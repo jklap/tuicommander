@@ -12,11 +12,9 @@
 //! * **The binary is the configured one.** No argument names a program, so no
 //!   caller over IPC or HTTP can choose what this host launches — the same rule
 //!   `acp_commands` keeps for the ACP spawn.
-//! * **There is no key parameter.** `ego config set` has a closed key set, and
-//!   of it the Providers tab writes exactly one, `model`. Spelling that as a
-//!   dedicated operation rather than a generic `set(key, value)` means a caller
-//!   cannot reach `sandbox` or `permissions.judge` at all, rather than being
-//!   refused by a list somebody has to remember to update.
+//! * **Keys belong to the owner.** The UI keeps dedicated model/perimeter
+//!   operations; the settings adapter admits only its typed managed-key schema.
+//!   Neither path accepts arbitrary commands or edits Ego configuration files.
 //! * **A value may not look like a flag.** The arguments never touch a shell, so
 //!   there is nothing to quote; what is left is a value starting with `-`, which
 //!   clap would read as an option. Refused here, and `--` is passed as well.
@@ -24,11 +22,15 @@
 //!   credential for anthropic" into "something went wrong", which is the one
 //!   thing a person looking at a Providers tab cannot act on.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+
+mod context;
+pub(crate) mod perimeter;
+pub(crate) use context::ConfigContext;
 
 /// How much of a child's output is kept when reporting a failure.
 ///
@@ -147,26 +149,36 @@ fn spell(program: &Path, args: &[String]) -> String {
 ///
 /// Takes the program rather than reading it from configuration so the runner
 /// itself is testable against a stock shell: the rule that only the configured
-/// binary may be launched lives in [`executable`], which every caller here goes
+/// binary may be launched lives in [`ConfigContext::configured`], which every caller here goes
 /// through, and not in a parameter a test has to work around.
 ///
 /// Stderr is dropped on success on purpose. Every caller asks for `--json` and
 /// reads stdout; a warning ego printed alongside a correct answer is not
 /// something a Providers tab can act on, and carrying it would invite a caller
 /// to render it as though the command had half-failed.
+#[cfg(test)]
 pub(crate) async fn run(program: &Path, args: &[String]) -> Result<String, EgoCliError> {
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .map_err(|err| EgoCliError {
-            code: EgoCliErrorCode::LaunchFailed,
-            message: format!("could not run the configured ego executable: {err}"),
-            command: spell(program, args),
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: None,
-        })?;
+    run_at(program, args, None).await
+}
+
+async fn run_at(
+    program: &Path,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<String, EgoCliError> {
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd).env_remove("EGO_PROFILE");
+    }
+    let output = command.output().await.map_err(|err| EgoCliError {
+        code: EgoCliErrorCode::LaunchFailed,
+        message: format!("could not run the configured ego executable: {err}"),
+        command: spell(program, args),
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+    })?;
 
     if !output.status.success() {
         return Err(EgoCliError {
@@ -182,20 +194,6 @@ pub(crate) async fn run(program: &Path, args: &[String]) -> Result<String, EgoCl
     Ok(String::from_utf8_lossy(&output.stdout)
         .trim_end()
         .to_string())
-}
-
-/// The ego binary this host may launch, as configured right now.
-///
-/// Read per call rather than remembered, so correcting the setting takes effect
-/// without a restart — the same choice `acp_commands::ego_config` makes, and for
-/// the same reason: "not configured" and "configured wrongly" are different
-/// things to be told.
-pub(crate) fn executable(state: &AppState) -> Result<PathBuf, EgoCliError> {
-    let configured = state.config.read().ego_executable.clone();
-    if configured.trim().is_empty() {
-        return Err(EgoCliError::not_configured());
-    }
-    Ok(PathBuf::from(configured))
 }
 
 /// Refuse a model id this host will not put on a command line.
@@ -524,17 +522,6 @@ fn unreadable(command: &str, stdout: String, error: serde_json::Error) -> EgoCli
     }
 }
 
-/// Run one `ego` subcommand and parse its `--json` answer.
-async fn read_json<T: serde::de::DeserializeOwned>(
-    program: &Path,
-    args: &[&str],
-) -> Result<T, EgoCliError> {
-    let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-    let stdout = run(program, &args).await?;
-    let command = spell(program, &args);
-    serde_json::from_str(&stdout).map_err(|error| unreadable(&command, stdout, error))
-}
-
 /// Everything the Providers tab shows, read from ego in three calls.
 ///
 /// All three must succeed. A partial answer would have to render as a tab that
@@ -551,17 +538,36 @@ pub(crate) async fn providers(
     state: &AppState,
     refresh: bool,
 ) -> Result<EgoProviders, EgoCliError> {
-    let program = executable(state)?;
+    providers_in(&ConfigContext::configured(state)?, refresh).await
+}
 
-    let listing: ConfigListing = read_json(&program, &["config", "ls", "--json"]).await?;
-    let models_args: &[&str] = if refresh {
-        &["models", "--refresh", "--json"]
-    } else {
-        &["models", "--json"]
-    };
-    let catalogue: CatalogueSnapshot = read_json(&program, models_args).await?;
-    let health: HealthSnapshot = read_json(&program, &["doctor", "--json"]).await?;
-
+pub(crate) async fn providers_in(
+    context: &ConfigContext,
+    refresh: bool,
+) -> Result<EgoProviders, EgoCliError> {
+    let raw = context.command("ls", &["--json"]).await?;
+    let mut listing: ConfigListing = serde_json::from_str(&raw)
+        .map_err(|error| unreadable("ego config ls --json", raw, error))?;
+    // A profile without its own model inherits the base model of the same layer.
+    if context.profile.is_some() && !listing.values.contains_key("model") {
+        let args = ["config".into(), "ls".into(), "--json".into()];
+        let raw = context.run(&args).await?;
+        let base: ConfigListing = serde_json::from_str(&raw)
+            .map_err(|error| unreadable("ego config ls --json", raw, error))?;
+        if let Some(model) = base.values.get("model") {
+            listing.values.insert("model".into(), model.clone());
+        }
+    }
+    let mut models_args = vec!["models".into(), "--json".into()];
+    if refresh {
+        models_args.push("--refresh".into());
+    }
+    let raw = context.run(&models_args).await?;
+    let catalogue: CatalogueSnapshot =
+        serde_json::from_str(&raw).map_err(|error| unreadable("ego models --json", raw, error))?;
+    let raw = context.run(&["doctor".into(), "--json".into()]).await?;
+    let health: HealthSnapshot =
+        serde_json::from_str(&raw).map_err(|error| unreadable("ego doctor --json", raw, error))?;
     Ok(project(listing, catalogue, health))
 }
 
@@ -578,15 +584,11 @@ pub(crate) async fn set_default_model(
     state: &AppState,
     model: String,
 ) -> Result<EgoProviders, EgoCliError> {
-    let program = executable(state)?;
+    let context = ConfigContext::configured(state)?;
     let validated = validate_model(&model)?;
     let assignment = format!("model=\"{validated}\"");
-    run(
-        &program,
-        &["config".to_string(), "set".to_string(), assignment],
-    )
-    .await?;
-    providers(state, false).await
+    context.command("set", &[&assignment]).await?;
+    providers_in(&context, false).await
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +618,7 @@ pub(crate) async fn ego_set_default_model(
 mod tests {
     use super::*;
     use crate::test_support::{fail_with_stderr_script, host_shell};
+    use std::path::PathBuf;
 
     /// `sh -c <script>` / `cmd /C <script>`, as the runner's argument vector.
     fn shell(script: String) -> (PathBuf, Vec<String>) {
@@ -635,7 +638,16 @@ mod tests {
     #[tokio::test]
     async fn a_long_successful_answer_is_returned_whole() {
         let long = "x".repeat(MAX_CAPTURED * 3);
-        let (program, args) = shell(format!("echo {long}"));
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let answer = dir.path().join("answer.txt");
+        std::fs::write(&answer, &long).unwrap();
+        // cmd.exe has an 8191-character command-line limit; the output does not.
+        let (program, args) = shell(if cfg!(windows) {
+            // The repository test temp path has no spaces; avoid cmd quote re-escaping.
+            tuic_test_support::print_file_script(&answer.display().to_string())
+        } else {
+            tuic_test_support::print_file_script(&format!("\"{}\"", answer.display()))
+        });
         let stdout = run(&program, &args).await.expect("the shell must succeed");
         assert_eq!(stdout, long);
     }
@@ -831,7 +843,10 @@ mod tests {
         );
         assert_eq!(projected.providers.len(), 1);
         assert_eq!(projected.providers[0].name, "anthropic");
-        assert!(projected.providers[0].models.is_empty());
+        assert_eq!(
+            projected.providers[0].models,
+            [] as [crate::ego_cli::EgoModel; 0]
+        );
     }
 
     #[test]

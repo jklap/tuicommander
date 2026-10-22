@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import * as handsFree from "../../actions/handsFreeConversation";
+import { listDemo } from "../../components/Tasks/list/demo";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { isMacOS } from "../../platform";
+import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
+import { automationsUi } from "../../stores/automations";
 import { dictationStore } from "../../stores/dictation";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -29,12 +33,15 @@ function createMockHandlers(): ShortcutHandlers {
 		reopenClosedTab: vi.fn(),
 		navigateTab: vi.fn(),
 		focusLastTerminal: vi.fn(),
+		historyBack: vi.fn(),
+		historyForward: vi.fn(),
 		jumpWaitingTerminal: vi.fn(),
 		clearTerminal: vi.fn(),
 		terminalIds: vi.fn().mockReturnValue([]),
 		handleTerminalSelect: vi.fn(),
 		handleSplit: vi.fn(),
 		handleRunCommand: vi.fn(),
+		reloadActiveTab: vi.fn(),
 		switchToBranchByIndex: vi.fn(),
 		isQuickSwitcherOpen: vi.fn().mockReturnValue(false),
 		toggleMarkdownPanel: vi.fn(),
@@ -73,6 +80,7 @@ function createMockHandlers(): ShortcutHandlers {
 		openPath: vi.fn(),
 		openSecondaryWindow: vi.fn(),
 		toggleCommandOverview: vi.fn(),
+		openTasks: vi.fn(),
 		toggleComposePanel: vi.fn(),
 		detachActivityDashboard: vi.fn(),
 		toggleProcessManager: vi.fn(),
@@ -117,6 +125,19 @@ describe("actionRegistry", () => {
 			expect(ids).toContain("command-palette");
 			expect(ids).toContain("quick-branch-switch");
 			expect(ids).toContain("toggle-focus-mode");
+		});
+
+		// Catches: Open Tasks vanishing with no provider installed, so the install hint in the Tasks tab is unreachable.
+		it("open-tasks is offered with or without a registered work-item provider", () => {
+			const ids = () => getActionEntries(createMockHandlers()).map((entry) => entry.id);
+			expect(ids()).toContain("open-tasks");
+			const registration = workItemProviderRegistry.register(listDemo(1));
+			try {
+				expect(ids()).toContain("open-tasks");
+			} finally {
+				registration.dispose();
+			}
+			expect(ids()).toContain("open-tasks");
 		});
 
 		it("Progress action advertises its shortcut and opens the active repository", () => {
@@ -201,14 +222,15 @@ describe("actionRegistry", () => {
 			expect(entry).toBeUndefined();
 		});
 
-		it("registers the hands-free toggle, unbound and labelled for what it will do", async () => {
+		it("registers the hands-free toggle with its default chord and current action label", async () => {
 			await enableDictation();
 			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-hands-free");
 			expect(entry).toBeDefined();
 			// Nothing is armed in a fresh store, so the palette offers to start.
 			expect(entry?.label).toBe("Start hands-free conversation");
 			expect(entry?.category).toBe("Dictation");
-			expect(entry?.keybinding).toBe("");
+			// TEST-CHANGE: the approved default replaces the previously empty binding.
+			expect(entry?.keybinding).toBe(isMacOS() ? "⌘⌥V" : "Ctrl+Alt+V");
 		});
 
 		it("routes the hands-free palette entry through the shared toggle", async () => {
@@ -253,4 +275,13 @@ describe("actionRegistry", () => {
 			expect(searchEntries.map((e) => e.id)).toEqual(["search-terminals", "search-files", "search-file-contents"]);
 		});
 	});
+});
+
+// A discoverable palette entry is the dialog's public entry point.
+it("does not strand scheduled runs without an Automations palette entry", () => {
+	const entry = getActionEntries(createMockHandlers()).find((action) => action.id === "automations");
+	expect(entry?.label).toBe("Automations");
+	entry?.execute();
+	expect(automationsUi.visible()).toBe(true);
+	automationsUi.close();
 });

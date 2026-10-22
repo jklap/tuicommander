@@ -289,7 +289,7 @@ pub(crate) struct AudioOutputDevice {
     pub is_default: bool,
 }
 
-pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
+pub(crate) fn list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
     let host = rodio::cpal::default_host();
     let default_name: Option<String> = host
         .default_output_device()
@@ -307,14 +307,14 @@ pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .map_err(|_| "Audio output device enumeration unavailable".to_string())
 }
 
 // ---------------------------------------------------------------------------
 // Playback
 // ---------------------------------------------------------------------------
 
-pub(crate) use tuic_dictation::audio_output::resolve_output_stream;
+pub(crate) use tuic_core::audio_output::resolve_output_stream;
 
 /// Play a notification sound on a background thread.
 ///
@@ -376,10 +376,16 @@ pub(crate) fn play_notification_sound(
     play(sound, volume, device);
 }
 
-/// Tauri command: list available audio output devices.
+/// Tauri command: list available audio output devices. Shared by
+/// `GET /audio/output-devices`.
 #[tauri::command]
-pub(crate) fn list_audio_output_devices() -> Vec<AudioOutputDevice> {
-    list_output_devices()
+pub(crate) async fn list_audio_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
+    crate::audio_enumeration::run_bounded(
+        "listing audio output devices",
+        crate::audio_enumeration::ENUMERATION_TIMEOUT,
+        list_output_devices,
+    )
+    .await?
 }
 
 #[cfg(test)]

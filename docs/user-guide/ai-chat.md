@@ -1,5 +1,7 @@
 # AI Chat
 
+Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
+
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
 over ACP. TUICommander is the environment — terminals, repositories, the MCP
 server — and ego is the intelligence. TUICommander keeps no provider, no API key,
@@ -10,10 +12,43 @@ no tool loop and no sandbox of its own.
 1. Turn on **Experimental Features** in `Settings > General`. The panel is behind
    it and there is no separate AI Chat switch.
 2. Set **ego executable** in `Settings > General` (**Select…** opens a file picker). While it is empty, ACP is not
-   configured: the panel says so and launches nothing.
+   configured: the panel explains why it is inactive and offers **Configure ego**, which opens
+   the ego section in General. Use `Settings > AI Chat` to log in to a provider and select
+   the default model (`ego config set model`). Saving the executable enables the composer
+   immediately, without restarting TUICommander.
+   If the panel is detached, return to its window after saving; it refreshes the settings on focus.
 3. Optionally set **ego profile** in `Settings > General` to select a profile from ego's user configuration.
    An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
    it does not send profile rules in `session/new`.
+
+A repository can select an ego profile with `"ego_profile": "team"` in its
+`.tuic.json`. For that conversation's workspace, TUIC sends the selected name and
+the explicit machine profile from Settings as `ceilingProfile`. Ego restricts mode,
+sandbox and perimeter to that ceiling and returns warnings, shown in AI Chat's
+existing warning notices. The repository cannot raise the machine policy.
+A repo selection requires an explicit machine profile and an ego build that
+acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
+
+Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
+
+Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
+
+While ego waits to retry a provider request, AI Chat shows the cause, attempt
+number and a live countdown. The countdown starts when the update arrives and
+ends at **retrying now**. Recovery removes the line; a final failure replaces it
+with the error. The Copy action beside a user message stays on one line.
+
+## Compact panel controls
+
+The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
+
+The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+
+## Tables
+
+AI Chat keeps short fields and headers on one line. Longer text uses the remaining space. Tables with multiple long columns use the approved wide layout; the first column stays visible while you scroll. A scroll hint appears only when the table is wider than its viewport. Priority values use compact badges.
+
+Each table has **Markdown**, **Copy as Markdown**, and **Open as document** actions. Markdown toggles the original source, including inline formatting and escaped pipes; Copy uses that source in either view. Open creates a read-only TUIC Markdown tab. In a detached AI Chat window, the document opens in the main window. On mobile, it opens a document view with **Back to Chat**. Other Markdown documents and terminal transcripts retain their existing layout.
 
 ## Opening it
 
@@ -24,9 +59,14 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
 On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
 tab, and opens without choosing a repository. It uses the same workspace root
-and saved sessions as desktop.
+and saved sessions as desktop. The composer shares the session input styling,
+auto-grow, right-side attachment icon and round Send button. Enter sends;
+Shift+Enter inserts a new line. Long transcript content wraps, while tables scroll
+inside their own block.
 A repository in a push link is sent with a message as context, not used as the
 chat root. The conversation picker shows the titles of saved sessions;
 choose one to load its history, or tap **New**. Messages, collapsed tool
@@ -51,13 +91,17 @@ reach. The header names that repository. Switching repository keeps the same
 tabs and the same conversation, and starts or loads nothing.
 If desktop and mobile open the chat together, they attach to the same running ego.
 
-ego starts when you send the first message or click **+**; opening the panel
+ego starts when you send the first message, click **+**, or select a saved tab; opening the panel
 starts nothing. There is one ego for the app: a reloaded window or the phone
-gets the one already running, and quitting TUICommander ends it. **New** in the
-control bar starts another conversation; the picker beside it lists previous
+gets the one already running, and quitting TUICommander ends it. **New chat tab** in the
+tab bar starts another conversation; the conversation picker lists previous
 conversations by title, newest first. Selecting one loads its history. The open
 tabs and the selected tab are restored after restarting TUICommander, and their
-history is replayed when ego starts.
+history is replayed when ego starts. Selecting a saved tab connects and loads it
+without sending a message. The panel shows **Connecting conversation…** while
+it attaches, or the failure reason and **Retry** if it cannot open the conversation.
+Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
+loading later does not switch you away from the new chat.
 
 The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
@@ -69,8 +113,10 @@ unsent composer draft. Open tabs and the selected tab return when the panel is
 hidden and shown or detached into its own window; the detached view replays
 their histories from ego.
 
-An untitled conversation appears with its first prompt or latest activity time;
-its session ID is available in the option tooltip.
+Tabs and the picker use the conversation title, its first prompt, or its latest
+activity time. A conversation without these details shows **Untitled conversation**;
+its session ID is available in the tooltip. The model/mode row remains visible
+with **pending** values until the selected session publishes its options.
 
 When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
@@ -95,7 +141,7 @@ Files open in TUICommander's viewer or editor, while directories open in the
 file browser, including when AI Chat is detached.
 With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
 `Cmd/Ctrl+F` opens its search, and `Cmd/Ctrl+K` clears the visible history of
-the current tab. Clearing the view does not delete ego's saved conversation.
+the current tab. Search matches displayed prose with collapsed whitespace; code blocks retain literal whitespace. Clearing the view does not delete ego's saved conversation.
 
 Paste a PNG, JPEG, GIF or WebP image into the composer to preview it before
 sending. Remove a preview with its close button if you change your mind. An
@@ -105,10 +151,13 @@ in total. Text paste works as usual.
 Pastes longer than 200 words appear as a numbered `[Pasted text #… +N words]`
 marker while you compose; the full text is sent when you press Send. The
 composer grows with shorter text up to its height limit, then scrolls.
-Press `Ctrl+S` in the composer, or tap **Park** on a phone, to set aside the
-current text and image previews. The **Parked draft** control shows that a
+Press `Ctrl+S` in the composer, or tap the **Park draft** archive icon on a phone, to set aside the
+current text and image previews. The **Parked draft** control on desktop, or the
+**Restore parked draft** icon on mobile, shows that a
 draft is waiting. Press `Ctrl+S` or tap it again while the composer is empty to
 restore the draft; when the composer contains another draft, the two swap.
+On mobile, Park and Stop use labelled icons in the input row beside Attach and
+Send. They do not reserve a separate row above the composer.
 Sending the intervening prompt also restores the parked draft automatically.
 Parking survives closing and reopening the panel or reloading its window, and
 stays with its chat tab. If browser storage is unavailable, the composer warns
@@ -118,7 +167,9 @@ is the reference for stashing and
 restoring an empty prompt; automatic restoration after Send and swapping two
 nonempty drafts are TUICommander behaviors requested for this composer.
 The transcript follows new output while you are at the bottom and keeps your
-position when you scroll up. Tool activity rows show names; expand a call to
+position when you scroll up. A touch pauses automatic scrolling until you release
+or cancel it. If you did not scroll up, the transcript then catches up to the latest
+output, even when the answer finished during the touch. Tool activity rows show names; expand a call to
 read its full command and output.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
@@ -135,6 +186,12 @@ read its full command and output.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
   composer becomes available for another prompt.
+- **Provider retries.** When the provider or the network fails before the
+  agent shows anything, ego retries up to six times and waits longer each time.
+  The conversation shows one orange line with the cause, the wait and the
+  attempt, for example `… — connection problem, retrying in 2s (attempt 2/6)`.
+  The line goes away when an attempt succeeds. After the sixth failure, the
+  turn error replaces the line and the next prompt can be sent.
 - **Tool activity** appears as one collapsed line per turn, with a count,
   observed duration, status and the first two call titles. Expand it to see
   each call's title, kind and status; expand a call to see its output. The
@@ -147,15 +204,18 @@ read its full command and output.
   advertised that extension, so a build without it shows no button rather than a
   button that fails. Resume remains available when a paused turn ends at its
   boundary; select it to continue the conversation.
-- **Queue** sends another message while a turn runs. TUICommander keeps it in
-  order and sends it only after the running turn ends. If ego pauses at a turn
-  boundary, the queue waits for Resume. The queued list appears
-  in every connected view; either view can remove an item before ego receives
-  it. Stop affects the running turn for every view. The conversation shows a
-  queued message as sent only when it actually reaches ego.
+- **Send during a turn** integrates text into the running query when ego
+  advertises steering. Ego consumes it at the next provider request and echoes
+  it into the conversation; TUICommander never sends accepted steering twice.
+  If the turn has already ended, the message follows the normal prompt path.
+  Attachments, agents without steering, and rejected steering use the **Queue**:
+  messages stay in order until the running turn ends. A paused queue waits for
+  Resume. Every connected view can remove a queued item before ego receives it.
+  Stop affects the running turn for every view. A queued message appears in the
+  conversation when it reaches ego; steering appears when ego echoes it.
 - **Session settings** are published by the current conversation. The control bar
   shows the model's short name and the current mode. Its summary shortens before
-  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  the icon controls, so Pause, Resume and Compact stay on one row. Each
   control has a tooltip and a name for assistive technology. The settings button opens a dialog with
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
@@ -199,11 +259,7 @@ the panel's composer and open it. They write the question; you send it.
 
 ## The session knowledge store
 
-Command outcomes are still recorded per terminal — exit codes from OSC 133 where
-the shell supports it, an `Inferred` outcome from the PTY silence timer where it
-does not — and persist to `<config_dir>/ai-sessions/<session_id>.json`. Nothing
-reads them today. They are kept because the recording has nothing to do with a
-model and re-deriving the history later is impossible.
+The write-only command knowledge store was removed in #2115-1333. TUICommander no longer records or periodically saves command outcomes for AI context. Existing `<config_dir>/ai-sessions/<session_id>.json` files remain untouched. Shell activity and command blocks still use OSC 133 markers.
 
 ## Not here
 
@@ -223,3 +279,58 @@ model and re-deriving the history later is impossible.
   drives TUICommander terminals, which is the path ego uses.
 - [`docs/backend/pty.md`](../backend/pty.md) — PTY lifecycle, OSC 133, TUI
   detection, silence-based idle.
+
+Pending permissions and ego notice cards can alert your phone when the desktop is away. Both share a 30-second limit per conversation; ordinary activity does not send a push.
+
+AI Chat offers **Fork from here** beside a reply when ego advertises message-point forks. The new tab keeps history through that reply’s completed turn; the parent remains open.
+
+Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
+
+The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
+
+### Conversation launch options
+
+Use **New conversation with options** beside the `+` button to override the ego profile, workspace or executable for one conversation. Empty fields use Settings defaults. The header shows the resolved values. The conversation keeps these values and its peer identity after a restart; other chats keep their existing launch configuration. The plain `+` action creates a chat with the global defaults.
+
+A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
+
+When you scroll up and more conversation content arrives, **New text below** appears as a compact badge floating at the bottom-right of the transcript, above the composer, without reserving a row. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the badge until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+
+AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
+
+Use **Pin repository** beside the composer to keep that conversation's repository context while you navigate elsewhere. **Pinned repository** identifies the frozen context. Unpin to follow the repository on screen again. The name uses the repository or group color, with the normal light-theme text adjustment. This does not move or filter conversation tabs. The existing pin icon still parks your draft; it is a separate action.
+
+Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first, including when focus has moved back to the composer. Desktop Stop, Park and Send align to the input height.
+
+Repository names in linked worktree contexts use the registered parent repository color, including its inherited group color. Pinning a worktree keeps that color while you browse another repository.
+
+## Telegram replies
+
+After Telegram is configured in Settings, allowlisted phone text reaches the
+latest-connected live AI Chat agent when no agent has explicitly registered.
+With several live chats, connection order determines the fallback, not the
+selected tab. An agent can call `telegram register` to take over the channel;
+that registration has priority until it ends or another agent replaces it.
+Registration lasts only while its MCP identity remains live. No PTY is needed.
+Incoming phone text arrives through the normal peer inbox and TUIC wakes an idle
+conversation. The no-agent reply appears only when neither a registered agent
+nor a live AI Chat agent is available.
+
+The phone shows a receipt reaction, then a working reaction once the mail is
+read and a new turn starts. Assistant message chunks stream into the ephemeral
+Telegram preview; thought chunks and tool arguments do not. Permissions show a
+waiting reaction and ask you to respond in TUICommander. The preview is never
+approval to publish anything.
+
+`telegram begin` is optional. `telegram finish` supplies the exact final phone
+answer and remains valid after the preview ends. If a turn started by TUIC's
+peer-mail wake settles without finish, TUIC sends that turn's assistant text
+once. Turns started from an unrelated conversation prompt do not auto-publish.
+A failed turn sends one safe stopped notice. Stop on the phone targets only the
+captured turn; a queued Stop does not interrupt unrelated work.
+
+## Settings MCP startup boundary
+
+The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).

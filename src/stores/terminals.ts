@@ -1,6 +1,7 @@
 import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { AgentType } from "../agents";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { rpc } from "../transport";
 import { getRepoConnection, setSessionConnectionLookup } from "../transportRuntime";
 import type { TerminalMatch } from "../types";
@@ -33,6 +34,14 @@ export interface CommandBlock {
 /** Shell activity state: null=never had output, busy=producing output, idle=waiting for input, exited=process terminated */
 export type ShellState = "busy" | "idle" | "exited" | null;
 /** Authoritative task lifecycle from the backend; distinct from PTY activity. */
+export type TerminalViewMode = "cli" | "chat";
+
+export interface ProviderRecovery {
+	phase: "waiting" | "retrying";
+	next_attempt_ms: number | null;
+	attempt: number;
+}
+
 export type AgentLifecycleState = "starting" | "working" | "awaiting_input" | "idle" | "completed" | null;
 
 const VALID_SHELL_STATES = new Set<string>(["busy", "idle", "exited"]);
@@ -67,7 +76,11 @@ export interface TerminalData {
 	 * home as soon as a repo claims the path.
 	 */
 	repoPath: string | null;
+	/** Legacy backend placement metadata; never overrides cwd for tab placement or cleanup. */
+	placementPath?: string | null;
 	awaitingInput: AwaitingInputType;
+	questionText?: string | null;
+	choicePrompt?: ChoicePrompt | null;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
@@ -76,7 +89,9 @@ export interface TerminalData {
 	/** Monotonic local event revision; prevents a stale session snapshot from overwriting PTY state. */
 	shellStateRevision: number;
 	agentState: AgentLifecycleState;
+	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
+	abandonedSinceMs?: number | null;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
@@ -85,6 +100,7 @@ export interface TerminalData {
 	// (e.g. "CLAUDE_CONFIG_DIR=/Users/me/.claude-private claude --dangerously-skip-permissions"),
 	// because a shell alias hides both the binary and the env that locates the session.
 	agentLaunchCommand: string | null;
+	agentProvider: string | null; // Model provider the agent session runs on (ego: from its session manifest); shown in the tooltip
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
@@ -96,18 +112,26 @@ export interface TerminalData {
 	agentIntent: string | null; // LLM-declared intent via intent: token
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
-	isRemote: boolean; // Created via HTTP/MCP (not locally by the UI)
+	isRemote: boolean; // Runs on a configured remote connection, not merely created through HTTP/MCP
+	isExternallyCreated: boolean; // Created via HTTP/MCP; owns cleanup, tab decoration and completion policy
+	exactAgentSessionId?: string | null; // Live backend hook evidence, never restored from persistence
 	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok)
 	tuicSession: string | null; // Stable tab UUID — injected as TUIC_SESSION env var, persists across restarts
 	suggestedActions: string[] | null; // Follow-up suggestions from suggest: token
 	suggestDismissed: boolean; // true after user dismissed/selected/typed — resets on shell-state:idle
+	historyBase: number; // Evicted rows in the latest grid frame; stored markers use all-time rows.
 	commandBlocks: CommandBlock[]; // Completed command blocks from OSC 133
 	activeBlock: CommandBlock | null; // Current in-progress block (A received, D not yet)
 	lastCommandExecAt: number | null; // Timestamp of last OSC 133 "C" (real command execution); monotonic, never evicted — used to gate completion against prompt-redraw/wake false-busy
 	foldedBlocks: Set<number>; // promptLine values of folded blocks
 	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
+	answersOnly: boolean; // Answers-only view: output of the last turn is collapsed except 💬 answer lines. Never automatic.
+	/** Which view of an agent terminal is shown. "chat" hides the grid, it never unmounts it. Never persisted. */
+	viewMode: TerminalViewMode;
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
+	/** PTY and agent were ended on purpose (Suspend); the tab is kept and resumes like a restored one. */
+	suspended: boolean;
 	parentSession: string | null; // Session or TUIC_SESSION of the agent that spawned this one (sub-agent PTY)
 }
 
@@ -122,12 +146,14 @@ type TerminalCreateData = Omit<
 	| "shellStateRevision"
 	| "agentState"
 	| "backgroundWork"
+	| "abandonedSinceMs"
 	| "queuedCommands"
 	| "completionNotified"
 	| "nameIsCustom"
 	| "nameFromSpawn"
 	| "agentType"
 	| "agentLaunchCommand"
+	| "agentProvider"
 	| "pendingResumeCommand"
 	| "pendingInitCommand"
 	| "usageLimit"
@@ -140,18 +166,24 @@ type TerminalCreateData = Omit<
 	| "currentTask"
 	| "activeSubTasks"
 	| "isRemote"
+	| "isExternallyCreated"
 	| "agentSessionId"
+	| "exactAgentSessionId"
 	| "tuicSession"
 	| "suggestedActions"
 	| "suggestDismissed"
 	| "awaitingInputConfident"
+	| "historyBase"
 	| "commandBlocks"
 	| "activeBlock"
 	| "lastCommandExecAt"
 	| "foldedBlocks"
 	| "userPromptLines"
+	| "answersOnly"
+	| "viewMode"
 	| "alias"
 	| "standby"
+	| "suspended"
 	| "repoPath"
 	| "parentSession"
 > & {
@@ -160,12 +192,14 @@ type TerminalCreateData = Omit<
 	tuicSession?: string | null;
 	alias?: string | null;
 	isRemote?: boolean;
+	isExternallyCreated?: boolean;
 	nameIsCustom?: boolean;
 	nameFromSpawn?: boolean;
 	agentType?: AgentType | null;
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;
 	ptyDescription?: string | null;
+	suspended?: boolean;
 };
 
 /** Terminal component ref interface */
@@ -207,14 +241,22 @@ interface TerminalsStoreState {
 	activeId: string | null;
 	/** Last non-null activeId — survives tab switches so non-terminal UI can find the right terminal. */
 	lastActiveId: string | null;
-	/** The terminal that was active before the current one — powers "return to last terminal" toggle. */
-	previousActiveId: string | null;
+	/**
+	 * Distinct activated terminals, most recent first (max HISTORY_LIMIT). The single source
+	 * for "return to last terminal" and history back/forward.
+	 */
+	history: string[];
+	/** Position of the terminal currently shown within `history` (0 = most recent; >0 after stepping back). */
+	historyCursor: number;
 	counter: number;
 	/** Tabs currently detached to floating windows: tabId → window label */
 	detachedWindows: Record<string, string>;
 	/** Debounced busy state per terminal — stays true for BUSY_HOLD_MS after idle */
 	debouncedBusy: Record<string, boolean>;
 }
+
+/** How many recently activated terminals the history keeps. */
+const HISTORY_LIMIT = 10;
 
 /** Debounce hold time: how long isBusy() stays true after shellState goes idle */
 const BUSY_HOLD_MS = 2000;
@@ -225,7 +267,8 @@ function createTerminalsStore() {
 		terminals: {},
 		activeId: null,
 		lastActiveId: null,
-		previousActiveId: null,
+		history: [],
+		historyCursor: 0,
 		counter: 0,
 		detachedWindows: {},
 		debouncedBusy: {},
@@ -420,10 +463,18 @@ function createTerminalsStore() {
 	}
 
 	const actions = {
+		/** Reserve presentation IDs before adopting sessions created while the document was absent. */
+		reserveSnapshotIds(ids: (string | undefined)[]): void {
+			const numbers = ids.map((id) => Number(id?.match(/^term-(\d+)$/)?.[1] ?? 0)).filter(Number.isSafeInteger);
+			setState("counter", Math.max(state.counter, ...numbers));
+		},
 		/** Add a new terminal */
-		add(data: TerminalCreateData): string {
-			const id = `term-${state.counter + 1}`;
-			setState("counter", (c) => c + 1);
+		add(data: TerminalCreateData, restoredId?: string): string {
+			const restoredNumber = Number(restoredId?.match(/^term-(\d+)$/)?.[1] ?? 0);
+			const validRestoredId = Number.isSafeInteger(restoredNumber) && restoredNumber > 0;
+			const counter = validRestoredId ? Math.max(state.counter, restoredNumber) : state.counter;
+			const id = validRestoredId && !state.terminals[restoredId!] ? restoredId! : `term-${counter + 1}`;
+			setState("counter", Math.max(counter, Number(id.slice(5))));
 			setState("terminals", id, {
 				id,
 				activity: false,
@@ -439,6 +490,7 @@ function createTerminalsStore() {
 				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
+				agentProvider: null,
 				pendingResumeCommand: null,
 				pendingInitCommand: null,
 				usageLimit: null,
@@ -451,18 +503,23 @@ function createTerminalsStore() {
 				currentTask: null,
 				activeSubTasks: 0,
 				isRemote: false,
+				isExternallyCreated: false,
 				agentSessionId: null,
 				tuicSession: null,
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
+				historyBase: 0,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
+				answersOnly: false,
+				viewMode: "cli",
 				alias: null,
 				standby: false,
+				suspended: false,
 				repoPath: null,
 				parentSession: null,
 				...data,
@@ -492,6 +549,7 @@ function createTerminalsStore() {
 				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
+				agentProvider: null,
 				pendingResumeCommand: null,
 				pendingInitCommand: null,
 				usageLimit: null,
@@ -504,18 +562,23 @@ function createTerminalsStore() {
 				currentTask: null,
 				activeSubTasks: 0,
 				isRemote: false,
+				isExternallyCreated: false,
 				agentSessionId: null,
 				tuicSession: null,
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
+				historyBase: 0,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
+				answersOnly: false,
+				viewMode: "cli",
 				alias: null,
 				standby: false,
+				suspended: false,
 				repoPath: null,
 				parentSession: null,
 				...data,
@@ -554,8 +617,11 @@ function createTerminalsStore() {
 					if (s.lastActiveId === id) {
 						s.lastActiveId = null;
 					}
-					if (s.previousActiveId === id) {
-						s.previousActiveId = null;
+					const at = s.history.indexOf(id);
+					if (at !== -1) {
+						s.history.splice(at, 1);
+						if (at < s.historyCursor) s.historyCursor--;
+						s.historyCursor = Math.max(0, Math.min(s.historyCursor, s.history.length - 1));
 					}
 				}),
 			);
@@ -579,10 +645,14 @@ function createTerminalsStore() {
 					setState("terminals", id, "activity", false);
 					setState("terminals", id, "unseen", false);
 					setState("lastActiveId", id);
-					// Remember the terminal we're leaving so "return to last terminal"
-					// can toggle back to it (and back again on the next press).
-					if (prevId && prevId !== id) {
-						setState("previousActiveId", prevId);
+					// Walking the history lands on the entry under the cursor: keep order.
+					// Any other activation drops the forward part and moves to the front.
+					if (state.history[state.historyCursor] !== id) {
+						setState(
+							"history",
+							[id, ...state.history.slice(state.historyCursor).filter((h) => h !== id)].slice(0, HISTORY_LIMIT),
+						);
+						setState("historyCursor", 0);
 					}
 				}
 				setState("activeId", id);
@@ -724,7 +794,7 @@ function createTerminalsStore() {
 
 		/** OSC 133: Handle shell integration marker.
 		 *  A=prompt start, B=command start, C=pre-execution, D=command finished.
-		 *  `line` is the absolute buffer line (baseY + cursorY) when the marker was processed. */
+		 *  `line` is the eviction-stable all-time row (total_scrolled + cursorY) when the marker was processed. */
 		handleOsc133(id: string, type: string, line: number, exitCode?: number): void {
 			const term = state.terminals[id];
 			if (!term) return;
@@ -784,14 +854,14 @@ function createTerminalsStore() {
 		},
 
 		/** Record an absolute line where the user submitted a prompt (UserInput.line
-		 *  from the OSC 7770 state=busy transition). Drives the green scrollbar marker.
+		 *  from the OSC 7770 state=prompt hook). Drives the green scrollbar marker.
 		 *  Ignores negative lines (keystroke-reconstructed UserInput has no grid row)
 		 *  and dedups consecutive repeats (a prompt redraw can re-fire busy on the same
 		 *  row). Capped at MAX_BLOCKS, mirroring commandBlocks eviction. */
 		addUserPromptLine(id: string, line: number): void {
 			if (!has(id) || line < 0) return;
 			setState("terminals", id, "userPromptLines", (prev) => {
-				if (prev[prev.length - 1] === line) return prev;
+				if (prev.at(-1)! === line) return prev;
 				const next = [...prev, line];
 				return next.length > MAX_BLOCKS ? next.slice(-MAX_BLOCKS) : next;
 			});
@@ -820,6 +890,19 @@ function createTerminalsStore() {
 				next.add(promptLine);
 			}
 			setState("terminals", id, "foldedBlocks", next);
+		},
+
+		/** Flip the answers-only view of one terminal (button / `answers-only` action). */
+		toggleAnswersOnly(id: string | null = state.activeId): void {
+			const term = id ? state.terminals[id] : undefined;
+			if (!id || !term) return;
+			setState("terminals", id, "answersOnly", !term.answersOnly);
+		},
+
+		/** Switch one terminal between its grid ("cli") and the transcript view ("chat"). */
+		setViewMode(id: string, mode: TerminalViewMode): void {
+			if (!has(id)) return;
+			setState("terminals", id, "viewMode", mode);
 		},
 
 		/** Update agent-declared intent (via intent: token) */
@@ -903,10 +986,25 @@ function createTerminalsStore() {
 			return state.activeId ? state.terminals[state.activeId] : undefined;
 		},
 
-		/** The terminal that was active before the current one, if it still exists. */
+		/** The most recently active terminal other than the current one ("return to last terminal"). */
 		getPreviousActiveId(): string | null {
-			const id = state.previousActiveId;
-			return id && state.terminals[id] ? id : null;
+			return state.history.find((id) => id !== state.activeId) ?? null;
+		},
+
+		/** Terminal one step back / forward in the history, or null at the ends. */
+		getHistoryTarget(direction: "back" | "forward"): string | null {
+			return state.history[state.historyCursor + (direction === "back" ? 1 : -1)] ?? null;
+		},
+
+		/**
+		 * Move the history cursor one step and return the terminal to show, or null at the end.
+		 * The caller then activates it; setActive recognises it as the cursor entry and keeps order.
+		 */
+		stepHistory(direction: "back" | "forward"): string | null {
+			const step = direction === "back" ? 1 : -1;
+			const id = state.history[state.historyCursor + step] ?? null;
+			if (id) setState("historyCursor", state.historyCursor + step);
+			return id;
 		},
 
 		/** Find the best terminal with an active PTY session: active > lastActive > any. */

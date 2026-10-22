@@ -2,7 +2,7 @@ import type { Setter } from "solid-js";
 import { AGENTS, type AgentRunConfig, type AgentType } from "../agents";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import { invoke } from "../invoke";
-import { getModifierSymbol, isWindows } from "../platform";
+import { getModifierSymbol } from "../platform";
 import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
@@ -10,11 +10,11 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
+import { newTerminalShellFamily, scopedLaunchCommand } from "../utils/agentLaunchCommand";
 import { prepareAgentLaunchCommand } from "../utils/agentSession";
 import { writeClipboard } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
-import { getShellFamily, type ShellFamily, sendCommand } from "../utils/sendCommand";
-import { escapePosixShellArg } from "../utils/shell";
+import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import type { useAgentDetection } from "./useAgentDetection";
 import type { useGitOperations } from "./useGitOperations";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -26,45 +26,9 @@ interface TerminalContextMenuOptions {
 	splitPanes: ReturnType<typeof useSplitPanes>;
 	terminalLifecycle: ReturnType<typeof useTerminalLifecycle>;
 	closeActiveTabOrPane: () => void;
+	openPromptInspector: (sessionId: string) => void;
 	setTermRenameDefault: Setter<string>;
 	setTermRenamePromptVisible: Setter<boolean>;
-}
-
-function scopedLaunchCommand(
-	command: string,
-	env: AgentRunConfig["env"] | undefined,
-	shellFamily: ShellFamily,
-): string {
-	const windows = isWindows();
-	const entries = Object.entries(env ?? {}).filter(([key]) => {
-		const name = windows || shellFamily === "windows-native" ? key.toUpperCase() : key;
-		return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && name !== "TUIC_SESSION" && name !== "TUIC_PARENT";
-	});
-	if (!entries.length) return command;
-	if (shellFamily !== "windows-native" && (shellFamily === "posix" || !windows)) {
-		return `env ${entries.map(([key, value]) => `${key}=${escapePosixShellArg(value)}`).join(" ")} ${command}`;
-	}
-	// EncodedCommand is accepted by both cmd and PowerShell and keeps values out of
-	// the parent shell's parser and history. The child exits when the agent exits.
-	const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-	const script = [
-		...entries.map(([key, value]) => `$env:${key} = ${psQuote(value)}`),
-		`Invoke-Expression ${psQuote(command)}`,
-	].join("; ");
-	let bytes = "";
-	for (let index = 0; index < script.length; index++) {
-		const codeUnit = script.charCodeAt(index);
-		bytes += String.fromCharCode(codeUnit & 0xff, codeUnit >> 8);
-	}
-	return `powershell.exe -NoProfile -EncodedCommand ${btoa(bytes)}`;
-}
-
-function newTerminalShellFamily(): ShellFamily {
-	if (!isWindows()) return "posix";
-	const shell = settingsStore.state.shell?.toLowerCase() ?? "";
-	return /(?:^|[\\/])(?:bash|zsh|sh|fish|dash|ksh|ash|tcsh|csh|mksh|wsl)(?:\.exe)?(?:\s|$)/.test(shell)
-		? "posix"
-		: "windows-native";
 }
 
 /** Builds terminal and sidebar agent context menus while keeping launch behavior in one owner. */
@@ -205,6 +169,14 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 	};
 
 	const getContextMenuItems = (): ContextMenuItem[] => [
+		{
+			label: "Inspect Launch Instructions…",
+			disabled: !terminalsStore.getActive()?.sessionId,
+			action: () => {
+				const id = terminalsStore.getActive()?.sessionId;
+				if (id) options.openPromptInspector(id);
+			},
+		},
 		...(options.agentDetection.getAvailable().length > 0
 			? [{ label: "Agents", action: () => {}, disabled: activeTerminalBusy(), children: buildAgentMenuItems() }]
 			: []),
@@ -221,12 +193,22 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
 				const lastBlock = term?.commandBlocks[term.commandBlocks.length - 1];
-				if (!term?.ref || !lastBlock || lastBlock.executionLine == null || lastBlock.endLine == null) return;
+				if (
+					!term?.ref ||
+					!lastBlock ||
+					lastBlock.executionLine == null ||
+					lastBlock.endLine == null ||
+					lastBlock.endLine <= term.historyBase
+				)
+					return;
 				// The menu invokes this without awaiting it, so a rejected buffer read
 				// would surface as an unhandled rejection instead of a failed copy.
 				let lines: string[];
 				try {
-					lines = await term.ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
+					lines = await term.ref.getBufferLines(
+						Math.max(0, lastBlock.executionLine + 1 - term.historyBase),
+						lastBlock.endLine - term.historyBase,
+					);
 				} catch (e) {
 					appLogger.warn("terminal", "Copy Block Output failed to read the buffer", { error: String(e) });
 					return;

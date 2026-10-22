@@ -1,25 +1,87 @@
 # MCP & HTTP Server
 
+The compact `ui` description includes `design_start`, `design_stop`, `design_status`,
+`design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and
+`design_eval`. `ui action=help` retains their full usage guidance together with
+the panel, notification and confirmation guide. Design actions keep the existing
+caller/repository checks, extension host grants and saved `design_mode` denials.
+
+## Scoped plugin settings
+
+The plugin settings IPC command and `POST /api/plugins/{id}/settings` dispatch to the same scoped Rust owner. Catalogue descriptors contain no stored values; secrets read as set/unset. `plugin-changed` carries only plugin IDs over desktop and SSE after a durable commit, scheduling existing reload callbacks. This adapter does not publish the general settings MCP tool.
+
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
+## Explicit repository registration
+
+`repo action=add` requires an absolute local directory path. It resolves the
+canonical path, reads real repository metadata, and persists and activates a Git
+or shell workspace under the repositories file lock. Repeat calls preserve the
+existing repository and terminal state. The backend broadcasts
+`repositories-changed` to desktop and SSE consumers after a change, then starts
+the repository watcher. A watcher failure returns a warning alongside successful
+registration; invalid paths and persistence failures return an error.
+
+The CLI's directory opener calls this same MCP operation over its selected local
+IPC endpoint, including named instances and `TUIC_SOCKET`. No OS deep-link handler
+or active frontend is required. `ui tab` accepts the native `tuic://open` and
+`tuic://edit` content schemes; other `tuic://` actions return an error. Use
+`repo action=add` for `tuic://open-repo` intent.
+
+## Browser shell authentication
+
+Unauthenticated HTML navigation to `/` and `/mobile` redirects to the existing `/mobile/login` form when a password is configured. The login handler permits root or mobile app destinations only. API authentication and non-HTML 401 responses are unchanged. The desktop entry checks touch-capable iPad/Mac user agents and selects `/mobile` before mounting the desktop app; native WebViews and standalone secret forms keep their own entry.
+
+## Remote file copies
+
+The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+
+## Open desktop Markdown tabs
+
+`GET /repo/open-markdown-tabs?cwd=<session-directory>` returns file-tab metadata
+for the deepest registered repository or workspace containing the directory.
+It uses the existing remote authentication middleware and returns 403 for an
+unregistered directory. No file contents are returned.
+
+The desktop publishes through `sync_open_markdown_tabs`; its HTTP twin is
+`PUT /config/open-markdown-tabs`, restricted to loopback. Rust stores a temporary
+snapshot and emits `open-markdown-tabs-changed` on desktop IPC and SSE whenever
+it changes. Mobile clients refetch after invalidation or reconnect. Saved pane
+layouts contain only tab IDs/types and cannot supply these file paths.
+
 ## CI logs
 
-The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches
-logs for the local branch head. It does not accept a selected check URL or PR
-head SHA. For a remote-only PR or a particular CircleCI check, use the
-`fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`, or
-`/repo/ci-failure-logs` with `checkUrl` and `headSha`. Both verify the selected
-check against that PR head.
+Use HTTP `GET /repo/ci-failure-logs` with `repoPath` and `branch` to fetch logs
+for the local branch head. For a remote-only PR or a particular CircleCI check,
+use the same route with `checkUrl` and `headSha`, or the
+`fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`. Both
+verify the selected check against that PR head.
 
 ## Native stories
 
-The `story` MCP tool accepts `{ input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Its `remove_dependency` action is refused for bound agent sessions: only a human may remove a direct WontFix prerequisite from a Backlog story. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
+The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Its `remove_dependency` action is refused for bound agent sessions: only a human may remove a direct WontFix prerequisite from a Backlog story. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
+
+HTTP's access marker does not prove human identity, because loopback requests also receive it; an HTTP action without `sessionId` records `local_api` provenance, including for approval. A managed session that claimed a story cannot approve that story; an independent reviewer session can approve after checking its criteria. Desktop and browser clients can approve through the shared story service.
+
+Workflow definitions use the shared `/workflows/definition/action` HTTP route and `workflow_definition_action` desktop command. They are project-scoped and published by immutable revision; execution has its own API.
+
+The grouped `workflow` MCP tool exposes five generated discriminated actions: `story`, `run`, `proposal_create`, `report` and `launch`. Pass the existing service action as `input` for `story` (`StoryAction`) and `run` (`RunAction`). The other three actions use their generated typed service inputs. The advertised schema is the pre-dispatch contract: missing, mistyped, cross-action and unknown fields are rejected before effects. The dispatcher reuses the existing handlers and their project, revision, ownership and local-launch checks; there is no new persistence owner.
+
+The catalogue cutover removes the old `story` and `workflow_*` tool names without aliases. Saved member denials migrate to action capabilities and still hide and deny those grouped actions. Disabling `workflow` hides and denies the grouped entry, not the separate `automations` scheduler. External policy rules need review: the `workflow` name covers all five actions.
+
+`workflow action=launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow action=report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
+
+For `workflow action=report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
+
+`workflow action=proposal_create` takes `{input:{runId,proposalKey,story}}` from the active bound plan coordinator. The story belongs to the run's plan and uses a `plan_step` origin. A proposal key is durable across retries: the same payload returns the same story, while a changed payload is rejected. The run records a bounded CreateStory effect before the story transaction and its outcome afterward.
 
 ## Project Progress reporting
 
 The compact `progress` native tool is available directly in classic and
 every collapsed discovery (Grok, ego), and through the meta-tool index, unless disabled by
-`disabled_native_tools` or by the global `progress_tracking` flag. It takes
+`mcp_capabilities.denied` or by the global `progress_tracking` flag. It takes
 `{ type, text, step? }` with `type` restricted to `done` or `blocked`, derives
 the project and the reporting agent from the caller, appends to the shared
 journal, and then dual-emits `progress-recorded`. A per-agent
@@ -36,7 +98,7 @@ exporting are the reader's business and cost instruction budget in every
 `initialize`.
 
 `repo action=progress_list` takes `path` and optional `input` with `blockedOnly`,
-`ptyId`, `limit` and `cursor`. The default page has 10 entries; `limit` is
+`ptyId`, `limit` and `cursor`. The default page has 8 entries; `limit` is
 clamped to 1–100. Entries are newest first. The response includes `total`
 (matching entries before the cursor) and `nextCursor` (`null` on the final
 page). Pass `nextCursor` as the next request's `cursor` to read the entire
@@ -47,6 +109,34 @@ and HTTP `POST /progress/list?path=…` use the same input and response.
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.
 
+## Installed bridge lifetime
+
+The primary instance installs the adjacent `tuic-bridge` into
+`<config_dir>/mcp-bridge/<sha256>/tuic-bridge` (`.exe` on Windows) before updating
+agent MCP configs, only when an eligible integration needs repair. Publication
+uses a temporary file in the destination directory and atomic rename, with
+executable permissions set before publication. The source is hashed before copying;
+both the copy and a second source read must match before publication. Identical
+bytes reuse the existing file. Different builds get separate revision directories;
+old revisions remain available to running agents and saved config commands.
+Cargo target cleanup, mbx view refreshes and app upgrades therefore cannot remove
+the configured executable. Failed installation leaves agent configs unchanged.
+Startup migrates TUIC bridge commands from cargo/mbx targets and its installed
+revision directory, while preserving custom working commands and transports.
+Claude migration covers `~/.claude.json`, an existing
+`~/.claude-private/.claude.json`, inherited `CLAUDE_CONFIG_DIR`, and the Claude
+agent's environment flags and saved run-config environment roots. Override roots
+use `<CLAUDE_CONFIG_DIR>/.claude.json`; canonical paths are deduplicated. Relative
+overrides cannot be resolved before a launch working directory is known and emit
+a warning. Disabled integrations and custom transports remain unchanged. A missing
+or non-executable configured absolute bridge command emits a warning naming the
+config and command even when no adjacent bridge is available to repair it.
+Secondary-instance ownership rules still apply. An explicit Settings > Agents
+Install can install under user authority. Manual setup snippets only inspect
+installed copies and never create them; without a copy they report the bare
+`tuic-bridge` command. Revision cleanup is deferred until every agent config root,
+including profiles used only by external shell launchers, can be discovered.
+
 ## Activation
 
 The server has two independent listeners:
@@ -54,7 +144,35 @@ The server has two independent listeners:
 - **IPC listener** (always started): On macOS/Linux, listens at `<config_dir>/mcp.sock` for the default instance. Named instances use a deterministic short socket name in the OS temp directory because macOS limits Unix socket paths to 104 bytes. On Windows, listens on `\\.\pipe\tuicommander-mcp` (named pipe). No authentication — used by the local `tuic-bridge` sidecar.
 - **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<port>` (port from `services.server`) with Basic Auth.
 
+The shared `tuic-ipc` crate owns `AppInstance`, endpoint naming and HTTP
+framing. Informational responses (1xx except 101) are skipped until the final
+response arrives. More than 32 interim replies per response, or a status/header
+section above 64 KiB including its terminator, returns an invalid-data error.
+These limits persist across reads; response bodies are not subject to the header
+limit. Status 101, 204 and 304 responses finish at the header
+terminator regardless of Content-Length or Transfer-Encoding (RFC 9112 §6.3).
+The clients do not issue HEAD requests.
+The server reuses its short named socket path; CLI and bridge select it
+with `--instance <id>` or `TUIC_APP_INSTANCE`. An explicit Unix `TUIC_SOCKET`
+wins. Bridge fallback discovery stays within the selected instance's socket
+prefix, so an unavailable named instance cannot fall through to the default
+instance. Sync CLI and async bridge adapters retain their separate I/O and timeout
+policies. Both finish length-delimited responses without waiting for EOF and
+decode chunked bodies before converting UTF-8.
+
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
+
+The daemon's `POST /remote/update` handler requires the current session token
+in a `tui-session` cookie. Basic Auth alone does not authorize executable
+replacement. `/fs/upload-copy` also authenticates by cookie (or Basic Auth)
+through the shared middleware. A `?token=` query is ignored on both routes, so
+a query-only request answers 401. QR pairing and WebSocket/SSE query
+authentication are unchanged.
+
+Release boundary (step 2 of the two-release upload-token migration): the release
+before this one accepts cookie or query on these routes (step 1); this release
+removes the query form and sends the cookie from the update client. Clients of
+the earlier release that still send `?token=` get 401 and must be updated.
 
 The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable the MCP socket or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
 
@@ -97,7 +215,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
-| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
+| Response timeout middleware | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
 | `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
@@ -131,6 +249,15 @@ uncapping the server.
 
 ### Session Management
 
+HTTP and MCP agent readers resolve their inherited `TUIC_SESSION` from the live
+PTY identity binding when no explicit reader identity is supplied. Generic HTTP
+shell readers use the same boundary. This lets native Codex hooks bind their exact
+Chat transcript without relaxing foreign-owner, live-PID, rollout-id or cwd checks.
+HTTP/IPC and MCP session lists copy PTY metadata and release the PTY mutex and
+map guard before validating native bindings. Validation probes the live PTY again;
+keeping the row lock during that probe would deadlock a bound Codex terminal.
+
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/sessions` | List active PTY sessions |
@@ -147,11 +274,14 @@ uncapping the server.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/design-mode/start` | Start or rebind Chrome inspection to an agent session (`{sessionId}`) |
+| `POST` | `/design-mode/start` | Start/rebind the dedicated Edge/Chrome profile (`{sessionId, browser?}`) |
 | `POST` | `/design-mode/stop` | Stop inspection for a repository (`{repoPath}`) |
+| `POST` | `/design-mode/reload` | Ask the armed browser to reload the reviewed tab once (`{repoPath}`) |
+| `POST` | `/design-mode/navigate` | Ask the armed browser to open a localhost URL in the reviewed tab once (`{repoPath, url}`) |
 | `GET` | `/design-mode` | Read the array of per-repository Design Mode statuses |
+| `POST` | `/design-mode/extension` | Versioned native-host pick, send, discovery and configured server-start operations |
 
-The Chrome window opens on the host running TUICommander, including when a
+The chosen browser opens on the host running TUICommander, including when a
 remote browser initiates the request. `design-mode-changed` is dual-emitted to
 the desktop window and `/events` SSE with `{repo_path, session_id, status}`;
 `status` is `armed` or `stopped`. See the [HTTP API](../api/http-api.md#design-mode-endpoints)
@@ -222,12 +352,12 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 | `PUT` | `/config` | Save app config |
 | `POST` | `/auth/hash-password` | Hash password for remote access |
 
-`GET /config` and MCP `config action=get` redact remote-access secrets:
+`GET /config` redact remote-access secrets:
 `services.auth.password_hash`, `services.auth.session_token`,
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`PUT /config` require `{ base, config }`, where
 `base` is the caller's loaded snapshot and `config` is its edited document.
 The backend applies only the base-to-config changes to the latest locked file;
 unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
@@ -298,6 +428,7 @@ client. Full request/response shapes in `docs/api/http-api.md`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/acp/workspace` | The AI Chat workspace root (`acp_workspace_root`) |
 | `POST` | `/acp/connections` | Launch the configured ego and initialize |
 | `GET` `DELETE` | `/acp/connections/:id` | Snapshot / disconnect |
 | `POST` | `/acp/connections/:id/kill` | Kill the child |
@@ -331,12 +462,15 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name is stored as a custom name (`display_name_is_custom`), like `session rename is_custom=true`: neither an `intent:` title nor an agent's OSC 0/2 title replaces it, only a user rename does, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
 - **`session-renamed`** — Emitted when MCP `session action=rename` changes a tab's display name. Carries `session_id`, `name` and `is_custom`. The desktop and browser UIs update the tab bar and sidebar from it. The name must be one line of at most 256 characters without control characters.
+- **`session-suspend-requested`** — Emitted when MCP `session action=suspend` passed the busy check. Carries `session_id` and `request_id`. The UI ends that tab's PTY and keeps the tab suspended.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
+
+`workflow-run-changed` is a low-frequency wake hint `{repo_path,payload:{runId,sequence}}` emitted on desktop and `/events` after a workflow run mutation. Consumers page `/workflows/run/action` with `events` from their last durable sequence, including after reconnect or an SSE lag notification. The hint does not carry the full run state.
 
 ### ACP stream (`/acp/connections/:id/stream`)
 
@@ -348,7 +482,7 @@ socket. A `gap` frame is terminal — recovery is a fresh connection and
 
 Turn frames never ride `/events`. What does is one low-frequency
 **`acp-notice`** per connection — `ready`, `settled`, `interaction_pending`,
-`interaction_settled` — naming the connection, generation and sequence, plus
+`interaction_settled`, `card` — naming the connection, generation and sequence, plus
 the session and request id when it has them. It is a wake signal: react to it
 by reading the snapshot, the interactions list, or the stream from the sequence
 it names.
@@ -497,6 +631,14 @@ second initialize response to the client.
 
 On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically.
 
+When the asserted identity has no live PTY binding, the first MCP request also
+checks the foreground processes of local terminals. Exactly one process whose
+actual `TUIC_SESSION` matches the header restores that terminal association.
+This repairs a missing restore-time binding even when the MCP route already
+exists, so session lists publish the parent's identity and mobile can nest its
+children. Existing live bindings stay intact; unrelated or ambiguous matches
+remain terminal-less. ACP conversation identities do not acquire a terminal.
+
 On normal stdio EOF, the bridge sends `DELETE /mcp` after its in-flight requests settle, releasing that protocol session immediately. Each fresh initialize for an existing `x-tuic-session` identity also retires protocol metadata, routes, and message channels of stale sibling sessions left by abrupt exits. Subscribed and recently active siblings remain intact. Sessions without a stable identity still use the hourly maintenance sweep after an abrupt exit.
 
 After a failed upstream initialize, the bridge waits before trying again. The pause starts at one second, doubles up to eight seconds on consecutive failures, and resets after a successful connection. Request-triggered, downstream initialize, and background retries share this limit within one bridge process.
@@ -511,14 +653,68 @@ one recipient and both MCP connections read the same inbox. This coalescing
 requires the same live PTY; peers on different PTYs remain separate.
 
 **Blocking tool actions run off the runtime worker.** Dispatch is action-aware:
-session create/input/close/kill/process-stats, agent spawn/detect/send, and config
+session create/input/close/kill/resize, agent spawn/send, and config
 writes use `run_blocking_handler` (`tokio::task::spawn_blocking`) because they may
 sleep, spawn processes, write PTYs, or touch disk. Common read-only actions such
-as session list/output/status and agent list-peers/inbox/stats/metrics execute
+as session list/output/status and agent list_peers/inbox execute
 inline without cloning their JSON payload or scheduling blocking-pool work.
 Async waits remain on their event-driven async handlers. A panicking blocking
 handler becomes a tool error rather than killing the request task; `POST /mcp`
 does not add another blanket wrapper.
+
+### Native argument repair contract (#2007-59f6)
+
+Native argument contracts are enforced before dispatch, both for direct tools
+and `call_tool`, on HTTP and MCP-over-ACP. The server keeps the complete private
+JSON Schema, including action-dependent requirements (for example `ui tab` needs
+`id`, `title`, and exactly one of `html`/`url`). Validation cannot fetch external
+schema references.
+
+Advertised `inputSchema` objects have no root `oneOf`, `anyOf`, or `allOf`:
+Anthropic tool clients reject that shape. Full listing, lazy search, and exact
+schema lookup publish the same flat action enum and properties. Conditional
+requirements are in description text; nested parameter alternatives use `anyOf`.
+The private validator still enforces exclusive alternatives and required fields
+before any effect starts, including grouped workflow actions and agent task handles.
+Static rejection returns a tool error with:
+
+- `code: "invalid_arguments"`, `outcome: "rejected"`, `effect: "not_started"`;
+- `retryable: false`: do not repeat unchanged arguments;
+- `repair.retry_after_correction: true`: a corrected request may be submitted;
+- at most 16 `violations`, each with JSON-pointer `path`, `schema_path`, the
+  schema `constraint` (limit, required fields or allowed values), and a masked
+  explanation. Input values are not copied into repair errors.
+
+This is not auto-retry advice for permission, configuration or safety refusals.
+Those remain existing refusals, without the static repair marker. Runtime
+preconditions and authorization remain the handler's responsibility; a valid
+schema never grants access or proves an effect completed.
+
+Progress text permits 1..500 Unicode scalar values before trimming, not UTF-8
+bytes, UTF-16 units, or grapheme clusters; whitespace-only text is invalid.
+The shared Progress model enforces the same raw length for HTTP `/progress/report`
+and IPC `report_progress_event`, which retain their typed transport errors.
+
+`src-tauri/src/mcp_http/fixtures/action-input-contract-2007.json` is a local
+consumer contract fixture, not a captured client trace. It covers the audit's
+582/543/502-character retries, the valid boundary, emoji and combining scalars,
+missing titles/text/paths, and an invented action. Ego must validate its admitted
+schema against these cases without a server round trip; that cross-repository
+consumer integration is not proven by TUIC's tests.
+
+### On-demand native tool guidance
+
+`session`, `agent`, `repo`, `ui`, `voice`, `telegram` and `automations` advertise
+compact agent-facing descriptions with every action and the hard constraints.
+Call the same tool with `{"action":"help"}` for its complete usage guide in the
+`description` response field. Help retains all displaced rules, examples and
+response details. It does not perform the requested operational action.
+The normal disabled-tool and conditional-owner gates apply to help too.
+Argument schemas and pre-dispatch validation remain authoritative; discovery
+continues to publish flat client-compatible schemas. Other already compact
+native tools are unchanged, including the directly loaded `progress` primitive.
+Settings summaries and tooltip copy do not change. Reconnect cached MCP clients
+after loading this backend build to obtain the updated catalogue.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
@@ -526,7 +722,7 @@ When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools
 
 | Meta-tool | Purpose |
 |-----------|---------|
-| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/description pairs |
+| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/summary pairs, an opaque `catalogue_generation`, and an optional complete `top_schema` |
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
@@ -555,27 +751,82 @@ through `tuic-bridge`, which opened the transport session under its own name:
 preferring the session made `server/discover` advertise the collapsed surface and
 the very next `tools/list` deliver the full one, for the identical request.
 
-**Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
+**Schema admission and reuse (#2013-73f9).** Search includes the complete definition of
+its first visible match when the serialized UTF-8 JSON fits `schema_byte_budget`
+(default 16384 bytes, maximum 65536; 0 disables inline schemas). The budget applies
+to the definition, not the whole search response. Oversized schemas are omitted,
+never truncated; select a result and fetch it with `get_tool_schema` instead.
+A client can admit `top_schema` directly and call the tool without a second
+schema-fetch hop. Reuse an admitted definition until `notifications/tools/list_changed`
+or a different `catalogue_generation`. The generation is a content digest of the
+search corpus, not an authorization token. An unchanged rebuild keeps it stable.
+HTTP SSE and MCP-over-ACP refresh the index before forwarding invalidation, including
+lag recovery. Dispatch still checks live permissions and visibility; a cached schema
+never grants access. Clients must implement admission and invalidation themselves;
+server tests are not evidence of a real ego client's hop reduction.
 
-The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
+**Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `mcp_capabilities.denied` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
+
+The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `mcp_capabilities.denied` edit, `collapse_tools` toggle).
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
+The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` on its own line, at the start of every user task and on material phase changes. "On its own line" is in the instruction because the ack sentence is required to open that same first message: an agent that runs the two together leaves the token mid-row, where the parser has to reach for it (see `docs/backend/output-parser.md` → Intent). The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
 ### Two instruction surfaces, and which one owns a rule
 
-TUIC teaches a connecting agent through two surfaces, and they do not reach the
-same clients:
+Initialize instruction prose stays within the existing 1,600-byte classic and
+1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
+marker, urgent mail and progress reporting rules. The answer marker can start a
+row or the text of a Markdown list item; status, tool and hook/task notices stay
+excluded.
 
-| Surface | Who receives it | Owns |
-|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | clients that surface instructions. **Codex does not** | the wire protocol markers, rules about tools that are *not* ours, live state |
-| tool `description` (`native_tool_definitions`) | **every** client, on every `tools/list` | everything about that tool: its actions, its arguments, its semantics |
+TUIC supplies protocol instructions and tool descriptions on different wire
+surfaces. Client receipt does not prove that the model can read either surface
+on its first turn. Deferred tool discovery can expose them later.
+
+| Surface | Transport receipt | Model visibility | Owns |
+|---|---|---|---|
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, live state |
+| tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
+
+**Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with
+`claude-sonnet-5-5`, exposes server instructions even when tool descriptions are
+deferred. Its default instruction cap is **2,048 characters**: the 1,024- and
+2,048-byte ASCII controls cite START/MIDDLE/END; the 4,096–32,768-byte controls
+cite START only (`CLAUDE_DEFAULT_*`). The unused probe description is absent
+until tool loading. Disabling tool search exposes that description but does not
+remove the instruction cap. `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH=65536`
+exposes all three instruction canaries at 32,768 bytes
+(`CLAUDE_MAX_OVERRIDE_32768`).
+
+Codex CLI **0.160.0**, with `gpt-6-luna`, receives the instructions, but its
+initial no-tool turns cite **NONE** at all six tested sizes. After metadata
+discovery, it cites the instruction START/MIDDLE/END and description token at
+1,024, 4,096 and **32,768 bytes** (`CODEX_SEARCH_*`, including
+`CODEX_SEARCH_32768.stdout`). Thus the field is not universally discarded, and
+post-discovery visibility does not establish first-turn visibility.
+
+The harness report at
+`~/Gits/personal/orchestrator/reports/tuicommander/2026-10-04-mcp-instructions-harnesses.md`
+records versions, controls and limits; its raw canary evidence is under
+`~/Gits/.tmp/mcp-canary/` (including `CLAUDE_DEFAULT_2048.stdout`). Speakeasy
+advertises meta-tool descriptions first; native `agent`, `repo` and `session`
+semantics require discovery. A description fallback therefore cannot guarantee
+that startup rules prevent an earlier shell action. Actual within-process
+reconnects and untested harness versions remain unmeasured.
+
+Instruction files are a separate surface. The
+rules-file study at `~/Gits/.tmp/rules-file-study/result.md` measures Claude
+`@file` expansion, literal unexpanded `@file` lines in Codex `AGENTS.md`, and
+explicit ego `--instructions FILE` loading in headless mode. Do not treat a
+file reference, MCP receipt, or parent context as proof of child or lifecycle
+visibility. The studies do not change TUIC's launch behavior.
 
 The rule that follows: a statement a tool description carries is not repeated in
-the instructions. A client reading both paid for it twice, and — worse — the
-client reading only descriptions was the one going without. That is the direction
+the instructions. A client reading both paid for it twice, and — worse — a
+client that loaded only descriptions could otherwise go without that rule. That is the direction
 story `078-8b2e` set, and `instructions_do_not_repeat_what_tool_descriptions_already_say`
 now enforces it in both directions, asserting the removal *and* the surviving
 copy. Three things moved out of the instructions this way: the per-tool
@@ -647,7 +898,7 @@ that no deduplication can touch is now the larger half at 1,178. Read any
 claimed saving against that split before believing it.
 
 **Checkout measurement, before and after the deduplication** — same fixture both
-sides (`test_state`, which leaves `disabled_native_tools` empty, so its classic
+sides (`test_state`, which leaves `mcp_capabilities.denied` empty, so its classic
 figure covers all nine native tools where production hides `config` and `debug`);
 `.empty` is zero repos/sessions/peers, `.loaded` is 8 repos, 12 sessions, 6 peers:
 
@@ -688,7 +939,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Settings access and diagnostics are disabled by default via capability denials; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -696,40 +947,78 @@ say what was measured, not what the list costs today.
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
-| `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
-| `task` | get, cancel | Enabled |
-| `remote` | preview, update | Enabled |
-| `repo` | list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
+| `remote` | preview, update | Only with a connected remote server |
+| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
-| `ui` | tab, toast, confirm, screenshot | Enabled |
+| `ui` | tab, toast, confirm, screenshot, design_start/stop/status/reload/navigate/screenshot/errors/eval | Enabled |
+| `workflow` | story, run, proposal_create, report, launch | Enabled |
+| `automations` | Scheduled definitions and runs | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
-| `voice` | speak, stop, status | Enabled |
-| `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
+| `voice` | speak, stop, status | Only with voice configured |
+| `telegram` | register, unregister, begin, activity, finish, send | Only with Telegram configured |
+| `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
-The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+### Capability cutover and client migration
+
+`mcp_capabilities` is the persisted policy object. `denied` defaults to `["settings", "diagnostics"]`. Settings access additionally requires trusted UI opt-in. Parent capabilities deny every action in their domain; member capabilities deny only their actions. Listing, search, exact schema lookup and direct/meta dispatch apply the same live policy, including before the search index refreshes.
+
+On the first load, `disabled_native_tools` migrates to this object and is removed on save. Mappings: `task` → `agent_tasks`; `story` → `workflow.story`; `workflow_run` → `workflow.run`; `workflow_story_create` → `workflow.proposals`; `workflow_report` → `workflow.reports`; `workflow_launch` → `workflow.launch`; `design_mode` → `design`; `debug` → `diagnostics`; `remote` → `remote_deployment`; `plugin_dev_guide` → `plugin_reference`. Other current tool names map to the same-named capability. An old parent denial still denies all grouped actions. Unknown names are logged and retained in `migration_unknown_tools`; Settings displays them for review. They are not silently dropped.
+
+**Breaking change:** retired MCP names have no aliases. Use `agent action=task_get/task_cancel`, `workflow action=story/run/proposal_create/report/launch` (retain the generated `input` object), and `ui action=design_*`. Reconnect cached clients and update literal CLI calls and external allow rules. Existing `agent`, `workflow` and `ui` allow rules now cover their grouped actions; review that scope explicitly. HTTP/IPC service routes and `tuic story` do not change. Unknown external callers cannot be migrated automatically.
+
+Compact `tools/list` measurement (2026-10-20, serialized `tools` array only; no JSON-RPC envelope):
+
+| Mode | Before (`c79f74bfe3`) | After cutover | Change |
+|------|-----------------------|---------------|--------|
+| Classic | 92,781 bytes | 73,435 bytes | −19,346 bytes (20.9%) |
+| Collapsed | 3,581 bytes | 3,581 bytes | Unchanged |
+
+Both runs use zero upstreams, Settings enabled and optional owners unconfigured. The regression test `capability_cutover_rejects_retired_names_and_measures_catalogue` prints these compact byte counts and rejects every retired name. These are byte measurements, not token estimates or a complete configured-owner inventory.
+
+Settings reads `native_capabilities` from `get_mcp_status` / `GET /mcp/status`; each entry has `name`, `title`, `description` and `optional`. The six optional switches are Secrets, Telegram, Settings access, Diagnostics / JS inspection, Remote daemon deployment and Progress tracking. Additional restrictions contain core domains and migrated member capabilities. The unfiltered `native_tools` reference inventory remains available separately. Disabled and unavailable capabilities remain configurable; upstream policy, trusted Settings opt-in, Design Mode host grants, voice binding and deployment consent remain separate.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
 
 `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep` answers the
 currently open orphan cleanup dialog. A remove answer rechecks every pending
-worktree for tracked or untracked changes and a HEAD reachable from a branch;
-an unsafe or stale request is refused. The frontend consumes the answer and
+worktree for tracked or untracked changes, a HEAD reachable from a branch and
+live sessions inside it; an unsafe or stale request is refused. The frontend consumes the answer and
 closes the dialog before removal.
 
-Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
 
-#### `voice` is always listed and usually unavailable
+#### Conditional native tools
 
-It is listed whether or not anything is armed, and on builds with no audio at
-all. That is deliberate: `notifications/tools/list_changed` is not a discovery
-mechanism we can rely on — Claude Code never refetches on it — so arming cannot
-be what makes the tool appear. Instead the tool is always there and answers
-`action=status` with `available: false` plus a reason. A headless
-`tuic-remote` build answers the same shape, so a model reads one contract on
-both builds rather than an unknown-tool error on one of them.
-The headless no-audio answer follows the terminal binding check: an unbound
-connection is refused before it can receive a voice status.
+`remote`, `voice` and `telegram` use one shared availability predicate for
+classic listing, lazy search, exact schema lookup and direct or `call_tool`
+dispatch. A known name does not bypass a missing condition. Explicit native
+config denials still take precedence.
+
+- `remote`: at least one `RemoteRuntime` entry has `RemoteStatus::Connected`.
+  Saved records, connecting tunnels, failed authentication and health-only
+  probes do not count. Preview digests and session-loss confirmation stay in
+  the deployment owner and are not relaxed by this condition.
+- `voice`: the persisted `dictation-config.json` parses as `DictationConfig`
+  with both `enabled` and `hands_free_spoken_replies` true. A missing or corrupt
+  document is not configured. Engine selection is not the opt-in: an unset
+  engine resolves to Edge. This does not require an armed conversation or
+  probe the microphone, speech model or network.
+- `telegram`: the private setup config has `enabled=true` and a nonempty
+  `bot_alias`, and the private `bot.token` file exists. Discovery checks only
+  credential-file availability, never its contents. Network connectivity,
+  chat selection and agent registration remain separate runtime checks.
+
+Remote connected-set transitions and successful voice/Telegram owner setting
+changes send `notifications/tools/list_changed` through the existing HTTP SSE,
+bridge and ACP notification paths. The Telegram polling owner also observes
+cross-process setup revisions. Clients that ignore catalogue notifications
+must reconnect after a condition changes. The Settings tool inventory remains
+unfiltered so users can inspect and enable optional capabilities.
+
+A configured voice can still answer `available: false` with a runtime reason.
+A build without audio retains that answer after checking terminal binding;
+an unbound connection is refused before it can receive voice status.
 
 Every action is bound to the **calling terminal**: `resolve_mcp_origin_session`
 maps `mcp-session-id` onto a TUIC session, and that session must be the one
@@ -809,6 +1098,9 @@ dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
 
+**`ui action=toast` urgency.** `urgency` accepts `normal` (default) or `urgent`, the same names as `agent action=send`. Other values are rejected; the value rides the `mcp-toast` event on both transports. MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent.
+
+
 The toast also resolves the calling MCP session to its peer project, PTY cwd, or
 session repository metadata (in that order). The resulting `origin_repo_path` is
 dual-emitted with the toast so clients can show its source and scope retained
@@ -832,7 +1124,7 @@ This applies both to direct `{upstream}__{tool}` calls and to the collapsed `cal
 meta-path. A malformed upstream value falls back to the native compact JSON text
 envelope so the response remains protocol-valid and inspectable.
 
-#### `task` tool — long-running orchestration past the 300s ceiling
+#### Agent task actions — long-running orchestration past the 300s ceiling
 
 `agent action=wait` and `session action=wait` are server-side blocking long-polls
 clamped to `WAIT_MAX_MS` (300 000 ms). An orchestrator supervising a peer that works
@@ -845,9 +1137,12 @@ the outcome entirely.
 { "session_id": "…", "task_id": "…", "poll_interval_ms": 1000, "…": "…" }
 ```
 
-The handle is polled with `task action=get` instead of holding a wait open. This is
+The handle is polled with `agent action=task_get` instead of holding a wait open. This is
 purely additive — every field a pre-task client already read keeps its name and type,
 and a client that ignores `task_id` behaves exactly as before.
+The retired `task` tool has no alias. Its saved denials migrate to `agent_tasks`,
+which blocks `agent task_get/task_cancel`; disabling `agent` blocks all of its actions.
+The grouped actions use the existing task handler and registry.
 
 **Lifecycle.** A task is created `working` once the PTY is live (a refused or failed
 spawn leaves none). `mark_session_exited` (`pty.rs`) drives it to `completed` with
@@ -863,12 +1158,12 @@ non-zero — so the outcome is recorded whether or not anyone was listening.
 The vocabulary is the MCP `2026-07-28` Tasks vocabulary from day one, so the standard
 `tasks/*` front door stays a serialization change rather than a semantic remap.
 
-**`task action=get`** returns `{task_id, status, status_message?, result?, error_detail?,
+**`agent action=task_get`** returns `{task_id, status, status_message?, result?, error_detail?,
 poll_interval_ms}`, absent optional fields omitted. A failed task reports its reason in
 `error_detail`, **not** `error` — a top-level `error` always means the call itself failed,
 so reusing it would make a successful poll look like a broken one.
 
-**`task action=cancel`** marks the task `cancelled` and does **not** kill the agent
+**`agent action=task_cancel`** marks the task `cancelled` and does **not** kill the agent
 (`session action=kill` does that). Cancelling an already-finished task is not an error:
 it reports the state that stands with `cancelled: false`, so a cancel racing the agent's
 exit never looks like a failure. Because terminal states are immutable, a cancel that
@@ -893,16 +1188,20 @@ The `url` param of `action=tab` supports three schemes:
 
 | Scheme | Behaviour |
 |--------|-----------|
-| `http(s)://` / `file://` | Loaded in a sandboxed iframe |
+| `http(s)://` | Loaded directly in a sandboxed iframe; external HTTPS and localhost HTTP use the permissive `default-src` CSP. |
+| `file://` | Read via IPC and rendered as inline HTML in a sandboxed iframe |
 | `tuic://edit/<path>?line=N` | Opens a native code-editor tab at the given file and line. Absolute paths require a `//` prefix: `tuic://edit//Users/x/file.rs?line=42`. Relative paths resolve against the active repo root. |
 | `tuic://open/<path>` | Opens a native markdown/preview tab |
+
+Site `X-Frame-Options` and CSP `frame-ancestors` still apply. There is no per-directive CSP, including `frame-src`; `http:` and `asset:` in `default-src` preserve localhost wildcard ports and asset frames.
 
 Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside iframes and must not be used with `action=tab`.
 
 ### One tool family, and why the second one went
 
-TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
-`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `config`, `debug`. Few tools,
+TUICommander exposes **one** MCP tool family: `session`, `agent`, `repo`,
+`workflow`, `automations`, `remote`, `secret`, `progress`, `ui`, `plugin_dev_guide`,
+`voice`, `settings`, `debug`. Few tools,
 many actions.
 
 It used to expose a second — 13 flat `ai_terminal_*` tools behind the
@@ -986,6 +1285,17 @@ text it treats as a paste and then refuses the Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
 
+`session action=suspend session_id=<id>` asks the UI to end a tab's PTY and agent
+while keeping the tab restorable like after a restart (the user resumes it from
+the tab). It is refused with `Cannot suspend: <reason>` while the agent is
+working, a question awaits input, compose commands are queued or a plain shell is
+busy, for a session that already exited, and for the caller's own session. The tab
+performs the suspend after the `session-suspend-requested` event and answers through
+`session_suspend_response` (`POST /mcp/suspend-response`, `{request_id, ok, reason}`);
+the MCP call returns that verdict: `{ok:true}`, or `Cannot suspend: <reason>` when the
+tab refuses. It returns an error when no UI is attached (headless with no open event
+stream) and when no tab answers within 20 s. Localhost clients only.
+
 `session action=keep_open session_id=<id> enabled=<bool>` controls automatic
 idle closure for a managed child. `agent action=spawn keep_open=true` sets the
 same mark at creation, and `agent action=send keep_open=<bool>` changes it while
@@ -1003,6 +1313,7 @@ immediately before Enter. One response returns:
 | `turn_epoch` | Epoch advanced by the shared input FSM |
 | `composer_state` | Tracked `InputLineBuffer`: `cleared`, `partial`, `empty`, or `unknown`; not the application's semantic state |
 | `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
+| `detail` | For pre-write rejections, a human-readable cause and corrective action; unknown agent identity includes the current foreground process |
 
 The acknowledgement does not claim semantic application acceptance or task
 success. Default acknowledgement timeout is 3,000 ms; callers may request
@@ -1041,9 +1352,11 @@ marker and reserves `idle` for an unclassified ready state.
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | `8192` | Max bytes to read |
+| `limit` | `50` | Max scrollback rows, or source bytes for raw output. Whole logical lines and UTF-8 codepoints can extend a page beyond the limit |
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
-| `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
+| `since_cursor` | (none) | Forward page from a previous cursor (text: scrollback rows; raw: source bytes) |
+| `from_line` | (none) | Absolute text scrollback row; omit to read the tail |
+| `from_byte` | (none) | Absolute raw source-byte offset; omit to read the tail |
 
 `session action=input` and HTTP `POST /sessions/:id/write` share the same raw PTY
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
@@ -1067,6 +1380,36 @@ Tauri events and `/events` SSE.
 
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
+**Retained-output paging:** Every window reports `start_offset`, `oldest_offset`,
+`has_more`, `next_cursor` (null at the end), and `truncated`. A truncated response
+includes `continuation` with the exact `session action=output` request for the
+next page, or for older retained output when the default tail omitted history.
+For text, start with `from_line=oldest_offset` and follow `from_line=next_cursor`.
+The legacy absolute/tail `cursor` remains the total scrollback position; use
+`next_cursor`, not that snapshot cursor, to page. Delta `cursor` stops at the
+returned page boundary. For raw output, start with `format=raw,
+from_byte=oldest_offset` and follow `from_byte=next_cursor`; `since_cursor` also
+accepts source-byte positions. Raw `cursor` is the returned page end and
+`total_written` is the total original byte count, independent of redaction.
+Explicit raw pages mask sensitive bytes with `*` using the complete retained
+ring and terminal context before slicing, so even one-byte pages cannot
+reconstruct a secret. Clean absolute and delta pages also discover secrets from the retained terminal
+context, so a page containing only a multiline private key body stays masked,
+including when its footer is still on screen and its header is in scrollback.
+Tail snapshots retain the existing `[REDACTED]` format.
+UTF-8 starts round down and ends extend to whole codepoints. Invalid PTY bytes
+use lossy decoding without changing source-byte cursors. `data_length` counts
+returned UTF-8 bytes, which can differ from the source range.
+
+Buffers remain the only output store: text retains its configured scrollback;
+raw retains up to 2 MiB. Output appended after a read is available on later
+pages; this is not a frozen snapshot. A cursor older than `oldest_offset` starts
+at the oldest retained position and adds `missed_count` (rows or source bytes).
+Evicted output cannot be fetched. Exhausted/future offsets return an empty page.
+The HTTP `format=mcp|mcp_raw` and remote MCP proxy use this same serializer.
+Remote continuation notes also name the required `connection_id`.
+
+
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
 
 MCP `repo action=worktree_create` uses the same creation path as HTTP
@@ -1078,6 +1421,12 @@ shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are
 not copied. See `docs/api/http-api.md` § Create Worktree; both transports call
 the same shared core.
+
+The lifecycle event includes `creator_session` resolved from the MCP binding,
+never from a caller-supplied session id, and the requested `spawn_session` flag.
+Without a spawn request, the same-repository creator is reconciled from its
+reported cwd. A root coordinator does not move into a worktree merely because it
+created it. Other tabs and the active workspace selection stay in place.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -1100,9 +1449,18 @@ Non-Claude Code MCP clients do not receive this field.
 
 MCP `repo action=worktree_list` returns each worktree's `branch`, `path`,
 `kind`, optional `warm_artifacts`, and `lifecycle_status`. `lifecycle_status`
-comes from `inspect_workspace_lifecycle` — the same backend function the
-sidebar's `lifecycleStatus` and `repo action=worktree_lifecycle` already call
-— fanned out concurrently per worktree on the blocking pool:
+uses the same classifier as the sidebar and `repo action=worktree_lifecycle`.
+Inventory and per-checkout inspection run on the blocking pool. Listing reuses
+its inventory and the sidebar's ref-keyed integration proofs and cached GitHub
+answers, instead of repeating unchanged integration subprocesses for every
+checkout. GitHub evidence is cache-only on this request: a cache miss keeps the
+conservative local classification, and normal monitoring can populate the existing
+definitive-answer cache. Listing never starts a GitHub network lookup; this avoids
+waiting on API pagination behind the native CLI response deadline. Fresh Git and
+filesystem inspection can still take time, so this is not a hard wall-clock bound.
+Dirt, fingerprints and submodule commit counts remain fresh; the
+response fields are unchanged. If checkout HEAD differs from its branch ref,
+listing classifies that HEAD freshly. Removal preflights remain uncached:
 
 ```json
 {
@@ -1150,16 +1508,54 @@ deletion fails after a linked worktree is removed, the action still succeeds
 with `branch_delete_warning` populated so clients can report that the worktree
 was removed but the branch was kept.
 
+### MCP Tool: `repo` — Branch Integration Proofs
+
+`repo action=branch_integrations path=<repo>` returns an array for all local
+branches, including branches without a worktree. `repo action=branch_integration
+path=<repo> branch=<name>` returns one entry. Each includes:
+
+- `branch`, `tip`, `default_branch`, `commit_status`, `integrated`, and `proof`;
+- `archive_required`, `archived`, and `archive_ref` (`refs/archive/<branch>`);
+- `worktree_paths` (including the main checkout when applicable), and `error`
+  when classification cannot establish a verdict.
+
+Proofs use the same classifier as workspace lifecycle, sidebar refresh, branch
+panel and safe deletion. `ancestry`, `integration_ancestry`, `patch_equivalence`,
+`noop_merge`, and `squash_message` are structural evidence. A squash message
+must list every branch subject, either directly or as GitHub `* subject`
+bullets, and a clean virtual merge must also leave the target tree unchanged.
+`github_pr` retains the verified fetched-head proof. The `in_sync` status means
+no own commits need integrating; it returns `integrated: false` and `proof: null`,
+not a positive merge proof. The UI still excludes same-tip branches from its
+merged list.
+
+`content_superset` is a heuristic: exact same-subject twin patches ignoring
+only context and hunk coordinates, or 100% of added lines present with their
+multiplicity in the same regular files at the target tip. The latter rejects
+deletions, changed modes, binary files and incomplete final lines. Neither
+subject matches alone nor a partial percentage proves integration. An archive
+at the exact current tip is required before deleting a branch with this proof.
+`integrated` does not mean a checked-out or protected branch can be deleted.
+Unknown verdicts never authorize deletion. The query itself changes no refs,
+index or working files; Git virtual merges may write unreachable Git objects.
+
+Cleanup tools must query this MCP surface instead of duplicating Git checks.
+Refresh the query after archiving; deletion performs a fresh safety check.
+
 ### MCP Tool: `repo` — Local Branch Delete
 
 `repo action=branch_delete` takes `path` and `branch` and returns
 `{ "ok": true, "proof": "..." }` on success. It deletes only the local branch
 ref; it does not remove a worktree or touch a remote ref. The branch must be
 absent from every checkout and must not be the current integration or default
-branch. The same ancestry and merged-PR checks as worktree removal apply; if
-those fail, patch equivalence against the default branch can prove
-a squash-merged branch safe. Merge commits without ancestry or PR proof are
-refused because patch comparison cannot cover their resolution. The final
+branch. The shared integration proofs described above apply. Content-based proofs
+require an archive ref at the current tip (the primary `refs/archive/<branch>`
+or its tip-suffixed variant). When the proof is `archived`, the response also
+includes `archive_ref`, captured before deletion and naming the ref that holds
+the deleted tip. An archived unmerged tip
+also remains deletable through the existing `archived` recovery rule; that
+does not change its integration verdict. Merge resolution changes are never
+proved by `git cherry` or a same-subject twin comparison alone. The final
 delete compares the ref against the proved tip and refuses a moved ref.
 
 ## Upstream MCP Proxy
@@ -1169,12 +1565,14 @@ TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their 
 ### Upstream configuration save contract
 
 IPC `save_mcp_upstreams` and HTTP `PUT /mcp/upstreams` both accept
-`{ base, config }`: the snapshot the caller loaded and its desired result. The
+`{ base, config, credentials? }`: the snapshot the caller loaded, its desired result, and optional write-only secrets for newly added servers. The
 backend indexes servers by stable `id`, derives the semantic base-to-desired
 delta, and applies that delta to the latest on-disk configuration inside the
 cross-process `ConfigFile` lock. It validates and atomically persists the merged
 result while still holding that lock instead of replacing the file with a stale
 UI snapshot.
+
+Add-time credentials identify their new server by `server_id`. The locked merged config is validated before any vault writes. Existing vault entries are never overwritten by an add; failed partial writes or config persistence roll back new entries. The standalone credential endpoint defaults to refusing replacement and accepts `replace: true` for an explicit edit.
 
 Absence has explicit semantics relative to `base`: omitting a former server from
 `config` removes that ID, and omitting its former optional `auth` field clears
@@ -1183,6 +1581,8 @@ survive; in particular, a stale UI save cannot erase OAuth/DCR auth written
 concurrently for an otherwise unchanged upstream. Concurrently added servers
 also survive unless the caller independently adds the same ID, which is rejected
 as a conflict.
+
+Bearer, OAuth and secret-header vault entries store the intended MCP origin with the secret in one write. The HTTP credential resolver checks that binding before every request and before OAuth refresh; a mismatch sends no request and reports an origin error. Entries saved before origin binding require re-saving or authorization. Config saves cannot rebind existing credentials, even if auth metadata is cleared or an ID is replaced. The Settings form keeps its early origin-change rejection for a clear message: add an upstream with a different name for a different provider. Same-origin path edits retain auth metadata. OAuth refresh preserves the MCP origin captured at authorization, independently of the authorization server and RFC 8707 resource URLs.
 
 Persistence returns the exact configuration immediately before and after the
 locked mutation. Once the lock is released, `apply_config_diff` uses that exact
@@ -1193,6 +1593,11 @@ The desktop boot thread owns the always-on Unix-socket/named-pipe listener and
 its one-time background tasks for the lifetime of the process. A configuration
 save may stop and replace the TCP listener, but the boot runtime remains parked
 after that shutdown so dropping it cannot silently kill local bridge IPC.
+
+PTY children receive `TUIC_SOCKET` from the server's actual bound Unix socket
+path. This includes named `tuic-remote --instance` sockets and collision
+fallbacks. `tuic-bridge` honors this environment override before instance-based
+socket discovery, keeping child MCP calls on the spawning server.
 
 ### Stdio transport
 
@@ -1317,20 +1722,25 @@ the final positional argument rather than converted to deferred PTY delivery.
 Structured `model` is composed with `args`; a matching run config can supply a
 default `model`, overridden by the spawn parameter. Existing `--model` in
 run-config `args` stays authoritative and conflicts with an explicit model
-parameter. Direct Codex commands include the approval-bypass default. Outside
-authoritative run-config argv, direct executable identity also selects Codex
-prompt deferral and parser state, even when `agent_type` is omitted or
-disagrees. That bypass-default step leaves canonical Codex wrapper run-config
-argv untouched and adds `launch_warning` because TUIC cannot validate the
-wrapper's internal Codex flags.
+parameter. Literal `codex` selects the persisted default run configuration,
+including its editable approval-bypass argument. Only direct interactive Codex
+defaults defer the task through PTY injection; wrappers and subcommands retain
+run-config positional or placeholder task delivery. A Codex `exec`, `e`, or
+`review` subcommand is recognized only as the first positional argument before
+`--`, after skipping root options and their values. Profiles or models named
+`review`, `exec`, or `e` keep interactive task submission. Direct executable identity
+also selects Codex parser state when `agent_type` is omitted or disagrees.
+Composition never restores a removed bypass. Wrapper configs receive
+`launch_warning` because TUIC cannot validate their internal Codex flags.
 
 The optional `env` map uses the same field name and string values as HTTP
 `POST /sessions/agent` and desktop IPC spawn. Its values override run-config
 environment values. TUIC applies `TUIC_SESSION` and `TUIC_PARENT` afterward,
 so callers cannot replace peer identity. Environment values are redacted from
 spawn logs.
+Managed Claude peers default to `CLAUDE_CODE_TMPDIR=$HOME/Gits/.tmp/claude/`; TUIC creates this directory before spawn and preserves an explicit inherited, run-config or caller value.
 
-`name` optionally assigns a non-empty peer and PTY display name at spawn time.
+`name` optionally assigns a non-empty peer and PTY display name at spawn time, pinned against later `intent:` and OSC titles.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
 response, exposed as `name` by `agent action=list_peers` and as `display_name`
 by `session action=list`, and preserved when the child later auto-binds its MCP
@@ -1482,6 +1892,13 @@ These tabs remain in the existing tab stores while another repository is
 selected. Unpinned tabs reappear when the opening repository is selected again;
 pinned MCP tabs remain visible across repositories. Unpinning restores the
 opening repository scope.
+Native Markdown tabs opened through `ui action=tab` survive UI document reloads
+within the same window, including native recovery without a working unload
+handler. The frontend snapshots tab changes synchronously and restores their
+target, scope, pin state and selected tab from session storage; reopening the
+same MCP id updates that tab.
+Closed tabs are not restored. This does not persist tabs across app restarts.
+
 Native file tabs use the MCP `id` as their identity, so distinct ids do not
 collapse onto one file-path tab and repeating an id updates its target. The tab
 bar also keeps repo-scoped tabs visible when a repository has no active workspace.
@@ -1493,7 +1910,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    `tuic-bridge` sends the value as the `x-tuic-session` header on the initialize `POST /mcp`. The server
    validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
    → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
-   becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
+   becomes an optional rename. A client that scrubs the bridge's environment (ego launches stdio MCP
+   servers with only its config's `inherit_env`) sends no header; on initialize the server then walks the
+   `x-tuic-client-pid` ancestry for the nearest process holding a well-formed `TUIC_SESSION`
+   (`identity_from_client_ancestry`) and binds that. An asserted header always wins. The same MCP session may refresh its binding, and a fresh session
    may reclaim a stale owner; a subscribed or recently active owner is not replaced but is joined,
    so a second bridge in the same PTY becomes routable instead of being locked out. An existing
    peer's display name is preserved. The bridge's eager initialize and the downstream client's
@@ -1529,7 +1949,8 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by path).
 3. **Send**: `agent action=send to=<address> message="..."` buffers to the recipient's inbox.
-   `to` takes any of the three address forms — the peer's `tuic_session`, the id of the
+   `to` takes the peer's `tuic_session`, its registered `name` (as `list_peers` prints it;
+   two peers with one name are refused with the candidates), the id of the
    PTY it runs in, or that terminal's alias. `delivered` is the verdict and
    `delivery_path` is the single source of truth for the route and distinguishes SSE,
    terminal-or-queued, waiter, subscribed ACP inbox resource, generic/coalesced
@@ -1545,11 +1966,30 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — the following paths surface buffered mail:
+   - **Interrupting mail (explicit opt-in)**: `agent action=send urgency="interrupt"`
+     buffers the message first. For Claude Code, Codex and ego, a safe working
+     session receives one bare Esc. TUIC waits up to **10 seconds** for independently
+     confirmed idle, then submits the full message as one input through the shared
+     agent submit writer. An already idle session skips Esc. This explicit request
+     also applies to registered orchestrators. Normal and urgent behavior is unchanged.
+     A dialog/approval, draft, unknown foreground owner or uncertain earlier input
+     prevents injection. A dialog or draft appearing during the wait aborts it.
+     Unsupported agent types, missing PTYs and idle timeouts fall back to the existing
+     urgent notice/inbox paths; a dialog or draft keeps the composer untouched.
+     The response adds `interrupt_delivered` and `interrupt_fallback_reason`
+     (for example `unknown_agent_type`, `dialog_open`, `composer_has_user_text`,
+     `idle_timeout`, or `waiter_owns_delivery`). `delivery_path=interrupt_payload_and_inbox`
+     means the complete input was written, not that the model accepted or acted on it.
+     An active waiter receives the buffered body without an interrupt. A partial
+     payload write is reported as `write_uncertain` and is not followed by a notice
+     or automatic replay. **Risk:** an interrupted tool can leave partial work, and
+     its child processes may continue; this is not a rollback or a process-tree kill.
    - **Urgent notice**: `agent send urgency="urgent"` retains the peer body only
-     in the inbox. A busy managed Claude Code or Codex session with a safe,
+     in the inbox. A busy managed Claude Code, Codex or ego session with a safe,
      empty composer gets a payload-free notice through the guarded PTY writer.
-     The writer sends Enter, which both probed CLIs queue until the next tool
-     boundary. It does not interrupt the current tool. A draft, confident
+     The writer sends Enter, which Claude/Codex queue until the next tool
+     boundary. ego also durably queues plain Enter while busy and delivers it
+     after the running tool batch; Ctrl+Enter and Escape are not used. It does not interrupt the current tool. A draft, confident
      dialog, unknown agent type or exited PTY prevents this submission. The
      notice names the sender by validated UUID, never by a peer-controlled
      display name. The sender receives `urgent_delivered=true` for a notice
@@ -1557,6 +1997,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
      `false` includes `urgent_fallback_reason` for the queued fallback. The
      receipt cannot prove the model acted. One unread notice per sender and
      recipient covers further urgent mail until inbox observation clears it.
+     An unfinished notice reservation expires after 30 seconds so an abandoned
+     writer cannot suppress later urgent sends. Completion of the expired
+     reservation cannot settle a newer message's reservation; this lease does
+     not retry the earlier payload or claim that the model consumed it.
      The recorded CLI contract, including unused immediate-send gesture
      findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
@@ -1715,6 +2159,7 @@ When remote access is enabled:
 - Password stored as bcrypt hash in config
 - Session token, relay token, and VAPID private key stored in the OS keyring-backed credential vault
 - Applied to all endpoints
+- Mobile app: unauthenticated page navigations redirect to `/mobile/login`, which posts to `POST /auth/login` (same rate limit and bcrypt admission as Basic); cookie is sliding, 30 days by default — see `docs/api/http-api.md` "Authentication"
 
 When MCP-only (localhost):
 - No authentication required
@@ -1722,9 +2167,9 @@ When MCP-only (localhost):
 
 ## Security Model
 
-- **Default:** Localhost-only, no authentication, opt-in
-- **Remote access:** Configurable port, Basic Auth required
-- **CORS:** Enabled for all origins (browser mode support)
+- **Default:** Local IPC (Unix socket or Windows named pipe), with filesystem/user access controls and no HTTP credentials. The TCP listener is opt-in.
+- **HTTP authentication:** Every protected TCP request needs the existing URL token, session cookie or Basic Auth, including loopback and LAN clients. The legacy `lan_auth_bypass` preference no longer bypasses HTTP authentication. Login assets and CORS preflight are public; the headless health probe remains public.
+- **Request boundary:** Before authentication, every TCP request validates one Host authority (localhost, loopback/private literal IP, actual local interface IP, or the detected Tailscale FQDN). Missing, duplicate or foreign Host is rejected with 403. An Origin must be an exact bundled WebView/Vite origin or the HTTP/HTTPS origin of that validated Host. Foreign and opaque origins are rejected with 403 even with valid credentials. Cross-site browser requests are refused except from the explicit bundled/development origins. CORS uses the same origin policy and never a wildcard. Native clients without Origin still authenticate. Daemon Tailscale detection refreshes every 30 seconds through the desktop's shared state-publication path; the Host guard reads the current state for every request, so late startup, node renames and daemon stops update trust without a server restart. With detection completing within its 500 ms budget, acceptance after Tailscale becomes ready takes at most 30.5 seconds (plus scheduler delay). A timed-out detection publishes an unavailable state and retries on the next cycle; repeated CLI failure/timeouts cannot guarantee acceptance. Daemon TLS remains controlled by its explicit manual/off configuration.
 - **Compression:** Gzip and Brotli via `CompressionLayer` (responses >860 bytes, auto-negotiated). SSE and WebSocket excluded by `DefaultPredicate`
 - **No TLS:** Intended for local network use; use SSH tunnel for remote
 - **Loopback-only session actions:** `session create`, `submit`, `input`, `kill`, `close`, `pause`, and `resume` are restricted to loopback connections — a non-loopback (remote/LAN) MCP client cannot pause/resume sessions, write to PTYs, or spawn/destroy sessions (those remain read-only: `list`, `output`, `status`)
@@ -1760,3 +2205,701 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
+
+## Secret form security boundary
+
+`secret` supports `request`, `run` and `remove`; no action reads values. The
+backend owns the zeroizing store and process spawn. Native-window bootstrap
+privately distributes a per-form capability. Browser entry uses
+`/index.html#/secret-form?nonce=<capability>` on the existing application router,
+with the same authentication and transport policy. Requests require a desktop
+host. There is no separate server, TLS detection or origin isolation: an
+application-origin service worker can observe entry, and HTTP is not restricted
+to loopback by this feature. Boss accepted these limits on 2026-10-03.
+
+One shared pre-call gate blocks native `ui`/`debug`, direct upstream
+`tools/call`, and `call_tool`-wrapped inspection while a form is open. Results
+of already-running inspection calls are not withheld. The HTTP debug-JS handler
+also checks the form gate. The form mounts through the common frontend entry
+without starting App/debug/logging/terminal initialization. Run captures pipes,
+caps output and masks before serialization; it never writes raw output to
+logging or PTY paths. Consent templates match exact argv, names and directory.
+
+## Configured remote MCP ownership
+
+The desktop's native MCP session list includes the Rust remote mirror. Remote rows carry
+`connection_id` and `address` (`connection_id/session_id`). Session output and submit
+resolve that owner and use its configured HTTP URL and token. Output uses the daemon's
+native MCP cursor, redaction and exited-session contract through `format=mcp` or
+`format=mcp_raw`; submit uses the authenticated semantic submit endpoint.
+
+Peer discovery includes local and connected remote registries. Use a returned peer
+`address`, or pass `connection_id` with `to`. `local/id` addresses the desktop.
+The desktop opens an authenticated `/mcp/peer` WebSocket to each configured daemon.
+This duplex mail link carries register, list_peers, send, inbox and wait only; process
+creation is excluded. A daemon sends to the desktop or another daemon through the hub.
+The authenticated link determines sender provenance. Destination delivery reuses native
+inbox and wake handling, preserving the message body in the inbox.
+
+Local mail survives hub loss. Cross-host failure names the connection; uncertain
+acknowledgements must not be retried blindly. Lifecycle mail retains its message identity
+in the bounded native outbox until acknowledged. Reconnect retries those notices without
+duplicating an already retained destination message.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: each registered recipient keeps a FIFO ring of the last 100 forwarded
+message ids and fingerprints, shared across senders, without retaining message
+bodies. A retained id with a different sender or body is rejected as an identity
+collision. Recipient unregister removes that recipient's ring; sender retirement
+does not. Beyond the last 100 ids, a retry may be delivered twice, including when
+another sender's burst pushes its id out of the ring. There are no global budgets,
+host quotas or sender eviction rules.
+
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. The registered-recipient
+check and enqueue remain atomic with recipient retirement. This is a bounded
+replay horizon, not unbounded or restart-persistent exactly-once delivery.
+
+## Telegram adapter groundwork
+
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Without an explicit owner, the latest-connected live AI Chat peer is the fallback for inbound text and may use the reply tools. Explicit registration always wins. Connecting another AI Chat changes only future inbound delivery; existing requests keep their original reply peer. Request-specific reply tools require that peer’s MCP binding. Explicit registration takeover revokes pending requests. Other callers must register before outbound actions. Authorized text with neither a registered owner nor a live AI Chat peer gets "No agent is listening. Ask an agent in TUICommander to register for Telegram." and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
+
+Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
+
+Workflow operator authority is selected by the host: verified HTTP credentials grant Human, unauthenticated loopback grants LocalApi. Request JSON cannot select the actor. Workflow policy writes and human decisions, plus administrative story transitions, require Human authority.
+
+The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+## Launch receipt read
+
+`GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. Sessions without a captured launch brief still retain served MCP instructions and show an explicit launch-unavailable section. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).
+
+### Inbox consumption audit
+
+Every successful `agent action=inbox` read emits an INFO tracing event with `source="agent_msg"`, `event="inbox_read"`, `caller_session_id` (the MCP protocol session), `caller_peer_id` (the bound TUIC peer), `inbox_owner` (that peer), and `message_ids` (a JSON array of returned ids). Empty reads emit an empty array. No message bodies are logged. The audit does not grant access to another peer's inbox: caller and owner remain bound by MCP registration. Read `/logs?source=agent_msg&level=info` and filter `event=inbox_read`.
+
+Conversation-specific launch is available through `POST /acp/chat/open`; see the HTTP API guide. It creates an ACP peer, without a terminal tab.
+
+### Agent-declared worktree placement
+
+An agent that uses `git -C` or tools without changing shell cwd can declare an
+existing linked worktree with:
+
+```text
+session action=declare_worktree worktree_path=/absolute/path/to/worktree
+```
+
+The authenticated MCP binding identifies the caller's live PTY. Omit
+`session_id`; a foreign session target is rejected. The backend resolves the
+repository from the immutable launch directory and discovers current worktrees
+from Git. The main checkout, unknown paths and worktrees owned by another
+repository are rejected before any configuration or placement changes. External
+worktrees are discovered without recreating or deleting them.
+
+The response and `session-worktree-declared` event use the worktree lifecycle
+payload, with `creator_session` naming the caller and `spawn_session=false`.
+Only the caller’s tab moves to the declared workspace, without changing shell cwd.
+Sibling tabs and an inactive selection stay unchanged. If the caller is active,
+its selected workspace follows the same tab. Retrying the declaration is idempotent.
+
+The stable `TUIC_SESSION` association is stored in the owning repository's
+`declaredWorktrees` map using the existing locked repository delta. Any saved
+caller snapshot moves to the target workspace; sibling snapshots are preserved.
+After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
+`list_active_sessions` return the declared `worktree_path` and `worktree_branch`
+while `cwd` remains the reported shell directory. The frontend restores tab
+placement from the persisted stable `TUIC_SESSION` declaration across registered
+repositories, independent of the current cwd-derived owner, when its workspace id
+and checkout path still match. Declaration does not acquire
+worktree cleanup ownership.
+A concurrent repository edit can return a configuration conflict; retry the
+declaration after refreshing rather than overwriting that edit.
+
+The association owns display placement during later shell cwd notifications,
+reconnect and saved-tab restore. A removed or replaced checkout invalidates it.
+Worktree removal checks each terminal’s current cwd, not its declaration or sidebar
+membership.
+
+**Intentional request transport exception:** `declare_worktree` is an MCP-only
+action, callable over the existing HTTP `POST /mcp` route with a bound caller.
+There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
+agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
+and session-list response fields are identical over IPC and HTTP. Schema and
+serialization regressions cover these shared contracts.
+
+### MCP Tool: `automations`
+
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed runs send the bound creator one `automation_run_failed` inbox message
+with run/definition ids and reason, including pre-spawn failures. The existing
+peer mail route supplies payload-free wakes; SQLite claims the `owner` channel
+before delivery, so repeated publication and restarts do not resend it. A
+missing creator registration leaves delivery unconfirmed; bell behavior stays
+unchanged for definitions without a creator.
+
+The native `automations` tool accepts the same top-level action object as
+`automation_action` IPC and the `input` in `POST /automations/action`.
+Actions include `list`, `get`, `create`, `update`, `pause`, `resume`, `delete`,
+`run_now`, `run`, `list_runs`, `summary`, `preview`, `preview_definition` and `preset`.
+See the HTTP API Automations table for fields and results. List returns rows
+with `definition`, `next_run_ms` and `last_status`; create/update return the saved
+definition. Update accepts a full definition (optional id), or id and enabled.
+Errors use `{ "error": "..." }` with the identical backend validation text.
+
+A bound agent can create a one-shot in one call:
+
+```json
+{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600,"run_config":"Your saved profile"}}
+```
+
+The host resolves the elapsed delay from its own UTC clock. It defaults repository
+from this caller's live cwd, ACP root or registered project, never another tab.
+`run_config` must be explicit: current caller metadata does not retain the actual
+saved account/model profile. The host never substitutes the agent type's default
+profile. An omitted profile returns `{error,code:"caller_profile_unresolved",field:"run_config"}`.
+Generated IDs combine the name with a SHA-256 hash of caller identity and the
+original request before defaults and clock resolution. Repeating that request
+returns the first saved occurrence, including when caller cwd has changed or is
+no longer available. Concurrent retries share one locked insertion. To create a
+separate identical reminder, supply a new explicit `id`. Explicit-ID duplicates
+still fail. Other defaults are existing workspace,
+enabled=true, grace_secs=43200, overlap=skip and max_duration_secs=3600.
+Create returns the saved fields plus `next_run_ms` and the resolved
+`once_local`/`timezone`; no date, list or get call is needed. `in_secs` must be a
+positive integer and cannot accompany cron or `once_local`. The stored `once_at`
+preserves the exact UTC instant across DST folds. Preserve it for unchanged
+schedule edits, or clear it when changing the schedule. Computed `next_run_ms` is
+read-only and is ignored when a reply is passed to update or preview. The MCP
+schema declares this field as a read-only nullable integer so a saved reply also
+passes the closed-object update/definition-preview property boundary.
+
+MCP creation requires a bound agent session. The host sets `created_by_session`;
+input cannot impersonate a creator, and updates preserve the original creator.
+Pause/resume edit only `enabled` under the store lock. Deleting a definition
+retains run history. `run_now` uses the same runtime owner and refusal rules as
+HTTP/IPC. All adapters call `automations::api`; MCP does not parse a second
+action enum or implement scheduler logic. The MCP endpoint is `POST /mcp`.
+
+`tuic automations '<action JSON>'` (or `tuic automations -` for stdin) forwards
+unchanged arguments over HTTP-over-IPC MCP into this same API. CLI failures
+print the backend message on stderr and exit nonzero; successes print JSON.
+
+### Automation HTTP/IPC adapter
+
+The shared desktop/headless router exposes `POST /automations/action` with
+`{input:{action:...}}`. `automations::api::execute` is also the Tauri command
+implementation; stores, schedule rules, aggregates and execution ownership stay
+in Rust. `COMMAND_TABLE.automation_action` maps the same input without renaming
+fields. Route snapshots and registered-route PATCH probes cover this route.
+MCP and CLI use this same action parser, runtime owner and result contract.
+HTTP and MCP/CLI validate static automation inputs with the same advertised
+schema before dispatch. HTTP returns status 400 with the identical structured
+`invalid_arguments` payload, including bounded, value-masked violations and
+`effect=not_started`. Semantic application error messages still match IPC
+rejections and MCP/CLI errors; IPC retains its string-error signature.
+MCP additionally requires a bound creator identity for creation.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+PR line review routes (`/repo/pr-line-threads`, `/repo/pr-open-threads`, `/repo/pr-thread-comments`, `/repo/pr-thread-resolved`, `/repo/pr-thread-reply`, `/repo/pr-draft-review`) share account resolution and backend behavior with their desktop commands.
+
+The PR action routes (`/repo/pr-action-state`, `/repo/pr-auto-merge`, `/repo/pr-merge-queue`, `/repo/pr-merge-or-enqueue`, `/repo/pr-rerun-failed`) share account-aware backend logic with IPC. Successful rerun means accepted, not completed.
+
+## Core accounts owner surface
+
+IPC `account_action` and HTTP `POST /accounts/action` share one Rust service and presence-only replies. Both HTTP routers require loopback or authenticated API access. The Settings MCP adapter can consume the owner service/schema after integration; account actions are not a new standalone MCP tool or an unrestricted plugin invoke grant. See [Shared account registry](github.md#shared-account-registry).
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode lifecycle tool
+
+The `ui` tool exposes `design_start`, `design_stop`, `design_status`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and `design_eval`. These actions delegate to the existing Design Mode owner: the caller must own the armed repository for browser commands, remote hosts still require an extension host grant, and JavaScript still requires its optional host grant. A saved `design_mode` denial migrates to the `design` capability and still blocks these actions; disabling `ui` blocks all UI actions. The separate `design_mode` tool is removed without an alias. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+
+The GitHub settings owner adapter supplies typed device-login, Enterprise account,
+credential, label and binding actions for the later settings transport cutover.
+It is an internal service boundary; this adapter step registers no new MCP tool,
+HTTP route or IPC command. Its reads and results contain credential presence only.
+
+### Internal Ego settings adapters (#1775-330c)
+
+`settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
+or `machine` for the user base. It captures trusted executable, workspace and
+profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
+`config capabilities/snapshot/batch`, `models --json` without refresh, and `auth status`.
+The model slug selects the provider. Managed DTOs discard unknown owner fields;
+credential type/expiry and process diagnostics never enter settings replies,
+effects or audit data. Credentials are read-only set/unset markers.
+
+Managed keys (`model`, `roots`, `network`, `exec_paths`) are atomic leaves.
+Null/reset sends an owner unset; explicit empty arrays stay explicit. A patch is
+one `config batch --if-revision` against the opaque revision from `config snapshot`.
+This protects against external CLI writers as well as host requests. Atomicity is
+limited to the selected Ego user document, never other settings stores. Owners
+without advertised atomic batch and compare-and-swap support fail closed.
+Base-only provider headers and credential commands have typed write-only auth
+actions (`EgoAuthAction`) and presence-only catalogue fields. Auth actions always
+select the base owner, independent of the launch profile. Profile-target reads
+of these machine-owned auth paths return `not_found`, not a false unset status. No read executes a
+credential command or attempts to recover an owner-redacted value. Failed
+readback after a successful write reports `persisted: true` and `nextAction: get`.
+
+Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
+`app` store and its `AppSettingsStore` owner. The adapter is internal; settings
+transport registration and executable confirmation belong to later plan steps.
+The Providers tab shows the base model when the configured profile has none, as
+Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
+identical shapes; model reads/writes now honor configured profile/workspace.
+
+Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
+`build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable
+URL, title and body. The shared Rust implementation reads the repo-contained
+`.tuic-start-work.md` and sanitizes item fields before substitution. The frontend
+passes the result to the provider; host delivery still wraps and caps it.
+
+## Tasks items through the repo tool
+
+`repo action=work_item` reads the item linked to the caller's current Git worktree branch in `workitem_links.json`, searching all registered paths sharing its canonical repository root. Explicit targets are `reference: {providerId, accountId, id}`, `url`, or `key` with `provider_id` and `account_id`. URL lookup uses registered plugin resolvers. Key lookup uses the selected provider's search and requires an exact key match; repeated cursors and ambiguous matches fail. Use a reference or URL when the provider cannot find a key through search.
+
+The response has `content`, with a JSON detail inside `<untrusted-content source="work item">` and its closing tag. Detail includes the first comments page. Pass `cursor` from `comments.nextCursor` to read the next comments page, with `limit` (1–100, default 50). All provider text, including metadata, stays inside the block. JSON escapes angle brackets so item text cannot forge a closing tag.
+
+`repo action=work_item_act` accepts the same target and `operation: {kind: "comment" | "transition", value: string}`. Transitions use provider action IDs. Writes fail before provider dispatch unless `mcp_work_item_writes` is true; it defaults to false. The setting is checked again before a frontend claims the write. An action result contains the updated detail in the same block.
+
+Rust owns target selection, input/reply validation and opt-in. A typed `work-item-provider-request` event reaches the existing frontend registry through desktop events and SSE. The frontend atomically claims a request with `work_item_provider_bridge`, calls the existing provider port and completes the reply. Multiple clients cannot dispatch the same request twice. Claims and completions have matching IPC and HTTP transports (`POST /work-items/provider-bridge`). A running frontend with the provider loaded is required; a headless daemon alone has no JS providers. Requests time out after 30 seconds. A dispatched write may have completed when the reply times out: read before retrying.
+
+Credentials stay in Rust's existing account-authenticated HTTP path, which redacts raw tokens and Basic encodings before provider JavaScript receives a response. MCP accepts only the Tasks DTOs and suppresses raw provider errors; it never serializes account objects or configuration.
+
+### Background tray and menu-bar icon
+
+The desktop `close-dialog` event and its SSE copy include `background_available: boolean`. The desktop Ask dialog uses it to omit Background when the tray is disabled or unavailable. Browser clients continue to ignore native close prompts; tray actions add no public request surface.
+
+When the desktop WebViews are deliberately unloaded in background mode, `ui` actions return `{"error":"webview_unloaded"}` immediately. This does not affect PTYs or remote terminal streams. SSE emits `background-mode-changed` with `state` equal to `hidden`, `unloaded` or `visible`.
+
+Design Mode browser commands (`navigate`, `reload`, `screenshot`, `errors`, `eval`)
+return correlated native-port results with a ten-second timeout. Direct MCP tool
+lists, meta search and schema lookup filter Design Mode by the armed terminal
+session; cached-tool dispatch checks the caller and repository again. Start remains
+callable by its known tool name before arming. Arm/Stop broadcasts
+`notifications/tools/list_changed`; live client refresh remains a verification item.
+
+### Settings proposal confirmation (#1786-9cbd)
+
+`ui(action=confirm, proposalId=...)` accepts an opaque proposal from the shared
+settings service. The host supplies the title and redacted diff; supplied
+`title`, `message` and `confirmed` cannot approve or replace it. The existing
+`mcp-confirm` event reaches desktop and SSE clients, and the existing human
+response endpoint/IPC command settles the first answer. A pending dialog uses the
+remaining portion of the proposal's absolute 300-second lifetime. Cancelling its
+handler dismisses the question and revokes the proposal. Ending an MCP protocol
+session revokes its proposals and grants. Headerless confirmation requires a
+server-issued connection identity.
+
+The service boundary rejects remote MCP writes regardless of peer registration.
+Local MCP enablement, HTTP local-or-authenticated access and native OS-user trust
+remain distinct host-issued contexts. The replacement settings tool and HTTP/IPC
+routes are not published by the policy foundation; cutover wires those contexts
+into the same service rather than duplicating policy.
+
+
+Durable session wake is shared by MCP submit and peer mail, IPC `resume_session`, and authenticated/local `POST /sessions/wake`. MCP list/status include retained tabs as `state:"hibernated"`. Mail remains durable in the inbox if wake fails; the response includes `resume_error`.
+
+### Account-scoped GitHub review and action ports
+
+`host.githubReviewThreads(account, reference, after)` returns the core B6 review
+thread page, including head SHA, bot authors and parsed findings.
+`host.githubPrAction(account, reference, request)` calls core B7 policy.
+Both require `net:http` and an on-disk manifest declaring `providers: ["github"]`.
+The reference must identify a GitHub pull request in the selected account. Core
+loads that exact account credential, never a local repository default. Cross-account
+references fail before credential lookup. No token is returned to the plugin.
+
+Requests use `action`: `state`, `auto_merge` (`enabled`, optional `mergeMethod`,
+`expectedHeadSha`), `queue` (`enqueued`, optional `expectedHeadSha`), `merge`
+(`mergeMethod`, `expectedHeadSha`), `rerun` (`runId`), or `review` (`draft` with
+`headSha`, `body`, `event`, `comments`). Existing core reviewed-head validation,
+merge queue policy and shared request budgets apply unchanged. The desktop command
+`plugin_github_action` and `POST /api/plugins/{plugin_id}/github` accept identical
+`{account, reference, request}` payloads (IPC also supplies `pluginId`).
+The GitHub Work runtime binds both ports when it registers each configured account.
+No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Settings cutover (#1787-4778)
+
+`GET /config` and `PUT /config` are registered once in `shared_routes()` for browser Settings hydration, non-saving refresh and legacy owner saves. Their authentication and secret-redacted readback are unchanged.
+
+`POST /settings/action` is registered once in `shared_routes()`, so desktop and headless daemons use the same handler, authentication policy and value-free Settings event publisher. Upstream OAuth startup requires a desktop host; the headless owner returns `unavailable` before upstream lookup or network access.
+
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+
+MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
+
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
+Plugin HTTP fetch and cancel routes use the shared `plugin_http` implementation. The optional `requestId` is scoped to the plugin; cancellation drops the entire request future, including authentication preparation, headers and streamed response body.
+
+`session action=force_retry` is a blocking, localhost-only terminal control.
+It resolves the normal session address, requires a live ego recovery snapshot
+and an empty tracked composer, serializes input and submits `/retry` once via
+the standard agent writer. It does not queue or attach ACP. Remote-qualified MCP
+session control remains limited to the existing supported remote actions; the
+browser status-bar control uses its owning daemon's normal PTY write transport.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+### Settings startup contract
+
+See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. Typed `list_accounts` and Ego `begin_login`/`login_status` use the same owner facade. Login launches the configured process directly in a tracked human terminal, not an arbitrary-command or ACP fallback; status separates process lifetime from credential readback.
+
+### CircleCI credential settings (#1991-bd88)
+
+The machine-scoped `circleci.token` descriptor is write-only. Read
+`{action:"get",target:{kind:"machine"},store:"circleci",paths:["/token"]}`
+through MCP `settings`, IPC `settings_action`, or HTTP `POST /settings/action`.
+Readback returns only `stored.status` and `effective.status`: `set`, `unset`, or
+`unavailable`. It describes the stored TUIC token, not environment or CLI fallbacks.
+Use `{action:"perform",target:{kind:"machine"},store:"circleci",operation:{action:"set_token",token:"..."}}`
+or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
+owner; replies contain only token presence. Clearing the stored token does not
+remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
+continues to show the effective token source. No transport returns the token.
+
+### Machine launch instruction previews
+
+`GET /config/defaults` and `POST /config/defaults` are shared machine routes on
+both the desktop server and `tuic-remote`. The POST previews draft agent settings
+without saving them and uses the same authentication as other machine config routes.
+
+Launch-capable Claude, Codex, Grok, OpenCode, Goose, pi and ego clients receive playbook obligations from generated launch files, not again from MCP initialize instructions. MCP keeps tool discovery and live repository/session/peer state. Unrecognized clients retain the existing MCP marker, submit, worktree and progress fallback.
+
+### Idempotent managed launch
+
+Prefer `agent action=launch` for a managed worker that needs a selected/new workspace and a durable retry identity. One request composes worktree allocation, named spawn, parent linkage and keep-open policy; unkeyed `spawn` remains compatible. The shared Rust boundary also serves `POST /agents/launch` and `managed_agent_launch` IPC. See [the wire contract](../api/http-api.md#durable-managed-agent-launch). Read by `launch_id` without sending a new prompt.
+
+A SQLite journal reserves identity before side effects and uses revision compare-and-swap to prevent concurrent checkpoint owners from both creating resources. An app-scoped async mutex serializes launch mutations; filesystem/process work remains on the existing allocation/spawn paths. A lost reply reuses the child. An uncertain interrupted side effect blocks instead of retrying or changing checkout. Native session/prompt state determines delivery and readiness, never output movement alone. The existing spawn name pinning and managed idle-close exemption are reused. Routing, account choice and local brief rules are not TUIC policy.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation. The existing 30-second deferred-prompt watchdog also applies to parentless run-owned children: a timeout reports blocked, retains the queued prompt and never creates a replacement.
+
+### Compact inventories and byte-bounded response snapshots
+
+`session action=list session_id=<address>` resolves one session through the same
+address resolver as other session actions. `agent action=list_peers to=<address>`
+uses the send recipient resolver; `connection_id` or `connection/peer` selects a
+remote owner. Missing or ambiguous targets return errors, not empty success.
+Both inventories accept `compact=true`. Rows keep identity/address fields,
+`state`, `activity_age_ms`, and `omitted_fields`. Unknown state is `"unknown"`;
+unknown activity age is `null`, never zero. The omitted-field list names removed
+fields. A failed remote inventory remains an error or `connection_errors`, not
+proof that no peers exist. Activity age comes from the backend session snapshot;
+a peer without a live terminal has unknown state and age.
+
+For `agent action=inbox` and `session action=output`, set
+`byte_budget=4096` (integer range 1024–65536) to request an immutable snapshot:
+
+```json
+{"encoding":"json-text","chunk":"...","offset":0,"total_bytes":49162,"continuation":"opaque token","omitted_fields":[],"expires_after_seconds":300}
+```
+
+The budget counts **UTF-8 bytes of the compact JSON page object**, including its
+escaped `chunk` and all page-envelope fields. It excludes JSON-RPC, MCP content
+blocks, HTTP headers, and transport framing. Even one oversized item is split;
+UTF-8 codepoints stay whole. Concatenate decoded `chunk` strings in page order,
+then parse the resulting JSON to obtain the original response. No fields or
+retained text are removed. `total_bytes` and `offset` refer to that reconstructed
+JSON text, not the escaped page object. `continuation=null` marks the final page.
+
+Repeat the same action, target and connection with the returned `continuation`.
+A continuation defaults to a 4096-byte budget if `byte_budget` is omitted. Tokens
+are bound to the inbox owner or output caller and operation/target; changed
+window arguments do not recapture the snapshot. Repeating a page is safe.
+Snapshots expire 300 seconds after capture, on restart, or when the shared cache
+needs space (128 snapshots, 32 MiB of serialized snapshot text). Invalid,
+foreign, expired or evicted tokens fail explicitly with `restart_required` when
+applicable. Start a new read; do not treat the error as an empty result.
+
+The inbox read cursor advances only when the final chunk is returned. A partial
+or abandoned read does not consume mail or its eviction count. Final-page replay
+does not acknowledge later evictions again. Explicit `since=0` remains replay,
+and cursor advancement remains monotonic. Concurrent new mail stays unread;
+concurrent terminal output does not alter an existing snapshot. Inbox retention
+loss is still reported as `missed_count`; expired terminal retention is still
+reported by the existing output-window metadata. A captured snapshot remains
+readable even if its source ring rolls over. The byte bound cannot recover data
+already lost before capture.
+
+Without `byte_budget` or a token, existing response shapes and cursor behavior
+stay unchanged. Errors remain errors; an error detail that itself exceeds the
+budget becomes `response_error_exceeds_byte_budget` with an explicit omission.
+The shared native handlers own validation and paging. MCP, the IPC MCP bridge,
+and HTTP `format=mcp|mcp_raw` use those handlers; the remote output proxy forwards
+byte budgets and tokens without rewriting the bounded envelope.
+
+Fixture provenance: `src-tauri/src/fixtures/mcp-output-2005.txt` captures the
+49,162-byte response cited in the 2026-10-17 MCP usage audit, coordinator transcript
+result line 168437. It is historical terminal text, not a current-state assertion.
+`src-tauri/src/fixtures/mcp-inbox-2005.txt` captures the audit's 49,609-byte inbox
+response, private TUIC transcript result line 3239. The regression also covers
+multibyte and escaped oversized inbox content.
+
+#### Review clarifications: loss watermarks, wait and local continuation scope
+
+All inbox readers use one delivery-gate acknowledgement boundary. A captured
+byte snapshot records the monotonic eviction watermark at capture time. Final
+completion acknowledges only the previously unacknowledged part of that range.
+Two overlapping snapshots cannot subtract the same historical missed count
+from later losses. An ordinary inbox read advances that same watermark; there
+is no separate byte-page read cursor or client acknowledgement protocol.
+
+`agent action=wait` is **not byte-bounded**. Supplying `byte_budget` or
+`continuation` to wait returns `wait_byte_budget_unsupported` before registering
+a waiter or consuming mail. Use byte-budgeted inbox reads for bounded payloads.
+The existing wait claims and acknowledges mail before its response is returned.
+Adding deferred completion to it would create another acknowledgement model;
+wait paging must instead use the shared subscription/ack reconciliation tracked
+by #2004-4760. This story does not claim to reduce the audit's 14,763-byte wait
+response maximum.
+
+A daemon must support the byte-page envelope to serve a byte-budgeted remote
+output request. The desktop proxy rejects unpaged legacy-daemon responses and
+pages that exceed the requested compact-JSON budget. It does not pass through
+an oversized legacy body merely because `exited` is present. Update an
+incompatible daemon; do not retry without a budget unless unbounded output is
+actually desired.
+
+Full session inventory exposes known `last_activity_ms` from the backend
+snapshot. Compact projection derives `activity_age_ms` from that timestamp;
+a missing or zero timestamp remains unknown. An exact registered local peer
+name is resolved before interpreting a slash as a connection qualifier. With
+an explicit connection selected, a daemon-local slash-containing name remains
+a name unless it carries that same connection prefix.
+
+Inbox tokens are scoped to the bound peer identity. Local native MCP output tokens
+are scoped to their MCP session and target; proxied remote output uses the
+owning daemon's HTTP scope. HTTP MCP-compatible output and the
+IPC MCP passthrough intentionally share the local `ipc` continuation scope for
+the same target: either local-user transport can resume a token issued by the
+other. Tokens are opaque snapshot references, **not authorization credentials**;
+normal endpoint admission and the local OS-user trust boundary still apply.
+
+### Frame workload dump
+
+The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).
+
+## Runtime call outcome audit (#2010-30a7)
+
+`GET /mcp/audit` returns at most 100 newest completed/cancelled `tools/call`
+observations from an instance-local 1024-record memory ring. `retained`, `evicted`,
+`capacity` and `limit` describe retention. Restart clears the ring. HTTP and ACP
+both enter `mcp_post`, so a collapsed call is one runtime ingress record, not an
+extra inferred hop. Existing inbox-read audit records are unchanged.
+
+Each row has a server `call_id`, optional UUID `client_call_id` and
+`parent_operation_id`, catalogue-recognized native `operation`, optional SHA-256
+`target_digest`, start time, `response_text_bytes`, `application_error`,
+`transport_error` and `effect`. Unknown/upstream tool names are digested. Arguments,
+response bodies, arbitrary metadata and error messages are never retained.
+The target digest covers the first string target among `to`, `session_id`, `path`,
+`worktree_path`, `id`, including the field name and a NUL separator. It is a grouping
+key, not authorization or anonymization against a known-value dictionary.
+
+Clients may supply UUIDs in `params._meta["tuic/call_id"]` and
+`params._meta["tuic/parent_operation_id"]`; invalid values are omitted. Use a new
+call UUID per attempt and a common parent UUID for one intent. Different target
+hashes in a batch are distinct operations, not evidence of retries. Neither a
+shared parent nor a repeated target proves an attempt is a retry.
+
+Text cost is the sum of UTF-8 byte lengths of top-level MCP `content` blocks whose
+`type` is `text`, after response formatting. It excludes JSON escaping, envelopes,
+resources, images and transport overhead. A native `error:null` is not an
+application error; upstream `isError` is preserved. Error text is not copied.
+Only explicit native `effect=not_started|completed` is retained; other effects
+remain `unknown`, including application refusals without an effect contract.
+A cancelled dispatch has unknown application outcome, no observed response bytes,
+`transport_error=cancelled_before_reply` and unknown effect. A constructed reply
+has `transport_error=unobserved_after_reply_construction`: this does not prove
+client delivery or absence of a lost reply, and is never rollback evidence.
+
+The projection counts actual MCP ingress, not all Codex model custom calls.
+Client-side correlation/captured traces are needed to identify Codex attempts that
+never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
+to derive call counts. No OTel exporter is enabled by this feature.
+
+The [partial live recording](../../src-tauri/src/mcp_http/fixtures/outcomes-partial-2010.md)
+records a real ego-selected call with a server-retained client UUID, an application
+refusal, and a client disconnect over local IPC. It excludes response bodies and
+does not complete the four-outcome fixture: real client permission denial and
+rendering success still require recording. A successful speech-status read is
+not rendering evidence.
+
+## Managed stateless reconnect context (#2008-5317)
+
+A modern `tools/call` without `mcp-session-id` can recover mail/project routing
+from an exact host-issued `x-tuic-session` only when that peer has a live PTY or
+ACP root. The internal `managed-call:<peer>` routing key is not a wire protocol
+session: the response does not introduce a legacy session header. Existing
+binding ownership, sibling-bridge policy and replacement migration remain the
+only identity mutation seams. Project resolution still follows the live binding;
+it never uses the focused repository, a display name or an invented path.
+
+An unknown/headerless peer receives `code=identity_context_required`,
+`effect=not_started`, `retryable=false` and bounded repair guidance. Managed
+callers must reconnect using host context; external callers initialize and then
+register on that protocol session. `repair.max_attempts=1` and
+`retry_after_context_change=true` prohibit an unchanged retry policy; the client
+must enforce that bound. Server diagnostics alone do not prove ego compliance.
+An external caller without a project still receives the Progress core's explicit
+`project_required` error, never a guessed project.
+
+## Durable independent mail subscriptions
+
+`agent action=subscribe subscription_id=pump filter=actionable` creates a reader
+owned by the bound peer identity. Repeating it resumes the same reader. Use a
+separate ID for each pump or watcher. The filter is immutable: `actionable`
+(default) excludes routine TUIC lifecycle/idle notices; `all` includes them;
+`exit` selects exits, including failed exits; `failure` selects nonzero exits
+and prompt-delivery failures. Peer messages, including `BLOCKED` and `RESULT`,
+remain actionable regardless of their wording. Unknown system notices fail open
+as actionable. No model-side lifecycle classification is needed.
+
+Read with `agent action=inbox|wait subscription_id=pump [limit=1..100]`.
+The reply contains `messages`, `count`, `cursor`, `acknowledged_cursor`,
+`missed_count`, and `has_more`. A filtered wait returns only for matching mail
+or matching retention loss. Routine traffic does not end the wait. For a
+continuous background consumer, use the HTTP event stream below or subscribe
+to the ACP resource; the consumer does not need a model-driven wait loop.
+Subscription batches do not use the legacy byte pager: `byte_budget` and
+`continuation` are rejected before either reader is consumed. Use `has_more`
+after explicit ACK to request the next bounded batch. Wait retains its separate
+lease path and also rejects byte paging.
+
+After processing a batch, call `agent action=ack subscription_id=pump
+cursor=<returned cursor>`. Reads do **not** acknowledge. A pending batch's message
+range is frozen until acknowledgement, so a retry cannot expand it to include
+new results. A changed limit takes effect after the pending batch is acknowledged. Acknowledgement is durable and idempotent. Read again after ack
+when `has_more` is true. A reconnect under the same peer identity and reader ID
+resumes after its acknowledged cursor. Reclaim the same explicit peer UUID when
+registering a new headerless MCP connection. Changing UUID does not migrate
+subscription cursors; legacy `replaces` still migrates the legacy inbox only.
+
+Delivery is **at least once until acknowledgement**, not exactly-once execution.
+If processing succeeds but ack does not reach the server, the retained batch is
+replayed. Deduplicate external effects by message ID. Acknowledged results do
+not replay. Concurrent readers must use distinct subscription IDs; sharing an ID
+means sharing its acknowledgement. Subscriptions never acknowledge another
+subscriber or advance the legacy inbox cursor. Explicit subscription ACKs mark
+exact matching live message IDs as observed under the same recipient delivery
+gate as legacy snapshot ACKs. This prevents a later FIFO eviction from counting
+already-delivered mail as lost. It does not acknowledge the legacy loss watermark;
+only the legacy snapshot ACK settles that snapshot's loss count. Filtered gaps
+remain unobserved and cannot clear unrelated wake evidence.
+
+The SQLite journal (`<config dir>/mail-subscriptions.db`, with WAL sidecars)
+retains the newest **1000 messages per recipient** across process restart. This
+is a message-count bound, not a byte budget or an unlimited result archive.
+Every common inbox insertion is journaled before its change notification,
+including forwarded peer mail. Retention is independent of the legacy
+100-message FIFO and lifecycle coalescing. `missed_count` counts matching
+unacknowledged events evicted since the reader started or last acknowledged the
+gap. Filtered routine evictions do not wake an actionable reader. A new reader
+starts at the oldest retained position and does not claim historical losses
+before its creation. Acknowledging the returned gap cursor clears the reported
+loss. Loss accounting can be conservative when an ACK is delayed until its
+offered batch is below the retention floor: already-processed evictions can
+remain in `missed_count` until a later gap ACK clears the aggregate. This does
+not discard additional mail. A journal append failure is logged and makes subscription reads fail
+explicitly for the lifetime of that process rather than claiming an empty inbox.
+Legacy in-memory mail delivery remains available.
+
+Each peer may keep 32 reader IDs (1–64 ASCII letters, digits, `_` or `-`).
+`agent action=unsubscribe subscription_id=pump` removes a reader, not retained
+mail. The journal and cursors are not removed by MCP disconnect or peer
+retirement. Legacy calls without `subscription_id` retain their existing
+`since`/`next_since` semantics and notifications; `since` is rejected for a
+subscription. No new Tauri command is needed: peer actions still require the
+MCP identity binding, including calls through the IPC MCP bridge.
+
+### Continuous HTTP and ACP notifications
+
+- `POST /agent/subscriptions/action`: accepts the same `subscribe`, `inbox`,
+  `ack`, and `unsubscribe` payload as the agent tool.
+- `GET /agent/subscriptions/{id}/events`: SSE `mail` events carry bounded batches
+  with `id: <cursor>`; keep-alive comments carry no mail. A connection emits an
+  unacknowledged batch once. Ack through the action endpoint advances it to the
+  next batch. Reconnect replays an unacknowledged retained batch. `Last-Event-ID`
+  does not acknowledge processing; only explicit ack does. Stream errors emit
+  `event: error` and close. Both endpoints require loopback, an enabled `agent`
+  tool, and `Mcp-Session-Id` bound to the reader's peer. Body fields cannot select
+  another peer. They use the same service and validation as MCP tools.
+- On MCP over ACP, subscribe/read resource
+  `tuic://inbox/subscriptions/<id>` after creating the reader. It sends
+  `notifications/resources/updated` only for a new actionable batch cursor or a
+  journal error. It also filters the idle-ego wake; routine traffic sends neither
+  a resource update nor a wake. Ack uses the agent tool. The
+  wake cursor is consumed only after a turn is accepted; a busy/skipped attempt
+  stays eligible when later mail arrives at the same frozen cursor. Selecting a durable
+  inbox resource replaces the legacy inbox as the idle-wake source on that ACP
+  connection. Explicitly subscribing to `tuic://inbox` still requests its legacy
+  unfiltered resource notifications.
+- HTTP MCP `/mcp`, its SSE/streamable response transport, and the local IPC MCP
+  bridge expose the same agent actions. The new HTTP SSE endpoint supplies
+  continuous durable-mail notifications; ordinary GET `/mcp` and the legacy
+  `tuic://inbox` resource are not silently reinterpreted as filtered readers.
+
+Controlled replay fixture: the audit's four captured idle notifications yield
+four legacy lifecycle deliveries and zero actionable deliveries. A subsequent
+RESULT produces one matching batch per independent acknowledged reader. This
+measurement is not a claim about product-wide token or latency savings.
+
+`session action=input` also accepts only `pty_description` (string or null).
+This updates or clears the context-bar description without sending PTY bytes.
+
+Managed `agent action=launch` uses the same private pre-dispatch static contract as other native actions. Discovery describes the disjoint receipt-read and creation forms, workspace alternatives, and nested spawn argument types; the server enforces exclusivity. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.
+
+## Client tool identity
+
+Server instructions use TUIC protocol names as shorthand. Claude Code exposes the configured `tuicommander` server tool as `mcp__tuicommander__agent`; Codex 0.163.0 exposes namespace member `mcp__tuicommander.agent`. A different configured server alias changes that prefix. These are not the client native `Agent` tool. Use the actual exposed schema; a bare `tool_name=agent` is valid inside TUIC lazy `call_tool`, not as a guessed direct client call.
+
+The recorded client names and localhost-only capture script are in `src-tauri/src/mcp_http/fixtures/tool-names-2108.*`. The probe advertises one MCP tool and captures only outgoing tool names, with isolated homes and dummy keys; it rejects the model request without a vendor call. This records client qualification, not a production TUIC server handshake.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+### Detached command identity boundary
+
+Native `tuic bg` removes `TUIC_SESSION` and `TUIC_PARENT` from the command
+environment and sets `TUIC_BG_COMMAND=1`. Headerless MCP identity recovery
+checks each process up to its 16-hop bound and stops at this marker before
+reading an identity or reaching the foreground runner. This also covers a
+bridge whose agent removed the marker from the bridge environment. Ordinary
+foreground ego ancestry recovery and explicit identity headers are unchanged.
+The detached runner keeps its caller identity for completion queueing and mail.
+This is an identity boundary, not a security sandbox or a delivery-policy bypass.

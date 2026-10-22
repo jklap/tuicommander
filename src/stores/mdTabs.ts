@@ -1,7 +1,11 @@
-import { batch } from "solid-js";
+import { batch, createComputed, createRoot, createSignal, untrack } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
+import { appLogger } from "./appLogger";
+import { editorTabsStore } from "./editorTabs";
 import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
+
+const MCP_RELOAD_KEY = "tui-commander-mcp-markdown-reload";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
 const MD_MIN_FONT_SIZE = 8;
@@ -95,6 +99,8 @@ export interface PrDiffTab extends BaseTab {
 	prTitle: string;
 	/** Raw unified diff content */
 	diff: string;
+	/** PR head the diff was fetched at; replaced whenever the diff is reopened */
+	headSha?: string;
 }
 
 /** HTML preview tab (renders HTML in a sandboxed iframe) */
@@ -105,11 +111,19 @@ export interface HtmlPreviewTab extends BaseTab {
 	filePath: string;
 	fileName: string;
 	fsRoot?: string;
+	/** Set when the tab was opened by an MCP `ui-tab` event (`tuic://open`). */
+	mcpUiId?: string;
 }
 
 /** Native Command Overview panel tab */
 export interface CommandOverviewTab extends BaseTab {
 	type: "command-overview";
+	title: string;
+}
+
+/** Native Tasks tab (work-item providers' list, board, roadmap, detail and create views) */
+export interface TasksTab extends BaseTab {
+	type: "tasks";
 	title: string;
 }
 
@@ -124,7 +138,8 @@ export type MdTabData =
 	| GithubOpsTab
 	| PrDiffTab
 	| HtmlPreviewTab
-	| CommandOverviewTab;
+	| CommandOverviewTab
+	| TasksTab;
 
 /**
  * Resolve a caller-supplied path (repo root or PTY cwd) to a registered repo path.
@@ -186,8 +201,31 @@ const handles = new Map<string, unknown>();
  */
 const pluginPanelClosedListeners = new Set<(tabId: string) => void>();
 
+function mcpFileTab(
+	id: string,
+	mcpUiId: string,
+	repoPath: string,
+	filePath: string,
+	pinned: boolean,
+	branchKey: string | undefined,
+): FileTab {
+	return {
+		type: "file",
+		id,
+		mcpUiId,
+		repoPath,
+		filePath,
+		fileName: pathBasename(filePath) || filePath,
+		branchKey,
+		fsRoot: repoPath,
+		pinned,
+		pinAcrossRepos: true,
+	};
+}
+
 function createMdTabsStore() {
 	const base = createTabManager<MdTabData>("markdown");
+	const [reloadReady, setReloadReady] = createSignal(false);
 
 	/** Announce a plugin-panel closure to every subscriber. */
 	function announceIfPluginPanel(tabId: string): void {
@@ -195,8 +233,91 @@ function createMdTabsStore() {
 		for (const listener of pluginPanelClosedListeners) listener(tabId);
 	}
 
-	return {
+	const store = {
 		state: base.state,
+
+		/** Keep MCP documents in this window across WebView/HMR reloads only. */
+		saveForReload(): void {
+			// An unload during boot must preserve the unread snapshot of the old document.
+			if (!untrack(reloadReady)) return;
+			const tabs = base.state._order
+				.map((id) => base.get(id))
+				.filter((tab): tab is FileTab => tab?.type === "file" && !!tab.mcpUiId)
+				.map((tab) => ({
+					mcpUiId: tab.mcpUiId,
+					repoPath: tab.repoPath,
+					filePath: tab.filePath,
+					branchKey: tab.branchKey,
+					pinned: tab.pinned === true,
+				}));
+			try {
+				if (tabs.length === 0) {
+					sessionStorage.removeItem(MCP_RELOAD_KEY);
+					return;
+				}
+				sessionStorage.setItem(
+					MCP_RELOAD_KEY,
+					JSON.stringify({
+						tabs,
+						activeMcpUiId: base.getActive()?.type === "file" ? base.getActive()?.mcpUiId : undefined,
+					}),
+				);
+			} catch (err) {
+				untrack(() => appLogger.warn("store", "Could not save MCP Markdown tabs for reload", err));
+			}
+		},
+
+		/** Called after repository and terminal restoration so selected documents win. */
+		restoreAfterReload(): void {
+			if (untrack(reloadReady)) return;
+			try {
+				const raw = sessionStorage.getItem(MCP_RELOAD_KEY);
+				// Consume even corrupt JSON; another init must not replay a broken snapshot.
+				sessionStorage.removeItem(MCP_RELOAD_KEY);
+				const saved: unknown = JSON.parse(raw ?? "null");
+				if (!saved || typeof saved !== "object") return;
+				const snapshot = saved as Record<string, unknown>;
+				if (!Array.isArray(snapshot.tabs)) return;
+				const claimed = new Set<string>();
+				for (const open of Object.values(base.state.tabs)) {
+					if (open.mcpUiId) claimed.add(open.mcpUiId);
+					if (open.type === "plugin-panel") claimed.add(open.pluginId);
+				}
+				for (const open of Object.values(editorTabsStore.state.tabs)) {
+					if (open.mcpUiId) claimed.add(open.mcpUiId);
+				}
+				const restored: FileTab[] = [];
+				let activeId: string | undefined;
+				for (const value of snapshot.tabs) {
+					if (!value || typeof value !== "object") continue;
+					const tab = value as Record<string, unknown>;
+					if (
+						typeof tab.mcpUiId !== "string" ||
+						!tab.mcpUiId ||
+						typeof tab.repoPath !== "string" ||
+						typeof tab.filePath !== "string" ||
+						!tab.filePath ||
+						typeof tab.pinned !== "boolean" ||
+						(tab.branchKey !== undefined && typeof tab.branchKey !== "string")
+					)
+						continue;
+					// Boot-time events and the first valid snapshot entry own each identity.
+					if (claimed.has(tab.mcpUiId)) continue;
+					claimed.add(tab.mcpUiId);
+					const id = base._nextId("md");
+					restored.push(
+						mcpFileTab(id, tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, tab.branchKey as string | undefined),
+					);
+					if (tab.mcpUiId === snapshot.activeMcpUiId) activeId = id;
+				}
+				base._addTabsBackground(restored);
+				if (activeId) base.setActive(activeId);
+			} catch (err) {
+				appLogger.warn("store", "Could not restore MCP Markdown tabs after reload", err);
+			} finally {
+				setReloadReady(true);
+			}
+		},
 
 		/** Remove a tab. Plugin panels announce their own death on the way out. */
 		remove(id: string): void {
@@ -277,20 +398,14 @@ function createMdTabsStore() {
 
 		/** Open a native Markdown tab using the MCP id, independent of its file path. */
 		addMcpFile(mcpUiId: string, repoPath: string, filePath: string, pinned: boolean, background: boolean): string {
+			// An id that last showed an image still owns its preview tab; drop it.
+			const stale = Object.values(base.state.tabs).find(
+				(tab) => tab.type === "html-preview" && tab.mcpUiId === mcpUiId,
+			);
+			if (stale) base.remove(stale.id);
 			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
 			const id = existing?.id ?? base._nextId("md");
-			const tab: FileTab = {
-				type: "file",
-				id,
-				mcpUiId,
-				repoPath,
-				filePath,
-				fileName: pathBasename(filePath) || filePath,
-				branchKey: branchKeyFor(repoPath),
-				fsRoot: repoPath,
-				pinned,
-				pinAcrossRepos: true,
-			};
+			const tab = mcpFileTab(id, mcpUiId, repoPath, filePath, pinned, branchKeyFor(repoPath));
 			if (existing) {
 				base._setState("tabs", id, tab);
 				if (!background) base.setActive(id);
@@ -300,7 +415,9 @@ function createMdTabsStore() {
 		},
 
 		closeMcpFile(mcpUiId: string): void {
-			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			const existing = Object.values(base.state.tabs).find(
+				(tab) => (tab.type === "file" || tab.type === "html-preview") && tab.mcpUiId === mcpUiId,
+			);
 			if (existing) base.remove(existing.id);
 		},
 
@@ -418,9 +535,7 @@ function createMdTabsStore() {
 						branchKeyFor(repoPath) as MdTabData[keyof MdTabData],
 					);
 				}
-				if (focus && repoPath && repoPath !== repositoriesStore.state.activeRepoPath)
-					repositoriesStore.setActive(repoPath);
-				if (focus) base.setActive(existing.id);
+				// An update never navigates: only the open that creates the tab may.
 				return existing.id;
 			}
 
@@ -564,8 +679,20 @@ function createMdTabsStore() {
 			return base._addTab({ type: "command-overview", id, title: "Commands", pinned: true } as CommandOverviewTab);
 		},
 
+		/** Add the Tasks tab (singleton — reuses existing if open) */
+		addTasks(): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "tasks") as TasksTab | undefined;
+			if (existing) {
+				base.setActive(existing.id);
+				return existing.id;
+			}
+
+			const id = base._nextId("md");
+			return base._addTab({ type: "tasks", id, title: "Tasks", pinned: true } as TasksTab);
+		},
+
 		/** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */
-		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string): string {
+		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string, headSha?: string): string {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "pr-diff" &&
@@ -575,6 +702,7 @@ function createMdTabsStore() {
 			if (existing) {
 				// Update diff content in case it changed
 				base._setState("tabs", existing.id, "diff" as keyof MdTabData, diff as MdTabData[keyof MdTabData]);
+				base._setState("tabs", existing.id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 				base.setActive(existing.id);
 				return existing.id;
 			}
@@ -589,9 +717,15 @@ function createMdTabsStore() {
 				prNumber,
 				prTitle,
 				diff,
+				headSha,
 				pinned: false,
 			} as PrDiffTab);
 			return tabId;
+		},
+
+		/** Record the head a PR diff tab was first reviewed at, when its fetch did not supply one */
+		pinPrDiffHead(id: string, headSha: string): void {
+			base._setState("tabs", id, "headSha" as keyof MdTabData, headSha as MdTabData[keyof MdTabData]);
 		},
 
 		/** Add an HTML preview tab (or return existing if same file already open) */
@@ -604,6 +738,7 @@ function createMdTabsStore() {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "html-preview" &&
+					!tab.mcpUiId &&
 					tab.repoPath === repoPath &&
 					(tab as HtmlPreviewTab).fsRoot === effectiveRoot &&
 					tab.filePath === filePath,
@@ -626,6 +761,31 @@ function createMdTabsStore() {
 				fsRoot: effectiveRoot,
 			};
 			return base._addTab(tab);
+		},
+
+		/** Add a preview tab owned by an MCP ui id (never shared with a user-opened preview of the same file). */
+		addMcpHtmlPreview(
+			mcpUiId: string,
+			repoPath: string,
+			filePath: string,
+			pinned: boolean,
+			background: boolean,
+		): string {
+			const id = base._nextId("md");
+			const fileName = pathBasename(filePath) || filePath;
+			const tab: HtmlPreviewTab = {
+				type: "html-preview",
+				id,
+				mcpUiId,
+				title: fileName,
+				repoPath,
+				filePath,
+				fileName,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: repoPath,
+				pinned,
+			};
+			return background ? base._addTabBackground(tab) : base._addTab(tab);
 		},
 
 		/** Set a tab's font size (clamped to [MIN, MAX]). */
@@ -688,6 +848,16 @@ function createMdTabsStore() {
 			);
 		},
 	};
+
+	// The store lives for the document lifetime. Save synchronously on changes,
+	// including close/pin/selection, so recovery needs no surviving unload handler.
+	// Wait until restore consumes the old snapshot before observing the empty store.
+	createRoot(() => {
+		createComputed(() => {
+			if (reloadReady()) store.saveForReload();
+		});
+	});
+	return store;
 }
 
 export const mdTabsStore = createMdTabsStore();

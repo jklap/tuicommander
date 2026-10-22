@@ -40,6 +40,7 @@ const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/
 const { uiStore } = await import("../../../stores/ui");
 const { mdTabsStore } = await import("../../../stores/mdTabs");
 const { editorTabsStore } = await import("../../../stores/editorTabs");
+const { repositoriesStore } = await import("../../../stores/repositories");
 
 const dir = (name: string, path = name): DirEntry => ({
 	name,
@@ -128,6 +129,7 @@ beforeEach(() => {
 // The view-mode toggle persists prefs on a 500 ms debounce; let that timer fire
 // before teardown so it does not leak into the next test file.
 afterEach(async () => {
+	vi.unstubAllGlobals();
 	setBrowserMode(false);
 	uiStore.setFileBrowserViewMode("flat");
 	await new Promise((resolve) => setTimeout(resolve, 600));
@@ -153,7 +155,88 @@ const clickRow = (container: HTMLElement, name: string) => {
 	fireEvent.click(label.parentElement as HTMLElement);
 };
 
+describe("FileBrowserPanel external transfer refresh", () => {
+	it.each([
+		{ name: "external folder drop into an expanded tree folder", confirm: false, copy: false, remote: false },
+		{ name: "confirmed recursive drop", confirm: true, copy: false, remote: false },
+		{ name: "move source in another expanded folder of the same tree", confirm: false, copy: false, remote: false },
+		{ name: "copy leaves the source visible and reloads the destination", confirm: false, copy: true, remote: false },
+		{ name: "remote copy reloads the owning destination", confirm: true, copy: true, remote: true },
+	])("$name — catches stale transfer children", async ({ name, confirm, copy, remote }) => {
+		const { dispatchTauriDrop, confirmFolderDrop, setFolderDropConfirmHandler } = await import(
+			"../../../hooks/useFileDrop"
+		);
+		const { dragDropStore } = await import("../../../stores/dragDrop");
+		const owner = vi.spyOn(repositoriesStore, "getConnectionId").mockReturnValue(remote ? "mint" : undefined);
+		const { toastsStore } = await import("../../../stores/toasts");
+		const toast = vi.spyOn(toastsStore, "add").mockReturnValue(0);
+		const modifier = vi.spyOn(dragDropStore, "copyModifierHeld").mockReturnValue(copy);
+		listings.set("/repo|.", [dir("dest"), dir("source")]);
+		listings.set("/repo|dest", [file("existing.txt", "dest/existing.txt")]);
+		listings.set("/repo|source", [dir("incoming", "source/incoming")]);
+		const originalHitTest = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+		const pending = vi.fn();
+		setFolderDropConfirmHandler(pending);
+		mockInvoke.mockImplementation((cmd, args) => {
+			if (cmd === "fs_transfer_paths" || cmd === "fs_transfer_remote_paths") {
+				if (confirm && !args?.allowRecursive) {
+					return Promise.resolve({ moved: 0, skipped: 0, errors: [], needs_confirm: true });
+				}
+				listings.set("/repo|dest", [file("existing.txt", "dest/existing.txt"), dir("incoming", "dest/incoming")]);
+				if (!copy) listings.set("/repo|source", []);
+				return Promise.resolve({ moved: 1, skipped: 0, errors: [], needs_confirm: false });
+			}
+			return defaultInvoke(cmd, args);
+		});
+		try {
+			const { container } = render(() => (
+				<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+			));
+			clickTreeViewButton(container);
+			await waitFor(() => expect(container.textContent).toContain("dest"));
+			clickRow(container, "dest");
+			clickRow(container, "source");
+			await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/source/incoming"]')).not.toBeNull());
+			await waitFor(() => expect(container.textContent).toContain("existing.txt"));
+			const dest = container.querySelector('[data-abs-path="/repo/dest"]');
+			Object.defineProperty(document, "elementFromPoint", { configurable: true, writable: true, value: () => dest });
+			await dispatchTauriDrop(["/repo/source/incoming"], 10, 10);
+			if (confirm) {
+				expect(pending).toHaveBeenCalledOnce();
+				expect(countListCalls("/repo", "dest")).toBe(1);
+				await confirmFolderDrop(pending.mock.calls[0][0]);
+			}
+			if (name.startsWith("move source")) {
+				await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/source/incoming"]')).toBeNull());
+			}
+			await waitFor(() => expect(container.querySelector('[data-abs-path="/repo/dest/incoming"]')).not.toBeNull());
+			expect(container.querySelector('[data-abs-path="/repo/source/incoming"]') !== null).toBe(copy);
+		} finally {
+			if (originalHitTest) Object.defineProperty(document, "elementFromPoint", originalHitTest);
+			else Reflect.deleteProperty(document, "elementFromPoint");
+			toast.mockRestore();
+			owner.mockRestore();
+			modifier.mockRestore();
+			setFolderDropConfirmHandler(null);
+		}
+	});
+});
+
 describe("FileBrowserPanel tree cache", () => {
+	// Catches: remote folder descendants losing the panel's actual repository owner.
+	it("exposes the repository connection on the native file-drop surface", () => {
+		const owner = vi.spyOn(repositoriesStore, "getConnectionId").mockReturnValue("mint");
+		try {
+			const { container } = render(() => (
+				<FileBrowserPanel visible={true} repoPath="/remote/repo" onClose={() => {}} onFileOpen={() => {}} />
+			));
+			expect(container.querySelector("#file-browser-panel")?.getAttribute("data-drop-connection-id")).toBe("mint");
+			expect(owner).toHaveBeenCalledWith("/remote/repo");
+		} finally {
+			owner.mockRestore();
+		}
+	});
+
 	it("clears cached children and expanded dirs when the repo changes", async () => {
 		listings.set("/repoA|.", [dir("src")]);
 		listings.set("/repoA|src", [file("from-repo-a.ts", "src/from-repo-a.ts")]);
@@ -501,5 +584,137 @@ describe("FileBrowserPanel create file", () => {
 		await waitFor(() =>
 			expect(mockInvoke).toHaveBeenCalledWith("write_file", { repoPath: "/repo", file: ".env", content: "" }),
 		);
+	});
+});
+
+describe("FileBrowserPanel external root (#1207-efd4)", () => {
+	afterEach(() => uiStore.setFileBrowserExternalRoot(null));
+
+	it("returns to the active repository when the repository changes", async () => {
+		listings.set("/repoA|.", [file("a.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repoB|.", [file("b.txt")]);
+
+		const [repoPath, setRepoPath] = createSignal("/repoA");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath={repoPath()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setRepoPath("/repoB");
+		await waitFor(() => expect(queryByText("b.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+		expect(queryByText("outside.txt")).toBeNull();
+	});
+
+	it("returns to the active worktree when only the worktree changes", async () => {
+		listings.set("/repo/wt1|.", [file("one.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repo/wt2|.", [file("two.txt")]);
+
+		const [fsRoot, setFsRoot] = createSignal("/repo/wt1");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" fsRoot={fsRoot()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("one.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setFsRoot("/repo/wt2");
+		await waitFor(() => expect(queryByText("two.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("shows the external path with a control that returns to the repository", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText, getByTitle } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')).toBeNull();
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')?.textContent).toContain("/outside");
+
+		fireEvent.click(getByTitle("Back to the active repository"));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("keeps the external folder while the repository stays the same", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBe("/outside");
+	});
+});
+
+describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
+	const pointer = (type: string, pointerType: string, x: number, y: number) =>
+		new PointerEvent(type, {
+			bubbles: true,
+			cancelable: true,
+			button: 0,
+			pointerId: 1,
+			pointerType,
+			clientX: x,
+			clientY: y,
+		});
+
+	const renameCalls = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "rename_path");
+
+	/** Press on `file`, optionally hold, move past the drag threshold and release over the `dir` row. */
+	const dragFileOntoDir = async (pointerType: string, holdMs = 0) => {
+		listings.set("/repo|.", [dir("docs"), file("a.txt")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+		const rows = Array.from(container.querySelectorAll(".entry")) as HTMLElement[];
+		const fileRow = rows.find((r) => r.textContent?.includes("a.txt")) as HTMLElement;
+		const dirRow = rows.find((r) => r.dataset.dropTarget === "folder") as HTMLElement;
+		const original = document.elementFromPoint;
+		document.elementFromPoint = () => dirRow;
+		try {
+			fileRow.dispatchEvent(pointer("pointerdown", pointerType, 50, 50));
+			if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
+			document.dispatchEvent(pointer("pointermove", pointerType, 50, 20));
+			document.dispatchEvent(pointer("pointerup", pointerType, 50, 10));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			document.elementFromPoint = original;
+		}
+	};
+
+	// Catches: a swipe that outruns pointercancel dropping the file onto a folder
+	// (an irreversible move started by a scroll gesture).
+	it.each(["touch", "pen"])("never moves a file when a %s swipe ends over a folder", async (pointerType) => {
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
+		await dragFileOntoDir(pointerType);
+		expect(renameCalls()).toHaveLength(0);
+	});
+
+	// Catches: removing touch file move instead of arming it with a long press.
+	it("moves a file when a touch long press is dragged onto a folder", async () => {
+		await dragFileOntoDir("touch", 450);
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+
+	// Guards the mouse path: drag and drop must keep moving files.
+	it("still moves a file when a mouse drag ends over a folder", async () => {
+		await dragFileOntoDir("mouse");
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
 	});
 });

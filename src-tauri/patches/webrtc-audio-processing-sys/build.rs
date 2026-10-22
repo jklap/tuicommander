@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
 use std::{env, path::PathBuf, process::Command};
 
@@ -10,7 +10,9 @@ const LIB_MIN_VERSION: &str = "2.1";
 const MACOSX_DEPLOYMENT_TARGET_VAR: &str = "MACOSX_DEPLOYMENT_TARGET";
 
 fn out_dir() -> PathBuf {
-    std::env::var("OUT_DIR").expect("OUT_DIR environment var not set.").into()
+    std::env::var("OUT_DIR")
+        .expect("OUT_DIR environment var not set.")
+        .into()
 }
 
 #[cfg(not(feature = "bundled"))]
@@ -54,12 +56,14 @@ mod webrtc {
                 eprintln!("Couldn't find {LIB_NAME} with pkg-config:");
                 eprintln!("{e}");
                 return Ok((None, None));
-            },
+            }
         };
 
-        Ok((lib.include_paths.first().cloned(), lib.link_paths.first().cloned()))
+        Ok((
+            lib.include_paths.first().cloned(),
+            lib.link_paths.first().cloned(),
+        ))
     }
-
 }
 
 #[cfg(feature = "bundled")]
@@ -108,8 +112,16 @@ mod webrtc {
         // Paired with `--wrap-mode=forcefallback` in the meson invocation
         // below: meson must build the same abseil these paths point at, or the
         // mismatch simply moves.
-        include_paths.push(webrtc_source_dir().join("subprojects").join("abseil-cpp-20240722.0"));
-        lib_paths.push(webrtc_build_dir().join("subprojects").join("abseil-cpp-20240722.0"));
+        include_paths.push(
+            webrtc_source_dir()
+                .join("subprojects")
+                .join("abseil-cpp-20240722.0"),
+        );
+        lib_paths.push(
+            webrtc_build_dir()
+                .join("subprojects")
+                .join("abseil-cpp-20240722.0"),
+        );
 
         Ok((include_paths, lib_paths))
     }
@@ -144,7 +156,9 @@ mod webrtc {
         fs_extra::dir::copy(
             bundled_source_path,
             &webrtc_source_dir,
-            &fs_extra::dir::CopyOptions::new().overwrite(true).content_only(true),
+            &fs_extra::dir::CopyOptions::new()
+                .overwrite(true)
+                .content_only(true),
         )
         .with_context(|| {
             format!(
@@ -158,13 +172,27 @@ mod webrtc {
         apply_patch("unlink-multichannel-noise-suppression-filters.patch")?;
 
         let mut meson = Command::new("meson");
-        meson.arg("setup").arg("--prefix").arg(out_dir().as_os_str());
-        meson.arg("--reconfigure");
+        meson
+            .arg("setup")
+            .arg("--prefix")
+            .arg(out_dir().as_os_str());
         // TUIC patch: build the vendored abseil rather than any the machine
         // happens to have. See the long note in `find_include_and_lib_paths`
         // — the two changes are one change. `abseil-cpp.wrap` is the only wrap
         // in this source, so this forces exactly one subproject.
         meson.arg("--wrap-mode=forcefallback");
+
+        // TUIC patch: MSVC targets must not pick MinGW just because cc/c++
+        // is on PATH. Meson activates Visual Studio for each subcommand;
+        // compile/install below must run through Meson to retain that setup.
+        if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            meson.arg("--vsenv");
+            // Reconfigure preserves the previous compiler. A restored CI
+            // build directory may still contain the MinGW configuration.
+            meson.arg("--wipe");
+        } else {
+            meson.arg("--reconfigure");
+        }
 
         if cfg!(target_os = "macos") {
             let link_args = "['-framework', 'CoreFoundation', '-framework', 'Foundation']";
@@ -180,19 +208,22 @@ mod webrtc {
             .context("Failed to execute meson. Do you have it installed?")?;
         assert!(status.success(), "Command failed: {:?}", &meson);
 
-        let mut ninja = Command::new("ninja");
-        let status = ninja
-            .current_dir(&webrtc_build_dir)
+        let mut compile = Command::new("meson");
+        let status = compile
+            .arg("compile")
+            .arg("-C")
+            .arg(&webrtc_build_dir)
             .status()
-            .context("Failed to execute ninja. Do you have it installed?")?;
-        assert!(status.success(), "Command failed: {:?}", &ninja);
+            .context("Failed to execute meson compile")?;
+        assert!(status.success(), "Command failed: {:?}", &compile);
 
-        let mut install = Command::new("ninja");
+        let mut install = Command::new("meson");
         let status = install
-            .current_dir(&webrtc_build_dir)
             .arg("install")
+            .arg("-C")
+            .arg(&webrtc_build_dir)
             .status()
-            .context("Failed to execute ninja install")?;
+            .context("Failed to execute meson install")?;
         assert!(status.success(), "Command failed: {:?}", &install);
 
         Ok(())
@@ -212,7 +243,12 @@ mod webrtc {
             .status()
             .context("Failed to execute patch")?;
 
-        anyhow::ensure!(status.success(), "Patch '{}' failed with status: {}", patch_name, status);
+        anyhow::ensure!(
+            status.success(),
+            "Patch '{}' failed with status: {}",
+            patch_name,
+            status
+        );
         Ok(())
     }
 
@@ -298,12 +334,14 @@ fn main() -> Result<()> {
         let min_version = match env::var(MACOSX_DEPLOYMENT_TARGET_VAR) {
             Ok(ver) => ver,
             Err(_) => {
-                String::from(match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
-                    "x86_64" => "10.10", // Using what I found here https://github.com/webrtc-uwp/chromium-build/blob/master/config/mac/mac_sdk.gni#L17
-                    "aarch64" => "11.0", // Apple silicon started here.
-                    arch => panic!("unknown arch: {}", arch),
-                })
-            },
+                String::from(
+                    match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+                        "x86_64" => "10.10", // Using what I found here https://github.com/webrtc-uwp/chromium-build/blob/master/config/mac/mac_sdk.gni#L17
+                        "aarch64" => "11.0", // Apple silicon started here.
+                        arch => panic!("unknown arch: {}", arch),
+                    },
+                )
+            }
         };
 
         // `cc` doesn't try to pick up on this automatically, but `clang` needs it to

@@ -73,7 +73,7 @@ connect_upstream(config)
 
 ### Boot-Time Auto-Connect & `tools/list` Readiness
 
-On startup, `auto_connect_saved_upstreams()` (`mcp_upstream_config.rs`) registers every saved upstream. It is **spawned, not awaited**, on both boot paths (desktop `lib.rs` and headless `run_headless`): `mcp_http::start_server` parks on the shutdown signal and never returns, so any auto-connect placed *after* it would be dead code — leaving every upstream unconnected until the user touches the UI. Registration is fast (the per-upstream async `initialize` is itself spawned), so it never delays IPC socket binding.
+On startup, `auto_connect_saved_upstreams()` (`mcp_upstream_config.rs`) registers every saved upstream. It is **spawned, not awaited**, on both boot paths (desktop and `run_remote`, both in `lib.rs`): `mcp_http::start_server` parks on the shutdown signal and never returns, so any auto-connect placed *after* it would be dead code — leaving every upstream unconnected until the user touches the UI. Registration is fast (the per-upstream async `initialize` is itself spawned), so it never delays IPC socket binding.
 
 To avoid serving a stale tool list, the registry exposes a one-shot settle gate:
 
@@ -123,6 +123,10 @@ Implements the legacy MCP Streamable HTTP transport (revision 2025-11-25):
 3. **`call_tool_with_reconnect(name, args)`** — Calls `call_tool`, and on HTTP 400 (session expired) or connection error, re-initializes once and retries.
 4. **`health_check()`** — Pings via `tools/list`. Used by the background health checker.
 5. **`shutdown()`** — Sends `DELETE /mcp` with the session ID to cleanly terminate the upstream session.
+
+Custom HTTP headers are configured as `headers: [{name, credential_ref}]` on each server. The reference is a UUID; each value is stored through the existing upstream credential vault under an upstream-scoped key (`<name>/header/<uuid>`), separate from the Bearer/OAuth entry. No secret read API is exposed to the editor. POST requests and session DELETE resolve values in the backend at request time, so rotation takes effect without caching values in the client. Legacy configs omit `headers` and require no migration.
+
+Header names use HTTP token syntax and are case-insensitively unique. Authorization cannot coexist with Bearer/OAuth; routing, framing and MCP transport headers are reserved. Values are validated without including them in errors and marked sensitive in reqwest. Same-origin redirects retain credentials, while the redirect policy stops cross-origin hops before a request reaches the new origin. Upstream response bodies and authentication challenge parameters are excluded from diagnostics because a server can echo credentials.
 
 The User-Agent header is set to `tuicommander-mcp-proxy/{version}`. Every POST
 also carries `MCP-Protocol-Version: 2025-11-25`; the stdio client offers the
@@ -287,6 +291,8 @@ Credentials (Bearer tokens for HTTP upstreams) are stored in the platform OS key
 The keyring service name is `tuicommander-mcp`. The account name is the upstream `name`. Credential names follow the same `[a-z0-9_-]+` validation as upstream names.
 
 `read_upstream_credential(name)` returns `None` (not an error) when no credential exists.
+
+Adding a server submits its secrets with the config save. The backend validates the latest locked config before writing new vault entries and rolls those entries back if the save fails. Duplicate names cannot replace an existing Bearer or OAuth credential, including at the same origin. Standalone credential writes require `replace: true` to edit an existing entry.
 
 ## Hot-Reload
 

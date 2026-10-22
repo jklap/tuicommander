@@ -10,6 +10,7 @@ import {
 	queueTextToActiveTerminal,
 	sendTextToActiveTerminal,
 } from "../utils/sendToActiveTerminal";
+import { AutomationsHost } from "./AutomationsDialog/AutomationsHost";
 import { FileBrowserPanel } from "./FileBrowserPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { IdeasPanel } from "./IdeasPanel";
@@ -27,6 +28,7 @@ export interface PanelOrchestratorProps {
 	repoPath: string | null;
 	/** Effective filesystem root (worktree path when on a linked worktree) */
 	fsRoot?: string | null;
+	onOpenSettings?: (tab: string, section?: string) => void;
 	onFileOpen: (repoPath: string, filePath: string, line?: number) => void;
 }
 
@@ -37,6 +39,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 	});
 	return (
 		<>
+			<AutomationsHost />
 			<Show when={!uiStore.isDetached("file-browser")}>
 				<FileBrowserPanel
 					visible={uiStore.state.fileBrowserPanelVisible && !globalWorkspaceStore.isActive()}
@@ -92,6 +95,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 						repoPath={props.repoPath}
 						fsRoot={props.fsRoot}
 						onClose={() => uiStore.toggleAiChatPanel()}
+						onOpenSettings={props.onOpenSettings}
 					/>
 				</Suspense>
 			</Show>

@@ -10,9 +10,10 @@ name = "tuic-bridge"
 path = "src/main.rs"
 
 [dependencies]
+tuic-ipc = { path = "../tuic-ipc" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
-dirs = "6"
+dirs = "7"
 
 [dev-dependencies]
 tempfile = "3"

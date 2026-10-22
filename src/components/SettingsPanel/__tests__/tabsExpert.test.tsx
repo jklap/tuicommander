@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import type { Component } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +22,7 @@ vi.mock("../../../stores/appLogger", () => ({
 // The real uiStore persists the expert pref through a debounced timer.
 vi.mock("../../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");
-	const [state, setState] = createStore({ settingsExpertMode: false });
+	const [state, setState] = createStore({ settingsExpertMode: false, tasksViewPreferences: {} });
 	return {
 		uiStore: {
 			state,
@@ -71,6 +71,7 @@ const NOTIFICATION_DEFAULTS = {
 	audio_device: null,
 	silence_remote_completions: true,
 	toasts_in_bell: true,
+	pr_native_notifications: true,
 };
 
 interface Case {
@@ -219,6 +220,28 @@ describe("expert controls on General, Appearance, Notifications and Terminal", (
 			const { container } = render(() => <Tab />);
 			expect(hasText(container, label)).toBe(true);
 		});
+	});
+
+	// Catches: Beta exists in the schema but users cannot select it in Settings.
+	it("lets a user select Beta in the General update channel control", async () => {
+		await setup({}, {});
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <GeneralTab />);
+		const select = [...container.querySelectorAll("select")].find((el) =>
+			[...el.options].some((option) => option.value === "beta"),
+		);
+		expect(select).toBeDefined();
+		if (!select) throw new Error("Beta channel selector missing");
+		vi.useFakeTimers();
+		try {
+			fireEvent.change(select, { target: { value: "beta" } });
+			expect(select.value).toBe("beta");
+			expect(settingsStore.state.updateChannel).toBe("beta");
+			expect(container.textContent).toContain("Beta and nightly builds may be unstable");
+			await vi.advanceTimersByTimeAsync(600);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it.each(BASIC_AT_DEFAULT)("$page — $label is shown in basic mode at its default", async ({ tab: Tab, label }) => {

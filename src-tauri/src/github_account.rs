@@ -7,69 +7,40 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::credentials::Credential;
-
 pub(crate) use tuic_git::github_account::*;
+
+#[path = "github_account_settings.rs"]
+mod settings;
+pub(crate) use settings::update_settings_binding;
 
 // ---------------------------------------------------------------------------
 // Account registry (persisted)
 // ---------------------------------------------------------------------------
 
-/// Config filename for the persisted account registry.
-const GITHUB_ACCOUNTS_FILE: &str = "github_accounts.json";
-
-/// The set of configured GitHub accounts, persisted to `github_accounts.json`.
+/// GitHub projection of the shared `accounts.json` registry.
 ///
 /// Does NOT include the implicit github.com default account — that is
 /// synthesized from the existing token-source chain so a github.com-only user
 /// has an empty registry and unchanged behavior.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GitHubAccountRegistry {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates accounts for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     accounts: Vec<GitHubAccount>,
 }
 
 impl GitHubAccountRegistry {
     /// Load the registry from disk (returns an empty registry if absent/corrupt).
     pub(crate) fn load() -> Self {
-        crate::config::load_json_config(GITHUB_ACCOUNTS_FILE)
-    }
-
-    /// Apply account-id changes to the latest locked registry. The on-disk
-    /// representation is an array, but independent account additions compose.
-    pub(crate) fn save(&self, base: &Self) -> Result<(), String> {
-        let changed: Vec<_> = self
-            .accounts
-            .iter()
-            .filter(|account| base.get(&account.id) != Some(*account))
-            .cloned()
-            .collect();
-        let removed: Vec<_> = base
-            .accounts
-            .iter()
-            .filter(|account| self.get(&account.id).is_none())
-            .map(|account| account.id.clone())
-            .collect();
-        crate::config::ConfigFile::<Self>::new(GITHUB_ACCOUNTS_FILE).update_with(|latest| {
-            let mut did_change = false;
-            for id in removed {
-                did_change |= latest.remove(&id);
-            }
-            for account in changed {
-                if let Some(existing) = latest.get(&account.id)
-                    && existing.host != account.host
-                {
-                    return Err(format!(
-                        "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
-                        account.id,
-                        existing.host.as_str()
-                    ));
-                }
-                latest.upsert(account);
-                did_change = true;
-            }
-            Ok(((), did_change))
-        })
+        Self {
+            accounts: crate::accounts::github_accounts().unwrap_or_else(|_| {
+                tracing::error!(
+                    source = "accounts",
+                    "GitHub account metadata is unavailable; repair the account registry"
+                );
+                Vec::new()
+            }),
+        }
     }
 
     pub(crate) fn list(&self) -> &[GitHubAccount] {
@@ -78,22 +49,6 @@ impl GitHubAccountRegistry {
 
     pub(crate) fn get(&self, id: &str) -> Option<&GitHubAccount> {
         self.accounts.iter().find(|a| a.id == id)
-    }
-
-    /// Insert a new account or replace the existing one with the same id.
-    pub(crate) fn upsert(&mut self, account: GitHubAccount) {
-        if let Some(slot) = self.accounts.iter_mut().find(|a| a.id == account.id) {
-            *slot = account;
-        } else {
-            self.accounts.push(account);
-        }
-    }
-
-    /// Remove the account with `id`; returns whether one was removed.
-    pub(crate) fn remove(&mut self, id: &str) -> bool {
-        let before = self.accounts.len();
-        self.accounts.retain(|a| a.id != id);
-        before != self.accounts.len()
     }
 }
 
@@ -109,12 +64,16 @@ const GITHUB_BINDINGS_FILE: &str = "github_bindings.json";
 /// Persisted (not derived live from the origin remote) so a repo's account is
 /// stable even if its remotes change — drift is then surfaced to the user
 /// rather than silently re-routing API calls.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoBinding {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates account id for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) account_id: GitHubAccountId,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates owner for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) owner: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repo for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) repo: String,
     /// Which git remote the owner/repo came from (origin, upstream, …).
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) remote_name: String,
 }
 
@@ -122,9 +81,10 @@ pub(crate) struct RepoBinding {
 ///
 /// Worktrees of the same repo resolve to the same canonical root and therefore
 /// share one binding.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RepoBindingStore {
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates bindings for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     bindings: std::collections::HashMap<String, RepoBinding>,
 }
 
@@ -209,15 +169,14 @@ pub(crate) struct BindCandidate {
 /// Outcome of resolving which account (if any) a repo belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepoResolution {
-    /// Resolved to an account (explicit persisted binding).
+    /// Resolved to an account (persisted binding or one unambiguous candidate).
     Bound {
         account: GitHubAccount,
         owner: String,
         repo: String,
     },
-    /// One or more candidate bindings. `len == 1` → the caller auto-confirms +
-    /// persists the binding and proceeds (the single obvious choice). `len > 1`
-    /// → the caller must prompt the user (no silent origin pick).
+    /// Multiple candidate account/repository bindings require a user choice.
+    /// Different repositories on the same account still require a remote choice.
     NeedsBind(Vec<BindCandidate>),
     /// A known GitHub host (github.com) is present but no account is configured
     /// for it → the user must add/authenticate an account.
@@ -315,6 +274,16 @@ pub(crate) fn resolve_repo_account(
     match candidates.len() {
         0 if saw_cloud_without_account => RepoResolution::NeedsAccount,
         0 => RepoResolution::Unmonitored,
+        1 => {
+            let candidate = candidates.remove(0);
+            RepoResolution::Bound {
+                account: find_account(&candidate.account_id)
+                    .expect("candidate came from a configured account")
+                    .clone(),
+                owner: candidate.owner,
+                repo: candidate.repo,
+            }
+        }
         _ => RepoResolution::NeedsBind(candidates),
     }
 }
@@ -333,29 +302,10 @@ fn store_guard() -> std::sync::MutexGuard<'static, ()> {
     STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Add or update an account record, storing its PAT (GHE accounts) in the vault.
+/// Add or update a GitHub account through the shared registry and vault.
 pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> Result<(), String> {
     let _guard = store_guard();
-    crate::config::ConfigFile::<GitHubAccountRegistry>::new(GITHUB_ACCOUNTS_FILE).update_with(
-        |latest| {
-            // Validate against the current file, not a snapshot taken before
-            // another process acquired the cross-process lock.
-            if let Some(existing) = latest.get(&account.id)
-                && existing.host != account.host
-            {
-                return Err(format!(
-                    "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
-                    account.id,
-                    existing.host.as_str()
-                ));
-            }
-            if let Some(pat) = pat {
-                crate::credentials::set(Credential::GithubToken(&account.id), pat)?;
-            }
-            latest.upsert(account);
-            Ok(((), true))
-        },
-    )
+    crate::accounts::upsert_github(account, pat)
 }
 
 /// Remove an account everywhere: its PAT, its registry record, and every binding
@@ -363,14 +313,18 @@ pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> R
 /// in Step 9, once those caches become account-scoped.)
 pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> {
     let _guard = store_guard();
-    // Best-effort token delete — absence is not an error.
-    let _ = crate::credentials::delete(Credential::GithubToken(account_id));
-    crate::config::ConfigFile::<GitHubAccountRegistry>::new(GITHUB_ACCOUNTS_FILE)
-        .update(|latest| latest.remove(account_id))?;
-    let mut bindings = RepoBindingStore::load();
+    // Refuse corrupt/unreadable bindings before deleting the account or its credential.
+    let mut bindings = RepoBindingStore::read_strict()?;
+    if account_id == GitHubAccount::GITHUB_COM_ID {
+        return Err("The github.com default cannot be removed; use clear_secret to log out".into());
+    }
     let bindings_base = bindings.clone();
     bindings.remove_account_bindings(account_id);
-    bindings.save(&bindings_base)
+    // Persist the references first: a failed save must leave the account and credential
+    // available to retry. A later account-removal failure leaves an unbound, valid account.
+    bindings.save(&bindings_base)?;
+    crate::accounts::remove(account_id)?;
+    Ok(())
 }
 
 /// Persist a repo→account binding derived from the chosen remote (its owner/repo
@@ -419,71 +373,26 @@ pub(crate) fn unbind_repo(repo_path: &std::path::Path) -> Result<bool, String> {
 
 /// Validate a token against `{host}/user` and return the resolved login.
 ///
-/// Shared by GHE PAT add and the additional-github.com device-flow add so the
-/// token-validation + login-resolution is written once.
-#[cfg(feature = "desktop")]
+/// Used by additional github.com device-flow login.
 pub(crate) async fn fetch_account_login(
     client: &reqwest::Client,
     host: &GitHubHost,
     token: &str,
 ) -> Result<Option<String>, String> {
-    let url = format!("{}/user", host.rest_base());
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "TUICommander")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()
+    let resp = crate::github::github_rest_request(
+        client,
+        reqwest::Method::GET,
+        host,
+        "/user",
+        token,
+        crate::github::GITHUB_JSON,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("Could not reach {}: {e}", host.as_str()))?;
+    crate::accounts::read_verified_identity(resp, "/login", token)
         .await
-        .map_err(|e| format!("Could not reach {}: {e}", host.as_str()))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        return Err(format!(
-            "Token rejected by {} (HTTP {status})",
-            host.as_str()
-        ));
-    }
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse /user response: {e}"))?;
-    Ok(body["login"].as_str().map(String::from))
-}
-
-/// Add a GitHub Enterprise Server account: validate the PAT against
-/// `{rest_base}/user`, store it under the new account id, and persist the record.
-///
-/// Shared by the Tauri command and the HTTP route (IPC/HTTP parity).
-#[cfg(feature = "desktop")]
-pub(crate) async fn github_add_account_impl(
-    state: &std::sync::Arc<crate::state::AppState>,
-    host: String,
-    pat: String,
-) -> Result<GitHubAccount, String> {
-    let host = GitHubHost::new(&host).ok_or_else(|| format!("Invalid host: {host}"))?;
-    if host.is_cloud() {
-        return Err("github.com uses device-flow login, not a PAT.".to_string());
-    }
-    let pat = pat.trim().to_string();
-    if pat.is_empty() {
-        return Err("Personal Access Token is required".to_string());
-    }
-
-    let login = fetch_account_login(&state.http_client, &host, &pat).await?;
-    let account = GitHubAccount::ghe_pat(host, login);
-    add_account_record(account.clone(), Some(&pat))?;
-    Ok(account)
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn github_add_account(
-    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
-    host: String,
-    pat: String,
-) -> Result<GitHubAccount, String> {
-    github_add_account_impl(state.inner(), host, pat).await
+        .map(Some)
 }
 
 /// Remove an account: its PAT, its record, all of its repo bindings, and its
@@ -672,75 +581,23 @@ pub(crate) async fn github_unbind_repo(repo_path: String) -> Result<bool, String
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- registry CRUD ---
+    use crate::credentials::Credential;
 
     #[test]
-    fn registry_upsert_get_remove() {
-        let mut reg = GitHubAccountRegistry::default();
-        assert!(reg.list().is_empty());
+    fn registry_reads_shared_account_records() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        assert_eq!(GitHubAccountRegistry::load().list(), []);
 
-        let acc = GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None);
-        reg.upsert(acc.clone());
-        assert_eq!(reg.get("ghe.acme.com"), Some(&acc));
-        assert_eq!(reg.list().len(), 1);
-
-        // Upsert with same id replaces, does not duplicate.
-        let updated = GitHubAccount::ghe_pat(
+        let account = GitHubAccount::ghe_pat(
             GitHubHost::new("ghe.acme.com").unwrap(),
             Some("octocat".into()),
         );
-        reg.upsert(updated.clone());
-        assert_eq!(reg.list().len(), 1);
-        assert_eq!(reg.get("ghe.acme.com"), Some(&updated));
-
-        assert!(reg.remove("ghe.acme.com"));
-        assert!(reg.get("ghe.acme.com").is_none());
-        assert!(!reg.remove("ghe.acme.com"));
-    }
-
-    #[test]
-    fn registry_persists_to_disk() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-
-        // Empty registry when nothing on disk.
-        assert!(GitHubAccountRegistry::load().list().is_empty());
-
-        let mut reg = GitHubAccountRegistry::default();
-        reg.upsert(GitHubAccount::ghe_pat(
-            GitHubHost::new("ghe.acme.com").unwrap(),
-            Some("octocat".into()),
-        ));
-        reg.save(&GitHubAccountRegistry::default()).expect("save");
+        add_account_record(account.clone(), None).expect("save shared account");
 
         let loaded = GitHubAccountRegistry::load();
-        assert_eq!(loaded, reg);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn stale_account_additions_preserve_both_accounts() {
-        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        let base = GitHubAccountRegistry::load();
-        let mut first = base.clone();
-        first.upsert(GitHubAccount::ghe_pat(
-            GitHubHost::new("first.example.com").unwrap(),
-            None,
-        ));
-        let mut second = base.clone();
-        second.upsert(GitHubAccount::ghe_pat(
-            GitHubHost::new("second.example.com").unwrap(),
-            None,
-        ));
-
-        first.save(&base).unwrap();
-        second.save(&base).unwrap();
-
-        let saved = GitHubAccountRegistry::load();
-        assert!(saved.get("first.example.com").is_some());
-        assert!(saved.get("second.example.com").is_some());
+        assert_eq!(loaded.list(), std::slice::from_ref(&account));
+        assert_eq!(loaded.get(&account.id), Some(&account));
     }
 
     // --- repo → account bindings ---
@@ -893,8 +750,9 @@ mod tests {
             &[("origin", "git@ghe.acme.com:team/project.git")],
         );
         let acc = GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None);
-        let mut reg = GitHubAccountRegistry::default();
-        reg.upsert(acc.clone());
+        let reg = GitHubAccountRegistry {
+            accounts: vec![acc.clone()],
+        };
         let mut bindings = RepoBindingStore::default();
         bindings.set_binding(
             &repo,
@@ -918,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unbound_single_github_com_needs_bind_one() {
+    fn resolve_single_candidate_does_not_require_a_binding_choice() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = make_repo_with_remotes(
             dir.path(),
@@ -932,17 +790,38 @@ mod tests {
             &RepoBindingStore::default(),
             Some(&default),
         );
-        match res {
-            RepoResolution::NeedsBind(c) => {
-                assert_eq!(c.len(), 1);
-                assert_eq!(c[0].account_id, "github.com");
-                assert_eq!(
-                    (c[0].owner.as_str(), c[0].repo.as_str()),
-                    ("octocat", "hello")
-                );
+        assert_eq!(
+            res,
+            RepoResolution::Bound {
+                account: default,
+                owner: "octocat".into(),
+                repo: "hello".into(),
             }
-            other => panic!("expected NeedsBind([1]), got {other:?}"),
-        }
+        );
+    }
+
+    // Catches: resolving a unique named account incorrectly requires a binding,
+    // or silently substitutes the ambient account's identity.
+    #[test]
+    fn resolve_single_named_account_without_ambient_credentials() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let repo = make_repo_with_remotes(
+            dir.path(),
+            "main",
+            &[("origin", "git@ghe.acme.com:team/project.git")],
+        );
+        let account = GitHubAccount::ghe_pat(GitHubHost::new("ghe.acme.com").unwrap(), None);
+        let registry = GitHubAccountRegistry {
+            accounts: vec![account.clone()],
+        };
+        assert_eq!(
+            resolve_repo_account(&repo, &registry, &RepoBindingStore::default(), None),
+            RepoResolution::Bound {
+                account,
+                owner: "team".into(),
+                repo: "project".into()
+            }
+        );
     }
 
     #[test]
@@ -1027,8 +906,8 @@ mod tests {
 
     #[test]
     fn resolve_binding_to_removed_account_falls_through() {
-        // A stale binding to an account that no longer exists must not resolve to
-        // Bound — it re-resolves from the remotes instead.
+        // A stale binding must not keep the removed identity: the single current
+        // candidate resolves from the remotes instead.
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = make_repo_with_remotes(
             dir.path(),
@@ -1052,7 +931,14 @@ mod tests {
             &bindings,
             Some(&default),
         );
-        assert!(matches!(res, RepoResolution::NeedsBind(_)));
+        assert_eq!(
+            res,
+            RepoResolution::Bound {
+                account: default,
+                owner: "octocat".into(),
+                repo: "hello".into(),
+            }
+        );
     }
 
     /// A second github.com account (same host as the implicit default), kept
@@ -1078,8 +964,9 @@ mod tests {
             &[("origin", "git@github.com:octocat/hello.git")],
         );
         let default = github_com_default(); // id "github.com"
-        let mut reg = GitHubAccountRegistry::default();
-        reg.upsert(github_com_named("github.com#work", "work-login"));
+        let reg = GitHubAccountRegistry {
+            accounts: vec![github_com_named("github.com#work", "work-login")],
+        };
 
         let res = resolve_repo_account(&repo, &reg, &RepoBindingStore::default(), Some(&default));
         match res {
@@ -1106,8 +993,9 @@ mod tests {
         );
         let default = github_com_default();
         let work = github_com_named("github.com#work", "work-login");
-        let mut reg = GitHubAccountRegistry::default();
-        reg.upsert(work.clone());
+        let reg = GitHubAccountRegistry {
+            accounts: vec![work.clone()],
+        };
 
         let mut bindings = RepoBindingStore::default();
         bindings.set_binding(

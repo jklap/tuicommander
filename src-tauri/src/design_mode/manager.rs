@@ -7,6 +7,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use base64::Engine;
 use chromiumoxide::cdp::browser_protocol::{css, dom, overlay, page};
@@ -18,9 +19,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::payload::GrabPayload;
-use super::source::{self, ScriptMaps};
+use super::source_cdp::{self as source, ScriptMaps};
 
-const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
+use super::captures::MAX_PNG_BYTES;
 /// One deadline for closing every browser at exit, not one per repository.
 const STOP_ALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -35,13 +36,41 @@ pub(crate) struct ModeStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) struct Rect {
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) x: f64,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) y: f64,
     pub(crate) width: f64,
     pub(crate) height: f64,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 impl Rect {
     fn from_value(value: &Value) -> Option<Self> {
         let number = |key| value.get(key)?.as_f64().filter(|number| number.is_finite());
@@ -62,6 +91,13 @@ impl Rect {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) struct Pick {
     pub(crate) raw: Value,
     pub(crate) styles: Value,
@@ -70,11 +106,32 @@ pub(crate) struct Pick {
 }
 
 pub(crate) trait InspectBrowser: Send + Sync {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn arm(&self) -> BoxFuture<'_, Result<(), String>>;
     /// Leaves inspect mode and drops every pick queued while nobody listened,
     /// so a later start cannot deliver a click the user made for another agent.
     fn disarm(&self) -> BoxFuture<'_, Result<(), String>>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn next_pick(&self) -> BoxFuture<'_, Option<Pick>>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn capture(&self, rect: Rect) -> BoxFuture<'_, Result<Option<Vec<u8>>, String>>;
     fn close(&self) -> BoxFuture<'_, Result<(), String>>;
 }
@@ -88,8 +145,25 @@ struct Mode {
 
 #[derive(Clone)]
 pub(crate) struct DesignModeManager {
+    pub(crate) heartbeat_id: String,
+    pub(crate) command_channels: super::command_channel::Channels,
     modes: Arc<Mutex<HashMap<String, Mode>>>,
+    liveness: Arc<std::sync::Mutex<super::liveness::Liveness>>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     grab_dir: PathBuf,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     prefill: Prefill,
     notify: Notify,
 }
@@ -97,10 +171,102 @@ pub(crate) struct DesignModeManager {
 impl DesignModeManager {
     pub(crate) fn new(grab_dir: PathBuf, prefill: Prefill, notify: Notify) -> Self {
         Self {
+            heartbeat_id: uuid::Uuid::new_v4().to_string(),
+            command_channels: Arc::default(),
             modes: Arc::new(Mutex::new(HashMap::new())),
+            liveness: Arc::default(),
             grab_dir,
             prefill,
             notify,
+        }
+    }
+
+    /// The extension owns picking; retain the existing terminal badge lifecycle.
+    pub(crate) async fn arm_extension(&self, repo_path: String, session_id: String) -> ModeStatus {
+        let status = ModeStatus {
+            repo_path: repo_path.clone(),
+            session_id,
+            status: "armed",
+        };
+        let mut modes = self.modes.lock().await;
+        if let Some(old) = self.command_channels.lock().unwrap().insert(
+            repo_path.clone(),
+            Arc::new(super::command_channel::CommandChannel::new(
+                status.session_id.clone(),
+            )),
+        ) {
+            old.cancel();
+        }
+        let old = modes.insert(
+            repo_path,
+            Mode {
+                status: status.clone(),
+                browser: None,
+                listener: None,
+                generation: 0,
+            },
+        );
+        self.liveness
+            .lock()
+            .unwrap()
+            .armed(&status.repo_path, &status.session_id, Instant::now());
+        (self.notify)(&status);
+        drop(modes);
+        if let Some(mut mode) = old {
+            if let Some(listener) = mode.listener.take() {
+                listener.abort();
+            }
+            if let Some(browser) = mode.browser.take()
+                && let Err(error) = browser.disarm().await
+            {
+                tracing::warn!(%error,"Could not stop previous inspector");
+            }
+        }
+        status
+    }
+
+    /// Extension heartbeat: the reload sequence, or `None` when nothing is armed.
+    pub(crate) async fn heartbeat(&self, repo_path: &str) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness
+            .lock()
+            .unwrap()
+            .beat(repo_path, Instant::now())
+    }
+
+    pub(crate) async fn request_reload(&self, repo_path: &str) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().request_reload(repo_path)
+    }
+
+    pub(crate) async fn request_navigate(&self, repo_path: &str, url: String) -> Option<u64> {
+        let _modes = self.modes.lock().await;
+        self.liveness
+            .lock()
+            .unwrap()
+            .request_navigate(repo_path, url)
+    }
+
+    pub(crate) async fn pending_navigate(&self, repo_path: &str) -> Option<(u64, Option<String>)> {
+        let _modes = self.modes.lock().await;
+        self.liveness.lock().unwrap().pending_navigate(repo_path)
+    }
+
+    /// Stops every armed mode whose browser stopped beating.
+    pub(crate) async fn stop_expired(&self) {
+        let mut modes = self.modes.lock().await;
+        let expired = self.liveness.lock().unwrap().expire(Instant::now());
+        for (repo_path, _) in expired {
+            if let Some(channel) = self.command_channels.lock().unwrap().remove(&repo_path) {
+                channel.cancel();
+            }
+            // Expiry and Start share the mode lock: an old deadline cannot stop a replacement.
+            if let Some(mode) = modes.get_mut(&repo_path) {
+                mode.status.status = "stopped";
+                mode.generation += 1;
+                tracing::info!(repo_path, "Design Mode extension went quiet; stopping");
+                (self.notify)(&mode.status);
+            }
         }
     }
 
@@ -123,6 +289,13 @@ impl DesignModeManager {
     /// Launching Chrome and arming take seconds, so the repo is marked
     /// "starting" and the `modes` lock is released meanwhile: other repos'
     /// picks, status reads and `stop` must not wait behind one launch.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     pub(crate) async fn start<F, Fut>(
         &self,
         repo_path: String,
@@ -209,6 +382,13 @@ impl DesignModeManager {
         Ok(status)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn listen(&self, repo_path: String, generation: u64, browser: Arc<dyn InspectBrowser>) {
         loop {
             let Some(pick) = browser.next_pick().await else {
@@ -232,6 +412,13 @@ impl DesignModeManager {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn is_armed(&self, repo_path: &str, generation: u64) -> bool {
         self.modes
             .lock()
@@ -240,6 +427,13 @@ impl DesignModeManager {
             .is_some_and(|mode| mode.generation == generation && mode.status.status == "armed")
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn handle_pick(
         &self,
         repo_path: &str,
@@ -273,20 +467,28 @@ impl DesignModeManager {
         (self.prefill)(&mode.status.session_id, &prompt)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     fn save_png(&self, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
-        if bytes.is_empty() || bytes.len() > MAX_PNG_BYTES {
-            return Ok(None);
-        }
-        std::fs::create_dir_all(&self.grab_dir).map_err(|error| error.to_string())?;
-        let path = self.grab_dir.join(format!("{}.png", uuid::Uuid::now_v7()));
-        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
-        Ok(Some(path))
+        super::captures::save_png(&self.grab_dir, bytes)
     }
 
     /// A browser that lost its connection or cannot re-arm is closed
     /// explicitly. Dropping the last `Arc` instead would SIGKILL a Chrome that
     /// TUIC launched (chromey sets `kill_on_drop`) and skip the graceful close.
     /// Only a healthy browser whose terminal closed is kept (`session_closed`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+        )
+    )]
     async fn disconnected(&self, repo_path: &str, generation: u64) {
         let mut modes = self.modes.lock().await;
         let Some(mode) = modes.get_mut(repo_path) else {
@@ -300,10 +502,10 @@ impl DesignModeManager {
         let status = mode.status.clone();
         drop(modes);
         (self.notify)(&status);
-        if let Some(browser) = browser {
-            if let Err(error) = browser.close().await {
-                tracing::warn!(repo_path, %error, "Design Mode browser could not close");
-            }
+        if let Some(browser) = browser
+            && let Err(error) = browser.close().await
+        {
+            tracing::warn!(repo_path, %error, "Design Mode browser could not close");
         }
     }
 
@@ -324,6 +526,10 @@ impl DesignModeManager {
                     mode.generation += 1;
                     listeners.extend(mode.listener.take());
                     browsers.extend(mode.browser.clone());
+                    self.liveness
+                        .lock()
+                        .unwrap()
+                        .stopped(&mode.status.repo_path);
                     changed.push(mode.status.clone());
                 }
             }
@@ -343,8 +549,12 @@ impl DesignModeManager {
     }
 
     pub(crate) async fn stop(&self, repo_path: &str) -> Result<Option<ModeStatus>, String> {
+        if let Some(channel) = self.command_channels.lock().unwrap().remove(repo_path) {
+            channel.cancel();
+        }
         let (browser, status, changed) = {
             let mut modes = self.modes.lock().await;
+            self.liveness.lock().unwrap().stopped(repo_path);
             let Some(mode) = modes.get_mut(repo_path) else {
                 return Ok(None);
             };
@@ -391,6 +601,13 @@ const STARTING: &str = "starting";
 /// Arms a reused browser, or makes a new one. A reused browser that cannot
 /// arm is dead (the user closed Chrome), so it is closed and replaced in the
 /// same click instead of failing it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 async fn arm_browser<F, Fut>(
     reused: Option<Arc<dyn InspectBrowser>>,
     make_browser: F,
@@ -423,6 +640,10 @@ where
 
 /// The concrete headed Chrome adapter. A dedicated profile is reused on a
 /// second start; the handler task is owned here and ends with the browser.
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 struct CdpInspectBrowser {
     browser: Mutex<Browser>,
     page: Page,
@@ -432,6 +653,10 @@ struct CdpInspectBrowser {
     map_task: JoinHandle<()>,
 }
 
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 impl CdpInspectBrowser {
     async fn connect(
         repo_root: &Path,
@@ -472,10 +697,8 @@ impl CdpInspectBrowser {
             .await
             .map_err(|error| error.to_string())?;
         enable_domains(&page).await?;
-        if new_page {
-            if let Some(url) = dev_server_url {
-                page.goto(url).await.map_err(|error| error.to_string())?;
-            }
+        if new_page && let Some(url) = dev_server_url {
+            page.goto(url).await.map_err(|error| error.to_string())?;
         }
         let scripts = scripts.filter_map(|event| {
             std::future::ready(
@@ -682,6 +905,13 @@ impl InspectBrowser for CdpInspectBrowser {
 /// Enables the CDP domains Design Mode reads. Debugger is on only for
 /// `scriptParsed`, but while it is enabled Chrome stops at every `debugger;`
 /// statement and nothing here resumes, so the page would hang: skip all pauses.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 async fn enable_domains(page: &Page) -> Result<(), String> {
     let error = |error: chromiumoxide::error::CdpError| error.to_string();
     page.execute(dom::EnableParams::default())
@@ -702,11 +932,16 @@ async fn enable_domains(page: &Page) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 pub(crate) async fn live_browser(
     repo_root: &Path,
     dev_server_url: Option<&str>,
 ) -> Result<Arc<dyn InspectBrowser>, String> {
-    CdpInspectBrowser::connect(repo_root, dev_server_url).await
+    // Shared tungstenite TLS features enlarge this future; keep it off callers' stacks.
+    Box::pin(CdpInspectBrowser::connect(repo_root, dev_server_url)).await
 }
 
 #[cfg(test)]
@@ -732,7 +967,7 @@ mod tests {
             Box::pin(async {
                 let failing = self
                     .arm_failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                         left.checked_sub(1)
                     })
                     .is_ok();
@@ -834,6 +1069,21 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    // Catches: a v2 launch losing its terminal badge or leaving it armed after exit.
+    #[tokio::test]
+    async fn extension_lifecycle_keeps_launching_terminal_and_stops_after_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _, mut events) = manager(dir.path().to_path_buf());
+        let status = manager
+            .arm_extension("/repo".into(), "terminal-X".into())
+            .await;
+        assert_eq!(status.session_id, "terminal-X");
+        assert_eq!(recv(&mut events).await.status, "armed");
+        manager.session_closed("terminal-X").await;
+        assert_eq!(recv(&mut events).await.status, "stopped");
+        assert_eq!(manager.statuses().await[0].status, "stopped");
     }
 
     #[tokio::test]

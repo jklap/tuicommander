@@ -1,6 +1,8 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getModifierSymbol } from "../../platform";
+import { useQuickSwitcherVisibility } from "../../hooks/useQuickSwitcherVisibility";
+import { getModifierSymbol, isMacOS, resetPlatformCache } from "../../platform";
 import type { AwaitingInputType } from "../../stores/terminals";
 
 const mockCopyPathToClipboard = vi.hoisted(() => vi.fn());
@@ -48,6 +50,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import type { ContextMenuItem } from "../../components/ContextMenu/ContextMenu";
 import { TabBar } from "../../components/TabBar/TabBar";
+import { ToastList } from "../../components/ToastContainer/ToastList";
 import { invoke, listen } from "../../invoke";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -61,6 +64,8 @@ import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
+import { keyFor } from "../../utils/hotkey";
+import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 
 describe("TabBar", () => {
 	beforeEach(() => {
@@ -124,6 +129,38 @@ describe("TabBar", () => {
 			awaitingInput: overrides.awaitingInput ?? null,
 		});
 	}
+
+	// Catches: a persisted backend record being lost when a fresh frontend mounts.
+	it("suspended_record_survives_restart_and_frontend_renders_it", () => {
+		const id = adoptSuspendedSession(
+			{
+				tuic_session: "durable-tab",
+				session_id: "old-pty",
+				agent_type: null,
+				cwd: "/Gits/alpha",
+				worktree: null,
+				agent_session_id: null,
+				launch_command: null,
+				alias: "parked",
+				pane_slot: null,
+				reason: "user",
+				name: "Durable shell",
+			},
+			14,
+		);
+		const view = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		expect(view.getByText("Durable shell")).toBeTruthy();
+		expect(terminalsStore.get(id)?.suspended).toBe(true);
+		expect(view.container.querySelector(".suspendedBadge")).toBeTruthy();
+	});
 
 	it("clicking new tab button calls onNewTab directly", () => {
 		const onNewTab = vi.fn();
@@ -1557,12 +1594,18 @@ describe("TabBar", () => {
 				node.textContent?.includes("Start Design Mode"),
 			);
 			expect(item).toBeDefined();
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
-			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session" });
+			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session", browser: "edge" });
 		});
 
-		it("hides design mode on a shell tab and reflects armed and stopped events on the bound tab", async () => {
+		it("removes the Design Mode badge when the bound session stops (regression: stopped badge remains)", async () => {
 			const shell = agentTab("shell-session", null);
 			const agent = agentTab("agent-session", "claude");
 			const { container } = renderBar();
@@ -1572,7 +1615,10 @@ describe("TabBar", () => {
 			const eventHandler = vi.mocked(listen).mock.calls.find(([name]) => name === "design-mode-changed")?.[1];
 			expect(eventHandler).toBeDefined();
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "armed" } });
-			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)).not.toBeNull();
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.textContent).toBe("D");
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.getAttribute("title")).toBe(
+				"Design Mode armed",
+			);
 			expect(container.querySelector(`[data-tab-id="${shell}"] .designModeBadge`)).toBeNull();
 			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${agent}"]`)!);
 			const stopItem = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
@@ -1582,9 +1628,7 @@ describe("TabBar", () => {
 			fireEvent.click(stopItem!);
 			expect(invoke).toHaveBeenCalledWith("stop_design_mode", { repoPath: "/repo" });
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
-			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.getAttribute("title")).toBe(
-				"Design Mode stopped",
-			);
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)).toBeNull();
 		});
 
 		it("restores design mode status after a webview reload", async () => {
@@ -1623,9 +1667,7 @@ describe("TabBar", () => {
 			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
 			resolveSnapshot([{ repoPath: "/repo", sessionId: "agent-session", status: "armed" }]);
 			await Promise.resolve();
-			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)?.getAttribute("title")).toBe(
-				"Design Mode stopped",
-			);
+			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)).toBeNull();
 		});
 
 		it("shows the backend message when starting design mode fails", async () => {
@@ -1641,25 +1683,38 @@ describe("TabBar", () => {
 			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
 				node.textContent?.includes("Start Design Mode"),
 			);
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
 			expect(addToast).toHaveBeenCalledWith(expect.any(String), "Chrome is unavailable", "error");
 			addToast.mockRestore();
 		});
 
 		it("explains that browser design mode opens Chrome on the host", async () => {
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 			const tauri = vi.spyOn(transport, "isTauri").mockReturnValue(false);
 			const id = agentTab("agent-session", "claude");
-			const addToast = vi.spyOn(toastsStore, "add");
+			const notice = render(() => <ToastList onDismiss={() => {}} repoName={() => null} />);
 			const { container } = renderBar();
 			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
 			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
 				node.textContent?.includes("Start Design Mode"),
 			);
+			expect(container.textContent).not.toContain("Choose Design Mode browser");
 			fireEvent.click(item!);
+			const browser = Array.from(container.querySelectorAll(".item")).find(
+				(node) => node.textContent?.trim() === "Edge",
+			);
+			expect(browser).toBeDefined();
+			fireEvent.click(browser!);
 			await Promise.resolve();
-			expect(addToast).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
-			addToast.mockRestore();
+			expect(notice.getByText("Browser opened on the host machine.")).toBeVisible();
+			expect(notice.getByText("Design Mode")).toBeVisible();
 			tauri.mockRestore();
 		});
 	});
@@ -1690,6 +1745,127 @@ describe("TabBar", () => {
 	});
 
 	describe("quick switcher badges", () => {
+		function renderLongPressHints() {
+			for (let i = 1; i <= 10; i++) addTerminal({ name: `Tab ${i}` });
+			return render(() => {
+				const [quick, setQuick] = createSignal(false);
+				const [hints, setHints] = createSignal(false);
+				useQuickSwitcherVisibility(setQuick, setHints);
+				return (
+					<TabBar
+						tabHintsActive={hints()}
+						quickSwitcherActive={quick()}
+						onTabSelect={() => {}}
+						onTabClose={() => {}}
+						onCloseOthers={() => {}}
+						onCloseToRight={() => {}}
+						onNewTab={() => {}}
+					/>
+				);
+			});
+		}
+
+		function primaryDown() {
+			fireEvent.keyDown(document, { key: isMacOS() ? "Meta" : "Control", metaKey: isMacOS(), ctrlKey: !isMacOS() });
+		}
+
+		it.each(["MacIntel", "Win32", "Linux x86_64"])(
+			"long press reveals only nine tab shortcuts and release hides them on %s",
+			(platform) => {
+				const original = navigator.platform;
+				Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+				resetPlatformCache();
+				const view = renderLongPressHints();
+				try {
+					primaryDown();
+					vi.advanceTimersByTime(449);
+					expect(view.container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+					vi.advanceTimersByTime(1);
+					const badges = view.container.querySelectorAll(".shortcutBadge");
+					expect([...badges].map((b) => b.textContent)).toEqual(
+						Array.from({ length: 9 }, (_, i) => keyFor(`switch-tab-${i + 1}`)),
+					);
+					fireEvent.keyUp(document, { key: isMacOS() ? "Meta" : "Control" });
+					expect(view.container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+				} finally {
+					view.unmount();
+					Object.defineProperty(navigator, "platform", { configurable: true, value: original });
+					resetPlatformCache();
+				}
+			},
+		);
+
+		it.each(["c", "t", "1", "mousedown", "wheel"])(
+			"%s cancels pending tab hints without consuming the event or rearming on repeat",
+			(action) => {
+				const { container } = renderLongPressHints();
+				primaryDown();
+				vi.advanceTimersByTime(200);
+				const event =
+					action === "mousedown"
+						? new MouseEvent(action, { bubbles: true, cancelable: true })
+						: action === "wheel"
+							? new WheelEvent(action, { bubbles: true, cancelable: true })
+							: new KeyboardEvent("keydown", {
+									key: action,
+									metaKey: isMacOS(),
+									ctrlKey: !isMacOS(),
+									bubbles: true,
+									cancelable: true,
+								});
+				document.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+				fireEvent.keyDown(document, {
+					key: isMacOS() ? "Meta" : "Control",
+					metaKey: isMacOS(),
+					ctrlKey: !isMacOS(),
+					repeat: true,
+				});
+				vi.advanceTimersByTime(1000);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+			},
+		);
+
+		it.each(["mousedown", "wheel", "blur", "visibilitychange", "keydown"])(
+			"%s retracts visible long-press badges",
+			(action) => {
+				const { container } = renderLongPressHints();
+				primaryDown();
+				vi.advanceTimersByTime(450);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(9);
+				(action === "blur" ? window : document).dispatchEvent(
+					action === "keydown" ? new KeyboardEvent(action, { key: "c" }) : new Event(action),
+				);
+				expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+			},
+		);
+
+		it("quick-switcher chord stays immediate and cancels the primary hold", () => {
+			const { container } = renderLongPressHints();
+			primaryDown();
+			fireEvent.keyDown(document, {
+				key: isMacOS() ? "Control" : "Alt",
+				metaKey: isMacOS(),
+				ctrlKey: true,
+				altKey: !isMacOS(),
+			});
+			expect(container.querySelector(".shortcutBadge")?.textContent).toBe(keyFor("switch-branch-1"));
+			vi.advanceTimersByTime(1000);
+			expect(container.querySelector(".shortcutBadge")?.textContent).toBe(keyFor("switch-branch-1"));
+			fireEvent.keyUp(document, { key: isMacOS() ? "Control" : "Alt" });
+			expect(container.querySelectorAll(".shortcutBadge")).toHaveLength(0);
+		});
+
+		it("unmount cancels the pending timer and listeners", () => {
+			const { unmount } = renderLongPressHints();
+			primaryDown();
+			const clear = vi.spyOn(globalThis, "clearTimeout");
+			unmount();
+			expect(clear).toHaveBeenCalled();
+			vi.advanceTimersByTime(1000);
+			clear.mockRestore();
+		});
+
 		it("shows shortcut badges when quickSwitcherActive", () => {
 			addTerminal({ name: "Tab 1" });
 			addTerminal({ name: "Tab 2" });
@@ -1706,6 +1882,8 @@ describe("TabBar", () => {
 			));
 			const badges = container.querySelectorAll(".shortcutBadge");
 			expect(badges.length).toBe(2);
+			// The badge names the chord that is held (Cmd+Ctrl+N), not plain Cmd+N.
+			expect(badges[0].textContent).toBe(keyFor("switch-branch-1"));
 		});
 	});
 

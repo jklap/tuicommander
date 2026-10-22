@@ -47,6 +47,8 @@ Keyboard Shortcuts if you want one. You can also choose a terminal in
 **Settings → Voice → Hands-free conversation** and select **Start
 conversation**.
 
+Hands-free conversation uses an accent **Start conversation** action and a distinct **Stop conversation** action. The state row shows a coloured indicator with **Running** or **Stopped**, alongside the backend phase when available.
+
 While it runs, the panel shows the state, the bound terminal, where the audio
 comes from, and the text that is about to be sent. The dictation hotkey stops
 the conversation, and so does **Stop conversation**.
@@ -62,7 +64,7 @@ them. Turn them off with the **Earcons** setting.
 | Hold-back before sending | How long a finished utterance stays visible before it goes to the terminal, so you can stop one you did not mean. With an activation phrase, the effective delay is at least five seconds to include a continuation. It applies to the next conversation, not to the one already running. |
 | Earcons | Plays the short sounds described below when a turn is sent or dropped. On by default. |
 | Notify model when hands-free changes | Tells the agent that it can answer out loud when the conversation starts, and to go back to text when it ends. |
-| Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in <language>." to the notice itself. |
+| Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in &lt;language&gt;." to the notice itself. |
 
 Speech is typed straight into the bound terminal. It does not wait for the
 agent to finish: a turn is typed at once, even while the agent is working, the
@@ -83,10 +85,19 @@ phrase is configured, even if you saved a shorter delay.
 
 ## Spoken Replies
 
-The agent can answer out loud. **Settings → Voice → Spoken replies** lists
-the downloads this needs: one shared runtime library, plus one bundle for each
-language, each with its own voices. English, French, German, Italian,
-Portuguese and Spanish are available.
+The agent can answer out loud. By default the voice is a **Microsoft Edge**
+neural voice: nothing to download, many languages, a voice list filtered by the
+dictation language and a **Listen** button to hear each one. It needs the
+internet, and the text of each reply is sent to Microsoft's online speech
+service. Offline, the Voice section says so instead of staying silent.
+
+Echo cancellation, hush, volume and levelling work the same for every engine.
+Expert mode adds a **Speech engine** setting: **Pocket TTS** runs fully on this
+machine (**Settings → Voice → Spoken replies** then lists one shared runtime
+library plus a bundle per language, each with its own voices; English, French,
+German, Italian, Portuguese and Spanish), and **External command** pipes the
+reply text to a program you name. Installations that already chose a Pocket
+voice or downloaded Pocket keep Pocket.
 
 Replies are spoken in the language of the conversation. When the dictation
 language is set to auto-detect, nothing is spoken until somebody speaks — the

@@ -2,6 +2,37 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Catches: browser reload dropping the changed-ID filter and scanning every plugin.
+it("maps targeted plugin discovery with the same ID array as IPC", () => {
+	const ids = ["plugin-a", "odd,id"];
+	const mapping = mapCommandToHttp("list_user_plugins", { pluginIds: ids });
+	const url = new URL(mapping!.path, "http://localhost");
+	expect(url.pathname).toBe("/plugins/list");
+	expect(JSON.parse(url.searchParams.get("plugin_ids")!)).toEqual(ids);
+	expect(mapCommandToHttp("list_user_plugins", {})?.path).toBe("/plugins/list");
+});
+
+// Catches: browser clients losing the provider bridge while desktop IPC works.
+it("maps scoped plugin settings actions without adding host authority", () => {
+	const action = { action: "get", paths: ["/retryDelayMs"] };
+	expect(mapCommandToHttp("plugin_settings_action", { pluginId: "retry-plugin", action })).toEqual({
+		method: "POST",
+		path: "/api/plugins/retry-plugin/settings",
+		body: action,
+	});
+});
+
+// Catches: browser clients losing the provider bridge while desktop IPC works.
+it("maps the work-item provider bridge to its HTTP twin", () => {
+	const input = { action: "claim", requestId: "request-1" };
+	expect(mapCommandToHttp("work_item_provider_bridge", { input })).toEqual({
+		method: "POST",
+		path: "/work-items/provider-bridge",
+		body: input,
+	});
+});
+
 import {
 	buildHttpUrl,
 	DEDICATED_WS_COMMANDS,
@@ -18,6 +49,16 @@ import {
 	setTransportLogger,
 } from "../transportRuntime";
 
+// Catches: browser/remote start work using a different input shape or an absent endpoint.
+it("maps_start_work_prompt_input_without_reshaping", () => {
+	const input = { key: "TASK-1", url: null, title: "Title", body: "Body" };
+	expect(mapCommandToHttp("build_start_work_prompt", { repoPath: "/repo", input })).toEqual({
+		method: "POST",
+		path: "/tasks/start-work-prompt",
+		body: { repoPath: "/repo", input },
+	});
+});
+
 function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
 }
@@ -32,7 +73,7 @@ function findNodes<T extends ts.Node>(root: ts.Node, guard: (node: ts.Node) => n
 	return found;
 }
 
-function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
+function extractCommandTableCommands(transportSource = readRepoFile("src/transport/commandTable.ts")): Set<string> {
 	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
 	const declaration = sourceFile.statements
 		.filter(ts.isVariableStatement)
@@ -56,6 +97,15 @@ function extractCommandTableCommands(transportSource = readRepoFile("src/transpo
 }
 
 describe("COMMAND_TABLE source scan", () => {
+	it("catches launch preview drafts being dropped by the HTTP defaults mapping", () => {
+		const preview = { agents: { agents: { claude: { suggest_followups: false } } }, intent_tab_title: false };
+		expect(mapCommandToHttp("get_config_defaults", { preview })).toMatchObject({
+			method: "POST",
+			path: "/config/defaults",
+			body: preview,
+		});
+	});
+
 	it("finds space-indented commands without treating a nested object key as a command", () => {
 		const source = `const COMMAND_TABLE = {
   first_command: { map: () => ({ body: {
@@ -65,6 +115,17 @@ describe("COMMAND_TABLE source scan", () => {
 };`;
 		expect(extractCommandTableCommands(source)).toEqual(new Set(["first_command", "second_command"]));
 	});
+});
+
+// Catches: HTTP maps history anchors to tail offsets or drops the null tail sentinel.
+it("maps anchored scrolling with the same row coordinate and tail sentinel as IPC", () => {
+	for (const anchor of [0, 123, null]) {
+		expect(mapCommandToHttp("terminal_scroll_to_anchor", { sessionId: "anchor", anchor })).toEqual({
+			method: "POST",
+			path: "/sessions/anchor/terminal/scroll-to-anchor",
+			body: { anchor },
+		});
+	}
 });
 
 describe("orphan cleanup transport", () => {
@@ -106,7 +167,7 @@ function extractRegisteredTauriCommands(): Set<string> {
 		.filter((entry) => entry.length > 0)
 		.map((entry) => {
 			const parts = entry.split("::");
-			const rustName = parts[parts.length - 1];
+			const rustName = parts.at(-1)!;
 			const renamedCommand = libSource.match(
 				new RegExp(
 					`#\\[tauri::command\\(rename\\s*=\\s*"([^"]+)"\\)\\]\\s*(?:pub\\(super\\)\\s+)?async\\s+fn\\s+${rustName}\\b`,
@@ -287,6 +348,13 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps force retry to the guarded session transaction instead of raw PTY writes", () => {
+			expect(mapCommandToHttp("force_retry_provider_recovery_command", { sessionId: "ego-a" })).toEqual({
+				method: "POST",
+				path: "/sessions/ego-a/force-retry",
+			});
+		});
+
 		it("maps one complete managed reply to the atomic session route", () => {
 			expect(mapCommandToHttp("submit_agent_reply", { sessionId: "s1", input: "answer" })).toEqual({
 				method: "POST",
@@ -300,10 +368,46 @@ describe("transport", () => {
 				path: "/design-mode/start",
 				body: { sessionId: "agent-1" },
 			});
+			// Catches: browser choice being dropped on the browser/PWA transport.
+			expect(mapCommandToHttp("start_design_mode", { sessionId: "agent-1", browser: "edge" })).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1", browser: "edge" },
+			});
+			// Catches: link URL being dropped by the HTTP transport.
+			expect(
+				mapCommandToHttp("start_design_mode", {
+					sessionId: "agent-1",
+					browser: "chrome",
+					url: "http://localhost:5173/page#target",
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1", browser: "chrome", url: "http://localhost:5173/page#target" },
+			});
 			expect(mapCommandToHttp("stop_design_mode", { repoPath: "/repo" })).toEqual({
 				method: "POST",
 				path: "/design-mode/stop",
 				body: { repoPath: "/repo" },
+			});
+			// Catches: agent browser control reachable over IPC but missing on the HTTP transport.
+			expect(mapCommandToHttp("reload_design_mode", { repoPath: "/repo" })).toEqual({
+				method: "POST",
+				path: "/design-mode/reload",
+				body: { repoPath: "/repo" },
+			});
+			expect(mapCommandToHttp("navigate_design_mode", { repoPath: "/repo", url: "http://localhost:5173/x" })).toEqual({
+				method: "POST",
+				path: "/design-mode/navigate",
+				body: { repoPath: "/repo", url: "http://localhost:5173/x" },
+			});
+			expect(
+				mapCommandToHttp("design_mode_browser_command", { repoPath: "/repo", action: "eval", args: { script: "2+2" } }),
+			).toEqual({
+				method: "POST",
+				path: "/design-mode/command",
+				body: { repoPath: "/repo", action: "eval", args: { script: "2+2" } },
 			});
 			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
 				method: "GET",
@@ -349,6 +453,57 @@ describe("transport", () => {
 				path: "/stories/action?path=%2Frepo%20a",
 				body: { action: remove },
 			});
+		});
+		it("routes versioned workflow definitions to their owning project", () => {
+			const action = { action: "get_published", id: "flow-1", revision: 2 };
+			expect(mapCommandToHttp("workflow_definition_action", { project: "/repo a", action })).toEqual({
+				method: "POST",
+				path: "/workflows/definition/action?path=%2Frepo%20a",
+				body: action,
+			});
+		});
+		it.each([
+			{ action: "events", run_id: "run-1", after_sequence: 4, limit: 20 },
+			{ action: "incidents", run_id: "run-1" },
+		])("routes workflow run actions to their owning project: $action", (action) => {
+			expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
+				method: "POST",
+				path: "/workflows/run/action?path=%2Frepo%20a",
+				body: action,
+			});
+		});
+
+		it("preserves pinned graph start and recovery payloads through HTTP", () => {
+			// Catches: graph controls being dropped or reshaped on the browser transport.
+			for (const action of [
+				{
+					action: "start_graph",
+					target: { type: "story", id: "story-1" },
+					expected_revision: 3,
+					definition_id: "flow-1",
+					definition_revision: 2,
+					request_id: "start-key",
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "resume-key",
+					expected_sequence: 4,
+					command: { action: "resume_graph", execution_id: "root", activation_id: "a3", resolution: "Reviewed" },
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "cancel-key",
+					expected_sequence: 4,
+					command: { action: "cancel" },
+				},
+			])
+				expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
+					method: "POST",
+					path: "/workflows/run/action?path=%2Frepo%20a",
+					body: action,
+				});
 		});
 
 		it("maps typed project progress controls", () => {
@@ -429,11 +584,33 @@ describe("transport", () => {
 			expect(result.body).toEqual({ data: "hello" });
 		});
 
+		it("catches dropping expectedDraft at the mobile queue transport boundary", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "later",
+				expectedDraft: "later ",
+			});
+			expect(result).toEqual({
+				method: "POST",
+				path: "/sessions/abc/queue",
+				body: { text: "later", expectedDraft: "later " },
+			});
+		});
 		it("maps enqueue_agent_command to POST /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("enqueue_agent_command", { sessionId: "abc", text: "run tests" });
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/sessions/abc/queue");
 			expect(result.body).toEqual({ text: "run tests" });
+		});
+
+		// Catches: HTTP drops the idempotency key supplied to the desktop command.
+		it("preserves queue idempotency keys across HTTP and Tauri arguments", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "run tests",
+				idempotencyKey: "bg-job-1",
+			});
+			expect(result.body).toEqual({ text: "run tests", idempotencyKey: "bg-job-1" });
 		});
 
 		it("maps clear_queued_agent_commands to DELETE /sessions/{id}/queue", () => {
@@ -484,6 +661,23 @@ describe("transport", () => {
 			const result = mapCommandToHttp("resume_pty", { sessionId: "abc" });
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/sessions/abc/resume");
+		});
+
+		it("maps resume_session to the shared wake route", () => {
+			expect(mapCommandToHttp("resume_session", { tuicSession: "identity" })).toMatchObject({
+				method: "POST",
+				path: "/sessions/wake",
+				body: { tuicSession: "identity" },
+			});
+		});
+
+		it("maps durable session actions to POST /sessions/suspended", () => {
+			const request = { action: "suspend", sessionId: "pty" };
+			expect(mapCommandToHttp("suspended_session_action", { request })).toMatchObject({
+				method: "POST",
+				path: "/sessions/suspended",
+				body: request,
+			});
 		});
 
 		it("maps close_pty to DELETE /sessions/{id}", () => {
@@ -566,6 +760,26 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base, config });
 		});
 
+		// Catches: the HTTP mapper dropping add-time secrets or edit intent.
+		it("carries upstream credentials and explicit replacement intent to HTTP", () => {
+			const credentials = [{ server_id: "new", token: "dummy-secret" }];
+			const base = { servers: [] };
+			const config = { servers: [{ id: "new" }] };
+			expect(mapCommandToHttp("save_mcp_upstreams", { base, config, credentials }).body).toEqual({
+				base,
+				config,
+				credentials,
+			});
+			expect(
+				mapCommandToHttp("save_mcp_upstream_credential", {
+					name: "existing",
+					token: "dummy-replacement",
+					url: "https://example.com",
+					replace: true,
+				}).body,
+			).toEqual({ name: "existing", token: "dummy-replacement", url: "https://example.com", replace: true });
+		});
+
 		it("throws for unknown commands", () => {
 			expect(() => mapCommandToHttp("unknown_cmd", {})).toThrow("No HTTP mapping for command: unknown_cmd");
 		});
@@ -597,6 +811,8 @@ describe("transport", () => {
 				["get_model_info", {}, "GET", "/dictation/models"],
 				["get_speech_assets", {}, "GET", "/dictation/speech/assets"],
 				["stop_speech", {}, "POST", "/dictation/speech/stop"],
+				["pause_speech", {}, "POST", "/dictation/speech/pause"],
+				["resume_speech", {}, "POST", "/dictation/speech/resume"],
 				["get_speech_status", {}, "GET", "/dictation/speech/status"],
 				// Asking about one reply is a query parameter rather than a
 				// second route: it is the same question with a narrower answer,
@@ -605,6 +821,7 @@ describe("transport", () => {
 				["get_speech_status", { utterance: "7" }, "GET", "/dictation/speech/status?utterance=7"],
 				// The language is a Whisper code, as for every other speech command.
 				["get_speech_voices", { language: "it" }, "GET", "/dictation/speech/voices?language=it"],
+				["get_edge_voices", { language: "it" }, "GET", "/dictation/speech/edge-voices?language=it"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],
@@ -615,6 +832,7 @@ describe("transport", () => {
 				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["get_config_defaults", {}, "GET", "/config/defaults"],
+				["get_config_defaults", { preview: { agents: { agents: {} } } }, "POST", "/config/defaults"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
 				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
 			])("maps %s to %s %s", (command, args, method, path) => {
@@ -624,10 +842,10 @@ describe("transport", () => {
 			});
 
 			it.each([
-				["download_whisper_model", { model_name: "small" }, "POST", "/dictation/models/download", { model: "small" }],
-				["delete_whisper_model", { model_name: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
+				["download_whisper_model", { modelName: "small" }, "POST", "/dictation/models/download", { model: "small" }],
+				["delete_whisper_model", { modelName: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
 				// The wire key is `asset` on both transports, unlike the whisper
-				// pair above where the IPC parameter is `model_name` and the body
+				// pair above where the IPC argument is `modelName` and the body
 				// key is `model`. Keeping them the same here is deliberate: the
 				// mismatch above is a wart nobody should copy.
 				[
@@ -817,6 +1035,21 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps the discovered SSH hosts listing", () => {
+			expect(mapCommandToHttp("list_discovered_ssh_hosts", {})).toMatchObject({
+				method: "GET",
+				path: "/tunnels/ssh-hosts/discovered",
+			});
+		});
+
+		it("maps the per-host SSH probe to a POST with the identity in the body", () => {
+			expect(mapCommandToHttp("probe_discovered_ssh_host", { target: "10.0.0.5", port: 2222 })).toMatchObject({
+				method: "POST",
+				path: "/tunnels/ssh-hosts/probe",
+				body: { target: "10.0.0.5", port: 2222 },
+			});
+		});
+
 		it("maps detect_agents to GET /agents", () => {
 			const result = mapCommandToHttp("detect_agents", {});
 			expect(result.method).toBe("GET");
@@ -908,6 +1141,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/s1/terminal/scroll-info");
 		});
 
+		it("maps chat_view_snapshot to GET /sessions/{id}/chat-view with the cursor", () => {
+			const first = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: null, fromSeq: 0 });
+			expect(first.method).toBe("GET");
+			expect(first.path).toBe("/sessions/s1/chat-view?from_seq=0");
+			const next = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: 2, fromSeq: 17 });
+			expect(next.path).toBe("/sessions/s1/chat-view?from_seq=17&epoch=2");
+		});
+
 		it("maps terminal_search to POST with transform", () => {
 			const result = mapCommandToHttp("terminal_search", { sessionId: "s1", query: "foo" });
 			expect(result.method).toBe("POST");
@@ -957,14 +1198,6 @@ describe("transport", () => {
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
-		});
-
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
 		});
 
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
@@ -1079,6 +1312,18 @@ describe("transport", () => {
 			expect(result.body).toEqual({ path: "/repo/a.md", content: "hi" });
 		});
 
+		it("maps write_file_if_unchanged to POST /fs/write-if-unchanged with the expected text", () => {
+			const result = mapCommandToHttp("write_file_if_unchanged", {
+				repoPath: "/repo",
+				file: "a.md",
+				expected: "- [ ] a",
+				content: "- [x] a",
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/fs/write-if-unchanged");
+			expect(result.body).toEqual({ repoPath: "/repo", file: "a.md", expected: "- [ ] a", content: "- [x] a" });
+		});
+
 		it("maps copy_path_abs to POST /fs/copy-abs", () => {
 			const result = mapCommandToHttp("copy_path_abs", { from: "/a/x", to: "/b/x" });
 			expect(result.method).toBe("POST");
@@ -1110,6 +1355,19 @@ describe("transport", () => {
 			});
 		});
 
+		// Catches: exposing Finder source paths to HTTP token holders and enabling exfiltration.
+		it("keeps remote copy coordination desktop-only", () => {
+			expect(INTENTIONALLY_UNMAPPED.has("fs_transfer_remote_paths")).toBe(true);
+			expect(() =>
+				mapCommandToHttp("fs_transfer_remote_paths", {
+					connectionId: "mint",
+					destDir: "/repo/dst",
+					paths: ["/Mac/file"],
+					allowRecursive: false,
+				}),
+			).toThrow(/native\/host-only/);
+		});
+
 		// --- PTY/terminal read commands (story 062) ---
 		it("maps get_shell_state to GET with {state} unwrap transform", () => {
 			const result = mapCommandToHttp("get_shell_state", { sessionId: "s1" });
@@ -1119,12 +1377,25 @@ describe("transport", () => {
 			expect(result.transform?.({ state: null })).toBeNull();
 		});
 
+		// Catches: inspector RPC routed to the latest typed prompt or wrong PTY.
+		it("maps get_prompt_receipt to the stored session receipt", () => {
+			const result = mapCommandToHttp("get_prompt_receipt", { sessionId: "launch-1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/launch-1/prompt-receipt");
+		});
+
 		it("maps get_last_prompt to GET with {prompt} unwrap transform", () => {
 			const result = mapCommandToHttp("get_last_prompt", { sessionId: "s1" });
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/last-prompt");
 			expect(result.transform?.({ prompt: "do the thing" })).toBe("do the thing");
 			expect(result.transform?.({ prompt: null })).toBeNull();
+		});
+
+		it("maps guarded agent input to the atomic backend submission route", () => {
+			// Catches: browser keepalive falling back to unguarded raw writes.
+			const result = mapCommandToHttp("send_agent_input_if_empty", { sessionId: "s1", text: "[noop]" });
+			expect(result).toMatchObject({ method: "POST", path: "/sessions/s1/input-if-empty", body: { text: "[noop]" } });
 		});
 
 		it("maps get_input_buffer_content to GET with {content} unwrap transform", () => {
@@ -1597,7 +1868,7 @@ describe("transport", () => {
 			expect(poll.body).toEqual({ deviceCode: "abc" });
 			const addPoll = mapCommandToHttp("github_poll_add_account", { deviceCode: "def" });
 			expect(addPoll.method).toBe("POST");
-			expect(addPoll.path).toBe("/github/auth/poll");
+			expect(addPoll.path).toBe("/github/accounts/poll");
 			expect(addPoll.body).toEqual({ deviceCode: "def" });
 			expect(mapCommandToHttp("github_logout", {}).path).toBe("/github/auth/logout");
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
@@ -1606,14 +1877,29 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
+		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
+		it("maps metadata-only account secret launch to the shared native host endpoint", () => {
+			const request = { action: "rotate", id: "account-id" };
+			expect(mapCommandToHttp("account_secret_form", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/secret-form",
+				body: request,
+			});
+		});
+
+		// Catches: IPC wrapping being forwarded to HTTP instead of the tagged account action.
+		it("maps account_action to the shared presence-only owner endpoint", () => {
+			const request = { action: "list", provider: "github" };
+			expect(mapCommandToHttp("account_action", { request })).toEqual({
+				method: "POST",
+				path: "/accounts/action",
+				body: request,
+			});
+		});
+
 		it("maps multi-account accounts + repo bindings", () => {
 			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");
-
-			const add = mapCommandToHttp("github_add_account", { host: "ghe.acme.com", pat: "ghp_x" });
-			expect(add.method).toBe("POST");
-			expect(add.path).toBe("/github/accounts");
-			expect(add.body).toEqual({ host: "ghe.acme.com", pat: "ghp_x" });
 
 			const rm = mapCommandToHttp("github_remove_account", { id: "ghe.acme.com" });
 			expect(rm.method).toBe("POST");
@@ -1854,6 +2140,28 @@ describe("transport", () => {
 			expect(ex.path).toBe("/api/plugins/my-plugin/exec");
 			expect(ex.body).toEqual({ binary: "mdkb", args: ["--version"], cwd: "/home/user" });
 
+			// Catches: browser-mode B6/B7 requests lose account or reference identity.
+			const githubReference = { providerId: "github", accountId: "selected", id: "owner/repo/pull/12" };
+			const githubRequest = { action: "threads", after: null };
+			expect(
+				mapCommandToHttp("plugin_github_action", {
+					pluginId: "my-plugin",
+					account: "selected",
+					reference: githubReference,
+					request: githubRequest,
+				}),
+			).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/github",
+				body: { account: "selected", reference: githubReference, request: githubRequest },
+			});
+
+			// Catches: cancellation losing plugin/request identity in browser transport.
+			expect(mapCommandToHttp("plugin_http_cancel", { pluginId: "my-plugin", requestId: "req-1" })).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/http/cancel",
+				body: { requestId: "req-1" },
+			});
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {
 				pluginId: "my-plugin",
@@ -1861,14 +2169,19 @@ describe("transport", () => {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
+				requestId: "req-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
+			// The account must cross the HTTP transport too, or browser mode sends unauthenticated.
 			expect(hf.body).toEqual({
 				url: "https://api.example.com/data",
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
+				account: "acct-1",
+				requestId: "req-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines
@@ -2010,6 +2323,14 @@ describe("transport", () => {
 		// than derived from the mappers: a test that rebuilt the path the same
 		// way the code does would agree with any typo.
 		it.each([
+			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
+			[
+				"acp_chat_open",
+				{ request: { profile: "coordinator", workspace: "/repo", executable: "/bin/ego" } },
+				"POST",
+				"/acp/chat/open",
+				{ profile: "coordinator", workspace: "/repo", executable: "/bin/ego" },
+			],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],
@@ -2049,6 +2370,13 @@ describe("transport", () => {
 				"POST",
 				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
 				{ authority },
+			],
+			[
+				"acp_session_fork",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority, atMessageId: "reply-id" },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
+				{ authority, atMessageId: "reply-id" },
 			],
 			[
 				"acp_session_delete",
@@ -2178,6 +2506,22 @@ describe("transport", () => {
 	});
 
 	describe("ego command line (Providers)", () => {
+		// Catches: browser writes lose roots/network fields or hit the provider endpoint.
+		it("keeps the perimeter payload identical to IPC on dedicated routes", () => {
+			expect(mapCommandToHttp("ego_perimeter", {})).toEqual({ method: "GET", path: "/ego/perimeter" });
+			const roots = { rootDir: "~/Gits", rootAccess: "read", readAllowlist: "/reference", writableDirs: "/scratch" };
+			expect(mapCommandToHttp("ego_set_perimeter_roots", { roots })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/roots",
+				body: { roots },
+			});
+			expect(mapCommandToHttp("ego_set_perimeter_network", { enabled: false })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/network",
+				body: { enabled: false },
+			});
+		});
+
 		it("reads the providers without asking ego to re-enumerate its sources", () => {
 			const mapping = mapCommandToHttp("ego_providers", {});
 			expect(mapping.method).toBe("GET");
@@ -2230,6 +2574,8 @@ describe("transport", () => {
 			// Sentinels from each group in the story 073 spec.
 			for (const cmd of [
 				"open_panel_window",
+				"write_clipboard_text",
+				"read_clipboard_text",
 				"start_native_drag",
 				"block_sleep",
 				"set_global_hotkey",
@@ -2401,6 +2747,31 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		// Catches: a fixed client-side AbortController (was 30 s) shorter than a backend
+		// deadline such as ego's 60 s initialize, surfacing "signal is aborted" instead of the backend message.
+		it("does not abort a request before the backend answers, however long it takes", async () => {
+			vi.useFakeTimers();
+			try {
+				const { rpc } = await import("../transport");
+				let signal: AbortSignal | undefined;
+				globalThis.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+					signal = init.signal ?? undefined;
+					return new Promise((resolve) => {
+						setTimeout(() => resolve(jsonResponse('{"ok":true}')), 90_000);
+					});
+				});
+
+				const pending = rpc<{ ok: boolean }>("list_active_sessions");
+				await vi.advanceTimersByTimeAsync(89_000);
+
+				expect(signal?.aborted ?? false).toBe(false);
+				await vi.advanceTimersByTimeAsync(2_000);
+				await expect(pending).resolves.toEqual({ ok: true });
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("sends the selected Claude profile root when verifying a browser resume", async () => {
@@ -2650,7 +3021,7 @@ describe("transport", () => {
 			await Promise.all(resizes);
 
 			expect(sent[0]).toEqual({ rows: 10, cols: 40 });
-			expect(sent[sent.length - 1]).toEqual({ rows: 40, cols: 160 });
+			expect(sent.at(-1)!).toEqual({ rows: 40, cols: 160 });
 			expect(sent).toHaveLength(2);
 		});
 
@@ -2779,18 +3150,59 @@ describe("transport", () => {
 			expect(result).toEqual({ result: "ok" });
 		});
 
-		it("returns plain text when response is not JSON", async () => {
+		// Catches: a remote HTML page is returned as the home path, leaking its token in diagnostics.
+		it("rejects HTML 200 for get_home_directory with a credential-free URL and content type", async () => {
 			const { rpc } = await import("../transport");
+			setRemoteBaseUrlLookup(() => "http://remote.test:9877");
+			setRemoteTokenLookup(() => "private-token");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response('<!doctype html><html lang="en">', {
+					headers: { "content-type": "text/html; charset=utf-8" },
+				}),
+			);
+			try {
+				await expect(rpc("get_home_directory", {}, "verification")).rejects.toThrow(
+					"RPC get_home_directory: expected JSON from http://remote.test:9877/system/home-directory, received text/html; charset=utf-8",
+				);
+			} finally {
+				setRemoteBaseUrlLookup(() => undefined);
+				setRemoteTokenLookup(() => undefined);
+			}
+		});
 
-			const mockResponse = {
+		// Catches: untyped non-JSON bodies silently become JSON RPC return values.
+		it("rejects plain text without content-type for JSON RPCs", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue({
 				ok: true,
 				headers: new Headers({}),
 				text: vi.fn().mockResolvedValue("plain text response"),
-			};
-			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+			});
+			await expect(rpc("get_orchestrator_stats")).rejects.toThrow(/expected JSON from .*received missing content-type/);
+		});
 
-			const result = await rpc("get_orchestrator_stats");
-			expect(result).toBe("plain text response");
+		// Catches: enforcing JSON for every route breaks the plugin data string contract.
+		it.each(["plain text response", "null", "123", '"quoted"'])("preserves plugin text data %s", async (body) => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response(body, {
+					headers: { "content-type": "text/plain; charset=utf-8" },
+				}),
+			);
+			expect(await rpc("read_plugin_data", { pluginId: "p", path: "content" })).toBe(body);
+		});
+
+		// Catches: the raw-text exception lets a proxy HTML page overwrite plugin content.
+		it("rejects HTML for plugin data despite its text response contract", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response("<!doctype html>", {
+					headers: { "content-type": "text/html" },
+				}),
+			);
+			await expect(rpc("read_plugin_data", { pluginId: "p", path: "content" })).rejects.toThrow(
+				/expected JSON from .*received text\/html/,
+			);
 		});
 
 		it("throws on non-ok response", async () => {
@@ -2880,7 +3292,7 @@ describe("transport", () => {
 	 * source instead — same rationale as `canvasTerminalMountGuards.test.ts`.
 	 */
 	describe("rpc() desktop short-circuit", () => {
-		const source = ts.createSourceFile("transport.ts", readRepoFile("src/transport.ts"), ts.ScriptTarget.Latest, true);
+		const source = ts.createSourceFile("http.ts", readRepoFile("src/transport/http.ts"), ts.ScriptTarget.Latest, true);
 		const functionNamed = (name: string) =>
 			findNodes(source, ts.isFunctionDeclaration).find((node) => node.name?.text === name);
 		const callNamed = (node: ts.Node, name: string) =>
@@ -3518,7 +3930,7 @@ describe("transport", () => {
 				// Ten failures is MAX_RETRIES; the eleventh close is the one that
 				// finds the budget spent.
 				for (let i = 0; i < 11; i++) {
-					instances[instances.length - 1].onclose?.({ code: 1006 });
+					instances.at(-1)!.onclose?.({ code: 1006 });
 					await vi.advanceTimersByTimeAsync(60_000);
 				}
 				expect(onExit).toHaveBeenCalledTimes(1);
@@ -3678,5 +4090,183 @@ describe("owningConnectionFor", () => {
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(warn.mock.calls[0][1]).toContain("start_native_drag");
 		expect(warn.mock.calls[0][2]).toMatchObject({ command: "start_native_drag", connectionId: TYCHO });
+	});
+});
+
+// A private native bootstrap must not become a public nonce-issuing endpoint.
+describe("private secret transport boundary", () => {
+	it("keeps native nonce bootstrap unmapped and submits the same envelope over HTTP", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("secret_form_bootstrap")).toBe(true);
+		const request = mapCommandToHttp("secret_form_submit", {
+			submission: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+		expect(request).toEqual({
+			method: "POST",
+			path: "/secrets/forms/submit",
+			body: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+	});
+});
+
+// Catches: phone setup drops the action or reaches a different config surface than IPC.
+describe("Telegram Settings transport", () => {
+	it("maps reads and writes to the same guarded settings route", () => {
+		expect(mapCommandToHttp("telegram_settings", {})).toEqual({ method: "GET", path: "/config/telegram" });
+		const change = { action: "add_chat", chat_id: "123" };
+		expect(mapCommandToHttp("telegram_setup", { change })).toEqual({
+			method: "PUT",
+			path: "/config/telegram",
+			body: { change },
+		});
+	});
+});
+
+// Add-account must never select the default-login HTTP handler.
+it("add-account polling uses a separate HTTP endpoint", () => {
+	const add = mapCommandToHttp("github_poll_add_account", { deviceCode: "additional" });
+	const login = mapCommandToHttp("github_poll_login", { deviceCode: "default" });
+	expect(add).toEqual({ method: "POST", path: "/github/accounts/poll", body: { deviceCode: "additional" } });
+	expect(login).toEqual({ method: "POST", path: "/github/auth/poll", body: { deviceCode: "default" } });
+});
+
+// Catches losing header metadata between desktop IPC and HTTP credential storage.
+it("maps custom header credential metadata on save and delete", () => {
+	const header = { name: "x-api-key", credential_ref: "dcacbdba-e6c1-45aa-83a7-8417484fce0d" };
+	expect(
+		mapCommandToHttp("save_mcp_upstream_credential", {
+			name: "example",
+			token: "DUMMY_TRANSPORT",
+			url: "https://example.com/mcp",
+			header,
+		}).body,
+	).toEqual({ name: "example", token: "DUMMY_TRANSPORT", url: "https://example.com/mcp", header });
+	expect(mapCommandToHttp("delete_mcp_upstream_credential", { name: "example", header }).body).toEqual({
+		name: "example",
+		header,
+	});
+});
+
+// Catches: automation requests losing action fields or routing to an unregistered path.
+describe("automation command transport", () => {
+	it.each([
+		{ action: "list" },
+		{ action: "get", id: "a" },
+		{ action: "create", definition: { id: "a" } },
+		{ action: "update", id: "a", enabled: false },
+		{ action: "delete", id: "a" },
+		{ action: "run_now", id: "a" },
+		{ action: "list_runs", id: "a", limit: 50, offset: 1 },
+		{ action: "preview", cron: "0 9 * * *", timezone: "UTC", count: 4 },
+		{ action: "preview_definition", definition: { id: "a" }, count: 4 },
+		{ action: "preset", preset: { kind: "daily", hour: 9, minute: 0 } },
+		{ action: "summary", window: "7d" },
+	])("preserves the shared input envelope for $action", (input) => {
+		expect(mapCommandToHttp("automation_action", { input })).toEqual({
+			method: "POST",
+			path: "/automations/action",
+			body: { input },
+		});
+	});
+});
+
+// Catches: a work-item link losing its payload or its repo/branch key between IPC and HTTP.
+describe("work-item link command transport", () => {
+	it("maps link CRUD and remotes onto the same keys as IPC", () => {
+		const link = {
+			reference: { providerId: "jira", accountId: "acme", id: "10001" },
+			key: "ACME-1",
+			title: "Fix",
+			url: "https://acme.atlassian.net/browse/ACME-1",
+			state: null,
+		};
+		expect(mapCommandToHttp("list_workitem_links", {})).toMatchObject({ method: "GET", path: "/workitem-links" });
+		expect(mapCommandToHttp("link_workitem", { repoPath: "/r", branch: "feat/a", link })).toEqual({
+			method: "PUT",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a", link },
+		});
+		expect(mapCommandToHttp("unlink_workitem", { repoPath: "/r", branch: "feat/a" })).toEqual({
+			method: "DELETE",
+			path: "/workitem-links",
+			body: { repoPath: "/r", branch: "feat/a" },
+		});
+		expect(mapCommandToHttp("get_git_remotes", { path: "/r a" }).path).toBe("/repo/remotes?path=%2Fr%20a");
+	});
+});
+
+describe("default-app host boundary", () => {
+	it("does not map default-app opens to a remote host launcher", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("open_default_app")).toBe(true);
+		expect(() => mapCommandToHttp("open_default_app", { target: "https://example.com", kind: "url" })).toThrow();
+	});
+});
+
+// Catches: browser projection receives a different input shape from desktop IPC.
+it("maps_local_tasks_projection_without_reshaping", () => {
+	const input = { items: [], fields: [], query: { filters: [] } };
+	expect(mapCommandToHttp("project_work_items", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/project",
+		body: input,
+	});
+});
+
+// Catches: the mobile metadata read or desktop publication having no equivalent HTTP shape.
+it("maps open Markdown metadata reads and loopback publication without document content", () => {
+	expect(mapCommandToHttp("list_open_markdown_tabs", { cwd: "/repo/src" })).toEqual({
+		method: "GET",
+		path: "/repo/open-markdown-tabs?cwd=%2Frepo%2Fsrc",
+	});
+	const tabs = [{ id: "md-1", repoPath: "/repo", filePath: "guide.md", fsRoot: "/repo" }];
+	expect(mapCommandToHttp("sync_open_markdown_tabs", { tabs })).toEqual({
+		method: "PUT",
+		path: "/config/open-markdown-tabs",
+		body: { tabs },
+	});
+});
+
+// Catches: comment comparison loses desktop/browser parity or reshapes provider details.
+it("maps_tasks_comment_comparison_without_reshaping", () => {
+	const input = { detail: {}, previous: null, enabled: false, followed: false };
+	expect(mapCommandToHttp("compare_work_item_comments", { input })).toEqual({
+		method: "POST",
+		path: "/tasks/compare-comments",
+		body: input,
+	});
+});
+
+// Catches: IPC settings envelopes acquiring a different HTTP wrapper.
+it("maps the shared settings envelope unchanged", () => {
+	const request = { action: "describe", limit: 1 };
+	expect(mapCommandToHttp("settings_action", { request })).toEqual({
+		method: "POST",
+		path: "/settings/action",
+		body: request,
+	});
+});
+
+// Catches: browser managed launch bypasses the shared keyed transaction boundary.
+it("maps managed launch unchanged to its shared HTTP boundary", () => {
+	const request = {
+		idempotency_key: "one",
+		parent_session_id: "parent",
+		name: "child",
+		keep_open: true,
+		workspace: { existing_path: "/workspace" },
+		spawn: { prompt: "task" },
+	};
+	expect(mapCommandToHttp("managed_agent_launch", { request })).toEqual({
+		method: "POST",
+		path: "/agents/launch",
+		body: request,
+	});
+});
+
+// Catches: browser dumps failing while desktop IPC persists the same recording.
+it("maps frame workload persistence without changing the recording", () => {
+	expect(mapCommandToHttp("save_frame_workload", { recording: "{}" })).toEqual({
+		method: "POST",
+		path: "/debug/frame-workload",
+		body: { recording: "{}" },
 	});
 });

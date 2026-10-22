@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunConfig, AgentsConfig } from "../../agents";
 
 const { mockInvoke } = vi.hoisted(() => {
@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // Import the store once (it's a singleton)
 import { createAgentConfigsStore, agentConfigsStore as store } from "../../stores/agentConfigs";
+import { appLogger } from "../../stores/appLogger";
 import { testInScopeAsync } from "../helpers/store";
 
 const configWithClaude = (): AgentsConfig => ({
@@ -32,12 +33,32 @@ async function hydrateWith(config: AgentsConfig): Promise<void> {
 }
 
 describe("agentConfigsStore", () => {
+	afterEach(() => vi.restoreAllMocks());
 	beforeEach(() => {
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 	});
 
 	describe("hydrate()", () => {
+		// Catches: saved removed-agent settings failing load or remaining the headless selection.
+		it("loads saved aider settings without offering the retired headless agent", async () => {
+			const persisted = JSON.parse(
+				JSON.stringify({
+					...configWithClaude(),
+					headless_agent: "aider:Old profile",
+					agents: {
+						...configWithClaude().agents,
+						aider: { run_configs: [{ name: "Old profile", command: "aider", args: [], env: {} }] },
+					},
+				}),
+			);
+			const machine = createAgentConfigsStore({ load: async () => persisted, save: vi.fn() });
+			await expect(machine.hydrate()).resolves.toBeUndefined();
+			expect(machine.state.loaded).toBe(true);
+			expect(machine.getHeadlessAgent()).toBeNull();
+			expect(machine.getDefaultConfig("claude")?.command).toBe("claude");
+		});
 		it("reports a failed load and permits a later successful retry", async () => {
+			const log = vi.spyOn(appLogger, "error").mockImplementation(() => undefined);
 			const load = vi
 				.fn()
 				.mockRejectedValueOnce(new Error("RPC load_agents_config failed: 404"))
@@ -47,6 +68,7 @@ describe("agentConfigsStore", () => {
 			await expect(machine.hydrate()).rejects.toThrow("404");
 			expect(machine.state.loaded).toBe(false);
 			expect(machine.state.loadError).toContain("404");
+			expect(log).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
 			await machine.hydrate();
 			expect(machine.state.loaded).toBe(true);
 			expect(machine.state.loadError).toBeNull();
@@ -54,6 +76,7 @@ describe("agentConfigsStore", () => {
 		});
 
 		it("keeps the last good config when a refresh fails", async () => {
+			const log = vi.spyOn(appLogger, "error").mockImplementation(() => undefined);
 			const load = vi
 				.fn()
 				.mockResolvedValueOnce(configWithClaude())
@@ -64,10 +87,12 @@ describe("agentConfigsStore", () => {
 			await expect(machine.hydrate()).rejects.toThrow("connection lost");
 			expect(machine.state.loaded).toBe(false);
 			expect(machine.state.loadError).toContain("connection lost");
+			expect(log).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
 			expect(machine.getRunConfigs("claude")).toHaveLength(2);
 		});
 
 		it("does not overwrite remote config after a failed load", async () => {
+			const log = vi.spyOn(appLogger, "error").mockImplementation(() => undefined);
 			const save = vi.fn();
 			const machine = createAgentConfigsStore({
 				load: async () => {
@@ -84,6 +109,7 @@ describe("agentConfigsStore", () => {
 				is_default: true,
 			});
 			expect(save).not.toHaveBeenCalled();
+			expect(log).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
 		});
 
 		it("accepts an empty successful response as loaded without an error", async () => {
@@ -157,7 +183,7 @@ describe("agentConfigsStore", () => {
 		it("returns undefined for agent with no configs", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateWith({ agents: {} });
-				const def = store.getDefaultConfig("aider");
+				const def = store.getDefaultConfig("opencode");
 				expect(def).toBeUndefined();
 			});
 		});
@@ -182,6 +208,38 @@ describe("agentConfigsStore", () => {
 				expect(configs[0].name).toBe("Test");
 			});
 		});
+	});
+
+	it("does not drop the migration marker when Settings removes Codex bypass", async () => {
+		let persisted: AgentsConfig = {
+			agents: {
+				codex: {
+					codex_bypass_migrated: true,
+					run_configs: [
+						{
+							name: "Default",
+							command: "codex",
+							args: ["--dangerously-bypass-approvals-and-sandbox"],
+							env: {},
+							is_default: true,
+						},
+					],
+				},
+			},
+		};
+		const machine = createAgentConfigsStore({
+			load: async () => persisted,
+			save: async (_base, config) => {
+				persisted = config;
+			},
+		});
+		await machine.hydrate();
+		const config = machine.getDefaultConfig("codex")!;
+		await machine.updateRunConfig("codex", 0, { ...config, args: [] });
+		expect(persisted.agents.codex.codex_bypass_migrated).toBe(true);
+		expect(persisted.agents.codex.run_configs[0].args).toEqual([]);
+		await machine.hydrate();
+		expect(machine.getDefaultConfig("codex")?.args).toEqual([]);
 	});
 
 	describe("updateRunConfig()", () => {
@@ -361,4 +419,46 @@ describe("agentConfigsStore", () => {
 			});
 		});
 	});
+});
+
+// Catches: machine-owned hibernation fields being lost when unrelated agent settings save.
+it("preserves and updates machine hibernation settings", async () => {
+	const save = vi.fn().mockResolvedValue(undefined);
+	const machine = createAgentConfigsStore({
+		load: async () => ({ ...configWithClaude(), hibernate_idle_minutes: 90, hibernate_scope: "always" }),
+		save,
+	});
+	await machine.hydrate();
+	expect(machine.state.hibernate_idle_minutes).toBe(90);
+	expect(machine.state.hibernate_scope).toBe("always");
+	await machine.setHibernate(0, "background_only");
+	expect(save).toHaveBeenLastCalledWith(
+		expect.objectContaining({ hibernate_idle_minutes: 90 }),
+		expect.objectContaining({
+			hibernate_idle_minutes: 0,
+			hibernate_scope: "background_only",
+			agents: configWithClaude().agents,
+		}),
+	);
+});
+
+// Catches: editing module toggles drops saved additions/migration metadata or routes agent flags globally.
+it("persists module switches and both addition layers without copying generated text", async () => {
+	const save = vi.fn().mockResolvedValue(undefined);
+	const machine = createAgentConfigsStore({
+		load: async () => ({ agents: {}, launch_additions_migrated: true, launch_instructions: "GLOBAL" }),
+		save,
+	});
+	await machine.hydrate();
+	await machine.setLaunchModule("waiting", false);
+	await machine.setLaunchModule("children", false, "ego");
+	await machine.setAgentLaunchInstructions("ego", "AGENT");
+	await machine.setLaunchInstructionsDisabled(true);
+	const wire = save.mock.lastCall![1] as AgentsConfig;
+	expect(wire.launch_instructions).toBe("GLOBAL");
+	expect(wire.agents.ego.launch_instructions).toBe("AGENT");
+	expect(wire.launch_modules).toEqual({ waiting: false });
+	expect(wire.agents.ego.launch_modules).toEqual({ children: false });
+	expect(wire.launch_instructions_disabled).toBe(true);
+	expect(wire.launch_additions_migrated).toBe(true);
 });

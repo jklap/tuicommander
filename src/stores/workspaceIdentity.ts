@@ -18,11 +18,13 @@ export type WorkspaceKind =
 	/** A linked git worktree: refs and objects shared with the parent. */
 	| "worktree";
 
-/** `in_sync` = HEAD is the default branch's tip, so the workspace has no commits
+/** `pushed_unmerged` = not merged, but every commit exists on the branch's own
+ *  remote-tracking ref, so deleting the local branch loses nothing.
+ *  `in_sync` = HEAD is the default branch's tip, so the workspace has no commits
  *  of its own and was never merged. Both it and `merged` satisfy the backend's
  *  `merge-base --is-ancestor` check; only `merged` describes commits that were
  *  actually integrated. */
-export type WorkspaceCommitStatus = "unmerged" | "in_sync" | "merged" | "unknown";
+export type WorkspaceCommitStatus = "unmerged" | "pushed_unmerged" | "in_sync" | "merged" | "unknown";
 export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
 
 /** Backend-authored Git lifecycle verdict for one exact workspace id. */
@@ -65,7 +67,7 @@ export interface WorkspaceState {
 	isMerged: boolean; // true when branch is fully merged into the repo's main branch
 	/** Derived on refresh; never persisted as user intent or trusted for deletion. */
 	lifecycleStatus?: WorkspaceLifecycleStatus;
-	lastCommitTs: number | null; // Unix timestamp of last commit on this branch
+	lastCommitTs: number | null; // Unix milliseconds of last commit on this branch
 	runCommand?: string; // Saved run command for this workspace
 	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
 	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */

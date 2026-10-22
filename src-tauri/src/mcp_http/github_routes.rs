@@ -9,11 +9,11 @@ pub(super) struct CircleCiSetTokenRequest {
 }
 
 use super::types::{
-    ChangelogQuery, CiChecksQuery, CiFailureLogsQuery, GithubAddAccountRequest,
-    GithubBindRepoRequest, GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody,
-    GithubResolveRepoQuery, GithubResolveReposRequest, GithubSetHideDraftsRequest,
-    IssueActionRequest, IssuesQuery, PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest,
-    StartPollingRequest, UpdatePathsRequest,
+    ChangelogQuery, CiChecksQuery, CiFailureLogsQuery, GithubBindRepoRequest,
+    GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody, GithubResolveRepoQuery,
+    GithubResolveReposRequest, GithubSetHideDraftsRequest, IssueActionRequest, IssuesQuery,
+    PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest, StartPollingRequest,
+    UpdatePathsRequest,
 };
 use super::{err_500, json_result, upstream_json_result, validate_repo_path};
 use crate::github_poller::PollerCmd;
@@ -71,6 +71,16 @@ pub(super) async fn repo_ci_checks(
     Json(crate::github::get_ci_checks_impl(&path, pr_number, &state).await).into_response()
 }
 
+pub(super) async fn repo_pr_review_threads(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CiChecksQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.path) {
+        return e.into_response();
+    }
+    json_result(crate::github::get_pr_review_threads_impl(&q.path, q.pr_number, &state).await)
+}
+
 pub(super) async fn repo_approve_pr(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::types::ApprovePrRequest>,
@@ -82,6 +92,39 @@ pub(super) async fn repo_approve_pr(
     let pr = body.pr_number;
     upstream_json_result(
         crate::github::approve_pr_impl(&path, pr, &state)
+            .await
+            .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
+pub(super) async fn repo_update_pr_branch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::UpdatePrBranchRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::update_pr_branch_impl(
+            &body.repo_path,
+            body.pr_number,
+            &body.expected_head_sha,
+            &state,
+        )
+        .await
+        .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
+pub(super) async fn repo_close_pr(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::ApprovePrRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::close_pr_impl(&body.repo_path, body.pr_number, &state)
             .await
             .map(|()| serde_json::json!({"ok": true})),
     )
@@ -149,10 +192,7 @@ pub(super) async fn repo_pr_diff(
     }
     let path = q.path;
     let pr = q.pr;
-    match crate::github::get_pr_diff_impl(&path, pr, &state).await {
-        Ok(diff) => diff.into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_GATEWAY, e).into_response(),
-    }
+    upstream_json_result(crate::github::get_pr_diff_pinned_impl(&path, pr, &state).await)
 }
 
 pub(super) async fn repo_merged_prs(
@@ -174,7 +214,7 @@ pub(super) async fn repo_merged_prs(
 ///
 /// Which servers answer them is not what "desktop-only" would suggest, and the
 /// distinction is between two *binaries*, not two features. They are mounted in
-/// `build_router`, so the desktop app and `run_headless` both serve them —
+/// `build_router`, so the desktop app serves them —
 /// nothing here needs a window, since the work happens in an ego process
 /// reached over ACP. They are **not** in `shared_routes`, so
 /// `build_remote_router` does not carry them and the `tuic-remote` daemon
@@ -315,29 +355,7 @@ pub(super) async fn poller_start(
         issue_filter,
         pr_hide_drafts,
     } = body;
-    // Desktop: cold-start the poller (or reconfigure a running one) via the same
-    // helper the Tauri `github_start_polling` command uses — this is the parity
-    // fix: the old route no-op'd when no poller was running, so a browser/PWA
-    // client could never start polling.
-    #[cfg(feature = "desktop")]
-    if let Some(app) = state.app_handle.read().clone() {
-        crate::github_poller::ensure_polling(&state, app, paths, issue_filter, pr_hide_drafts);
-        return Json(serde_json::json!({"ok": true})).into_response();
-    }
-    // No AppHandle (or non-desktop build): can't spawn a poller, but still push
-    // config + resync to one that is already running.
-    #[cfg(not(feature = "desktop"))]
-    {
-        if let Some(poller) = state.github.poller.lock().as_ref() {
-            crate::github_poller::send_poller_config(
-                poller,
-                paths,
-                issue_filter,
-                pr_hide_drafts,
-                true,
-            );
-        }
-    }
+    crate::github_poller::ensure_polling(&state, paths, issue_filter, pr_hide_drafts);
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
@@ -460,6 +478,13 @@ pub(super) async fn github_poll_login(
     json_result(crate::github_auth::github_poll_login_impl(&state, body.device_code).await)
 }
 
+pub(super) async fn github_poll_add_account(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubPollLoginRequest>,
+) -> Response {
+    json_result(crate::github_auth::github_poll_add_account_impl(&state, body.device_code).await)
+}
+
 pub(super) async fn github_logout(State(state): State<Arc<AppState>>) -> Response {
     json_result(crate::github_auth::github_logout_impl(&state).await)
 }
@@ -491,14 +516,6 @@ pub(super) async fn github_list_accounts() -> Response {
 // #[cfg(feature = "desktop")] (keychain-backed). The remote daemon never serves
 // GitHub routes (build_remote_router omits them), so gate these handlers to match
 // their impls and keep the always-compiled lib building for tuic-remote (#094-ec55).
-#[cfg(feature = "desktop")]
-pub(super) async fn github_add_account(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<GithubAddAccountRequest>,
-) -> Response {
-    json_result(crate::github_account::github_add_account_impl(&state, body.host, body.pat).await)
-}
-
 #[cfg(feature = "desktop")]
 pub(super) async fn github_remove_account(
     State(state): State<Arc<AppState>>,
@@ -548,4 +565,90 @@ pub(super) async fn github_resolve_repos(
         body.repo_paths,
     ))
     .into_response()
+}
+
+/// Kills the surviving mutants of #1366-ea64: a handler that returns `Response::default()`
+/// (200, empty body) instead of the result of the GitHub call it wraps.
+#[cfg(test)]
+mod pr_action_route_tests {
+    use super::*;
+    use crate::mcp_http::types::{ApprovePrRequest, MergePrRequest, UpdatePrBranchRequest};
+    use axum::http::StatusCode;
+
+    fn state() -> Arc<AppState> {
+        Arc::new(crate::state::tests_support::make_test_app_state())
+    }
+
+    async fn error_body(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON body");
+        json["error"].as_str().expect("an error string").to_string()
+    }
+
+    /// Catches (repo_pr_review_threads -> Default): a failed lookup answering 200 with no body.
+    #[tokio::test]
+    async fn review_threads_route_returns_the_lookup_error() {
+        let response = repo_pr_review_threads(
+            State(state()),
+            Query(CiChecksQuery {
+                path: "/nonexistent".into(),
+                pr_number: 1,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error_body(response).await, "No GitHub remote");
+    }
+
+    /// Catches (repo_update_pr_branch -> Default): a refused update answering 200 with no body,
+    /// which the panel reads as "branch updated".
+    #[tokio::test]
+    async fn update_branch_route_returns_the_upstream_error() {
+        let response = repo_update_pr_branch(
+            State(state()),
+            Json(UpdatePrBranchRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+                expected_head_sha: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(error_body(response).await.contains("head commit"));
+    }
+
+    /// Catches (repo_close_pr -> Default): a PR that could not be closed answering 200.
+    #[tokio::test]
+    async fn close_route_returns_the_upstream_error() {
+        let response = repo_close_pr(
+            State(state()),
+            Json(ApprovePrRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_ne!(error_body(response).await, "");
+    }
+
+    /// Catches (merge_pr_via_github_http -> Default): a refused merge answering 200 with no
+    /// `sha`, which the caller reads as merged.
+    #[tokio::test]
+    async fn merge_route_returns_the_merge_error() {
+        let response = crate::mcp_http::worktree_routes::merge_pr_via_github_http(
+            State(state()),
+            Json(MergePrRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+                merge_method: "squash".into(),
+                expected_head_sha: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error_body(response).await.contains("head commit"));
+    }
 }

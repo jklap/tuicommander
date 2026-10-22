@@ -12,6 +12,14 @@ export interface ConfigDefaults {
 	repo_defaults: Record<string, unknown>;
 	agents: Record<string, unknown>;
 	dictation?: Record<string, unknown>;
+	launch_instructions?: LaunchInstructionsDefaults;
+}
+
+/** The shipped launch-instruction text and the markers the TUIC parser needs. */
+export interface LaunchInstructionsDefaults {
+	default_text: string;
+	required_markers: string[];
+	effective_text: Record<string, string>;
 }
 
 /**
@@ -115,6 +123,11 @@ function createSettingsExpertStore() {
 		},
 
 		isAtDefault,
+
+		/** The shipped launch instructions, or undefined until the defaults load. */
+		launchInstructions(): LaunchInstructionsDefaults | undefined {
+			return defaults()?.launch_instructions;
+		},
 
 		/** The single visibility rule for an expert control. */
 		isVisible(configKey: string, value: unknown): boolean {

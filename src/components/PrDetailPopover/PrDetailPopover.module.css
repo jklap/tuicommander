@@ -1,10 +1,4 @@
 /* PR Detail Popover */
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-}
-
 .popover {
   position: fixed;
   bottom: calc(var(--status-height) + 8px);
@@ -201,6 +195,36 @@
 .reviewStateBadge.reviewRequired {
   background: rgba(220, 220, 170, 0.2);
   color: var(--warning);
+}
+
+/* Readiness chip: the shared verdict (utils/prReadiness), colored by severity */
+.readinessBadge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.readinessBadge.readinessOk {
+  background: rgba(63, 185, 80, 0.2);
+  color: var(--success);
+}
+
+.readinessBadge.readinessWarn {
+  background: rgba(220, 220, 170, 0.2);
+  color: var(--warning);
+}
+
+.readinessBadge.readinessCritical {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--error);
+}
+
+.readinessBadge.readinessMuted {
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--fg-secondary);
 }
 
 .title {
@@ -671,4 +695,25 @@
 
 :global([data-compact]) .statusRow {
   padding: 4px 12px;
+}
+
+.requestForm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+}
+
+.requestForm textarea {
+  width: 100%;
+  min-height: 64px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 6px;
 }

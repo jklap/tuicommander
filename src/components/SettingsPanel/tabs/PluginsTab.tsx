@@ -1,9 +1,9 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { invoke } from "../../../invoke";
 import { dashboardRegistry } from "../../../plugins/dashboardRegistry";
 import type { LogEntry } from "../../../plugins/pluginLogger";
+import { WORK_ITEM_PLUGINS } from "../../../plugins/workItemSetup";
 import { appLogger } from "../../../stores/appLogger";
 import { mdTabsStore } from "../../../stores/mdTabs";
 import type { PluginState } from "../../../stores/pluginStore";
@@ -12,9 +12,14 @@ import { type RegistryEntry, registryStore } from "../../../stores/registryStore
 import { settingsStore } from "../../../stores/settings";
 import { isTauri } from "../../../transport";
 import { openDialog as open } from "../../../utils/nativeDialog";
+import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
+import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
+import { SegmentedControl } from "../../ui/SegmentedControl";
+import { ContextualHelp } from "../ContextualHelp";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { ListRow, SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import ps from "./PluginsTab.module.css";
 
 const PLUGIN_DOCS_URL = "https://tuicommander.com/docs/plugins";
@@ -47,7 +52,7 @@ const PluginLogViewer: Component<{ plugin: PluginState }> = (props) => {
 };
 
 /** Single plugin row in the installed list */
-const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (props) => {
+const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSettings?: () => void }> = (props) => {
 	const [showLogs, setShowLogs] = createSignal(false);
 	const [toggling, setToggling] = createSignal(false);
 	const [uninstalling, setUninstalling] = createSignal(false);
@@ -100,7 +105,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (pro
 
 	const updateEntry = createMemo(() => {
 		const v = props.plugin.manifest?.version;
-		return v ? registryStore.hasUpdate(props.plugin.id, v) : null;
+		return v ? registryStore.hasUpdate(props.plugin.id, v, props.plugin.manifest?.contentSha256) : null;
 	});
 	const [updating, setUpdating] = createSignal(false);
 
@@ -129,7 +134,10 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (pro
 					<div class={ps.pluginNameRow}>
 						<span class={ps.pluginName}>{props.plugin.manifest?.name ?? props.plugin.id}</span>
 						<span class={ps.pluginVersion}>v{version()}</span>
-						<Show when={props.plugin.builtIn}>
+						<span class={ps.badge}>
+							{props.plugin.loaded ? "Loaded" : props.plugin.enabled ? "Not loaded" : "Disabled"}
+						</span>
+						<Show when={props.plugin.builtIn} fallback={<span class={ps.badge}>External</span>}>
 							<span class={ps.badge} data-type="builtin">
 								Built-in
 							</span>
@@ -161,42 +169,74 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void }> = (pro
 
 				<div class={ps.pluginActions}>
 					<div class={ps.pluginActionsRow}>
+						<Show when={props.onOpenSettings}>
+							<button
+								data-non-setting="Navigate to a plugin settings or dashboard page"
+								class={s.testBtn}
+								onClick={() => props.onOpenSettings?.()}
+							>
+								Settings
+							</button>
+						</Show>
 						<Show when={updateEntry()}>
-							<button class={ps.installBtn} onClick={handleUpdate} disabled={updating()}>
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={ps.installBtn}
+								onClick={handleUpdate}
+								disabled={updating()}
+							>
 								{updating() ? "..." : "Update"}
 							</button>
 						</Show>
 						<Show when={hasReadme()}>
-							<button class={ps.docsBtn} onClick={handleOpenReadme} title="View plugin documentation">
+							<button
+								data-non-setting="Open plugin documentation"
+								class={ps.docsBtn}
+								onClick={handleOpenReadme}
+								title="View plugin documentation"
+							>
 								?
 							</button>
 						</Show>
-						<label class={s.toggle}>
-							<input type="checkbox" checked={props.plugin.enabled} disabled={toggling()} onChange={handleToggle} />
-						</label>
-						<button
-							class={ps.logsBtn}
-							classList={{ [ps.logsActive]: showLogs() }}
-							onClick={() => setShowLogs(!showLogs())}
-							title="View logs"
-						>
-							Logs
-						</button>
-						<Show when={!props.plugin.builtIn}>
+						<details>
+							<summary class={s.testBtn}>Manage plugin</summary>{" "}
+							<label class={s.toggle}>
+								<input
+									data-setting-id="app.disabled_plugin_ids"
+									type="checkbox"
+									aria-label={`Enable ${props.plugin.manifest?.name ?? props.plugin.id}`}
+									checked={props.plugin.enabled}
+									disabled={toggling()}
+									onChange={handleToggle}
+								/>
+							</label>
 							<button
-								class={ps.uninstallBtn}
-								onClick={handleUninstall}
-								disabled={uninstalling()}
-								title="Uninstall plugin"
+								data-non-setting="Show or hide plugin runtime logs"
+								class={ps.logsBtn}
+								classList={{ [ps.logsActive]: showLogs() }}
+								onClick={() => setShowLogs(!showLogs())}
+								title="View logs"
 							>
-								{uninstalling() ? "..." : "Uninstall"}
+								Logs
 							</button>
-						</Show>
+							<Show when={!props.plugin.builtIn}>
+								<button
+									data-non-setting="Plugin package installation, update or removal workflow"
+									class={ps.uninstallBtn}
+									onClick={handleUninstall}
+									disabled={uninstalling()}
+									title="Uninstall plugin"
+								>
+									{uninstalling() ? "..." : "Uninstall"}
+								</button>
+							</Show>
+						</details>
 					</div>
 					<Show when={dashboardRegistry.get(props.plugin.id)}>
 						{(entry) => (
 							<div class={ps.pluginActionsRow}>
 								<button
+									data-non-setting="Navigate to a plugin settings or dashboard page"
 									class={ps.dashboardBtn}
 									onClick={async () => {
 										// Close the Settings panel first so the dashboard becomes visible
@@ -248,7 +288,7 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 	const updateAvailable = () => {
 		const p = installed();
 		if (!p?.manifest?.version) return false;
-		return registryStore.hasUpdate(props.entry.id, p.manifest.version) !== null;
+		return registryStore.hasUpdate(props.entry.id, p.manifest.version, p.manifest.contentSha256) !== null;
 	};
 
 	const handleInstall = async () => {
@@ -293,7 +333,12 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 
 				<div class={ps.pluginActions}>
 					<Show when={!isInstalled() || updateAvailable()}>
-						<button class={ps.installBtn} onClick={handleInstall} disabled={installing()}>
+						<button
+							data-non-setting="Plugin package installation, update or removal workflow"
+							class={ps.installBtn}
+							onClick={handleInstall}
+							disabled={installing()}
+						>
 							{installing() ? "..." : updateAvailable() ? "Update" : "Install"}
 						</button>
 					</Show>
@@ -313,14 +358,18 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
  */
 export function sortPlugins(plugins: readonly PluginState[]): PluginState[] {
 	const name = (p: PluginState) => (p.manifest?.name ?? p.id).toLowerCase();
-	return [...plugins].sort((a, b) => {
+	return plugins.toSorted((a, b) => {
 		if (a.builtIn !== b.builtIn) return a.builtIn ? -1 : 1;
 		if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
 		return name(a).localeCompare(name(b));
 	});
 }
 
-export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
+export const PluginsTab: Component<{
+	onClose?: () => void;
+	settingsPluginIds?: string[];
+	onOpenSettings?: (id: string) => void;
+}> = (props) => {
 	const plugins = () => sortPlugins(pluginStore.getAll());
 	const [installing, setInstalling] = createSignal(false);
 	const [fileInstallError, setFileInstallError] = createSignal<string | null>(null);
@@ -387,13 +436,14 @@ export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
 
 	return (
 		<div class={s.section}>
-			<div class={ps.sectionHeader}>
-				<h3>Plugins</h3>
+			<div>
+				<SettingPageHeader title="Manage plugins" scope="Application defaults" breadcrumb="Plugins / Manage plugins" />
 				<button
+					data-non-setting="Open plugin documentation"
 					class={ps.docsLink}
 					onClick={() => {
 						if (isTauri()) {
-							openUrl(PLUGIN_DOCS_URL).catch((err) => appLogger.error("plugin", "Failed to open URL", err));
+							handleOpenUrl(PLUGIN_DOCS_URL);
 						} else {
 							window.open(PLUGIN_DOCS_URL, "_blank");
 						}
@@ -404,83 +454,122 @@ export const PluginsTab: Component<{ onClose?: () => void }> = (props) => {
 				</button>
 			</div>
 
-			<div class={ps.subTabs}>
-				<button
-					class={ps.subTab}
-					classList={{ [ps.subTabActive]: activeSubTab() === "installed" }}
-					onClick={() => setActiveSubTab("installed")}
-				>
-					Installed
-				</button>
-				<button class={ps.subTab} classList={{ [ps.subTabActive]: activeSubTab() === "browse" }} onClick={handleBrowse}>
-					Browse
-				</button>
-			</div>
+			<SegmentedControl
+				aria-label="Plugin manager"
+				options={[
+					{ id: "installed", label: "Installed" },
+					{ id: "browse", label: "Browse" },
+				]}
+				value={activeSubTab()}
+				onChange={(value) => (value === "browse" ? handleBrowse() : setActiveSubTab(value))}
+			/>
 
 			{/* Installed tab */}
 			<Show when={activeSubTab() === "installed"}>
-				<SettingToggle
-					checked={settingsStore.state.autoUpdatePluginsEnabled}
-					onChange={(v) => settingsStore.setAutoUpdatePluginsEnabled(v)}
-					label="Check for plugin updates"
-					hint="Fetch the registry at startup and show available updates"
-				/>
+				<SectionCard title="Installed plugins">
+					<SettingToggle
+						settingId="app.auto_update_plugins_enabled"
+						row
+						checked={settingsStore.state.autoUpdatePluginsEnabled}
+						onChange={(v) => settingsStore.setAutoUpdatePluginsEnabled(v)}
+						label="Check for plugin updates"
+						hint="Fetch the registry at startup and show available updates"
+					/>
 
-				<Show
-					when={plugins().length > 0}
-					fallback={
-						<p class={s.hint}>No plugins installed. Use the buttons below to install from a folder or ZIP file.</p>
-					}
-				>
-					<div class={ps.pluginList}>
-						<For each={plugins() as PluginState[]}>
-							{(plugin) => <PluginRow plugin={plugin} onClose={props.onClose} />}
-						</For>
-					</div>
-				</Show>
+					<Show
+						when={plugins().length > 0}
+						fallback={<p class={`${s.hint} ${ps.emptyState}`}>No plugins installed.</p>}
+					>
+						<div class={ps.pluginList}>
+							<For each={plugins() as PluginState[]}>
+								{(plugin) => (
+									<PluginRow
+										plugin={plugin}
+										onClose={props.onClose}
+										onOpenSettings={
+											props.settingsPluginIds?.includes(plugin.id) && props.onOpenSettings
+												? () => props.onOpenSettings?.(plugin.id)
+												: undefined
+										}
+									/>
+								)}
+							</For>
+						</div>
+					</Show>
 
-				<Show when={isTauri()}>
-					<div class={ps.installRow}>
-						<button class={s.testBtn} onClick={handleInstallFromFolder} disabled={installing()}>
-							{installing() ? "Installing..." : "Install from folder..."}
-						</button>
-						<button class={s.testBtn} onClick={handleInstallFromZip} disabled={installing()}>
-							{installing() ? "Installing..." : "Install from ZIP..."}
-						</button>
-						<Show when={fileInstallError()}>
-							<p class={ps.pluginError}>Installation failed: {fileInstallError()}</p>
-						</Show>
-					</div>
-				</Show>
+					<For each={WORK_ITEM_PLUGINS.filter((setup) => !pluginStore.getPlugin(setup.pluginId))}>
+						{(setup) => (
+							<div class={ps.installSuggestion}>
+								<ListRow
+									name={setup.name ?? setup.pluginId}
+									description={`${setup.purpose} · Not installed`}
+									actions={<InstallWorkItemPlugin setup={setup} compact />}
+								/>
+							</div>
+						)}
+					</For>
+
+					<Show when={isTauri()}>
+						<div class={ps.installRow}>
+							<ContextualHelp label="Local install" />
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={s.testBtn}
+								onClick={handleInstallFromFolder}
+								disabled={installing()}
+							>
+								{installing() ? "Installing..." : "Install from folder..."}
+							</button>
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={s.testBtn}
+								onClick={handleInstallFromZip}
+								disabled={installing()}
+							>
+								{installing() ? "Installing..." : "Install from ZIP..."}
+							</button>
+							<Show when={fileInstallError()}>
+								<p class={ps.pluginError}>Installation failed: {fileInstallError()}</p>
+							</Show>
+						</div>
+					</Show>
+				</SectionCard>
 			</Show>
 
 			{/* Browse tab */}
 			<Show when={activeSubTab() === "browse"}>
-				<div class={ps.browseHeader}>
-					<p class={s.hint} style={{ margin: "0" }}>
-						Discover plugins from the community registry.
-					</p>
-					<button class={ps.refreshBtn} onClick={() => registryStore.refresh()} disabled={registryStore.state.loading}>
-						{registryStore.state.loading ? "Loading..." : "Refresh"}
-					</button>
-				</div>
-
-				<Show when={registryStore.state.error}>
-					<p class={ps.pluginError}>{registryStore.state.error}</p>
-				</Show>
-
-				<Show
-					when={registryStore.state.entries.length > 0}
-					fallback={
-						<Show when={!registryStore.state.loading && !registryStore.state.error}>
-							<p class={s.hint}>No plugins available in the registry yet.</p>
-						</Show>
-					}
-				>
-					<div class={ps.pluginList}>
-						<For each={registryStore.state.entries}>{(entry) => <BrowseRow entry={entry} />}</For>
+				<SectionCard title="Community registry">
+					<div class={ps.browseHeader}>
+						<p class={s.hint} style={{ margin: "0" }}>
+							Discover plugins from the community registry.
+						</p>
+						<button
+							data-non-setting="Explicit plugin-registry discovery"
+							class={ps.refreshBtn}
+							onClick={() => registryStore.refresh()}
+							disabled={registryStore.state.loading}
+						>
+							{registryStore.state.loading ? "Loading..." : "Refresh"}
+						</button>
 					</div>
-				</Show>
+
+					<Show when={registryStore.state.error}>
+						<p class={ps.pluginError}>{registryStore.state.error}</p>
+					</Show>
+
+					<Show
+						when={registryStore.state.entries.length > 0}
+						fallback={
+							<Show when={!registryStore.state.loading && !registryStore.state.error}>
+								<p class={s.hint}>No plugins available in the registry yet.</p>
+							</Show>
+						}
+					>
+						<div class={ps.pluginList}>
+							<For each={registryStore.state.entries}>{(entry) => <BrowseRow entry={entry} />}</For>
+						</div>
+					</Show>
+				</SectionCard>
 			</Show>
 		</div>
 	);

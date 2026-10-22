@@ -27,14 +27,10 @@ SIGN_IDENTITY?=-
 TAURI_TARGET=src-tauri/target/release/bundle/macos
 APP_BUNDLE=$(TAURI_TARGET)/$(APP_NAME).app
 
-# whisper-rs-sys bundles whisper.cpp which uses std::filesystem::path (macOS 10.15+).
-# Must be exported so CMake subprocesses inherit it (.cargo/config.toml [env] alone is insufficient).
-export MACOSX_DEPLOYMENT_TARGET ?= 10.15
-
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test test-shell build build-dmg check cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -67,11 +63,19 @@ hooks:
 # `scripts/check-make-instance-scope.sh` deliberately cannot see it. Say which
 # config directory this is starting on, so the wrong one is the first line of
 # output instead of something inferred from an empty repository list.
+# mbx sets CARGO_INCREMENTAL=0, and its learned incremental never engaged for
+# tuicommander_lib here, so every Rust edit recompiled the lib from scratch, twice
+# (tuic-remote without default features, then the desktop build). Measured
+# 2026-10-10 for `tuic-remote` after a one-line lib.rs change: 80s full compile,
+# 9s incremental.
+dev: export MBX_INCREMENTAL := 1
 dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
+	@cd src-tauri && cargo build --bin tuic-remote --no-default-features
+	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
 	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)) — not the shared one,the shared default config directory)"
-	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
+	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch -- --config 'target."cfg(target_os = \"macos\")".runner = ["python3", "$(CURDIR)/scripts/dev-exe-copy.py"]'
 
 # Build frontend + launch Tauri dev (for quick manual testing).
 #
@@ -98,8 +102,20 @@ test: TUIC_APP_INSTANCE?=tuic-test
 test:
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
+	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
 	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
 	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
+
+# Agent desktop checks never use make dev/test or the daily executable.
+# Dedicated variables ignore inherited TUIC_* values; defaults cannot leak to dev.
+AGENT_TEST_INSTANCE?=agent-test
+AGENT_TEST_PORT?=19876
+AGENT_TEST_DRY_RUN?=0
+agent-test:
+	@python3 -B scripts/agent-test.py start --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)" $(if $(filter 1,$(AGENT_TEST_DRY_RUN)),--dry-run,)
+
+agent-test-stop:
+	@python3 -B scripts/agent-test.py stop --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)"
 
 # Build .app only (default, fast — skips DMG)
 build:
@@ -116,16 +132,22 @@ fmt:
 	@pnpm exec biome check --fix src/
 	@cd src-tauri && cargo fmt
 
+# Check the production embedding path; unit tests use fixed transport fixtures.
+check-desktop-embedding:
+	@bash scripts/check-desktop-embedding.sh
+
 # Type-check, lint, format, and test (no Tauri build)
-check: test-shell
+check: test-shell check-desktop-embedding
 	@echo "Running checks..."
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles && scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
 	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
+	@scripts/with-test-tmp.sh bash scripts/check-make-dev-builds-sibling.sh && echo "  make-dev-builds-sibling ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
-	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --release -- -D warnings && echo "  clippy ✓"
+# bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
@@ -261,6 +283,7 @@ nightly:
 
 # Bump version across all manifests (no commit, no tag).
 # Usage: make bump V=0.6.2
+# Do not report a complete bump if release-note generation fails after version edits.
 bump:
 	@if [ -z "$(V)" ]; then echo "ERROR: specify version with V=x.y.z" && exit 1; fi; \
 	CUR=$$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
@@ -279,7 +302,7 @@ bump:
 	sed -i '' 's/^## \[Unreleased\]/## [Unreleased]\n\n## [$(V)] - '"$$TODAY"'/' CHANGELOG.md; \
 	echo "  CHANGELOG.md          → $(V) ($$TODAY)"; \
 	echo "  release-notes.json   → generating..."; \
-	./scripts/generate-release-notes.sh $(V); \
+	./scripts/generate-release-notes.sh $(V) || { echo "ERROR: Release-note generation failed; version files are already updated. Release preparation is incomplete." >&2; exit 1; }; \
 	echo "==> Done. Run 'cargo check' or 'make github-release' to continue."
 
 # Generate AI-written release notes for a specific version.

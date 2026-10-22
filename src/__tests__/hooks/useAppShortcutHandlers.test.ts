@@ -29,6 +29,7 @@ const { mockDialogs, mockInvoke, mockNavigate, mockStores } = vi.hoisted(() => (
 			state: { activeId: "term-1" as string | null },
 			getActive: vi.fn(),
 			getPreviousActiveId: vi.fn(),
+			stepHistory: vi.fn(),
 			getIds: vi.fn(),
 			get: vi.fn(),
 			isDetached: vi.fn(),
@@ -169,7 +170,21 @@ describe("useAppShortcutHandlers", () => {
 		expect(terminalSearch).toHaveBeenCalledOnce();
 	});
 
-	it("reloads an active preview before falling back to the run-command workflow", () => {
+	it("reloadActiveTab reloads an active preview and reports whether it did", () => {
+		const reload = vi.fn();
+		const options = createOptions();
+		const handlers = useAppShortcutHandlers(options as never);
+		mockStores.markdown.state.activeId = "preview";
+		mockStores.markdown.getHandle.mockReturnValue({ reload });
+
+		expect(handlers.reloadActiveTab()).toBe(true);
+		expect(reload).toHaveBeenCalledOnce();
+
+		mockStores.markdown.state.activeId = null;
+		expect(handlers.reloadActiveTab()).toBe(false);
+	});
+
+	it("handleRunCommand runs the command even while a preview is active", () => {
 		const reload = vi.fn();
 		const options = createOptions();
 		const handlers = useAppShortcutHandlers(options as never);
@@ -177,12 +192,8 @@ describe("useAppShortcutHandlers", () => {
 		mockStores.markdown.getHandle.mockReturnValue({ reload });
 
 		handlers.handleRunCommand(false);
-		expect(reload).toHaveBeenCalledOnce();
-		expect(options.gitOps.handleRunCommand).not.toHaveBeenCalled();
-
-		mockStores.markdown.state.activeId = null;
-		handlers.handleRunCommand(true);
-		expect(options.gitOps.handleRunCommand).toHaveBeenCalledWith(true, expect.any(Function));
+		expect(reload).not.toHaveBeenCalled();
+		expect(options.gitOps.handleRunCommand).toHaveBeenCalledWith(false, expect.any(Function));
 	});
 
 	it("routes typed paths by stat result", async () => {
@@ -217,18 +228,33 @@ describe("useAppShortcutHandlers", () => {
 		expect(mockNavigate).toHaveBeenNthCalledWith(2, "term-2");
 	});
 
+	it("history back/forward navigate to the terminal the store steps to, and do nothing at the ends", () => {
+		const handlers = useAppShortcutHandlers(createOptions() as never);
+		mockStores.terminals.stepHistory.mockReturnValueOnce("term-older").mockReturnValueOnce(null);
+
+		handlers.historyBack();
+		handlers.historyForward();
+
+		expect(mockStores.terminals.stepHistory).toHaveBeenNthCalledWith(1, "back");
+		expect(mockStores.terminals.stepHistory).toHaveBeenNthCalledWith(2, "forward");
+		expect(mockNavigate).toHaveBeenCalledTimes(1);
+		expect(mockNavigate).toHaveBeenCalledWith("term-older");
+	});
+
 	// This handler picks WHICH block to fold; whether folding is allowed at all
 	// is `blockFoldingEnabled`, enforced inside `toggleBlockFold` so both this
 	// path and CanvasTerminal's Cmd+Shift+. branch obey one check. The gate is
 	// covered in stores/terminalBlockFold.test.ts — asserting it here would
 	// only re-test a mock.
-	it("folds the block nearest the viewport centre", async () => {
+	// Catches: eviction leaves the viewport centre relative while stored blocks are absolute.
+	it("folds the block nearest the viewport centre after eviction", async () => {
 		mockStores.terminals.getActive.mockReturnValue({
 			id: "term-1",
 			ref: { getSessionId: () => "session-1" },
-			commandBlocks: [{ promptLine: 40 }, { promptLine: 90 }],
+			historyBase: 100,
+			commandBlocks: [{ promptLine: 40 }, { promptLine: 140 }, { promptLine: 190 }],
 		});
-		// [displayOffset, historySize, screenRows] — centres the view on line 90
+		// [displayOffset, historySize, screenRows] — centres the view on absolute line 190
 		mockInvoke.mockResolvedValue([0, 80, 20]);
 		const handlers = useAppShortcutHandlers(createOptions() as never);
 
@@ -236,7 +262,7 @@ describe("useAppShortcutHandlers", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 90);
+		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 190);
 	});
 
 	it("executes and marks matching smart-prompt shortcuts", async () => {

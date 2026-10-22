@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { ErrorBoundary } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -22,12 +23,15 @@ vi.mock("../../../stores/ui", async () => {
 	};
 });
 
+import { RemoteQrDialog } from "../../../components/RemoteQrDialog/RemoteQrDialog";
 import { RemoteAccessPanel } from "../../../components/SettingsPanel/tabs/services/RemoteAccessPanel";
 import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import { mockInvoke } from "../../mocks/tauri";
+
+vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,AA==") } }));
 
 describe("RemoteAccessPanel", () => {
 	beforeEach(() => {
@@ -69,6 +73,53 @@ describe("RemoteAccessPanel", () => {
 		vi.useRealTimers();
 		vi.clearAllMocks();
 	});
+
+	it.each(["settings", "dialog"] as const)(
+		"keeps the %s surface after rejected IP discovery and recovers on retry",
+		async (surface) => {
+			const base = vi.mocked(rpc).getMockImplementation()!;
+			let discoveries = 0;
+			vi.mocked(rpc).mockImplementation(async (command, args) => {
+				if (command === "get_local_ips") {
+					if (++discoveries < 3) throw new Error("Discovery unavailable: " + "network-interface/".repeat(20));
+					return [{ ip: "192.168.1.42", label: "LAN" }];
+				}
+				if (command === "get_connect_url") return "http://192.168.1.42:9876/connect";
+				const result = await base(command, args);
+				if (command === "load_config") {
+					const config = result as { services: { server: { enabled: boolean } } };
+					config.services.server.enabled = true;
+				}
+				return result;
+			});
+			const view = render(() => (
+				<ErrorBoundary fallback={<p>Whole surface crashed</p>}>
+					{surface === "settings" ? <RemoteAccessPanel /> : <RemoteQrDialog onClose={() => {}} />}
+				</ErrorBoundary>
+			));
+			await vi.advanceTimersByTimeAsync(0);
+			// Catches: a failed resource read replaces the entire surface, or Retry cannot recover it.
+			expect(view.queryByText("Whole surface crashed")).toBeNull();
+			expect(view.getByText(surface === "settings" ? "Remote Access" : "Remote Mobile Connection")).toBeDefined();
+			expect(view.getByRole("alert").textContent).toContain("Discovery unavailable:");
+			if (surface === "settings") {
+				expect(view.getByLabelText("Username")).toBeDefined();
+				expect(view.getByLabelText("Relay Server URL")).toBeDefined();
+			}
+			for (let attempt = 0; attempt < 2; attempt++) {
+				fireEvent.click(view.getByRole("button", { name: "Retry" }));
+				await vi.advanceTimersByTimeAsync(0);
+				if (attempt === 0) expect(view.getByRole("alert").textContent).toContain("Discovery unavailable:");
+			}
+			expect(discoveries).toBe(3);
+			expect(view.queryByRole("alert")).toBeNull();
+			expect(view.getByText("http://192.168.1.42:9876/connect")).toBeDefined();
+			expect(
+				view.getByAltText(surface === "settings" ? "QR code" : "QR code for remote mobile connection"),
+			).toBeDefined();
+			view.unmount();
+		},
+	);
 
 	it("shows the remote-access content it owns", async () => {
 		const view = render(() => <RemoteAccessPanel />);
@@ -146,16 +197,11 @@ describe("RemoteAccessPanel", () => {
 			});
 		}
 
-		const EXPERT_LABELS = [
-			"Port",
-			"Session Token Duration",
-			"Enable IPv6 (dual-stack)",
-			"Allow LAN access without authentication",
-		];
+		const EXPERT_LABELS = ["Port", "Session Token Duration", "Enable IPv6 (dual-stack)"];
 		const shown = (view: ReturnType<typeof render>) =>
 			EXPERT_LABELS.filter((label) => view.queryByText(label) !== null);
 
-		it("hides Port, Token duration, IPv6 and LAN bypass at their defaults", async () => {
+		it("hides Port, Token duration and IPv6 at their defaults", async () => {
 			const view = await renderEnabled();
 			expect(shown(view)).toEqual([]);
 			// The basic credentials stay.
@@ -169,13 +215,22 @@ describe("RemoteAccessPanel", () => {
 				[{ port: 9999 }, {}, "Port"],
 				[{}, { session_token_duration_secs: 3600 }, "Session Token Duration"],
 				[{ ipv6_enabled: true }, {}, "Enable IPv6 (dual-stack)"],
-				[{}, { lan_auth_bypass: true }, "Allow LAN access without authentication"],
 			];
 			for (const [server, auth, label] of cases) {
 				const view = await renderEnabled(server, auth);
 				expect(shown(view)).toEqual([label]);
 				view.unmount();
 			}
+		});
+
+		it("does not offer the retired LAN bypass from a saved config in expert mode", async () => {
+			uiStore.setSettingsExpertMode(true);
+			const view = await renderEnabled({}, { lan_auth_bypass: true });
+			expect(view.queryByText("Allow LAN access without authentication")).toBeNull();
+			expect(view.getByText("Username")).toBeDefined();
+			expect(view.getByText("Password")).toBeDefined();
+			expect(updateAppConfig).not.toHaveBeenCalled();
+			view.unmount();
 		});
 
 		it("shows every control at its default in expert mode", async () => {
@@ -186,14 +241,28 @@ describe("RemoteAccessPanel", () => {
 		});
 	});
 
+	it("does not revoke remote sessions before explicit confirmation", async () => {
+		const view = await renderWith({
+			server: { enabled: true, port: 9876, ipv6_enabled: false },
+			auth: { username: "operator", password_hash: "", session_token_duration_secs: 86400 },
+			relay: { enabled: false, url: "", session_id: "" },
+		});
+		fireEvent.click(view.getByRole("button", { name: "Regenerate Token" }));
+		expect(vi.mocked(rpc).mock.calls.some(([command]) => command === "regenerate_session_token")).toBe(false);
+		expect(view.getByText("Regenerate remote access token?")).toBeDefined();
+		fireEvent.click(view.getByRole("button", { name: "Regenerate token" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(vi.mocked(rpc).mock.calls.filter(([command]) => command === "regenerate_session_token")).toHaveLength(1);
+		view.unmount();
+	});
+
 	describe("cloud relay configuration", () => {
 		const relayOff = {
 			server: { enabled: false, port: 9876, ipv6_enabled: false },
 			auth: { username: "", password_hash: "", session_token_duration_secs: 86400, lan_auth_bypass: false },
 			relay: { enabled: false, url: "", session_id: "" },
 		};
-		const input = (view: ReturnType<typeof render>, label: string) =>
-			view.getByText(label).parentElement?.querySelector("input") as HTMLInputElement;
+		const input = (view: ReturnType<typeof render>, label: string) => view.getByLabelText(label) as HTMLInputElement;
 
 		// The relay starts only when it is enabled AND has a URL AND a token
 		// (`relay_client.rs`), so both must be settable before switching it on —

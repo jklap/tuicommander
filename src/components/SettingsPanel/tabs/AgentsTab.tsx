@@ -1,4 +1,16 @@
-import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	createUniqueId,
+	For,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import {
 	AGENT_DISPLAY,
 	AGENT_TYPES,
@@ -7,6 +19,8 @@ import {
 	type AgentRunConfig,
 	type AgentType,
 	HOOK_SUPPORT,
+	LIMITED_SUPPORT_AGENTS,
+	LIMITED_SUPPORT_LABEL,
 	MCP_SUPPORT,
 } from "../../../agents";
 import {
@@ -17,33 +31,55 @@ import {
 	type EnvFlagDef,
 } from "../../../data/ccEnvFlags";
 import { type AgentAvailability, useAgentDetection } from "../../../hooks/useAgentDetection";
+import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { setClaudeUsageEnabled } from "../../../plugins";
 import { isPluginDisabled, setPluginEnabled } from "../../../plugins/pluginLoader";
+import { settingOptions } from "../../../services/settingsCatalogue";
 import { agentConfigsStore, ensureAgentConfigs } from "../../../stores/agentConfigs";
 import { appLogger } from "../../../stores/appLogger";
 import { editorTabsStore } from "../../../stores/editorTabs";
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { type ConfigDefaults, settingsExpertStore } from "../../../stores/settingsExpert";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
+import {
+	type ArgConflict,
+	egoProfileChips,
+	findArgConflicts,
+	hasBlockingConflict,
+	type ProfileChip,
+	splitRawArgs,
+} from "../../../utils/runConfigArgs";
 import { AgentIcon } from "../../ui/AgentIcon";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
 import a from "./AgentsTab.module.css";
 import {
 	AgentConfigProvider,
 	createRemoteAgentConfigStore,
+	LaunchPreviewProvider,
 	MachineProvider,
 	useAgentConfig,
+	useLaunchPreview,
 	useMachine,
 } from "./agentConfigContext";
+import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
+import { LaunchModuleSettings } from "./LaunchModuleSettings";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
+
+/** Agents with a launch-time instruction channel (Rust `launch_instructions::AGENTS`). */
+const LAUNCH_INSTRUCTION_AGENTS: readonly AgentType[] = ["claude", "codex", "grok", "opencode", "goose", "pi", "ego"];
 
 /**
  * Build the set of lowercased run-config names across all agent groups,
@@ -93,25 +129,86 @@ const EnvVarRow: Component<{
 	onRemove: () => void;
 }> = (props) => (
 	<div class={a.envVarRow}>
-		<input
+		<Input
+			data-non-setting="Environment variable record key, paired with the catalogue value control"
 			class={`${a.formInput} ${a.mono} ${a.envVarKey}`}
 			classList={{ [a.inputError]: !!props.duplicate }}
+			aria-label="KEY"
 			placeholder="KEY"
 			value={props.key}
 			onInput={(e) => props.onChange(e.currentTarget.value, props.value)}
 		/>
 		<span class={a.envVarEquals}>=</span>
-		<input
+		<Input
+			data-setting-id="agents.agents.{key}.run_configs.{name}.env.{key}"
 			class={`${a.formInput} ${a.mono} ${a.envVarValue}`}
+			aria-label="value"
 			placeholder="value"
 			value={props.value}
 			onInput={(e) => props.onChange(props.key, e.currentTarget.value)}
 		/>
-		<button class={`${a.smallBtn} ${a.danger}`} onClick={props.onRemove} title="Remove">
+		<button
+			data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+			class={`${a.smallBtn} ${a.danger}`}
+			onClick={props.onRemove}
+			title="Remove"
+		>
 			×
 		</button>
 	</div>
 );
+
+/** Chips for args the permissions profile adds at launch, then the raw args as an advanced field. */
+const RunArgsFields: Component<{
+	chips: ProfileChip[];
+	conflicts: ArgConflict[];
+	value: string;
+	onInput: (value: string) => void;
+	onKeyDown: (e: KeyboardEvent) => void;
+}> = (props) => {
+	const argsId = createUniqueId();
+	return (
+		<>
+			<Show when={props.chips.length > 0}>
+				<div class={a.formRow}>
+					<span class={a.envVarsLabel}>From permissions profile</span>
+					<For each={props.chips}>
+						{(chip) => (
+							<span class={a.argChip} title="Set in the ego permissions section; applied at every launch">
+								{chip.flag} {chip.value}
+							</span>
+						)}
+					</For>
+				</div>
+			</Show>
+			<div class={a.formRow}>
+				<label class={a.editorFieldLabel} for={argsId}>
+					Arguments
+				</label>
+				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.args"
+					id={argsId}
+					class={`${a.formInput} ${a.mono}`}
+					classList={{ [a.inputError]: hasBlockingConflict(props.conflicts) }}
+					aria-label="Raw arguments (advanced)"
+					placeholder="Raw arguments (advanced, space-separated)"
+					value={props.value}
+					onInput={(e) => props.onInput(e.currentTarget.value)}
+					onKeyDown={props.onKeyDown}
+				/>
+			</div>
+			<For each={props.conflicts}>
+				{(c) => (
+					<div
+						classList={{ [a.validationError]: c.kind === "duplicate", [a.validationWarning]: c.kind === "overridden" }}
+					>
+						{c.message}
+					</div>
+				)}
+			</For>
+		</>
+	);
+};
 
 /** Inline form for adding a new run config */
 const AddConfigForm: Component<{
@@ -119,6 +216,7 @@ const AddConfigForm: Component<{
 	onClose: () => void;
 }> = (props) => {
 	const configStore = useAgentConfig();
+	const editorId = createUniqueId();
 	const [name, setName] = createSignal("");
 	const [command, setCommand] = createSignal(AGENTS[props.agentType].binary);
 	const [args, setArgs] = createSignal("");
@@ -145,14 +243,16 @@ const AddConfigForm: Component<{
 
 	const duplicateEnvKeys = createMemo(() => findDuplicateEnvKeys(envVars()));
 	const duplicateEnvKeysSet = createMemo(() => new Set(duplicateEnvKeys()));
+	const egoProfile = () => configStore.state.agents.ego;
+	const argConflicts = createMemo(() => findArgConflicts(props.agentType, splitRawArgs(args()), egoProfile()));
 
 	const handleSave = async () => {
 		const n = name().trim();
-		if (!n || isDuplicate() || duplicateEnvKeys().length > 0) return;
+		if (!n || isDuplicate() || duplicateEnvKeys().length > 0 || hasBlockingConflict(argConflicts())) return;
 		const config: AgentRunConfig = {
 			name: n,
 			command: command().trim() || AGENTS[props.agentType].binary,
-			args: args().trim() ? args().trim().split(/\s+/) : [],
+			args: splitRawArgs(args()),
 			model: model().trim() || undefined,
 			env: buildEnvFromEntries(envVars()),
 			is_default: false,
@@ -162,11 +262,18 @@ const AddConfigForm: Component<{
 	};
 
 	return (
-		<div class={a.addConfigForm}>
+		<div class={a.addConfigForm} role="group" aria-label="New run configuration">
+			<strong class={a.editorTitle}>New run configuration</strong>
 			<div class={a.formRow}>
-				<input
+				<label class={a.editorFieldLabel} for={`new-${editorId}-name`}>
+					Configuration name
+				</label>
+				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.name"
 					class={a.formInput}
 					classList={{ [a.inputError]: isDuplicate() }}
+					aria-label="Configuration name"
+					id={`new-${editorId}-name`}
 					placeholder="Configuration name"
 					value={name()}
 					onInput={(e) => setName(e.currentTarget.value)}
@@ -180,27 +287,38 @@ const AddConfigForm: Component<{
 				<div class={a.validationError}>Name "{name().trim()}" already exists</div>
 			</Show>
 			<div class={a.formRow}>
-				<input
+				<label class={a.editorFieldLabel} for={`new-${editorId}-command`}>
+					Command (binary)
+				</label>
+				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.command"
 					class={`${a.formInput} ${a.mono}`}
+					aria-label="Command (binary)"
+					id={`new-${editorId}-command`}
 					placeholder="Command (binary)"
 					value={command()}
 					onInput={(e) => setCommand(e.currentTarget.value)}
 				/>
-				<input
-					class={`${a.formInput} ${a.mono}`}
-					placeholder="Arguments (space-separated)"
-					value={args()}
-					onInput={(e) => setArgs(e.currentTarget.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") handleSave();
-						if (e.key === "Escape") props.onClose();
-					}}
-				/>
 			</div>
+			<RunArgsFields
+				chips={props.agentType === "ego" ? egoProfileChips(egoProfile()) : []}
+				conflicts={argConflicts()}
+				value={args()}
+				onInput={setArgs}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") handleSave();
+					if (e.key === "Escape") props.onClose();
+				}}
+			/>
 			<div class={a.formRow}>
-				<input
+				<label class={a.editorFieldLabel} for={`new-${editorId}-model`}>
+					Model (optional)
+				</label>
+				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.model"
 					class={`${a.formInput} ${a.mono}`}
 					aria-label="Model"
+					id={`new-${editorId}-model`}
 					placeholder="Model (optional)"
 					value={model()}
 					onInput={(e) => setModel(e.currentTarget.value)}
@@ -210,7 +328,12 @@ const AddConfigForm: Component<{
 			<div class={a.envVarsSection}>
 				<div class={a.envVarsHeader}>
 					<span class={a.envVarsLabel}>Environment Variables</span>
-					<button class={a.smallBtn} onClick={addEnvVar} type="button">
+					<button
+						data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+						class={a.smallBtn}
+						onClick={addEnvVar}
+						type="button"
+					>
 						+ Add
 					</button>
 				</div>
@@ -235,13 +358,20 @@ const AddConfigForm: Component<{
 			</div>
 			<div class={a.formRow}>
 				<button
+					data-non-setting="Commit the existing run-configuration editor draft through its owner"
 					class={a.smallBtn}
 					onClick={handleSave}
-					disabled={isDuplicate() || !name().trim() || duplicateEnvKeys().length > 0}
+					disabled={
+						isDuplicate() || !name().trim() || duplicateEnvKeys().length > 0 || hasBlockingConflict(argConflicts())
+					}
 				>
 					Save
 				</button>
-				<button class={a.smallBtn} onClick={props.onClose}>
+				<button
+					data-non-setting="Open, close or cancel the run-configuration editor"
+					class={a.smallBtn}
+					onClick={props.onClose}
+				>
 					Cancel
 				</button>
 			</div>
@@ -256,6 +386,7 @@ const RunConfigRow: Component<{
 	agentType: AgentType;
 }> = (props) => {
 	const configStore = useAgentConfig();
+	const editorId = createUniqueId();
 	const [editingEnv, setEditingEnv] = createSignal(false);
 	const [editingConfig, setEditingConfig] = createSignal(false);
 	const [menuOpen, setMenuOpen] = createSignal(false);
@@ -299,14 +430,20 @@ const RunConfigRow: Component<{
 		return n.length > 0 && allExistingNames().has(n);
 	};
 
+	const egoProfile = () => configStore.state.agents.ego;
+	const profileChips = () => (props.agentType === "ego" ? egoProfileChips(egoProfile()) : []);
+	const editConflicts = createMemo(() => findArgConflicts(props.agentType, splitRawArgs(editArgs()), egoProfile()));
+	// Already-saved args may predate the profile; the row warns before launch.
+	const savedConflicts = createMemo(() => findArgConflicts(props.agentType, props.config.args, egoProfile()));
+
 	const saveConfig = async () => {
 		const n = editName().trim();
-		if (!n || isDuplicateName()) return;
+		if (!n || isDuplicateName() || hasBlockingConflict(editConflicts())) return;
 		const updated: AgentRunConfig = {
 			...props.config,
 			name: n,
 			command: editCommand().trim() || props.config.command,
-			args: editArgs().trim() ? editArgs().trim().split(/\s+/) : [],
+			args: splitRawArgs(editArgs()),
 			model: editModel().trim() || undefined,
 		};
 		await configStore.updateRunConfig(props.agentType, props.index, updated);
@@ -344,6 +481,32 @@ const RunConfigRow: Component<{
 			<div class={a.configRow}>
 				<span class={a.configName}>{props.config.name}</span>
 				<span class={a.configCommand}>{cmdPreview()}</span>
+				<Show
+					when={props.config.args
+						.slice(0, props.config.args.indexOf("--") < 0 ? undefined : props.config.args.indexOf("--"))
+						.includes("--dangerously-bypass-approvals-and-sandbox")}
+				>
+					<span
+						class={a.envBadge}
+						title="Approvals and sandbox are bypassed. Remove the flag in Edit configuration to disable bypass."
+						aria-label="Approvals and sandbox bypassed"
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M12 2 1 22h22L12 2zm-1 7h2v6h-2V9zm0 8h2v2h-2v-2z" />
+						</svg>
+					</span>
+				</Show>
+				<Show when={savedConflicts().length > 0}>
+					<span
+						class={a.envBadge}
+						title={savedConflicts()
+							.map((c) => c.message)
+							.join("\n")}
+						aria-label="Conflicting arguments"
+					>
+						args conflict
+					</span>
+				</Show>
 				<Show when={envCount() > 0}>
 					<span class={a.envBadge}>{envCount()} env</span>
 				</Show>
@@ -351,11 +514,17 @@ const RunConfigRow: Component<{
 					<span class={a.defaultBadge}>Default</span>
 				</Show>
 				<div class={a.configActions}>
-					<button class={a.smallBtn} onClick={startEnvEdit} title="Edit environment variables">
+					<button
+						data-non-setting="Open, close or cancel the run-configuration editor"
+						class={a.smallBtn}
+						onClick={startEnvEdit}
+						title="Edit environment variables"
+					>
 						Env
 					</button>
 					<Show when={!props.config.is_default}>
 						<button
+							data-setting-id="agents.agents.{key}.run_configs.{name}.is_default"
 							class={a.smallBtn}
 							onClick={() => configStore.setDefaultConfig(props.agentType, props.index)}
 							title="Set as default"
@@ -364,15 +533,28 @@ const RunConfigRow: Component<{
 						</button>
 					</Show>
 					<div class={a.menuWrap} ref={menuRef}>
-						<button class={a.smallBtn} onClick={() => setMenuOpen(!menuOpen())} title="More actions">
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setMenuOpen(!menuOpen())}
+							title="More actions"
+						>
 							···
 						</button>
 						<Show when={menuOpen()}>
 							<div class={a.menuDropdown}>
-								<button class={a.menuItem} onClick={startConfigEdit}>
+								<button
+									data-non-setting="Open, close or cancel the run-configuration editor"
+									class={a.menuItem}
+									onClick={startConfigEdit}
+								>
 									Edit
 								</button>
-								<button class={`${a.menuItem} ${a.danger}`} onClick={handleDelete}>
+								<button
+									data-non-setting="Remove the stable run-configuration record through its owner"
+									class={`${a.menuItem} ${a.danger}`}
+									onClick={handleDelete}
+								>
 									Delete
 								</button>
 							</div>
@@ -383,12 +565,18 @@ const RunConfigRow: Component<{
 			<Show when={editingConfig()}>
 				<div class={a.envEditPanel}>
 					<div class={a.envVarsHeader}>
-						<span class={a.envVarsLabel}>Edit Configuration</span>
+						<span class={a.envVarsLabel}>Edit Configuration · {props.config.name}</span>
 					</div>
 					<div class={a.formRow}>
-						<input
+						<label class={a.editorFieldLabel} for={`edit-${editorId}-name`}>
+							Configuration name
+						</label>
+						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.name"
 							class={a.formInput}
 							classList={{ [a.inputError]: isDuplicateName() }}
+							aria-label="Configuration name"
+							id={`edit-${editorId}-name`}
 							placeholder="Configuration name"
 							value={editName()}
 							onInput={(e) => setEditName(e.currentTarget.value)}
@@ -402,37 +590,57 @@ const RunConfigRow: Component<{
 						<div class={a.validationError}>Name "{editName().trim()}" already exists</div>
 					</Show>
 					<div class={a.formRow}>
-						<input
+						<label class={a.editorFieldLabel} for={`edit-${editorId}-command`}>
+							Command (binary)
+						</label>
+						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.command"
 							class={`${a.formInput} ${a.mono}`}
+							aria-label="Command (binary)"
+							id={`edit-${editorId}-command`}
 							placeholder="Command (binary)"
 							value={editCommand()}
 							onInput={(e) => setEditCommand(e.currentTarget.value)}
 						/>
-						<input
-							class={`${a.formInput} ${a.mono}`}
-							placeholder="Arguments (space-separated)"
-							value={editArgs()}
-							onInput={(e) => setEditArgs(e.currentTarget.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") saveConfig();
-								if (e.key === "Escape") setEditingConfig(false);
-							}}
-						/>
 					</div>
+					<RunArgsFields
+						chips={profileChips()}
+						conflicts={editConflicts()}
+						value={editArgs()}
+						onInput={setEditArgs}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") saveConfig();
+							if (e.key === "Escape") setEditingConfig(false);
+						}}
+					/>
 					<div class={a.formRow}>
-						<input
+						<label class={a.editorFieldLabel} for={`edit-${editorId}-model`}>
+							Model (optional)
+						</label>
+						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.model"
 							class={`${a.formInput} ${a.mono}`}
 							aria-label="Model"
+							id={`edit-${editorId}-model`}
 							placeholder="Model (optional)"
 							value={editModel()}
 							onInput={(e) => setEditModel(e.currentTarget.value)}
 						/>
 					</div>
 					<div class={a.formRow}>
-						<button class={a.smallBtn} onClick={saveConfig} disabled={isDuplicateName() || !editName().trim()}>
+						<button
+							data-non-setting="Commit the existing run-configuration editor draft through its owner"
+							class={a.smallBtn}
+							onClick={saveConfig}
+							disabled={isDuplicateName() || !editName().trim() || hasBlockingConflict(editConflicts())}
+						>
 							Save
 						</button>
-						<button class={a.smallBtn} onClick={() => setEditingConfig(false)}>
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setEditingConfig(false)}
+						>
 							Cancel
 						</button>
 					</div>
@@ -442,7 +650,12 @@ const RunConfigRow: Component<{
 				<div class={a.envEditPanel}>
 					<div class={a.envVarsHeader}>
 						<span class={a.envVarsLabel}>Environment Variables</span>
-						<button class={a.smallBtn} onClick={addEnvVar} type="button">
+						<button
+							data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+							class={a.smallBtn}
+							onClick={addEnvVar}
+							type="button"
+						>
 							+ Add
 						</button>
 					</div>
@@ -463,10 +676,19 @@ const RunConfigRow: Component<{
 						<div class={a.validationError}>Duplicate env keys: {duplicateEnvKeys().join(", ")}</div>
 					</Show>
 					<div class={a.formRow}>
-						<button class={a.smallBtn} onClick={saveEnv} disabled={duplicateEnvKeys().length > 0}>
+						<button
+							data-non-setting="Commit the existing run-configuration editor draft through its owner"
+							class={a.smallBtn}
+							onClick={saveEnv}
+							disabled={duplicateEnvKeys().length > 0}
+						>
 							Save
 						</button>
-						<button class={a.smallBtn} onClick={() => setEditingEnv(false)}>
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setEditingEnv(false)}
+						>
 							Cancel
 						</button>
 					</div>
@@ -546,6 +768,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 												<div class={a.envFlagRow}>
 													<Show when={flag.type === "boolean" || flag.type === "boolean_inverted"}>
 														<input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
 															type="checkbox"
 															class={a.envFlagToggle}
 															checked={isFlagEnabled(flag.key)}
@@ -553,17 +776,21 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 														/>
 													</Show>
 													<Show when={flag.type === "enum"}>
-														<select
+														<Select
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
+															compact
 															class={a.envFlagSelect}
 															value={getFlagValue(flag.key)}
 															onChange={(e) => handleValueChange(flag.key, e.currentTarget.value)}
 														>
 															<option value="">off</option>
 															<For each={flag.options ?? []}>{(opt) => <option value={opt}>{opt}</option>}</For>
-														</select>
+														</Select>
 													</Show>
 													<Show when={flag.type === "number"}>
-														<input
+														<Input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
+															compact
 															type="number"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -572,7 +799,9 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 														/>
 													</Show>
 													<Show when={flag.type === "string"}>
-														<input
+														<Input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
+															compact
 															type="text"
 															class={a.envFlagInput}
 															value={getFlagValue(flag.key)}
@@ -619,7 +848,12 @@ const ClaudeUsageToggle: Component = () => {
 			<div class={a.expandedLabel}>Features</div>
 			<div class={a.actionsRow}>
 				<label class={a.toggleRow}>
-					<input type="checkbox" checked={enabled()} onChange={handleToggle} />
+					<input
+						data-setting-id="app.disabled_plugin_ids"
+						type="checkbox"
+						checked={enabled()}
+						onChange={handleToggle}
+					/>
 					<span>Usage Dashboard</span>
 				</label>
 				<span class={s.hint}>
@@ -637,6 +871,7 @@ const AgentRow: Component<{
 	onExpand?: (type: AgentType) => void;
 }> = (props) => {
 	const configStore = useAgentConfig();
+	const launchPreview = useLaunchPreview();
 	const machine = useMachine();
 	const [expanded, setExpanded] = createSignal(false);
 	const [addingConfig, setAddingConfig] = createSignal(false);
@@ -771,12 +1006,20 @@ const AgentRow: Component<{
 			>
 				<div class={a.agentInfo}>
 					<div class={a.agentNameRow}>
-						<div class={a.agentIcon} style={{ background: display().color, opacity: isEnabled() ? 1 : 0.4 }}>
+						<div
+							class={a.agentIcon}
+							style={{ background: display().color, color: display().foreground, opacity: isEnabled() ? 1 : 0.4 }}
+						>
 							<AgentIcon agent={props.agentType} size={16} />
 						</div>
 						<span class={a.agentName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
 							{agent().name}
 						</span>
+						<Show when={LIMITED_SUPPORT_AGENTS.includes(props.agentType)}>
+							<span class={a.badge} data-type="limited">
+								{LIMITED_SUPPORT_LABEL}
+							</span>
+						</Show>
 						<Show when={props.detection?.version}>
 							<span class={a.agentVersion}>{props.detection!.version}</span>
 						</Show>
@@ -819,75 +1062,96 @@ const AgentRow: Component<{
 						configKey="agent_settings.idle_close_minutes"
 						value={configStore.getIdleCloseMinutes(props.agentType)}
 					>
-						<div class={a.expandedSection}>
-							<label for={`idle-close-${props.agentType}`}>Close idle managed child after</label>
-							<input
-								id={`idle-close-${props.agentType}`}
-								class={a.formInput}
-								type="number"
-								min="0"
-								max="1440"
-								step="1"
-								value={configStore.getIdleCloseMinutes(props.agentType)}
-								onChange={(event) => {
-									const minutes = event.currentTarget.valueAsNumber;
-									if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440) {
-										void configStore.setIdleCloseMinutes(props.agentType, minutes);
-									}
-								}}
-							/>
-							<p class={s.hint}>Minutes. Set to 0 to keep managed children open.</p>
-						</div>
+						<SettingRow label="Close idle managed child after" hint="Set to 0 to keep managed children open.">
+							{(id, descriptionId) => (
+								<div class={a.minutesControl}>
+									<Input
+										data-setting-id="agents.agents.{key}.idle_close_minutes"
+										id={id}
+										aria-describedby={descriptionId()}
+										class={a.formInput}
+										type="number"
+										min="0"
+										max="1440"
+										step="1"
+										value={configStore.getIdleCloseMinutes(props.agentType)}
+										onChange={(event) => {
+											const minutes = event.currentTarget.valueAsNumber;
+											if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440) {
+												void configStore.setIdleCloseMinutes(props.agentType, minutes);
+											}
+										}}
+									/>
+									<span>min</span>
+								</div>
+							)}
+						</SettingRow>
 					</ExpertSetting>
 					{/* Enable/Disable toggle */}
-					<div class={a.expandedSection}>
-						<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+					<SettingRow label="Enabled">
+						{(id, descriptionId) => (
 							<input
+								data-setting-id="app.disabled_agents"
+								id={id}
+								aria-describedby={descriptionId()}
 								type="checkbox"
+								role="switch"
+								class={a.rowSwitch}
 								checked={isEnabled()}
 								onChange={() => settingsStore.toggleAgent(props.agentType)}
 							/>
-							<span>Enabled</span>
-						</label>
-					</div>
+						)}
+					</SettingRow>
 
 					{/* Auto-retry on server errors */}
 					<ExpertSetting
 						configKey="agent_settings.auto_retry_on_error"
 						value={configStore.isAutoRetryEnabled(props.agentType)}
 					>
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+						<SettingRow
+							label="Auto-retry on server errors"
+							hint="Inject &quot;continue&quot; on 5xx errors with backoff (5s, 15s, 30s)"
+						>
+							{(id, descriptionId) => (
 								<input
+									data-setting-id="agents.agents.{key}.auto_retry_on_error"
+									id={id}
+									aria-describedby={descriptionId()}
 									type="checkbox"
+									role="switch"
+									class={a.rowSwitch}
 									checked={configStore.isAutoRetryEnabled(props.agentType)}
 									onChange={() =>
 										configStore.setAutoRetry(props.agentType, !configStore.isAutoRetryEnabled(props.agentType))
 									}
 								/>
-								<span>Auto-retry on server errors</span>
-							</label>
-							<p class={s.hint}>Inject "continue" on 5xx errors with backoff (5s, 15s, 30s)</p>
-						</div>
+							)}
+						</SettingRow>
 					</ExpertSetting>
 
 					<ExpertSetting
 						configKey="agent_settings.prevent_alt_screen"
 						value={configStore.state.agents[props.agentType]?.prevent_alt_screen ?? null}
 					>
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+						<SettingRow
+							label="Prevent alternate screen"
+							hint="Use native terminal scrollback when this agent supports it. Applies to new launches."
+						>
+							{(id, descriptionId) => (
 								<input
+									data-setting-id="agents.agents.{key}.prevent_alt_screen"
+									id={id}
+									aria-describedby={descriptionId()}
 									type="checkbox"
+									role="switch"
+									class={a.rowSwitch}
 									checked={configStore.getPreventAltScreen(props.agentType)}
 									onChange={() =>
 										configStore.setPreventAltScreen(props.agentType, !configStore.getPreventAltScreen(props.agentType))
 									}
 								/>
-								<span>Prevent alternate screen</span>
-							</label>
-							<p class={s.hint}>Use native terminal scrollback when this agent supports it. Applies to new launches.</p>
-						</div>
+							)}
+						</SettingRow>
 					</ExpertSetting>
 
 					<Show when={props.agentType === "claude" || props.agentType === "codex"}>
@@ -895,22 +1159,25 @@ const AgentRow: Component<{
 							configKey="agent_settings.skip_trust_dialog"
 							value={configStore.state.agents[props.agentType]?.skip_trust_dialog ?? null}
 						>
-							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+							<SettingRow
+								label="Accept workspace trust for managed spawns"
+								hint="Start agents in a new folder without stopping at their workspace trust question. Applies only to agent-to-agent spawns."
+							>
+								{(id, descriptionId) => (
 									<input
+										data-setting-id="agents.agents.{key}.skip_trust_dialog"
+										id={id}
+										aria-describedby={descriptionId()}
 										type="checkbox"
+										role="switch"
+										class={a.rowSwitch}
 										checked={configStore.getSkipTrustDialog(props.agentType)}
 										onChange={() =>
 											configStore.setSkipTrustDialog(props.agentType, !configStore.getSkipTrustDialog(props.agentType))
 										}
 									/>
-									<span>Accept workspace trust for managed spawns</span>
-								</label>
-								<p class={s.hint}>
-									Start agents in a new folder without stopping at their workspace trust question. Applies only to
-									agent-to-agent spawns.
-								</p>
-							</div>
+								)}
+							</SettingRow>
 						</ExpertSetting>
 					</Show>
 
@@ -919,23 +1186,24 @@ const AgentRow: Component<{
 							configKey="agent_settings.native_status_signals"
 							value={configStore.state.agents[props.agentType]?.native_status_signals ?? null}
 						>
-							<div class={a.expandedSection}>
-								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+							<SettingRow
+								label="Native status signals"
+								hint="Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch."
+							>
+								{(id, descriptionId) => (
 									<input
+										data-setting-id="agents.agents.{key}.native_status_signals"
+										id={id}
+										aria-describedby={descriptionId()}
 										type="checkbox"
+										role="switch"
+										class={a.rowSwitch}
 										checked={configStore.getNativeStatusSignals(props.agentType)}
 										disabled={hookLoading()}
 										onChange={handleNativeStatusToggle}
 									/>
-									<span>Native status signals</span>
-									<span class={a.badge} data-type="mcp">
-										Signals: at launch
-									</span>
-								</label>
-								<p class={s.hint}>
-									Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch.
-								</p>
-							</div>
+								)}
+							</SettingRow>
 						</ExpertSetting>
 					</Show>
 
@@ -948,6 +1216,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.hook_instrumentation"
 										type="checkbox"
 										checked={configStore.getHookInstrumentation(props.agentType) ?? false}
 										disabled={hookLoading()}
@@ -977,6 +1246,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.intent_tab_title"
 										type="checkbox"
 										checked={configStore.getIntentTabTitle(props.agentType) ?? true}
 										onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
@@ -998,6 +1268,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.progress_tracking"
 										type="checkbox"
 										disabled={!settingsStore.state.progressTracking}
 										checked={
@@ -1022,6 +1293,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.suggest_followups"
 										type="checkbox"
 										checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
 										onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
@@ -1035,6 +1307,26 @@ const AgentRow: Component<{
 						</ExpertSetting>
 					</Show>
 
+					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>
+						{(defaults) => (
+							<>
+								<LaunchModuleSettings agentType={props.agentType} />
+								<LaunchInstructionsEditor
+									settingId="agents.agents.{key}.launch_instructions"
+									id={`launch-instructions-${props.agentType}`}
+									label={`Launch instructions for ${agent().name}`}
+									value={configStore.getAgentLaunchInstructions(props.agentType)}
+									fallback={launchPreview()?.effective_text[props.agentType]}
+									inheritanceLabel="Generated modules and global additions"
+									customizeLabel={`Add instructions for ${agent().name}`}
+									resetLabel="Clear agent additions"
+									requiredMarkers={defaults().required_markers}
+									onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
+								/>
+							</>
+						)}
+					</Show>
+
 					{/* Headless Command Template — compared by the stored override, not
 					    the built-in template the input falls back to. */}
 					<ExpertSetting
@@ -1043,7 +1335,8 @@ const AgentRow: Component<{
 					>
 						<div class={a.expandedSection}>
 							<div class={a.expandedLabel}>Headless Command Template</div>
-							<input
+							<Input
+								data-setting-id="agents.agents.{key}.headless_template"
 								class={`${a.formInput} ${a.mono}`}
 								placeholder={`${AGENTS[props.agentType].binary} -p "{prompt}" --no-input`}
 								value={configStore.getHeadlessTemplate(props.agentType) ?? ""}
@@ -1072,7 +1365,12 @@ const AgentRow: Component<{
 						<Show
 							when={addingConfig()}
 							fallback={
-								<button class={a.smallBtn} style={{ "margin-top": "8px" }} onClick={() => setAddingConfig(true)}>
+								<button
+									data-non-setting="Open, close or cancel the run-configuration editor"
+									class={a.smallBtn}
+									style={{ "margin-top": "8px" }}
+									onClick={() => setAddingConfig(true)}
+								>
 									Add Configuration...
 								</button>
 							}
@@ -1087,12 +1385,17 @@ const AgentRow: Component<{
 						<div class={a.actionsRow}>
 							{/* Opens the file in this app's editor, so it can only be a local path. */}
 							<Show when={!machine()}>
-								<button class={a.actionBtn} onClick={handleEditConfig}>
+								<button
+									data-non-setting="Open the agent-owned configuration editor"
+									class={a.actionBtn}
+									onClick={handleEditConfig}
+								>
 									Edit Agent Config
 								</button>
 							</Show>
 							<Show when={mcpEditable()}>
 								<button
+									data-non-setting="Explicit external-agent MCP installation workflow; not TUIC configuration"
 									class={a.actionBtn}
 									classList={{ [a.installed]: mcpStatus()?.installed }}
 									onClick={handleMcpToggle}
@@ -1177,14 +1480,20 @@ const McpIntegrationsSection: Component = () => {
 
 	return (
 		<Show when={isTauri() && installed().length > 0}>
-			<div class={a.expandedSection}>
-				<div class={a.expandedLabel}>MCP integrations</div>
+			<div class={a.cleanupCard}>
+				<div class={a.expandedLabel}>MCP integrations · This machine</div>
+				<p class={s.hint}>Remove the bridge entries that TUICommander installed in local agent clients.</p>
 				<p class={s.hint} style={{ "margin-bottom": "8px" }}>
 					The TUICommander bridge is configured in: <strong>{installed().join(", ")}</strong>. Remove them before
 					uninstalling TUICommander, or each client will report a missing MCP server.
 				</p>
 				<div class={a.actionsRow}>
-					<button class={a.actionBtn} onClick={handleRemoveAll} disabled={busy()}>
+					<button
+						data-non-setting="Explicit external-agent MCP installation workflow; not TUIC configuration"
+						class={a.actionBtn}
+						onClick={handleRemoveAll}
+						disabled={busy()}
+					>
 						{busy() ? "Removing..." : "Remove all MCP integrations"}
 					</button>
 				</div>
@@ -1234,6 +1543,45 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 		}),
 	);
 
+	// Pass the current edits, not a delayed disk snapshot: app saves are debounced.
+	// Remote machines keep their own global marker preferences on the backend.
+	const [preview] = createResource(
+		() =>
+			activeStore().state.loaded
+				? {
+						connectionId: machine(),
+						preview: {
+							agents: {
+								agents: JSON.parse(JSON.stringify(activeStore().state.agents)),
+								launch_instructions: activeStore().getLaunchInstructions(),
+								launch_modules: JSON.parse(JSON.stringify(activeStore().state.launch_modules)),
+								launch_instructions_disabled: activeStore().state.launch_instructions_disabled,
+								launch_additions_migrated: true,
+							},
+							intent_tab_title: machine() ? undefined : settingsStore.state.intentTabTitle,
+							suggest_followups: machine() ? undefined : settingsStore.state.suggestFollowups,
+						},
+					}
+				: false,
+		async ({ connectionId, preview }) => {
+			try {
+				const defaults = connectionId
+					? await rpc<ConfigDefaults>("get_config_defaults", { preview }, connectionId)
+					: await invoke<ConfigDefaults>("get_config_defaults", { preview });
+				return { connectionId, instructions: defaults.launch_instructions };
+			} catch (err) {
+				appLogger.error("config", "Failed to load launch instruction previews", err);
+				return undefined;
+			}
+		},
+	);
+	const launchPreview = () => {
+		const snapshot = preview();
+		return activeStore().state.loaded && !preview.loading && snapshot?.connectionId === machine()
+			? snapshot?.instructions
+			: undefined;
+	};
+
 	onMount(() => {
 		detection.detectAll();
 	});
@@ -1248,78 +1596,269 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 	};
 
 	return (
-		<AgentConfigProvider value={activeStore()}>
-			<MachineProvider value={machine}>
-				<div class={s.section}>
-					<MachineSelector
-						value={machine()}
-						label="Configure agents on"
-						onChange={(id) => {
-							setMachinePicked(true);
-							setPickedMachine(id);
-						}}
-					/>
-					<Show when={machine()}>
-						{(cid) => {
-							const conn = () => remoteConnectionsStore.getConnectionState(cid());
-							return (
-								<div class={a.remoteBanner}>
-									<span class={a.remoteBannerIcon}>&#x27D0;</span>
-									Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
-								</div>
-							);
-						}}
-					</Show>
-					<Show when={remoteLoading()}>
-						<div class={a.remoteLoading}>Loading remote configuration...</div>
-					</Show>
-					<Show when={remoteError()}>
-						<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
-					</Show>
-
-					<h3>Agents</h3>
-					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-						Configure AI coding agents, manage run configurations, and install MCP bridge integrations.
-					</p>
-
-					<SettingToggle
-						checked={settingsStore.state.intentTabTitle}
-						onChange={(v) => settingsStore.setIntentTabTitle(v)}
-						label="Show agent intent as tab title"
-						hint="When agents declare their current work phase, update the tab name with a short title"
-					/>
-
-					<SettingToggle
-						checked={settingsStore.state.suggestFollowups}
-						onChange={(v) => settingsStore.setSuggestFollowups(v)}
-						label="Show suggested follow-up actions"
-						hint="Display actionable suggestions from agents after completing a task"
-					/>
-
-					<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
-						<SettingToggle
-							checked={settingsStore.state.progressTracking}
-							onChange={(v) => settingsStore.setProgressTracking(v)}
-							label="Collect project progress"
-							hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
+		<LaunchPreviewProvider value={launchPreview}>
+			<AgentConfigProvider value={activeStore()}>
+				<MachineProvider value={machine}>
+					<div class={`${s.section} ${a.page}`}>
+						<SettingPageHeader
+							title="Terminal agents"
+							scope={
+								machine()
+									? `Machine: ${remoteConnectionsStore.getConnectionState(machine()!)?.connection.name ?? machine()}`
+									: "This machine"
+							}
+							breadcrumb="Agents / Terminal agents"
 						/>
-					</ExpertSetting>
+						<div class={a.machineScope}>
+							<MachineSelector
+								value={machine()}
+								label="Configure agents on"
+								onChange={(id) => {
+									setMachinePicked(true);
+									setPickedMachine(id);
+								}}
+							/>
+							<Show when={machine()}>
+								{(cid) => {
+									const conn = () => remoteConnectionsStore.getConnectionState(cid());
+									return (
+										<div class={a.remoteBanner}>
+											<span class={a.remoteBannerIcon}>&#x27D0;</span>
+											Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
+										</div>
+									);
+								}}
+							</Show>
+							<Show when={remoteLoading()}>
+								<div class={a.remoteLoading}>Loading remote configuration...</div>
+							</Show>
+							<Show when={remoteError()}>
+								<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
+							</Show>
+						</div>
+						<SectionCard title="Agent behavior">
+							<SettingToggle
+								settingId="app.intent_tab_title"
+								row
+								checked={settingsStore.state.intentTabTitle}
+								onChange={(v) => settingsStore.setIntentTabTitle(v)}
+								label="Show agent intent as tab title"
+								hint="When agents declare their current work phase, update the tab name with a short title"
+							/>
 
-					<div class={a.agentList}>
-						<For each={sortedAgents()}>
-							{(type) => (
-								<AgentRow
-									agentType={type}
-									detection={detection.getDetection(type)}
-									onExpand={detection.detectVersion}
+							<SettingToggle
+								settingId="app.suggest_followups"
+								row
+								checked={settingsStore.state.suggestFollowups}
+								onChange={(v) => settingsStore.setSuggestFollowups(v)}
+								label="Show suggested follow-up actions"
+								hint="Display actionable suggestions from agents after completing a task"
+							/>
+
+							<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
+								<SettingToggle
+									settingId="app.progress_tracking"
+									row
+									checked={settingsStore.state.progressTracking}
+									onChange={(v) => settingsStore.setProgressTracking(v)}
+									label="Collect project progress"
+									hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
 								/>
-							)}
-						</For>
-					</div>
+							</ExpertSetting>
 
-					<McpIntegrationsSection />
+							<Show when={settingsExpertStore.launchInstructions()}>
+								{(defaults) => (
+									<>
+										<LaunchModuleSettings />
+										<LaunchInstructionsEditor
+											settingId="agents.launch_instructions"
+											id="launch-instructions-global"
+											label="Launch instructions"
+											value={activeStore().getLaunchInstructions()}
+											fallback={launchPreview()?.default_text}
+											inheritanceLabel="Generated modules"
+											customizeLabel="Add instructions"
+											resetLabel="Clear global additions"
+											requiredMarkers={defaults().required_markers}
+											onSave={(text) => void activeStore().setLaunchInstructions(text)}
+										/>
+									</>
+								)}
+							</Show>
+
+							<div class={a.agentList}>
+								<For each={sortedAgents()}>
+									{(type) => (
+										<AgentRow
+											agentType={type}
+											detection={detection.getDetection(type)}
+											onExpand={detection.detectVersion}
+										/>
+									)}
+								</For>
+							</div>
+						</SectionCard>
+						<HibernationSection />
+						<EgoPermissionsSection />
+
+						<McpIntegrationsSection />
+					</div>
+				</MachineProvider>
+			</AgentConfigProvider>
+		</LaunchPreviewProvider>
+	);
+};
+
+const EgoPermissionsSection: Component = () => {
+	const configStore = useAgentConfig();
+	return (
+		<SectionCard title="ego permissions" description="Permissions for new terminal sessions.">
+			<div class={a.permissionRows}>
+				<div class={s.helpLabel}>
+					<label for="ego-permission-mode">Permissions</label>
+					<ContextualHelp label="Permissions" />
 				</div>
-			</MachineProvider>
-		</AgentConfigProvider>
+				<Select
+					data-setting-id="agents.agents.{key}.ego_mode"
+					id="ego-permission-mode"
+					class={a.formInput}
+					value={configStore.state.agents.ego?.ego_mode ?? ""}
+					onChange={(event) =>
+						void configStore.setEgoPermissions({
+							ego_mode: (event.currentTarget.value as import("../../../agents").EgoPermissionMode) || undefined,
+						})
+					}
+				>
+					<For
+						each={settingOptions("agents.agents.{key}.ego_mode", {
+							"": "Use ego configuration",
+							plan: "Read-only (plan)",
+							default: "Ask (default)",
+							edits: "Auto-edit (edits)",
+							auto: "Auto (reviewed)",
+							yolo: "Full access (yolo)",
+						})}
+					>
+						{(option) => <option value={option.value}>{option.label}</option>}
+					</For>
+				</Select>
+				<div class={s.helpLabel}>
+					<label for="ego-permission-sandbox">Filesystem sandbox</label>
+					<ContextualHelp label="Filesystem sandbox" />
+				</div>
+				<Select
+					data-setting-id="agents.agents.{key}.ego_sandbox"
+					id="ego-permission-sandbox"
+					class={a.formInput}
+					value={configStore.state.agents.ego?.ego_sandbox ?? ""}
+					onChange={(event) =>
+						void configStore.setEgoPermissions({
+							ego_sandbox: (event.currentTarget.value as import("../../../agents").EgoSandbox) || undefined,
+						})
+					}
+				>
+					<For
+						each={settingOptions("agents.agents.{key}.ego_sandbox", {
+							"": "Use ego configuration",
+							ro: "Read-only (ro)",
+							workspace: "Workspace writes (workspace)",
+						})}
+					>
+						{(option) => <option value={option.value}>{option.label}</option>}
+					</For>
+				</Select>
+				<p class={s.hint}>Applies to new terminal launches and managed spawns, including resumes.</p>
+			</div>
+		</SectionCard>
+	);
+};
+
+const HibernationSection: Component = () => {
+	const store = useAgentConfig();
+	return (
+		<SectionCard title={t("settings.agents.hibernateHeading", "Idle agent hibernation")}>
+			<ExpertSetting configKey="agents.abandoned_shell_hours" value={store.state.abandoned_shell_hours}>
+				<div class={a.fieldRow}>
+					<div class={s.helpLabel}>
+						<label for="abandoned-shell-hours">
+							{t("settings.agents.abandonedHours", "Close abandoned shells after (hours)")}
+						</label>
+					</div>
+					<Input
+						data-setting-id="agents.abandoned_shell_hours"
+						id="abandoned-shell-hours"
+						class={a.formInput}
+						type="number"
+						min="0"
+						max="65535"
+						value={store.state.abandoned_shell_hours}
+						onChange={(event) => void store.setAbandonedShellHours(event.currentTarget.valueAsNumber)}
+					/>
+				</div>
+				<p class={s.hint}>
+					{t(
+						"settings.agents.abandonedHint",
+						"Zero disables automatic closure. Plain shells are marked abandoned after one idle hour. Running processes, managed sessions and uncertain process observations are never closed.",
+					)}
+				</p>
+			</ExpertSetting>
+			<ExpertSetting configKey="agents.hibernate_idle_minutes" value={store.state.hibernate_idle_minutes}>
+				<div class={a.fieldRow}>
+					<div class={s.helpLabel}>
+						<label for="hibernate-minutes">
+							{t("settings.agents.hibernateMinutes", "Hibernate idle agents after")}
+						</label>
+						<ContextualHelp label={t("settings.agents.hibernateMinutes", "Hibernate idle agents after")} />
+					</div>
+					<Input
+						data-setting-id="agents.hibernate_idle_minutes"
+						id="hibernate-minutes"
+						class={a.formInput}
+						type="number"
+						min="0"
+						max="1440"
+						value={store.state.hibernate_idle_minutes}
+						onChange={(event) =>
+							void store.setHibernate(event.currentTarget.valueAsNumber, store.state.hibernate_scope)
+						}
+					/>
+				</div>
+			</ExpertSetting>
+			<ExpertSetting configKey="agents.hibernate_scope" value={store.state.hibernate_scope}>
+				<div class={a.fieldRow}>
+					<div class={s.helpLabel}>
+						<label for="hibernate-scope">{t("settings.agents.hibernateScope", "Hibernate scope")}</label>
+						<ContextualHelp label={t("settings.agents.hibernateScope", "Hibernate scope")} />
+					</div>
+					<Select
+						data-setting-id="agents.hibernate_scope"
+						id="hibernate-scope"
+						class={a.formInput}
+						value={store.state.hibernate_scope}
+						onChange={(event) =>
+							void store.setHibernate(
+								store.state.hibernate_idle_minutes,
+								event.currentTarget.value as "background_only" | "always",
+							)
+						}
+					>
+						<For
+							each={settingOptions("agents.hibernate_scope", {
+								background_only: t("settings.agents.hibernateBackground", "Only in background"),
+								always: t("settings.agents.hibernateAlways", "Always"),
+							})}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
+					</Select>
+				</div>
+			</ExpertSetting>
+			<p class={s.hint}>
+				{t(
+					"settings.agents.hibernateHint",
+					"Minutes of awake idle time. Set to 0 to disable. Only unattended resumable agents hibernate; managed children keep their idle-close policy.",
+				)}
+			</p>
+		</SectionCard>
 	);
 };

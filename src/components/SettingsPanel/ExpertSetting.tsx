@@ -99,6 +99,7 @@ export const ExpertModeSwitch: Component = () => (
 	<label class={s.expertSwitch}>
 		<span>{t("settings.expert.switch", "Expert")}</span>
 		<input
+			data-setting-id="preferences.settings_expert_mode"
 			type="checkbox"
 			role="switch"
 			checked={uiStore.state.settingsExpertMode}

@@ -17,9 +17,12 @@ import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { updaterStore } from "../../stores/updater";
 import { isTauri } from "../../transport";
+import { getRepoConnection } from "../../transportRuntime";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoTextColor } from "../../utils/repoColor";
+import type { SidebarDensityMode } from "../../utils/sidebarDensity";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
@@ -35,16 +38,42 @@ function relativeAge(timestamp: number): string {
 	return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Narrowest sidebar that still fits the full "TUICommander" wordmark.
- *
- * Worst case is macOS: 78px of `padding-left` reserved for the traffic lights,
- * 10px `padding-right`, two 26px toggles plus gaps (~56px) and the 110px svg —
- * 254px total. The old threshold was 240, so between 240 and 254 the full name
- * did not fit; because it was absolutely positioned it overlapped the toggles
- * instead of pushing them. Below this the short "TUIC" mark (38px) is used, which
- * fits comfortably at the 200px minimum sidebar width.
- */
-const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
+const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAuto", "Sidebar layout: auto (rich for a short list or a finger) — click for compact"),
+	compact: () => t("toolbar.densityCompact", "Sidebar layout: compact — click for rich"),
+	rich: () => t("toolbar.densityRich", "Sidebar layout: rich (details on every row) — click for auto"),
+};
+
+/** Back/forward arrows over the terminal activation history. */
+const HISTORY_BUTTONS = [
+	{
+		direction: "back",
+		action: "history-back",
+		icon: "M10 3 5 8l5 5",
+		go: (name: string) => t("toolbar.historyBack", "Back to {name}", { name }),
+		none: () => t("toolbar.historyBackNone", "No earlier terminal"),
+	},
+	{
+		direction: "forward",
+		action: "history-forward",
+		icon: "m6 3 5 5-5 5",
+		go: (name: string) => t("toolbar.historyForward", "Forward to {name}", { name }),
+		none: () => t("toolbar.historyForwardNone", "No later terminal"),
+	},
+] as const;
+
+/** Row glyph: five tight lines for compact, a title with a detail line for rich. */
+const DENSITY_LABELS: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAutoShort", "A"),
+	compact: () => t("toolbar.densityCompactShort", "C"),
+	rich: () => t("toolbar.densityRichShort", "R"),
+};
+
+const DENSITY_ICON_PATHS: Record<SidebarDensityMode, string> = {
+	auto: "M2 3.5h12M2 8h12M2 12.5h12",
+	compact: "M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12",
+	rich: "M2 3h12M2 5.5h7M2 10.5h12M2 13h7",
+};
 
 const NOTIFICATION_LABELS: Record<PrNotificationType, { label: string; icon: string; cls: string }> = {
 	merged: { label: "Merged", icon: "\u2714", cls: s.notifMerged },
@@ -132,6 +161,8 @@ export function lastItemKey(src: LastItemSource): string {
 }
 
 export interface ToolbarProps {
+	/** Confirms and restarts into an installed update while sessions are still busy. */
+	onRestartNow?: () => void;
 	repoPath?: string;
 	runCommand?: string;
 	onBranchClick?: () => void;
@@ -214,8 +245,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		return getRepoTextColor(activeRepoPath);
 	};
 
-	const getRepoPath = () => props.repoPath;
-	const github = useGitHub(getRepoPath);
+	const launchPath = () => activeBranch()?.worktreePath || props.repoPath;
+	// Ahead/behind belongs to the selected branch's checkout, not the repo root
+	const github = useGitHub(launchPath);
 
 	const aheadBehind = () => {
 		const gs = github.status();
@@ -225,8 +257,6 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		if (gs.behind > 0) return ` ↓${gs.behind}`;
 		return null;
 	};
-
-	const launchPath = () => activeBranch()?.worktreePath || props.repoPath;
 
 	const focusedFilePath = (): string | undefined => {
 		const editTab = editorTabsStore.getActive();
@@ -261,12 +291,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 
 	return (
 		<div id="toolbar" class={s.toolbar} data-tauri-drag-region>
-			<div
-				class={cx(s.left, uiStore.state.sidebarWidth < FULL_APP_NAME_MIN_SIDEBAR_PX && s.narrowSidebar)}
-				data-tauri-drag-region
-			>
+			<div class={s.left} data-tauri-drag-region>
 				<span class={s.leftSpacer} data-tauri-drag-region />
-				{/* Embossed app name — full version for wide sidebar, short for narrow */}
+				{/* Embossed app name —  */}
 				<svg
 					class={`${s.appName} ${s.appNameFull}`}
 					data-tauri-drag-region
@@ -320,61 +347,33 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						TUICommander
 					</text>
 				</svg>
-				<svg
-					class={`${s.appName} ${s.appNameShort}`}
-					data-tauri-drag-region
-					viewBox="0 0 38 16"
-					width="38"
-					height="16"
-					aria-label="TUIC"
-				>
-					<defs>
-						<linearGradient id="toolbar-name-grad-short" x1="0" y1="0" x2="38" y2="0" gradientUnits="userSpaceOnUse">
-							<stop offset="0%" class={s.nameGradStart} />
-							<stop offset="50%" class={s.nameGradMid} />
-							<stop offset="100%" class={s.nameGradEnd} />
-						</linearGradient>
-					</defs>
-					<text
-						x="0"
-						y="12"
-						class={s.nameShadow}
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-						dx="1"
-						dy="1"
-					>
-						TUIC
-					</text>
-					<text
-						x="0"
-						y="12"
-						class={s.nameHighlight}
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-						dx="-0.5"
-						dy="-0.5"
-					>
-						TUIC
-					</text>
-					<text
-						x="0"
-						y="12"
-						fill="url(#toolbar-name-grad-short)"
-						font-size="11"
-						font-weight="700"
-						letter-spacing="0.09em"
-						font-family="system-ui,-apple-system,sans-serif"
-					>
-						TUIC
-					</text>
-				</svg>
 				<span class={s.leftSpacer} data-tauri-drag-region />
 				<Show when={uiStore.state.sidebarVisible}>
+					<button
+						class={cx(s.filterToggle, s.densityToggle)}
+						classList={{
+							[s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto",
+						}}
+						onClick={() => uiStore.cycleSidebarDensityMode()}
+						data-testid="sidebar-density-toggle"
+						data-mode={uiStore.state.sidebarDensityMode}
+						title={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip-pos="bottom"
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+							<path
+								d={DENSITY_ICON_PATHS[uiStore.state.sidebarDensityMode]}
+								stroke="currentColor"
+								stroke-width="1.3"
+								stroke-linecap="round"
+							/>
+						</svg>
+						{/* The mode is read off the button: title and tooltip do not show on touch. */}
+						<span class={s.densityLabel} data-testid="sidebar-density-label">
+							{DENSITY_LABELS[uiStore.state.sidebarDensityMode]()}
+						</span>
+					</button>
 					<button
 						class={s.filterToggle}
 						classList={{ [s.filterToggleActive]: uiStore.state.repoFilterActiveOnly }}
@@ -421,6 +420,41 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 			</div>
 
 			<div class={s.center} data-tauri-drag-region>
+				<For each={HISTORY_BUTTONS}>
+					{(btn) => {
+						const target = () => terminalsStore.getHistoryTarget(btn.direction);
+						const title = () => {
+							const id = target();
+							if (!id) return btn.none();
+							const name = terminalsStore.get(id)?.name ?? "";
+							return `${btn.go(name)} (${keyFor(btn.action)})`;
+						};
+						return (
+							<button
+								class={s.filterToggle}
+								disabled={!target()}
+								onClick={() => {
+									const id = terminalsStore.stepHistory(btn.direction);
+									if (id) navigateToTerminal(id);
+								}}
+								title={title()}
+								data-tooltip={title()}
+								data-tooltip-pos="bottom"
+								data-testid={`history-${btn.direction}`}
+							>
+								<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+									<path
+										d={btn.icon}
+										stroke="currentColor"
+										stroke-width="1.5"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									/>
+								</svg>
+							</button>
+						);
+					}}
+				</For>
 				<Show when={activeBranchName()}>
 					<button
 						class={s.branch}
@@ -539,6 +573,11 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						<div class={s.popover}>
 							<div class={s.sectionHeader}>
 								<span class={s.sectionLabel}>PROGRESS</span>
+								<Show when={progressStore.unreadCount > 0}>
+									<button class={s.dismissAll} onClick={() => progressStore.markRead()}>
+										{t("toolbar.markAsRead", "Mark as read")}
+									</button>
+								</Show>
 							</div>
 							<div
 								class={s.activityItem}
@@ -575,7 +614,8 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 									onClick={(e) => {
 										e.stopPropagation();
 										setShowNotifPopover(false);
-										updaterStore.downloadAndInstall();
+										if (updaterStore.state.restartPending) props.onRestartNow?.();
+										else updaterStore.downloadAndInstall();
 									}}
 								>
 									<span class={s.notifIcon}>
@@ -588,9 +628,17 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 											{`v${updaterStore.state.version} ${t("toolbar.available", "available")}`}
 										</span>
 										<span class={s.notifBranch}>
-											{updaterStore.state.downloading
-												? `${t("statusBar.updating", "Updating")} ${updaterStore.state.progress}%`
-												: t("toolbar.clickToUpdate", "Click to update")}
+											{updaterStore.state.restartPending
+												? t(
+														"toolbar.restartPending",
+														"Restarts when agents are idle ({count} busy) — click to restart now",
+														{
+															count: String(updaterStore.busyCount()),
+														},
+													)
+												: updaterStore.state.downloading
+													? `${t("statusBar.updating", "Updating")} ${updaterStore.state.progress}%`
+													: t("toolbar.clickToUpdate", "Click to update")}
 										</span>
 										<Show
 											when={
@@ -724,6 +772,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 													e.stopPropagation();
 													setShowNotifPopover(false);
 													requestAnimationFrame(() => {
+														if (getRepoConnection(notif.repoPath) !== notif.connectionId) return;
 														setPrDetailTarget({ repoPath: notif.repoPath, branch: notif.branch });
 													});
 												}}

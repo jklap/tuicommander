@@ -1,10 +1,28 @@
 # Tauri Commands Reference
 
+## Scoped plugin settings
+
+`plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
+
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
+## Workflow runs
+
+| Command | Parameters | Result | Description |
+|---|---|---|---|
+| `workflow_run_action` | `project, action` | tagged `RunReply` | Starts, reads, lists plan runs, pages events, executes pinned checks, records checked integrations or canonical recertifications, or commands a durable project-scoped run. See [Workflow runs](../backend/workflows.md#durable-runs). |
+
+## Workflow definitions
+
+| Command | Parameters | Result | Description |
+|---|---|---|---|
+| `workflow_definition_action` | `project, action` | tagged `WorkflowReply` | Reads, edits, validates, and publishes project-scoped workflow definitions; `update_closure` sets the approval policy and `update_checks` pins executable checks. See [Workflow definitions](../backend/workflows.md). |
+
 ## Native stories
 
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
+| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
 
 ## Project Progress
@@ -12,7 +30,7 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
-| `progress_list` | `project, input.blockedOnly?, input.ptyId?, input.limit?, input.cursor?` | `ProgressList` | A newest-first page (default 10, maximum 100), matching total, next cursor, available PTY IDs, and stored last-visit mark. |
+| `progress_list` | `project, input.blockedOnly?, input.ptyId?, input.limit?, input.cursor?` | `ProgressList` | A newest-first page (default 8, maximum 100), matching total, next cursor, available PTY IDs, and stored last-visit mark. |
 | `progress_projects` | none | `string[]` | Journal projects ordered by their most recent entry, for clients without an active desktop repository. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
 | `progress_flow` | `project, input.ptyId?` | `ProgressFlow` | The journal as a delegation sequence: participants and ordered hand-off events (see `docs/api/http-api.md` → Project Progress). |
@@ -41,7 +59,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
 | `write_pty_parts` | `session_id, parts: Vec<String>` | `()` | Write several inputs under one writer lock. The parts stay separate on purpose: post-write bookkeeping runs once per part, and it is not a function of the joined bytes (a lone `/` opens slash mode, an exact option key answers a choice prompt) |
-| `enqueue_agent_command` | `session_id, text` | `{ typed, queued }` | Queue a command for the agent's next idle window (typed at once when already idle); errors for non-agent sessions |
+| `enqueue_agent_command` | `session_id, text, idempotency_key?, expected_draft?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional `expectedDraft` validates and clears the live composer first (errors after clearing are uncertain; do not retry automatically); optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
 | `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
@@ -56,27 +74,25 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
+| `get_prompt_receipt` | `session_id` | `PromptReceipt` | Read captured launch sections and observation gaps; async/blocking worker |
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
-| `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `get_pty_capture` | -- | `JSON` | Raw PTY capture tap state: enabled, session filter, directory, bytes per session. Browser parity: `GET /diagnostics/capture`. |
 | `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap` or the absolute `TUIC_CAPTURE_DIR` override; a relative override returns an error and leaves recording disabled. Starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
 | `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col, history_base?` | `Result<String, String>` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Optional frame `history_base` rebases grid-relative rows atomically against history eviction; evicted endpoints are rejected. Browser parity: `GET /sessions/:id/terminal/selection-text` (`historyBase` query parameter). |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
-| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
-| `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
+| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>, visible: bool` | `u64` (epoch) | Register the grid-frame channel and initial visibility for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
+| `ack_terminal_frame` | `session_id, epoch: u64, received: u64, visible?: bool` | `()` | Report the total number of frames this client has received and optionally update epoch-scoped desktop visibility. Hidden subscriptions receive no frames. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
+| `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
-Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
-`terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
-`terminal_get_cursor_line`, `terminal_hyperlink_at` and
-`terminal_hyperlink_span` and `read_vt_log` — is an `async fn` that runs on the blocking pool via
-`pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
+`terminal_get_row_text`, `terminal_get_logical_line`, and `terminal_get_lines`
+use `pty::vt_try_read`, so each returns `Result<T, String>` rather than a bare `T`.
 The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
 [`docs/backend/command-threading.md`](../backend/command-threading.md).
@@ -86,6 +102,9 @@ request-scoped orchestration contract in `mcp_transport.rs`: it reuses the PTY
 injection claim, writer, input FSM, and output ring, then keeps the MCP response
 open for a bounded terminal-movement receipt. Desktop `write_pty` and
 `write_pty_parts` remain raw input primitives and make no acknowledgement claim.
+Raw input returns an uncertain-delivery error after two seconds rather than
+waiting indefinitely on a blocked writer. The write can still complete; do not
+retry automatically. Session close does not wait on the input writer.
 
 ## Design Mode (`design_mode/tauri_commands.rs`)
 
@@ -96,7 +115,7 @@ that session's input draft without submitting it.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_design_mode` | `sessionId: String` | `DesignModeStatus` | Start or rebind inspection for an agent terminal; opens the repository's configured URL or `about:blank` |
+| `start_design_mode` | `sessionId: String, browser?: String, url?: String` | `DesignModeStatus` | Start or rebind an agent terminal; optional HTTP(S) `url` opens directly, otherwise uses discovery/onboarding |
 | `stop_design_mode` | `repoPath: String` | `DesignModeStatus` | Stop inspection for a repository |
 | `get_design_mode_status` | -- | `Vec<DesignModeStatus>` | Read the active per-repository modes |
 
@@ -123,6 +142,10 @@ receive it on `/events`.
 | `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
+| `get_git_remotes` | `path` | `Vec<{name,url}>` | Every remote; credentials in URLs removed (`workitem_links.rs`) |
+| `list_workitem_links` | — | `{repoPath: {branch: WorkItemLink}}` | Work-item links of worktree branches (`workitem_links.rs`) |
+| `link_workitem` | `repoPath, branch, link` | `()` | Link a worktree branch to a work item; url must be http(s) |
+| `unlink_workitem` | `repoPath, branch` | `bool` | Remove a link; true when one existed |
 | `rename_branch` | `path, old_name, new_name` | `()` | Rename branch |
 | `check_is_main_branch` | `branch` | `bool` | Is main/master/develop |
 | `get_initials` | `name` | `String` | 2-char repo initials |
@@ -130,8 +153,7 @@ receive it on `/events`.
 | `get_repo_summary` | `repo_path` | `RepoSummary` | Aggregate snapshot: worktree paths + merged branches + per-path diff stats in one IPC |
 | `get_repo_structure` | `repo_path` | `RepoStructure` | Fast phase: worktree paths + merged branches only (Phase 1 of progressive loading) |
 | `get_repo_diff_stats` | `repo_path` | `RepoDiffStats` | Slow phase: per-worktree diff stats, last commit timestamps, and `workspace_statuses` keyed by opaque workspace id (Phase 2 of progressive loading) |
-| `run_git_command` | `path, args` | `GitCommandResult` | Run arbitrary git command (success, stdout, stderr, exit_code) |
-| `get_git_panel_context` | `path` | `GitPanelContext` | Rich context for Git Panel (branch, ahead/behind, staged/changed/stash counts, last commit, rebase/cherry-pick state). Cached 5s TTL. |
+| `run_git_command` | `path, args` | `GitCommandResult` | Run allowlisted git command (success, stdout, stderr, exit_code) |
 | `get_working_tree_status` | `path` | `WorkingTreeStatus` | Full porcelain v2 status: branch, upstream, ahead/behind, stash count, staged/unstaged entries, untracked files |
 | `update_from_base` | `path, branch_name, strategy?` | `String` | Fetch configured base ref and rebase or merge the branch onto it. Conflict cleanup reports `(aborted)` only after abort succeeds; abort failure includes manual recovery guidance. |
 | `git_stage_files` | `path, files` | `()` | Stage files (`git add`). Path-traversal validated |
@@ -148,7 +170,7 @@ receive it on `/events`.
 | `get_file_history` | `path, file, count?, after?` | `Vec<CommitLogEntry>` | Per-file commit log following renames (default 50, max 500) |
 | `get_file_blame` | `path, file` | `Vec<BlameLine>` | Per-line blame: hash, author, author_time (unix), line_number, content |
 | `get_branches_detail` | `path` | `Vec<BranchDetail>` | Rich branch listing: name, ahead/behind, last commit date, tracking upstream, merged status |
-| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses safe `-d`; `force=true` uses `-D`. Refuses to delete the current branch or default branch |
+| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses the shared integration proof and compares the ref with its proved tip; content-based proof requires an exact-tip archive. `force=true` preserves the exact tip at `refs/archive/<branch>` before deleting, archives at `refs/archive/<branch>-<sha7>` when that name holds a different tip, and cannot delete a checked-out branch. Refuses to delete the current branch or default branch |
 | `create_branch` | `path, name, start_point, checkout` | `()` | Create a new branch from `start_point` (defaults to HEAD). `checkout=true` switches to it immediately |
 | `get_recent_branches` | `path, limit` | `Vec<String>` | Recently checked-out branches from reflog, ordered by recency |
 
@@ -175,14 +197,17 @@ receive it on `/events`.
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
 | `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
+| `get_pr_review_threads` | `path, pr_number` | `{bot, human, ego}` | Unresolved review threads of one PR, split bot vs human vs ego (first comment carries `<!-- tuic:ego-review -->`) |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
 | `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
-| `merge_pr_via_github` | `repo_path, pr_number, merge_method` | `String` | Merge PR via GitHub API |
+| `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
+| `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
+| `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
+| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
+| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
 | `circleci_token_status` | — | `CircleCiTokenStatus` | Report token presence and source without returning the token |
 | `circleci_set_token` | `token` | `()` | Store a read-only CircleCI token |
 | `circleci_delete_token` | — | `()` | Remove the stored CircleCI token |
@@ -201,14 +226,14 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | Review a PR's diff. Findings under the confidence threshold (default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD` overrides) are dropped before the result is built. Emits `review-progress` |
 | `generate_changelog` | `repo_path, since_tag?` | `ChangelogResult` | Changelog over the merged PRs since a tag. `{ markdown, json }`; `json` is `null` when ego answered in prose only |
 | `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | Up to five proposals for `refactor`, `testing` or `perf`. Emits `proposals-ready` |
-| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through `gh`. No model call |
+| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through account-aware REST. No model call |
 
 ## Worktree Management (`worktree.rs`)
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and start warming in the background. `instructions.warm_artifacts.status` is `pending`, matching HTTP/MCP. Parent tracked changes are not carried over. |
-| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion accepts ancestry in the default or checked-out integration branch, patch equivalence, or a merged GitHub PR whose verified head contains the local tip; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
+| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs fetched over account-aware, fully paginated HTTP GraphQL; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
 | `delete_local_branch` | `repo_path, branch_name, workspace_id, keep_worktree?` | `()` | Delete a local branch and dispose of the workspace `workspace_id` names. Two identifiers because there are two objects: `branch_name` is the ref to delete, `workspace_id` the checkout holding it. Refuses to delete the default branch, and refuses when the resolved workspace is on a different branch than the one asked for. Uses safe `git branch -d` |
 | `check_worktree_dirty` | `repo_path, workspace_id` | `bool` | Check if the workspace `workspace_id` names has uncommitted changes. Addressed by id because the answer gates an irreversible cleanup — a sibling on the same branch being clean must never authorise destroying this one. Returns false if the id resolves to no checkout. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
 | `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree", warm_artifacts }>` | Every linked worktree of a repo, keyed by workspace id. `warm_artifacts.status` is `pending`, `done`, or `failed`. |
@@ -217,11 +242,11 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_local_branches` | `path` | `Vec<String>` | List local branches |
 | `checkout_remote_branch` | `repo_path, branch_name` | `()` | Check out a remote-only branch as a new local tracking branch |
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
-| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason? }>` | Classify every orphan for automatic removal using tracked/untracked status and branch reachability. |
+| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason?, live_sessions? }>` | Classify every orphan for automatic removal using tracked/untracked status, branch reachability and live sessions in the checkout. |
 | `begin_orphan_cleanup` | `repo_path, paths` | `()` | Register the open Ask dialog for an agent answer. |
 | `pending_orphan_cleanup_answer` | `repo_path` | `bool?` | Read the pending answer, or `null` while unanswered. |
 | `clear_orphan_cleanup` | `repo_path` | `()` | Clear the pending answer when the dialog closes. |
-| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status and branch reachability immediately before removal. |
+| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?, confirmed_sessions?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status, branch reachability and live sessions immediately before removal. Without it, refuse when a live session in the checkout is not in `confirmed_sessions` (the session ids the user saw). |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
 | `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive or delete. A pre-flight counts commits and checks the exact checkout. For `archive` or `delete`, an unverified or dirty checkout or one with a live session returns `action: "needs_confirmation"` **before merging**. Re-call with `force: true` and the confirmed lifecycle `expected_fingerprint` to proceed; a changed fingerprint aborts. A locked checkout is not archived. If conflict cleanup abort fails, the error includes the manual abort command. |
 | `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up after a completed merge. Uses the same lifecycle review as one-click cleanup and also requires merged commit status before automatic cleanup. Without `force`, a dirty, unverified, or live checkout returns `action: "needs_confirmation"` (`merged: true` — only cleanup stopped). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. A lock stops archiving. Delete may include `branch_delete_warning` if safe branch deletion kept the branch. |
@@ -238,9 +263,10 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `save_app_config` | `base, config` | `()` | Save app settings |
 | `load_notification_config` | -- | `NotificationConfig` | Load notifications |
 | `save_notification_config` | `base, config` | `()` | Save notifications |
+| `show_native_notification` | `title, body, target` | `()` | macOS desktop-only alert that retains the Notification Center click and emits `native-notification-click` for a terminal or Progress target; browser/remote clients cannot call it |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
-| `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
+| `get_config_defaults` | `preview?: LaunchPreview` | `ConfigDefaults` | Read-only defaults and resolved launch instruction previews; optional draft agent config and global marker flags |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
 | `save_repo_settings` | `base, config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |
@@ -258,7 +284,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `delete_note_assets` | `note_id` | `()` | Remove `note-images/<note_id>/` directory recursively (no-op if missing) |
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
-| `save_keybindings` | `base, config` | `()` | Save keybinding overrides |
+| `save_keybindings` | `base, config` | `()` | Save typed action/key overrides; reject invalid records before persistence |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `save_agents_config` | `base, config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
@@ -280,7 +306,9 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_active_tunnels` | -- | `Vec<JSON>` | List all active tunnels with ID, status, and started_at |
 | `get_tunnel_status` | `id` | `JSON` | Get the current status of a specific tunnel (starting, connected, reconnecting, stopped, error) |
 | `list_ssh_config_hosts` | -- | `Vec<String>` | Parse `~/.ssh/config` and return all non-negated, non-wildcard Host entries |
-| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe deduplicated SSH config hosts with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
+| `list_discovered_ssh_hosts` | -- | `DiscoveredSshHosts` | List non-wildcard `~/.ssh/config` aliases and plain `~/.ssh/known_hosts` names deduplicated by resolved host and port; hashed known_hosts entries are counted in `hashed_count` |
+| `probe_discovered_ssh_host` | `target, port?` | `SshHostStatus` | Probe one discovered entry (known_hosts entries use `StrictHostKeyChecking=yes`); refuses a host not in the discovered list |
+| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe the `~/.ssh/config` aliases (known_hosts names excluded) with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
 | `get_tunnel_audit` | `id, limit?` | `Vec<JSON>` | Query audit log events for a tunnel (default limit 20). Returns timestamp, kind, and extracted message |
 | `list_ssh_agent_keys` | -- | `SshAgentInfo` | Detect SSH agent type (1Password, Secretive, GPG, generic) and list loaded keys via `ssh-add -l` |
 
@@ -291,7 +319,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
 | `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
-| `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
+| `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json`. Publishes a value-free `connections` Settings change only after vault persistence, through the same owner as HTTP |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
 | `install_remote_daemon` | `id` | `()` | Stage the matching daemon and install/start a systemd user unit or launchd agent, then persist `deploy = installed` |
@@ -321,6 +349,7 @@ remote daemon.
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
+| `open_default_app` | `target: String, kind: "url" \| "path"` | `()` | Host-only default application open; allows http/https/mailto/tel URLs, checks path metadata, returns after spawn and reaps the launcher through `tuic_core::child_reaping` |
 | `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
 | `spawn_agent` | `pty_config, agent_config` | `String` (session ID) | Spawn agent in PTY |
 
@@ -328,7 +357,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. IPC and HTTP run filesystem and process reads on the blocking pool. Ego bindings are cached by sessions root and pid, with one-lease pid and writer-lock validation; a miss scans for the latest matching heartbeat. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -344,24 +373,9 @@ Activity Dashboard and the Git panel.
 
 ## The embedded AI engine is gone (#784-0aec)
 
-There is no `ai_chat.rs`, `ai_chat_registry.rs`, `provider_registry.rs`,
-`llm_api.rs`, `diff_triage.rs`, `improvement_scan.rs` or `changelog.rs`, and
-`ai_agent/` holds only `knowledge.rs` and `tui_detect.rs`. Every command those
-modules registered is unregistered, every `/ai/*` route is unmounted, and the
-matching `COMMAND_TABLE` entries are removed from `src/transport.ts`.
-TUICommander makes no provider HTTP call and stores no model API key.
+The embedded ReAct loop, provider registry and model-key storage were removed. `ego` supplies intelligence over ACP — see **ACP client for ego** below. PR review, changelog generation and improvement scanning use unattended ego turns.
 
-`ego` supplies the intelligence over ACP — see **ACP client for ego** below.
-What comes back where is tabulated in [`docs/sync-matrix.md`](../sync-matrix.md)
-under *What #784-0aec removed*.
-
-Command knowledge is the one thing that stayed, because recording it involves no
-model: `pty.rs` still writes `CommandOutcome` rows per session and
-`ai_agent::knowledge::spawn_persist_task` still flushes them to
-`<config_dir>/ai-sessions/<session_id>.json`. No command reads them back — the
-`get_session_knowledge`, `list_knowledge_sessions` and
-`get_knowledge_session_detail` accessors went with the UI that called them.
-
+`ai_agent/` retains only `tui_detect.rs`, which classifies terminal activity. The write-only command knowledge store and its persistence task were removed in #2115-1333. No knowledge accessor command remains.
 
 ## MCP OAuth 2.1 (`mcp_oauth/commands.rs`)
 
@@ -380,11 +394,11 @@ Commands for managing upstream MCP servers proxied through TUICommander's `/mcp`
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_mcp_upstreams` | -- | `UpstreamMcpConfig` | Load upstream config from `mcp-upstreams.json` |
-| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig` | `()` | Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
+| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig, credentials?: {server_id, token, header?}[]` | `()` | Add-time credentials are validated and created under the config lock; failures roll back new vault entries. Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
 | `reconnect_mcp_upstream` | `name: String` | `()` | Disconnect and reconnect a single upstream by name. Useful after credential changes or transient failures |
 | `get_mcp_upstream_status` | -- | `Vec<UpstreamStatus>` | Get live status of all upstream MCP servers. Status values: `connecting`, `ready`, `circuit_open`, `disabled`, `failed`, `authenticating`, `needs_auth` |
-| `save_mcp_upstream_credential` | `name: String, token: String` | `()` | Store a Bearer token for an upstream in the OS keyring |
-| `delete_mcp_upstream_credential` | `name: String` | `()` | Remove a Bearer token from the OS keyring (idempotent) |
+| `save_mcp_upstream_credential` | `name: String, token: String, url: String, header?: {name, credential_ref}, replace?: boolean` | `()` | Refuse to overwrite an existing entry unless `replace: true` explicitly requests an edit. Store a Bearer token or scoped header secret with its intended HTTP origin in the OS credential vault |
+| `delete_mcp_upstream_credential` | `name: String, header?: {name, credential_ref}` | `()` | Remove a Bearer/OAuth token or a scoped custom header secret (idempotent) |
 
 ### UpstreamMcpConfig schema
 
@@ -489,13 +503,15 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `preview_speech_voice` | `language`, `voice`, `text` | `()` | Speak `text` (max 200 characters) in `voice` on this machine's speaker with the saved loudness. Needs no hands-free conversation and does not change `speech_voice`. Refused while a hands-free reply is queued, rendering or playing |
 | `speak_reply` | `text`, `turn?` | `SpokenReply` | Queue one spoken reply, max 2000 characters. Returns `state: "queued"` — never `"finished"`; poll `get_speech_status` with the id. `turn` refuses a reply written for a turn the user talked over |
 | `stop_speech` | -- | `SpeechStatus` | Stop now, drop the queue, open a new turn. Returns the status so the caller learns that turn |
+| `pause_speech` | -- | `SpeechStatus` | Hold the reply where it is; `paused` true, `speaking` false. No-op with nothing playing |
+| `resume_speech` | -- | `SpeechStatus` | Continue a reply the user held |
 | `get_speech_status` | `utterance?` | `SpeechStatus` | Whether anything can be spoken, and optionally what became of one reply. An id no longer remembered reports `state: "unknown"`. `language` is the conversation's language — empty under `auto` before the first turn, which is the one state in which nothing can be spoken |
 | `get_correction_map` | -- | `HashMap<String,String>` | Load corrections |
 | `set_correction_map` | `map` | `()` | Save corrections |
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
 | `get_dictation_config` | -- | `DictationConfig` | Load saved config. With an activation phrase, the hands-free runtime applies at least 5000 ms of hold-back even when the saved `hands_free_hold_back_ms` is shorter; hands-free status reports the effective value |
 | `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
-| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
+| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; hands_free_spoken_replies=false also cancels it and refuses new speech while dictation stays armed. Edge 401/403 rejection makes speech unavailable for five minutes. Other fields leave the voice alone. `hands_free_listening` (default true, read at arm time only; false arms a replies-only conversation with no microphone, and arming with it and `hands_free_spoken_replies` both false is refused). `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 
@@ -520,10 +536,6 @@ are unaffected (they build `NSAlert`) and stay as they are.
 
 ## Filesystem (`fs.rs`)
 
-`upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, `name`, and binary `bytes`, returns the same `{ path,
-size }` receipt, and uses the same destination, cap, and cleanup rules.
-
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
@@ -533,12 +545,14 @@ size }` receipt, and uses the same destination, cap, and cleanup rules.
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
+| `write_file_if_unchanged` | `repo_path, file, expected, content` | `bool` | Write only when the file still equals `expected`; `false` = changed on disk, nothing written (mobile Markdown review) |
 | `create_directory` | `path` | `()` | Create directory |
 | `delete_path` | `path` | `()` | Delete file or directory |
 | `rename_path` | `src, dest` | `()` | Rename/move path |
 | `copy_path` | `src, dest` | `()` | Copy file or directory |
 | `copy_path_abs` | `from, to` | `()` | Copy a file by absolute paths (cross-repo paste). Rejects directories. |
 | `move_path_abs` | `from, to` | `()` | Move a file by absolute paths (cross-repo cut+paste); copy+remove fallback across filesystems. |
+| `fs_transfer_remote_paths` | `connectionId, destDir, paths, allowRecursive` | `TransferResult` | Sender-side coordinator for copying local OS paths onto a connected remote repository using its existing endpoint/token. Streams bounded archives; preserves recursion confirmation and skips existing names. Desktop IPC only (`INTENTIONALLY_UNMAPPED`): data leaves the machine; Finder source paths cannot be gated to registered roots; HTTP token holders must not trigger exfiltration. |
 | `fs_transfer_paths` | `destDir, paths, mode ("move"\|"copy"), allowRecursive` | `TransferResult { moved, skipped, errors, needs_confirm }` | Move/copy OS paths into a destination directory. Skips silently on name conflicts; returns `needs_confirm=true` (no-op) when a source is a directory and `allowRecursive=false`. Used by the drag-drop handler when dropping files onto a folder in the file browser. |
 | `add_to_gitignore` | `path, pattern` | `()` | Add pattern to .gitignore |
 | `search_files` | `path, query` | `Vec<SearchResult>` | Search files by name in directory |
@@ -561,7 +575,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests |
+| `list_user_plugins` | `pluginIds?: string[]` | `Vec<PluginManifest>` | List valid plugin manifests with backend-derived optional `contentSha256` |
 | `get_plugin_readme_path` | `id` | `Option<String>` | Get plugin README.md path |
 | `read_plugin_data` | `plugin_id, path` | `Option<String>` | Read plugin data file |
 | `write_plugin_data` | `plugin_id, path, content` | `()` | Write plugin data file |
@@ -592,7 +606,9 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `plugin_http_fetch` | `url, method?, headers?, body?, allowed_urls, plugin_id` | `HttpResponse` | Make HTTP request (validated against allowed_urls) |
+| `plugin_github_action` | `plugin_id, account, reference, request` | `Value` | Account-scoped B6/B7 bridge; requires net:http, manifest github provider consent and matching PR reference |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id, request_id?` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_cancel` | `plugin_id, request_id` | `()` | Cancel a plugin-scoped HTTP request, including its response body. |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -666,7 +682,8 @@ empty result.
 | `hash_password` | `password` | `String` | Bcrypt hash |
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
-| `get_mcp_status` | -- | `JSON` | MCP server status (no token — use `get_connect_url` for QR) |
+| `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
@@ -716,6 +733,7 @@ can choose what the host runs.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
+| `acp_workspace_root` | — | `String` | The directory AI Chat runs in, from `ai_chat_workspace` (empty = home directory of this host). A missing folder is created; an unusable one is refused with a message naming the setting |
 | `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
 | `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
 | `acp_disconnect` | `connectionId` | `AcpConnectionSettlement` | Ask the child to exit; the snapshot is retained |
@@ -762,17 +780,39 @@ Four rules hold this surface down:
 
 - The binary is the configured `ego_executable`, read per call. No argument
   names a program.
-- There is no key parameter. `model` is the only writable key and it is spelled
-  as its own operation, so a caller cannot reach `sandbox` or
+- There is no key parameter. Dedicated operations write only `model`, `roots`
+  and `network`, so a caller cannot reach `sandbox` or
   `permissions.judge` at all.
-- A value may not look like a flag, carry whitespace or a control character, or
+- A model value may not look like a flag, carry whitespace or a control character, or
   contain `"` or `\` — the last two would break out of ego's TOML string.
 - A failure carries what ego printed.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
-| `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --profile=<configured> --json` + `models --json` + `doctor --json`, joined in the configured AI Chat workspace. The profile flag is omitted for the base. `refresh: true` adds `--refresh`, the only call that reaches a provider |
+| `ego_set_default_model` | `model` | `EgoProviders` | `config set --profile=<configured> -- model="<slug>"` in the configured AI Chat workspace (profile omitted for the base), then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_perimeter` | -- | `PerimeterView` | Stored `config ls --json` plus `config ls --effective --json` in the AI Chat workspace/profile |
+| `ego_set_perimeter_roots` | `roots: {rootDir, rootAccess, readAllowlist, writableDirs}` | `PerimeterView` | Encode a typed `roots=[...]` assignment, run `config set --`, then read back |
+| `ego_set_perimeter_network` | `enabled: bool` | `PerimeterView` | `config set -- network="on"` or `network="off"`, then read back |
+
+Perimeter operations select `--profile` from `ego_profile` and cwd from
+`ai_chat_workspace` (empty means host HOME); that directory must exist. They
+remove ambient `EGO_PROFILE` so the preview matches the configured ACP profile.
+Path strings are TOML-encoded in Rust, never written to the TOML file by TUIC.
+Each allowlist is newline-delimited; the primary root is one path. `rootAccess`
+is `read` or `read-write`. Paths must be absolute or start with `~/`; limits are
+128 entries and 64 KiB of path input. Empty fields encode explicit `roots=[]`.
+The response contains the edit fields, `networkEnabled`, selected `profile`,
+`effective` (ego's original snake_case JSON schema), `execEnforcement`
+(`enforcedByOs`, `promptOnly`, `notChecked`), and a display-ready `preview`.
+Capability evidence remains exactly what ego reports: a measured string array
+or `not_checked`, with optional `capabilities_reason` and `probe_evidence`.
+Rust classifies the exec badge: `ro` needs `read_scoped` + `write_denied`,
+`workspace` needs `read_scoped` + `write_scoped`, and offline adds `no_ip_network`.
+An empty/partial measured set is Prompt only; unknown evidence is unverified.
+The measured form needs its probe reference. `off` + online is Prompt only,
+never a vacuous OS-enforcement success. Headless inspection currently has no
+measurement, so it reports not checked and its reason.
 
 All three reads must succeed. A partial answer would render as a tab silently
 missing one of the three things it exists to show.
@@ -782,3 +822,239 @@ Errors are an `EgoCliError` — `code` (`notConfigured`, `invalidInput`,
 `stdout`, `stderr`, `exitCode` — identical on both transports. `command` is
 spelled by file name only, and the captured output is clipped to 4000
 characters on a character boundary.
+
+## Private secret form commands
+
+`secret_form_bootstrap` takes no arguments and checks the native caller window
+against the backend-created private window. It is intentionally unmapped: an
+HTTP client must already possess the privately delivered capability.
+`secret_form_submit {submission}` checks the same native identity and uses the
+same schema and consumption logic as `POST /secrets/forms/submit`.
+
+Workflow definition and human-decision IPC commands use host Human authority. HTTP equivalents require verified credentials for that authority; local address admission grants LocalApi only. Native story plan_state and plan_view use current integration receipts for workflow-owned plans.
+
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` use all-time rows. `terminal_scroll_to`, `terminal_get_lines` and search results keep their retained-grid coordinates; callers subtract the current frame `historyBase` when using stored markers.
+
+### Telegram Settings
+
+- `telegram_settings`: safe settings snapshot (`enabled`, `token_set`, `bot_alias`, `registered_agent_name` (nullable), decimal-string `chats`, `connected`, `last_error`, `last_message_time`). Never returns a token or message text.
+- `telegram_setup { change }`: `change.action` is `token` (password `token`, checks `getMe`), `pair` (returns `code`, `expires_in_seconds`), `add_chat`/`remove_chat` (`chat_id`), or `configure` (`enabled`). Errors are typed safe Telegram categories.
+
+The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+`acp_session_fork` accepts optional `atMessageId`, with the same behavior as the ACP HTTP fork route. Capability snapshots expose `forkAtMessage` separately from tip fork support.
+
+`acp_session_list` uses the same complete ancestry projection as HTTP: original ego lineage plus `_meta.tuicommander.lineageDepth` and disabled deleted-parent placeholders.
+
+`workflow_run_action` also accepts the read-only `incidents` action with `run_id`. It returns the same project-scoped camelCase incident entries as `POST /workflows/run/action`; see the HTTP API run incident projection.
+
+### `acp_chat_open`
+
+Arguments: `{ request: { sessionId?, profile?, workspace?, executable? } }`. Returns `{ connection, sessionId, launch, replayed }`. Creates a conversation with its own durable launch options, or reopens the saved `sessionId`. HTTP equivalent: `POST /acp/chat/open` with the request object as the body. Global ACP connect defaults remain unchanged.
+
+MCP `session action=declare_worktree` is intentionally not a Tauri command. It
+requires a bound managed caller, which window IPC does not supply. Call it via
+HTTP `POST /mcp`. Its `session-worktree-declared` push is also emitted to Tauri;
+`list_active_sessions` and HTTP `GET /sessions` report the persisted declaration
+in their existing worktree fields. See [MCP backend](../backend/mcp-http.md).
+
+### Desktop text clipboard
+
+| Command | Parameters | Returns | Description |
+|---------|------------|---------|-------------|
+| `write_clipboard_text` | `text: String` | `()` | Write UTF-8 text to the local OS clipboard through arboard. Errors reject the call so copy actions show failure. |
+| `read_clipboard_text` | — | `String` | Read UTF-8 text directly from the local OS clipboard without the macOS Web Clipboard Paste pill. |
+
+Both commands require the `desktop` feature and run blocking clipboard operations
+on worker threads. They have no focus or user-gesture requirement. The clipboard
+owner stays alive between calls and is released on application exit. They are
+`INTENTIONALLY_UNMAPPED`: browser clients use `navigator.clipboard` on their own
+machine; HTTP clients cannot read or write the host pasteboard.
+
+### Automations
+
+`automation_action(input: serde_json::Value) -> Result<serde_json::Value, String>`
+is an async command that shares parsing, definition edits, history, schedule
+previews/presets, UTC run summaries and owner-guarded Run Now with
+`POST /automations/action`. Invoke with `{input:{action:"list"}}`; response values
+and application error messages match HTTP. See the HTTP Automations action table
+for every field and reply. Blocking storage/schedule work runs off the main
+thread. Run Now executes only on the addressed backend; Once and cron definitions both run.
+
+`automation_action` also accepts `{input:{action:"run",id:"<run id>"}}` to fetch a canonical saved run for notification navigation. Native automation click targets are `{kind:"automation",id:"<run id>"}` on macOS.
+Design Mode v2: `start_design_mode(sessionId, browser?: "edge" | "chrome", url?: string)` opens the dedicated browser profile and installs its native host. HTTP `POST /design-mode/start` accepts the identical camelCase body. Stop/status and the terminal badge retain their existing shapes. The browser opens on the backend host.
+
+Automation precheck context (#1631-45bf): definitions can opt in with
+`precheck.inject_output: true` (default false). Proceeding checks prefix the
+literal prompt with delimited, escaped untrusted stdout capped at 16 KiB;
+truncation is marked and stderr is excluded. Empty output and manual bypasses
+inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
+the prepared launch prompt, counting escaped stdout bytes before framing/marker.
+
+### PR line review commands
+
+- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
+- `get_pr_open_threads(repoPath, prNumber)`: the `{pr_open_threads}` smart-prompt variable. A string: a preface, then a fenced untrusted block with one line per unresolved, non-outdated thread (`- path:line · tool · severity · title · url`, most severe first, at most 30 plus `+N more open threads not listed`). Each value is flattened to one line without control characters, and the fence is longer than any backtick run in the data.
+- `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
+- `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
+- `reply_pr_thread(repoPath, threadId, body)`: posted comment.
+- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
+
+### PR action commands
+
+- `get_pr_action_state(repoPath, prNumber)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
+- `set_pr_auto_merge(repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
+- `set_pr_merge_queue(repoPath, prNumber, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
+- `merge_or_enqueue_pr(repoPath, prNumber, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
+- `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+
+`post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
+
+## Core account command
+
+| Command | Arguments | Result | HTTP equivalent |
+|---|---|---|---|
+| `account_action` | `request: AccountAction` | Metadata/presence-only action reply | `POST /accounts/action`, body = request |
+
+The async command delegates to the same owner service as HTTP; disk/vault work runs on the blocking pool. See [the account action table](../backend/github.md#shared-account-registry).
+
+### Private account credential entry
+
+`account_secret_form {request}` opens the existing isolated native secret window.
+The request is `{action:"add",account:{provider,host,kind,label,username?}}` or
+`{action:"rotate",id}`; it accepts no credential. The reply contains only
+`{names:[],status:"stored"|"declined"|"failed"}`. `secret_form_bootstrap` and
+`secret_form_submit` require the active native window identity. Account forms
+do not expose a mobile capability or accept HTTP bootstrap/submission.
+
+
+Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### History-anchored viewport scrolling
+
+`terminal_scroll_to_anchor` accepts `{ sessionId: string, anchor: number | null }` and returns `()`. The all-time row includes evicted rows, matching `historyBase + historySize - displayOffset`. Null follows output; a trimmed anchor clamps to the oldest retained row. HTTP uses `POST /sessions/:id/terminal/scroll-to-anchor` with the same anchor value.
+
+### Desktop close policy
+
+- `request_quit()` requests real quit regardless of `app.close_behavior`, with confirmation if enabled and terminal sessions exist.
+- `ack_background_snapshot(request_id: string)` acknowledges a completed persisted terminal snapshot requested by `snapshot-now { request_id }`. Native lifecycle only; intentionally unmapped over HTTP. The desktop waits at most two seconds before hiding.
+- `resolve_close(choice: "background" | "quit" | "cancel", remember: bool)` answers the pending Rust-owned close dialog. Background and Remember apply only to Ask. A failed save leaves the dialog pending.
+- These native lifecycle commands are deliberately in `INTENTIONALLY_UNMAPPED`; remote clients cannot hide or quit the host. `close-dialog` carries `{kind: "ask" | "confirm_quit", sessions: number, background_available: boolean}` on desktop events and `/events` SSE.
+
+### Tasks start-work brief
+
+| Command | Arguments | Returns | Description |
+|---------|-----------|---------|-------------|
+| `build_start_work_prompt` | `repoPath, input: {key, url: string or null, title, body}` | `String` | Read `.tuic-start-work.md`, substitute sanitized fields once, or preserve the default brief when absent. HTTP: `POST /tasks/start-work-prompt`. Delivery applies the existing untrusted wrapper and 12,000-character cap. |
+
+### Tasks provider bridge
+
+`work_item_provider_bridge(input)` claims or completes one Rust-issued Tasks provider request. It uses the same input and reply as `POST /work-items/provider-bridge`; see the HTTP API reference. The command only moves requests and replies; the existing provider port owns tracker calls.
+
+`project_work_items` / `POST /tasks/project`: accepts `{items, fields, query}` using the work-item DTOs. Returns `WorkItemGroupedPage` with the filtered unique count, no cursor and one unnamed group when no grouping is selected. Pure Rust projection, maximum 1,000 collected items, no provider access or persisted state.
+
+Settings policy foundation (#1786-9cbd): `mcp_confirm_response` also settles the
+existing desktop/mobile dialog for a backend-built settings proposal. It grants
+only that connection/target/revision/content-bound proposal once, within its
+absolute five-minute lifetime. No new settings IPC command is registered by this
+step; the replacement settings transport is a separate cutover.
+
+## Open desktop Markdown metadata
+
+| Command | Arguments | Result | HTTP twin |
+| --- | --- | --- | --- |
+| `sync_open_markdown_tabs` | `tabs: {id,repoPath,filePath,fsRoot?}[]` | `void` | `PUT /config/open-markdown-tabs` (loopback only) |
+| `list_open_markdown_tabs` | `cwd: string` | `{id,title,relative_path,absolute_path,fs_root}[]` | `GET /repo/open-markdown-tabs?cwd=...` |
+
+The read command runs configuration I/O on the blocking pool. Publication stores
+only metadata in memory and invalidates consumers with `open-markdown-tabs-changed`.
+The list is scoped to registered repository/workspace ownership.
+
+`design_mode_browser_command(repo_path, action, args)` executes an immediate
+Design Mode native-port browser command. HTTP parity: `POST /design-mode/command`.
+See the HTTP reference for action arguments and typed error prefixes.
+
+### Tasks comment comparison
+
+`compare_work_item_comments` / `POST /tasks/compare-comments` accepts `{detail, previous, enabled, followed}` and returns `{snapshot, notify}`. `detail` is the unchanged WorkItemDetail; `previous` is null or `{latest, ids, count}` (latest is a UTC timestamp in milliseconds). The pure Rust comparison has no provider IO or persistence. First observations, disabled/unfollowed inputs, older comments and edits are silent. GitHub full comment counts cover normal comments outside the first page. Desktop and HTTP use the same implementation.
+
+
+`resume_session(tuic_session)` returns `{ok:true,session_id}` through the shared Rust wake path. HTTP parity: `POST /sessions/wake` with `{tuicSession}`. Live targets are idempotent; failed resume retains the suspended record.
+
+### Guarded automated agent input
+
+`send_agent_input_if_empty { sessionId, text } -> boolean` submits only to a confirmed-idle agent with no awaiting question, tracked draft, or queued command. Checks, split writes, and input bookkeeping share the per-session input transaction with raw UI and HTTP input. HTTP: `POST /sessions/{id}/input-if-empty { text }`.
+
+## Shared settings action (#1787-4778)
+
+`settings_action(request: JSON) -> JSON` uses the same Rust-generated envelope as POST `/settings/action` and MCP settings. Native caller authority is host-issued, never deserialized from the request. Typed owner workflows use the same envelope and explicit machine target. Owner transactions remain inventory-gated.
+
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
+### Audio choice availability (#1908-c327, #1909-0d24)
+
+Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
+
+`force_retry_provider_recovery_command(sessionId)` submits `/retry` once through the
+shared ego recovery transaction. It refuses a non-empty tracked composer and returns
+the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
+
+## Settings startup ownership
+
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) describes GitHub `list_accounts` and configured Ego `begin_login`/`login_status`, including owner revision checks, a human-operated terminal and credential readback distinct from process completion.
+
+### CircleCI credential settings (#1991-bd88)
+
+The machine-scoped `circleci.token` descriptor is write-only. Read
+`{action:"get",target:{kind:"machine"},store:"circleci",paths:["/token"]}`
+through MCP `settings`, IPC `settings_action`, or HTTP `POST /settings/action`.
+Readback returns only `stored.status` and `effective.status`: `set`, `unset`, or
+`unavailable`. It describes the stored TUIC token, not environment or CLI fallbacks.
+Use `{action:"perform",target:{kind:"machine"},store:"circleci",operation:{action:"set_token",token:"..."}}`
+or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
+owner; replies contain only token presence. Clearing the stored token does not
+remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
+continues to show the effective token source. No transport returns the token.
+
+### Managed launch transaction
+
+`managed_agent_launch(request: object) -> object` creates or reads a durable managed-child launch. It shares validation, journal and execution with `POST /agents/launch` and MCP `agent action=launch`. See [HTTP API](http-api.md#durable-managed-agent-launch) for the request, receipt and retry contract. The explicit registered parent, stable name and keep-open policy are set before the prompt can run.
+
+MCP passthrough calls use the same native inbox/output byte-budget validator and
+snapshot pager as `POST /mcp` and HTTP MCP-compatible output; no separate IPC
+paging implementation is added. See [the paging contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+Output snapshot references issued through IPC MCP passthrough and HTTP
+MCP-compatible output intentionally share local `ipc` scope for the same
+target. They are not authorization tokens; endpoint admission is unchanged.
+
+### Frame workload evidence
+
+`save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.
+
+Dictation corrections are also available through `settings_action` with machine
+target and store `corrections`: discover `/replacements` records keyed by `from`,
+create/remove records and edit replacement `to` values with an owner revision.
+`set_correction_map(map)` retains its public arguments and shared TextCorrector
+persistence; its host-injected state publishes a value-free change after saving.
+
+The upstream credential save/delete commands retain their public arguments;
+host-injected state routes both through the shared value-free Settings publisher
+only after owner persistence. Their HTTP equivalents use the same adapters.
+
+Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).

@@ -76,6 +76,26 @@ describe("a repo registered on a remote machine runs its work there", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: launch preparation injects the desktop's --settings path into a remote command.
+	it("prepares remote agent arguments on the owning daemon instead of local IPC", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("[]"));
+		const { prepareAgentLaunchCommand } = await import("../utils/agentSession");
+		expect(await prepareAgentLaunchCommand("claude", null, "claude", REMOTE_REPO)).toBe("claude");
+		expect(fetchedUrls()).toEqual([`${BASE_URL}/agents/launch-args?token=${TOKEN}`]);
+		expect(mockInvoke).not.toHaveBeenCalled();
+	});
+
+	// Catches: nesting the resume cwd in request silently routes a remote agent's resume to local IPC.
+	it("resolves a remote agent resume on its owning daemon", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse('{"cmd":null,"verified":false}'));
+		const { resolveAgentResume } = await import("../utils/agentSession");
+		await resolveAgentResume("claude", REMOTE_REPO, "remote-peer", "remote-agent");
+		expect(fetchedUrls()).toEqual([`${BASE_URL}/sessions/suspended?token=${TOKEN}`]);
+		expect(mockInvoke).not.toHaveBeenCalled();
+	});
+
 	it("sends a git write on a remote repo to that machine", async () => {
 		await rpc("git_commit", { path: REMOTE_REPO, message: "wip", amend: false });
 
@@ -153,6 +173,25 @@ describe("a repo registered on a remote machine runs its work there", () => {
 			await rpc("write_pty", { sessionId: SESSION, data: "ls\r" });
 
 			expect(fetchedUrls()[0]).toBe(`${BASE_URL}/sessions/${SESSION}/write?token=${TOKEN}`);
+		});
+
+		// Catches: nested Suspend/Resume routing loses the owning daemon after sessionId is cleared.
+		it("suspends and resumes a remote tab on its daemon without a live session id", async () => {
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+			const id = openRemoteTab(REMOTE_REPO, REMOTE_REPO);
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+				jsonResponse('{"ok":true,"session_id":"remote-replacement"}'),
+			);
+			const { suspendTerminal, resumeTerminal } = await import("../utils/suspendTerminal");
+			expect(await suspendTerminal(id)).toEqual({ ok: true });
+			expect(terminalsStore.get(id)?.sessionId).toBeNull();
+			expect(await resumeTerminal(id)).toEqual({ ok: true });
+			expect(terminalsStore.get(id)?.sessionId).toBe("remote-replacement");
+			expect(fetchedUrls()).toEqual([
+				`${BASE_URL}/sessions/suspended?token=${TOKEN}`,
+				`${BASE_URL}/sessions/wake?token=${TOKEN}`,
+			]);
+			expect(mockInvoke).not.toHaveBeenCalled();
 		});
 
 		it("resizes and closes on the same daemon", async () => {
@@ -265,6 +304,15 @@ describe("a repo registered on a remote machine runs its work there", () => {
 	});
 
 	describe("an explicit connection still wins", () => {
+		// Catches: browsing the serving TUIC jumps to a registered daemon with the same path.
+		it("keeps explicit current-server directory browsing local despite remote path ownership", async () => {
+			await rpc("list_directory", { repoPath: REMOTE_REPO, subdir: "" }, "");
+			expect(fetchedUrls()).toHaveLength(1);
+			expect(fetchedUrls()[0]).not.toContain(BASE_URL);
+			expect(fetchedUrls()[0]).not.toContain("token=");
+			expect(new URL(fetchedUrls()[0]).origin).toBe(window.location.origin);
+		});
+
 		it("probes a path before its repo is registered", async () => {
 			await rpc("get_repo_info", { path: "/home/boss/work/not-yet-added" }, CONNECTION);
 

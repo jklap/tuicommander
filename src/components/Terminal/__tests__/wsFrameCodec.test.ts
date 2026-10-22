@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canDecodeDeflate, decodeTaggedFrame, FRAME_TAG } from "../wsFrameCodec";
+import { decodeTaggedFrame, FRAME_TAG } from "../wsFrameCodec";
 
 /** Deflate the way `flate2::Compress::new(level, false)` does: a raw block, no zlib wrapper. */
 async function deflate(payload: Uint8Array): Promise<Uint8Array> {
@@ -21,12 +21,6 @@ describe("wsFrameCodec", () => {
 	// still pass; the literals are the point.
 	it("names the four tags the server writes", () => {
 		expect(FRAME_TAG).toEqual({ binary: 0x00, binaryDeflate: 0x01, text: 0x02, textDeflate: 0x03 });
-	});
-
-	it("knows whether this runtime can inflate at all", () => {
-		// The answer gates whether the client asks for the encoding in the first
-		// place, so it must reflect the platform rather than a build-time guess.
-		expect(canDecodeDeflate()).toBe(typeof DecompressionStream === "function");
 	});
 
 	it("returns an identity payload without its tag", async () => {

@@ -4,8 +4,20 @@ import { appLogger } from "../../stores/appLogger";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
+import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
+
+/** The backend's removal verdict for one detached checkout. `live_sessions` lists the sessions
+ *  still working inside it; a checkout with any is never `safe`. */
+export interface OrphanAssessment {
+	path: string;
+	safe: boolean;
+	reason?: string;
+	/** The checkout's status + HEAD fingerprint; absent when it is gone or unreadable. */
+	dirty_fingerprint?: string;
+	live_sessions?: Array<{ session_id: string; name: string }>;
+}
 
 interface WorkspaceLifecycleResponse {
 	dirty_files: number | null;
@@ -40,11 +52,16 @@ interface RepositoryRefreshCoordinatorDeps {
 			workspace_statuses: Record<string, WorkspaceLifecycleResponse>;
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
+		assessOrphanCleanup: (repoPath: string) => Promise<OrphanAssessment[]>;
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
-		clearOrphanCleanup: (repoPath: string) => Promise<void>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
+		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
+		removeOrphanWorktree: (
+			repoPath: string,
+			worktreePath: string,
+			safeOnly?: boolean,
+			confirmedSessions?: string[],
+		) => Promise<void>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
@@ -155,12 +172,52 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		recentlyProcessedBranches.set(`${repoPath}::${branchName}`, now);
 	};
 
+	// When each workspace key was first seen by a refresh of its repo, keyed by
+	// repoPath. The backend coalesces and caches worktree_paths (GIT_CACHE_TTL,
+	// 60s), so a snapshot requested after a worktree was created can still have
+	// been computed before it. A key that appears after the repo's first refresh
+	// is not judged deleted until a snapshot requested CREATION_GRACE_WINDOW_MS
+	// later. Keys present at the first refresh are old (-Infinity): persisted
+	// rows from a previous session are pruned at once. (#1317)
+	const workspaceFirstSeen = new Map<string, Map<string, number>>();
+	const trackFirstSeen = (repoPath: string, keys: Set<string>, now: number): Map<string, number> => {
+		const known = workspaceFirstSeen.get(repoPath);
+		const next = new Map<string, number>();
+		for (const key of keys) next.set(key, known ? (known.get(key) ?? now) : Number.NEGATIVE_INFINITY);
+		workspaceFirstSeen.set(repoPath, next);
+		return next;
+	};
+
+	// A probe that never settles (dead mount, stuck git status) would hold
+	// refreshInFlight forever, so it is bounded; timeout and error both mean "not gone".
+	const CHECKOUT_PROBE_TIMEOUT_MS = 5_000;
+	const isCheckoutGone = async (worktreePath: string): Promise<boolean> => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			// One settled result instead of a race whose losing timeout promise
+			// stays pending after its timer has been cleared.
+			return await new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), CHECKOUT_PROBE_TIMEOUT_MS);
+				deps.repo
+					.getInfo(worktreePath)
+					.then((info) => resolve(!info.is_git_repo))
+					.catch(() => resolve(false));
+			});
+		} catch {
+			return false;
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+
 	const refreshRepoOnce = async (repoPath: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
 		// Snapshot branch keys before any await so we can detect user-triggered
 		// removals that happen while async ops are in-flight (race condition guard).
 		const priorBranchKeys = new Set(Object.keys(repo.workspaces));
+		const requestedAt = Date.now();
+		const firstSeen = trackFirstSeen(repoPath, priorBranchKeys, requestedAt);
 		// Non-git directories: check if they became a git repo
 		if (repo.isGitRepo === false) {
 			try {
@@ -239,7 +296,8 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// (which caused the sidebar to flash/jump during refresh).
 		const storeIds = new Set(terminalsStore.getIds());
 		const toRemove: string[] = [];
-		const terminalsToClose: string[] = [];
+		const worktreesToClose: string[] = [];
+		const probeCandidates: Array<{ branchName: string; worktreePath: string; terminals: string[] }> = [];
 
 		const active = currentRepo.activeWorkspaceId;
 		// A branch switch changes the workspace id, not the checkout directory.
@@ -253,6 +311,17 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// The store removal may not have settled yet (batch scheduled), so
 				// we'd otherwise re-enqueue the same close+remove.
 				if (alreadyProcessed(repoPath, branchName)) continue;
+				// The structure snapshot was requested before this workspace entered the
+				// store, so its absence says nothing about the checkout: a worktree created
+				// while the fetch was in flight (MCP worktree_create has no creation grace)
+				// would otherwise be read as deleted and its terminals killed. The next
+				// refresh sees it with a snapshot that postdates it.
+				if (!priorBranchKeys.has(branchName)) {
+					appLogger.info("git", `refreshAllBranchStats: SNAPSHOT PREDATES "${branchName}" — not judging it deleted`, {
+						repoPath,
+					});
+					continue;
+				}
 				// Skip branches just created — git may not have fully registered the
 				// worktree by the time the first repo-changed refresh fires.
 				if (isRecentlyCreated(repoPath, branchName)) {
@@ -272,6 +341,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					markProcessed(repoPath, branchName);
 					continue;
 				}
+				// The snapshot was requested after the workspace entered the store, but
+				// it may still be a cached/coalesced answer older than the checkout.
+				if (requestedAt - (firstSeen.get(branchName) ?? requestedAt) < CREATION_GRACE_WINDOW_MS) {
+					appLogger.info(
+						"git",
+						`refreshAllBranchStats: SNAPSHOT MAY PREDATE "${branchName}" — not judging it deleted`,
+						{
+							repoPath,
+						},
+					);
+					continue;
+				}
 				// Branch has live terminals — only keep it if the worktree path
 				// is the main repo checkout (HEAD switched away). If the worktree
 				// directory was deleted externally, close the orphaned terminals
@@ -279,20 +360,17 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				const branchState = currentRepo.workspaces[branchName];
 				const hasLiveTerminals = branchState?.terminals.some((id) => storeIds.has(id));
 				if (hasLiveTerminals) {
-					const isLinkedWorktree = branchState.worktreePath && branchState.worktreePath !== repoPath;
-					if (isLinkedWorktree) {
-						// Linked worktree was removed externally — close its terminals
-						appLogger.info(
-							"terminal",
-							`refreshAllBranchStats: closing terminals for deleted worktree "${branchName}"`,
-							{
-								terminals: branchState.terminals,
-								worktreePath: branchState.worktreePath,
-							},
-						);
-						terminalsToClose.push(...branchState.terminals.filter((id) => storeIds.has(id)));
-						toRemove.push(branchName);
-						markProcessed(repoPath, branchName);
+					const linkedPath = branchState.worktreePath !== repoPath ? branchState.worktreePath : null;
+					if (linkedPath) {
+						// A snapshot that omits the worktree is not proof it is gone: the backend
+						// serves coalesced/cached worktree_paths and concurrent runs can judge it
+						// with different snapshots. Closing a session is irreversible, so the
+						// directory is probed after the loop (concurrently). (#1317)
+						probeCandidates.push({
+							branchName,
+							worktreePath: linkedPath,
+							terminals: branchState.terminals,
+						});
 					} else {
 						appLogger.info("terminal", `refreshAllBranchStats: keeping "${branchName}" — has live terminals`, {
 							terminals: branchState.terminals,
@@ -304,6 +382,27 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				markProcessed(repoPath, branchName);
 			}
 		}
+
+		const gone = await Promise.all(probeCandidates.map((c) => isCheckoutGone(c.worktreePath)));
+		probeCandidates.forEach(({ branchName, worktreePath, terminals }, i) => {
+			if (!gone[i]) {
+				// Keep the row too: its terminals are filed under it.
+				appLogger.info(
+					"terminal",
+					`refreshAllBranchStats: keeping "${branchName}" — snapshot omits it but its checkout is still on disk`,
+					{ worktreePath },
+				);
+				return;
+			}
+			// Linked worktree was removed externally — close its terminals
+			appLogger.info("terminal", `refreshAllBranchStats: closing terminals for deleted worktree "${branchName}"`, {
+				terminals,
+				worktreePath,
+			});
+			worktreesToClose.push(worktreePath);
+			toRemove.push(branchName);
+			markProcessed(repoPath, branchName);
+		});
 
 		if (toRemove.length > 0) {
 			appLogger.info("terminal", `refreshAllBranchStats removing branches from ${repoPath}`, {
@@ -317,51 +416,62 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// Best-effort: a PTY may already be dead; log and continue so the
 		// branch removal in the batch below is not blocked.
 		await Promise.allSettled(
-			terminalsToClose.map(async (termId) => {
+			worktreesToClose.map(async (worktreePath) => {
 				try {
-					await deps.closeTerminal(termId, true);
+					await closeWorktreeTerminals(worktreePath, deps.closeTerminal);
 				} catch (err) {
-					appLogger.warn("terminal", `refreshAllBranchStats: failed to close terminal ${termId}`, err);
+					appLogger.warn("terminal", `refreshAllBranchStats: failed to close terminals in ${worktreePath}`, err);
 				}
 			}),
 		);
 
 		// Freeze-investigation: split the structural batch into body (our
 		// setState loop) vs reactive flush (dependent effects/memos waking).
-		timeBatch(`git.refreshBatch:${repoPath}`, (markBodyEnd) =>
-			batch(() => {
-				// Guard against race: if a branch was present before our async ops
-				// but is now gone from the live store, the user deleted it while we
-				// were in-flight. Don't resurrect it via stale worktreePaths data.
-				const liveRepo = repositoriesStore.get(repoPath);
-				// Create new worktree branches first so mergeWorkspaceState has a target
-				for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
-					if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
-						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
-							repoPath,
+		timeBatch(
+			`git.refreshBatch:${repoPath}`,
+			(markBodyEnd) =>
+				batch(() => {
+					// Guard against race: if a branch was present before our async ops
+					// but is now gone from the live store, the user deleted it while we
+					// were in-flight. Don't resurrect it via stale worktreePaths data.
+					const liveRepo = repositoriesStore.get(repoPath);
+					// Create new worktree branches first so mergeWorkspaceState has a target
+					for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
+						if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
+							appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
+								repoPath,
+								worktreePath: wt.path,
+							});
+							continue;
+						}
+						// `mergedSet` holds BRANCH names, so it is queried with the
+						// record's branch — never the key, which is a workspace id and
+						// only equals the branch under the identity migration.
+						const update: Partial<import("../../stores/repositories").WorkspaceState> = {
 							worktreePath: wt.path,
-						});
-						continue;
+							branchName: wt.branch,
+							kind: wt.path === repoPath ? "main" : wt.kind,
+							isMerged: mergedSet.has(wt.branch),
+						};
+						repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 					}
-					// `mergedSet` holds BRANCH names, so it is queried with the
-					// record's branch — never the key, which is a workspace id and
-					// only equals the branch under the identity migration.
-					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
-						worktreePath: wt.path,
-						branchName: wt.branch,
-						kind: wt.path === repoPath ? "main" : wt.kind,
-						isMerged: mergedSet.has(wt.branch),
-					};
-					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
-				}
-				for (const [source, target] of replacements) {
-					repositoriesStore.mergeWorkspaceState(repoPath, source, target);
-					if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
-				}
-				for (const branchName of toRemove) {
-					repositoriesStore.removeWorkspace(repoPath, branchName);
-				}
-				markBodyEnd();
+					for (const [source, target] of replacements) {
+						repositoriesStore.mergeWorkspaceState(repoPath, source, target);
+						if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
+					}
+					for (const branchName of toRemove) {
+						removeWorktreeWorkspace(repoPath, branchName);
+					}
+					markBodyEnd();
+				}),
+			// DEFERRED (2026-10-16) — real-stall replay needs captured consumer state;
+			// counts and byte size alone cannot reconstruct the reactive graph.
+			() => ({
+				repo_count: repositoriesStore.getActivePaths().length,
+				worktree_count: Object.keys(worktreePaths).length,
+				store_worktree_count: Object.keys(currentRepo.workspaces).length,
+				// Diagnostic-only: serialize only after a slow batch, never per normal refresh.
+				response_bytes: new TextEncoder().encode(JSON.stringify(structure)).byteLength,
 			}),
 		);
 
@@ -424,10 +534,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// cancellation made structure reconciliation starvation-prone: a sustained
 	// repo-changed stream could obsolete every in-flight Phase 1 before it pruned
 	// deleted worktrees, leaving persisted ghost rows in the sidebar forever.
-	// Every caller now joins the current run and requests at most one fresh pass.
+	// Automatic starts are at least 5s apart per repo. Explicit UI operations
+	// can wake a trailing wait, but still join any active backend pass.
 	const refreshInFlight = new Map<string, Promise<void>>();
 	const refreshQueued = new Set<string>();
-	const refreshRepo = async (repoPath: string): Promise<void> => {
+	const refreshStartedAt = new Map<string, number>();
+	const MIN_REFRESH_INTERVAL_MS = 5_000;
+	const refreshImmediate = new Set<string>();
+	const wakeRefresh = new Map<string, () => void>();
+	const refreshRepo = async (repoPath: string, immediate: boolean): Promise<void> => {
+		if (immediate) {
+			refreshImmediate.add(repoPath);
+			wakeRefresh.get(repoPath)?.();
+		}
 		const existing = refreshInFlight.get(repoPath);
 		if (existing) {
 			refreshQueued.add(repoPath);
@@ -437,7 +556,26 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const run = (async () => {
 			do {
+				const now = Date.now();
+				const startedAt = refreshStartedAt.get(repoPath);
+				const remaining = startedAt === undefined ? 0 : MIN_REFRESH_INTERVAL_MS - (now - startedAt);
+				if (remaining > 0 && !refreshImmediate.has(repoPath)) {
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, remaining);
+						wakeRefresh.set(repoPath, () => {
+							clearTimeout(timer);
+							resolve();
+						});
+					});
+					wakeRefresh.delete(repoPath);
+				}
+				refreshImmediate.delete(repoPath);
+				// Requests received while waiting belong to this pass, not another rerun.
 				refreshQueued.delete(repoPath);
+				// A repo may have been removed or parked during the trailing wait.
+				if (!repositoriesStore.getActivePaths().includes(repoPath)) break;
+				const start = Date.now();
+				refreshStartedAt.set(repoPath, start);
 				try {
 					await refreshRepoOnce(repoPath);
 				} catch (err) {
@@ -457,18 +595,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// event carries the one repo that changed, so scoping avoids re-scanning
 	// every open repo in unison on each filesystem event. Called with no arg
 	// (init, branch ops) it refreshes all active repos as before.
-	const refreshReposCapped = async (paths: string[], maxConcurrent: number): Promise<void> => {
+	const refreshReposCapped = async (paths: string[], maxConcurrent: number, immediate: boolean): Promise<void> => {
 		let nextIndex = 0;
 		const worker = async () => {
 			while (nextIndex < paths.length) {
 				const path = paths[nextIndex++];
-				await refreshRepo(path);
+				await refreshRepo(path, immediate);
 			}
 		};
 		await Promise.all(Array.from({ length: Math.min(maxConcurrent, paths.length) }, worker));
 	};
 
-	const refreshAllBranchStats = async (scopeRepoPath?: string) => {
+	const refreshAllBranchStats = async (scopeRepoPath?: string, options: { immediate?: boolean } = {}) => {
 		// Skip parked repos — they should stay dormant. (#1358-caf5)
 		const activePaths = repositoriesStore.getActivePaths();
 		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : [...activePaths];
@@ -477,19 +615,83 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			paths.splice(paths.indexOf(activeRepoPath), 1);
 			paths.unshift(activeRepoPath);
 		}
-		await refreshReposCapped(paths, 4);
+		await refreshReposCapped(paths, 4, options.immediate === true);
 	};
 
 	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
 	let orphanDialogOpen = false;
-	// Orphans the user chose to "Keep" this session — don't nag about them again
-	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
-	const keptOrphans = new Set<string>();
+	// Orphans the user chose to "Keep" this session, with the fingerprint they had:
+	// a Keep holds until the checkout changes, then the orphan is judged afresh. (#65)
+	// Session-scoped (re-detected on next launch).
+	const keptOrphans = new Map<string, string | undefined>();
+	const isKept = (entry: OrphanAssessment) =>
+		keptOrphans.has(entry.path) && keptOrphans.get(entry.path) === entry.dirty_fingerprint;
+	/** Remove one orphan, then close its terminals. Resolves with how many terminals could not be closed. The backend verdict comes first: a session
+	 *  that started after the assessment makes the backend refuse, and its terminal must survive.
+	 *  A review-confirmed entry carries the session ids the user saw; the backend refuses if
+	 *  another one appeared since. */
+	const removeOrphan = async (repoPath: string, entry: OrphanAssessment): Promise<number> => {
+		if (entry.safe) {
+			await deps.repo.removeOrphanWorktree(repoPath, entry.path, true);
+		} else {
+			const seen = (entry.live_sessions ?? []).map((session) => session.session_id);
+			await deps.repo.removeOrphanWorktree(repoPath, entry.path, false, seen);
+		}
+		// The checkout is gone: a terminal that will not close must not turn that into a failed removal.
+		try {
+			await deps.closeTerminalsInWorktree(entry.path);
+			return 0;
+		} catch (err) {
+			appLogger.warn("git", `Removed orphan worktree ${entry.path} but could not close its terminals`, err);
+			return err instanceof AggregateError ? err.errors.length : 1;
+		}
+	};
+	interface OrphanRemovalTally {
+		removed: number;
+		unclosedTerminals: number;
+	}
+	/** Remove the orphans concurrently and add the outcome to `tally` once all settled: each task
+	 *  returns its own count, so concurrent removals cannot overwrite one another's. */
+	const removeOrphans = async (
+		repoPath: string,
+		entries: OrphanAssessment[],
+		failure: string,
+		tally: OrphanRemovalTally,
+	) => {
+		const results = await Promise.allSettled(
+			entries.map(async (entry) => {
+				try {
+					return await removeOrphan(repoPath, entry);
+				} catch (err) {
+					appLogger.warn("git", `${failure} ${entry.path}`, err);
+					return null;
+				}
+			}),
+		);
+		for (const result of results) {
+			if (result.status !== "fulfilled" || result.value === null) continue;
+			tally.removed++;
+			tally.unclosedTerminals += result.value;
+		}
+	};
+	/** One status line for the whole sweep, whichever phase removed the checkouts. */
 	const handleOrphanCleanup = async (repoPath: string) => {
+		const tally: OrphanRemovalTally = { removed: 0, unclosedTerminals: 0 };
+		try {
+			await sweepOrphans(repoPath, tally);
+		} finally {
+			if (tally.removed > 0) {
+				const unclosed =
+					tally.unclosedTerminals > 0 ? `; ${tally.unclosedTerminals} terminal(s) could not be closed` : "";
+				deps.setStatusInfo(`Removed ${tally.removed} orphaned worktree(s)${unclosed}`);
+			}
+		}
+	};
+	const sweepOrphans = async (repoPath: string, tally: OrphanRemovalTally) => {
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
 		if (orphanCleanup === "off") return;
 
-		let assessments: Array<{ path: string; safe: boolean; reason?: string }>;
+		let assessments: OrphanAssessment[];
 		try {
 			assessments = await deps.repo.assessOrphanCleanup(repoPath);
 		} catch {
@@ -497,35 +699,28 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 		if (assessments.length === 0) return;
 
-		if (orphanCleanup === "on") {
-			// Auto-remove only the worktrees the backend classified as safe.
-			let removed = 0;
-			await Promise.allSettled(
-				assessments
-					.filter((entry) => entry.safe)
-					.map(async ({ path: wtPath }) => {
-						try {
-							await deps.closeTerminalsInWorktree(wtPath);
-							await deps.repo.removeOrphanWorktree(repoPath, wtPath, true);
-							removed++;
-						} catch (err) {
-							appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
-						}
-					}),
-			);
-			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
-			return;
-		}
+		// A checkout the backend judged safe (clean, reachable from a branch, no live
+		// session) is removed without asking, in both modes: the same rule as any
+		// merged clean worktree. Whatever else is left waits for the review below;
+		// in "on" mode only a checkout a session still works in does.
+		await removeOrphans(
+			repoPath,
+			assessments.filter((entry) => entry.safe),
+			"Failed to auto-remove orphan worktree",
+			tally,
+		);
+		const unsafe = assessments.filter((entry) => !entry.safe);
+		const reviewable =
+			orphanCleanup === "on" ? unsafe.filter((entry) => (entry.live_sessions?.length ?? 0) > 0) : unsafe;
 
-		// orphanCleanup === "ask"
-		// Skip orphans the user already chose to keep — otherwise the dialog re-fires
-		// on every refresh until the underlying worktree state changes. (#65)
-		const pending = assessments.filter((entry) => !keptOrphans.has(entry.path));
+		// Skip orphans the user already chose to keep until their fingerprint moves —
+		// otherwise the dialog re-fires on every refresh. (#65)
+		const pending = reviewable.filter((entry) => !isKept(entry));
 		if (pending.length === 0) return;
 
 		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes
 		orphanDialogOpen = true;
-		let confirmed: boolean;
+		let confirmed: boolean | undefined;
 		let poll: ReturnType<typeof setInterval> | undefined;
 		let dialogActive = true;
 		try {
@@ -563,30 +758,20 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			dialogActive = false;
 			if (poll) clearInterval(poll);
 			try {
-				await deps.repo.clearOrphanCleanup(repoPath);
+				// A Keep stays on the backend so other clients showing this dialog
+				// see it instead of counting down to a removal.
+				await deps.repo.clearOrphanCleanup(repoPath, confirmed === false);
 			} finally {
 				orphanDialogOpen = false;
 			}
 		}
 		if (!confirmed) {
 			// User chose "Keep" — remember these so we don't prompt again this session.
-			for (const entry of pending) keptOrphans.add(entry.path);
+			for (const entry of pending) keptOrphans.set(entry.path, entry.dirty_fingerprint);
 			return;
 		}
 
-		let removed = 0;
-		await Promise.allSettled(
-			pending.map(async ({ path: wtPath, safe }) => {
-				try {
-					await deps.closeTerminalsInWorktree(wtPath);
-					await deps.repo.removeOrphanWorktree(repoPath, wtPath, safe);
-					removed++;
-				} catch (err) {
-					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);
-				}
-			}),
-		);
-		if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
+		await removeOrphans(repoPath, pending, "Failed to remove orphan worktree", tally);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */

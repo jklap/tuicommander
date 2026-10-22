@@ -1,6 +1,6 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::grid::{Dimensions, ReflowMode};
+use alacritty_terminal::grid::{Dimensions, ReflowMode, ScrollSource};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{Colors, named_color_to_index};
@@ -8,6 +8,7 @@ use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 // `parking_lot::Mutex` has no poison state. A panic taken anywhere near this
 // queue used to poison a `std::sync::Mutex` permanently: `send_event` then
 // panicked on `.lock().unwrap()` for the rest of the terminal's life, and
@@ -106,6 +107,7 @@ fn palette_color_for_index(index: usize) -> Option<Rgb> {
 pub enum TermEvent {
     Title(String),
     ResetTitle,
+    Bell,
     ClipboardStore(String),
     PtyWrite(String),
     MouseCursorDirty,
@@ -134,6 +136,10 @@ impl EventListener for TermEventCollector {
         match event {
             Event::Bell => {
                 self.bell.store(true, Ordering::Relaxed);
+                let mut events = self.events.lock();
+                if !events.iter().any(|event| matches!(event, TermEvent::Bell)) {
+                    events.push(TermEvent::Bell);
+                }
             }
             Event::Title(t) => {
                 self.events.lock().push(TermEvent::Title(t));
@@ -548,9 +554,13 @@ fn encode_cell(buf: &mut Vec<u8>, cell: &Cell, colors: &Colors) {
 ///
 /// Alacritty stores zero-width codepoints on the preceding base cell. Every
 /// text extraction path must read the pair together or decomposed Unicode is
-/// silently reduced to its base character.
+/// silently reduced to its base character. Synthetic wide-character spacers
+/// carry layout only and must not contribute text or text length.
 fn push_cell_text(text: &mut String, cell: &Cell) {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return;
     }
 
@@ -561,7 +571,10 @@ fn push_cell_text(text: &mut String, cell: &Cell) {
 }
 
 fn cell_text_utf8_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' { 1 } else { cell.c.len_utf8() };
@@ -575,7 +588,10 @@ fn cell_text_utf8_len(cell: &Cell) -> usize {
 }
 
 fn cell_text_utf16_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' {
@@ -637,6 +653,22 @@ fn append_cell_extras_trailer(
     }
 }
 
+/// Provenance captured before changing the grid geometry.
+struct ResizeViewport {
+    before_columns: usize,
+    after_columns: usize,
+    grid_sequence: u64,
+    viewport_top: usize,
+    rows: Vec<String>,
+    /// Immutable contiguous history immediately above the owned viewport.
+    preceding_logical: String,
+    /// Only these newest old history rows came from this viewport.
+    displaced_rows: usize,
+    /// Exclusive owned-row end and complete WRAPLINE record before the redraw.
+    displaced_records: Vec<(usize, String)>,
+    scrolled_after_resize: usize,
+}
+
 /// Wraps `alacritty_terminal::Term` with a TUICommander-specific API.
 ///
 /// Provides `process() → Vec<ChangedRow>` + `screen_text_rows()`
@@ -668,6 +700,26 @@ pub struct TerminalGrid {
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
     pub reflow_history: bool,
+    /// Armed by a resize of the primary screen: `total_scrolled` at that moment.
+    /// While armed, [`Self::merge_reprinted_history_tail`] runs after every chunk.
+    reprint_merge_armed_at: Option<usize>,
+    /// Tail of the previous chunk, so a frame end split across chunks is seen.
+    frame_end_carry: Vec<u8>,
+    /// Screen rows at the last frame end seen while armed (or at the resize). A
+    /// merge needs every compared row to differ from these, with no scroll in
+    /// between: that is the proof the frame rewrote them, as opposed to history
+    /// that already repeated them or output that moved them.
+    reprint_head_snapshot: Vec<String>,
+    /// `total_scrolled` when `reprint_head_snapshot` was taken.
+    reprint_snapshot_scrolled: usize,
+    /// Full viewport erase generation at the resize/last examined repaint.
+    reprint_clear_generation: usize,
+    grid_sequence: u64,
+    resize_viewport: Option<ResizeViewport>,
+    /// Only blank screen rows created by proven prefix suppression, starting
+    /// at row zero. Any parser damage touching them relinquishes ownership.
+    suppressed_screen_prefix: usize,
+    history_source_widths: std::collections::HashMap<String, usize>,
 }
 
 impl TerminalGrid {
@@ -714,6 +766,15 @@ impl TerminalGrid {
             bell_flag,
             events,
             reflow_history: true,
+            reprint_merge_armed_at: None,
+            frame_end_carry: Vec::new(),
+            reprint_head_snapshot: Vec::new(),
+            reprint_snapshot_scrolled: 0,
+            reprint_clear_generation: 0,
+            grid_sequence: 0,
+            resize_viewport: None,
+            suppressed_screen_prefix: 0,
+            history_source_widths: std::collections::HashMap::new(),
         }
     }
 
@@ -722,7 +783,16 @@ impl TerminalGrid {
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
-        self.processor.advance(&mut self.term, data);
+        self.grid_sequence = self.grid_sequence.wrapping_add(1);
+        if self.reprint_merge_armed_at.is_some() {
+            if self.advance_frame_by_frame(data) {
+                // History shrank: the cached rows and the frame bookkeeping are stale.
+                self.prev_rows.clear();
+            }
+        } else {
+            self.processor.advance(&mut self.term, data);
+            self.invalidate_suppressed_screen_prefix();
+        }
 
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
         // content actually changed, instead of rebuilding+diffing the whole screen
@@ -815,6 +885,7 @@ impl TerminalGrid {
             return false;
         }
         self.processor.stop_sync(&mut self.term);
+        self.invalidate_suppressed_screen_prefix();
         self.refresh_rows_after_sync_flush();
         true
     }
@@ -828,6 +899,7 @@ impl TerminalGrid {
             return false;
         }
         self.processor.stop_sync(&mut self.term);
+        self.invalidate_suppressed_screen_prefix();
         self.refresh_rows_after_sync_flush();
         true
     }
@@ -888,6 +960,34 @@ impl TerminalGrid {
         }
     }
 
+    /// Per screen row: true when the row soft-wraps into the next one.
+    pub fn screen_row_wraps(&self) -> Vec<bool> {
+        (0..self.term.grid().screen_lines())
+            .map(|i| self.row_wrapped(Line(i as i32)))
+            .collect()
+    }
+
+    /// True when the newest history row soft-wraps into the row below it.
+    pub fn newest_history_row_wraps(&self) -> bool {
+        self.term.grid().history_size() > 0 && self.row_wrapped(Line(-1))
+    }
+
+    /// Text of the history rows that soft-wrap into screen row 0: the head of a
+    /// logical line that is partly out of view. Empty when row 0 starts a line.
+    pub fn screen_head_context(&self) -> String {
+        let mut rows = Vec::new();
+        let mut line = -1;
+        while let Some(text) = self.row_to_text(Line(line)) {
+            if !self.row_wrapped(Line(line)) {
+                break;
+            }
+            rows.push(text);
+            line -= 1;
+        }
+        rows.reverse();
+        rows.concat()
+    }
+
     /// Borrowed view of the cached screen rows — avoids cloning when the caller
     /// only needs `&[String]` and holds the lock.  Returns `None` only when
     /// `process()` has never been called (empty `prev_rows`).
@@ -930,6 +1030,11 @@ impl TerminalGrid {
     /// Monotonic screen origin, including lines evicted from capped scrollback.
     pub fn screen_origin(&self) -> usize {
         self.term.grid().total_scrolled()
+    }
+
+    /// Primary-screen origin, including evicted rows, even while alternate screen is active.
+    pub fn primary_screen_origin(&self) -> usize {
+        self.term.primary_total_scrolled()
     }
 
     /// Number of primary-screen scrollback lines, regardless of the active screen.
@@ -1156,13 +1261,556 @@ impl TerminalGrid {
     }
 
     pub fn resize_with_mode(&mut self, rows: u16, cols: u16, mode: ReflowMode) {
+        self.invalidate_suppressed_screen_prefix();
+        let suppressed = std::mem::take(&mut self.suppressed_screen_prefix);
+        if mode == ReflowMode::All && suppressed != 0 {
+            // These blanks are our deleted replay, not program output. Remove
+            // them before full reflow can migrate them into immutable history.
+            let grid = self.term.grid_mut();
+            let lines = grid.screen_lines();
+            grid.scroll_up_with(
+                &(Line(0)..Line(lines as i32)),
+                suppressed,
+                ScrollSource::Control,
+            );
+            grid.cursor.point.line = Line((grid.cursor.point.line.0 - suppressed as i32).max(0));
+            grid.saved_cursor.point.line =
+                Line((grid.saved_cursor.point.line.0 - suppressed as i32).max(0));
+            self.prev_rows.clear();
+            self.term.mark_fully_damaged();
+        }
         let size = GridSize {
             cols: cols as usize,
             lines: rows as usize,
         };
+        let was_alt = self.is_alternate_screen();
+        let before_columns = self.term.grid().columns();
+        let before_lines = self.term.grid().screen_lines();
+        let viewport_top = self.term.grid().total_scrolled();
+        // Height growth pulls these exact coordinate-owned rows from history
+        // into the resized viewport. Keep their redraw; they no longer have
+        // an older history copy to preserve.
+        let pulled_rows = (rows as usize)
+            .saturating_sub(before_lines)
+            .min(self.term.grid().history_size());
+        let viewport_rows: Vec<String> = (-(pulled_rows as i32)..before_lines as i32)
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
+        let preceding_count = self
+            .term
+            .grid()
+            .history_size()
+            .saturating_sub(pulled_rows)
+            .min(before_lines.saturating_mul(4).min(256));
+        // Preserve the source width of immutable hard rows across reflow.
+        // VT soft wraps are joined by bounds_to_string before the lookup;
+        // unchanged hard-row text keeps the width recorded at its last snapshot.
+        let hard_rows = self.logical_text_rows(
+            -(pulled_rows as i32 + preceding_count as i32),
+            -(pulled_rows as i32),
+        );
+        let mut widths = std::collections::HashMap::new();
+        let source_widths: Vec<usize> = hard_rows
+            .iter()
+            .map(|row| {
+                let width = self
+                    .history_source_widths
+                    .get(row)
+                    .copied()
+                    .unwrap_or(before_columns);
+                widths.insert(row.clone(), width);
+                width
+            })
+            .collect();
+        self.history_source_widths = widths;
+        let mut preceding_parts = Vec::new();
+        let mut first = 0;
+        while first < hard_rows.len() {
+            if hard_rows[first].trim().is_empty() {
+                preceding_parts.push(String::new());
+                first += 1;
+                continue;
+            }
+            let mut last = first + 1;
+            while last < hard_rows.len() && !hard_rows[last].trim().is_empty() {
+                last += 1;
+            }
+            let part: Vec<&str> = hard_rows[first..last].iter().map(String::as_str).collect();
+            preceding_parts.extend(reflow_copied_run_at_widths(
+                &part,
+                before_columns,
+                2,
+                true,
+                Some(&source_widths[first..last]),
+            ));
+            first = last;
+        }
+        let preceding_logical = preceding_parts.join("\n");
+        // All-mode width reflow can intermingle viewport and older history.
+        // Only short, unwrapped viewport rows have an unambiguous height map.
+        let simple_rows = (0..before_lines.saturating_sub(rows as usize)).all(|row| {
+            !self.row_wrapped(Line(row as i32))
+                && viewport_rows[pulled_rows + row].width() <= cols as usize
+        });
+        let mut displaced_rows = if before_columns == cols as usize
+            || mode == ReflowMode::HistoryOnly
+            || (cols as usize <= before_columns && simple_rows)
+        {
+            before_lines.saturating_sub(rows as usize)
+        } else {
+            0
+        };
+        // Reflow can move visible content into history even without a height
+        // change. Locate the complete original viewport prefix in its new
+        // coordinates; ambiguous or incomplete matches own no history rows.
+        let source_logical = self.logical_text_rows(-(pulled_rows as i32), before_lines as i32);
         self.term.resize_reflow(size, mode);
+        if mode == ReflowMode::All && (cols as usize) < before_columns {
+            let first = source_logical.iter().position(|row| !row.trim().is_empty());
+            if let Some(first) = first
+                && let Some(next) = source_logical.get(first + 1)
+                && !next.trim().is_empty()
+            {
+                let prefix = format!("{}\n{}", source_logical[first], next);
+                let count = self
+                    .term
+                    .grid()
+                    .history_size()
+                    .min(before_lines.saturating_mul(4).min(256));
+                let candidates: Vec<i32> = (-(count as i32)..0)
+                    .filter(|&row| {
+                        self.term
+                            .bounds_to_string(
+                                Point::new(Line(row), Column(0)),
+                                Point::new(Line(-1), Column(self.term.grid().columns() - 1)),
+                            )
+                            .starts_with(&prefix)
+                    })
+                    .collect();
+                if let [start] = candidates.as_slice() {
+                    displaced_rows = (-start) as usize;
+                }
+            }
+        }
+        // Record identity follows WRAPLINE boundaries, never substring matches.
+        // Include a continuation still on screen before the repaint erases it.
+        displaced_rows = displaced_rows.min(self.term.grid().history_size());
+        let mut displaced_records = Vec::new();
+        let mut first = -(displaced_rows as i32);
+        while displaced_rows != 0 && first < self.term.grid().screen_lines() as i32 {
+            let mut last = first;
+            while last + 1 < self.term.grid().screen_lines() as i32 && self.row_wrapped(Line(last))
+            {
+                last += 1;
+            }
+            let text = self.term.bounds_to_string(
+                Point::new(Line(first), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            let end = (last + 1).min(0) + displaced_rows as i32;
+            displaced_records.push((end as usize, text));
+            first = last + 1;
+        }
+        self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
+        self.frame_end_carry.clear();
+        self.reprint_head_snapshot = self.armed_screen_rows();
+        self.reprint_snapshot_scrolled = self.term.grid().total_scrolled();
+        self.reprint_clear_generation = self.term.viewport_clear().0;
+        self.resize_viewport = (!was_alt).then_some(ResizeViewport {
+            before_columns,
+            after_columns: cols as usize,
+            grid_sequence: self.grid_sequence,
+            viewport_top,
+            rows: viewport_rows,
+            preceding_logical,
+            displaced_rows,
+            displaced_records,
+            scrolled_after_resize: self.term.grid().total_scrolled(),
+        });
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
+    }
+
+    /// Feed `data`, trying [`Self::merge_reprinted_history_tail`] at the end of
+    /// every synchronized-update frame. Claude Code draws a repaint inside one,
+    /// so that is the moment its reprinted rows are complete whatever the chunk
+    /// boundaries were. Returns true when history rows were dropped.
+    fn advance_frame_by_frame(&mut self, data: &[u8]) -> bool {
+        const FRAME_END: &[u8] = b"\x1b[?2026l";
+        let carried = self.frame_end_carry.len();
+        let mut window = std::mem::take(&mut self.frame_end_carry);
+        window.extend_from_slice(data);
+        let mut merged = false;
+        let mut fed = 0;
+        let mut from = 0;
+        while let Some(at) = window[from..]
+            .windows(FRAME_END.len())
+            .position(|w| w == FRAME_END)
+        {
+            let end = from + at + FRAME_END.len();
+            from = end;
+            // A match that ended in the carried bytes was already fed.
+            let Some(end_in_data) = end.checked_sub(carried).filter(|&e| e > fed) else {
+                continue;
+            };
+            self.processor
+                .advance(&mut self.term, &data[fed..end_in_data]);
+            fed = end_in_data;
+            self.invalidate_suppressed_screen_prefix();
+            merged |= self.merge_reprinted_history_tail();
+            if self.reprint_merge_armed_at.is_none() {
+                break;
+            }
+        }
+        self.processor.advance(&mut self.term, &data[fed..]);
+        self.invalidate_suppressed_screen_prefix();
+        self.frame_end_carry = if self.reprint_merge_armed_at.is_some() {
+            window[window.len().saturating_sub(FRAME_END.len() - 1)..].to_vec()
+        } else {
+            Vec::new()
+        };
+        merged
+    }
+
+    fn invalidate_suppressed_screen_prefix(&mut self) {
+        if self.suppressed_screen_prefix == 0 {
+            return;
+        }
+        let touched = match self.term.parse_damage() {
+            TermParseDamage::Full => true,
+            TermParseDamage::Partial(rows) => {
+                rows.iter().any(|&row| row < self.suppressed_screen_prefix)
+            }
+        };
+        if touched || self.is_alternate_screen() {
+            self.suppressed_screen_prefix = 0;
+        }
+    }
+
+    fn logical_text_rows(&self, mut start: i32, end: i32) -> Vec<String> {
+        let mut rows = Vec::new();
+        while start < end {
+            let mut last = start;
+            while last + 1 < end && self.row_wrapped(Line(last)) {
+                last += 1;
+            }
+            let raw = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            if raw.is_empty() {
+                rows.push(String::new());
+            } else {
+                rows.extend(raw.lines().map(str::to_string));
+            }
+            start = last + 1;
+        }
+        rows
+    }
+
+    fn armed_screen_rows(&self) -> Vec<String> {
+        let lines = self.term.grid().screen_lines() as i32;
+        (0..lines)
+            .map(|line| self.row_to_text(Line(line)).unwrap_or_default())
+            .collect()
+    }
+
+    /// Undo the duplicate a resize leaves behind in scrollback.
+    ///
+    /// A resize that shrinks the screen scrolls its top rows into history so no
+    /// row is lost. Claude Code then wipes the visible screen and prints its
+    /// last rows again, beginning with rows that were just scrolled out, so
+    /// the same rows are in history and on screen. When the newest history
+    /// rows are the first rows of the screen, drop them from history.
+    ///
+    /// Armed by [`Self::resize_with_mode`]; a program that draws without synchronized
+    /// updates keeps the duplicate. Disarms on the first merge, or once
+    /// the output has scrolled a screenful, which ends the repaint window.
+    /// Returns true when history rows were dropped.
+    fn merge_reprinted_history_tail(&mut self) -> bool {
+        const MIN_ROWS: usize = 2;
+        let Some(armed_at) = self.reprint_merge_armed_at else {
+            return false;
+        };
+        let (history, lines, scrolled) = {
+            let grid = self.term.grid();
+            (
+                grid.history_size(),
+                grid.screen_lines(),
+                grid.total_scrolled(),
+            )
+        };
+        if !self.is_alternate_screen()
+            && self.term.viewport_clear().0 != self.reprint_clear_generation
+        {
+            let merged = self.merge_cleared_viewport_reprint();
+            self.reprint_merge_armed_at = None;
+            return merged;
+        }
+        if self.is_alternate_screen() || scrolled.saturating_sub(armed_at) > lines {
+            self.reprint_merge_armed_at = None;
+            return false;
+        }
+        let owned = self
+            .resize_viewport
+            .as_ref()
+            .map_or(0, |resize| resize.displaced_rows);
+        let m = history.min(lines).min(owned) as i32;
+        let text = |line: i32| self.row_to_text(Line(line)).unwrap_or_default();
+        let tail: Vec<String> = (-m..0).map(text).collect();
+        let head = self.armed_screen_rows();
+        let snapshot = std::mem::replace(&mut self.reprint_head_snapshot, head.clone());
+        // A screen that scrolled since the snapshot shifted every row, so a
+        // difference proves nothing about what was rewritten.
+        let unscrolled =
+            std::mem::replace(&mut self.reprint_snapshot_scrolled, scrolled) == scrolled;
+        let overlap = (MIN_ROWS..=m as usize)
+            .rev()
+            .find(|&k| {
+                tail[m as usize - k..] == head[..k]
+                    && head[..k].iter().filter(|row| !row.is_empty()).count() >= MIN_ROWS
+                    && unscrolled
+                    && snapshot.len() >= k
+                    && (0..k).all(|i| snapshot[i] != head[i])
+            })
+            .unwrap_or(0);
+        if overlap == 0 {
+            return false;
+        }
+        self.term.grid_mut().drop_newest_history(overlap);
+        self.reprint_merge_armed_at = None;
+        true
+    }
+
+    /// Reconcile only the viewport captured at resize. An older-history prefix
+    /// in the redraw is NEW duplicate output, not permission to delete old rows.
+    fn merge_cleared_viewport_reprint(&mut self) -> bool {
+        let (generation, cleared_at) = self.term.viewport_clear();
+        self.reprint_clear_generation = generation;
+        let Some(resize) = self.resize_viewport.take() else {
+            return false;
+        };
+        let grid = self.term.grid();
+        if resize.after_columns != grid.columns()
+            || resize.grid_sequence > self.grid_sequence
+            || cleared_at != resize.scrolled_after_resize
+            || resize.viewport_top > resize.scrolled_after_resize
+        {
+            return false;
+        }
+        let newer = grid.total_scrolled().saturating_sub(cleared_at);
+        if newer > grid.history_size() {
+            return false;
+        }
+        let normalize = |rows: &[&str], columns: usize| {
+            let mut out = Vec::new();
+            let mut first = 0;
+            while first < rows.len() {
+                if rows[first].trim().is_empty() {
+                    out.push(String::new());
+                    first += 1;
+                    continue;
+                }
+                let mut last = first + 1;
+                while last < rows.len() && !rows[last].trim().is_empty() {
+                    last += 1;
+                }
+                out.extend(reflow_copied_run(&rows[first..last], columns, 2, true));
+                first = last;
+            }
+            out.join("\n")
+        };
+        let fresh_text = |start: i32| {
+            let text = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(
+                    Line(grid.screen_lines() as i32 - 1),
+                    Column(grid.columns() - 1),
+                ),
+            );
+            normalize(&text.lines().collect::<Vec<_>>(), grid.columns())
+        };
+        let fresh = fresh_text(-(newer as i32));
+        let anchor = (0..resize.rows.len().saturating_sub(1)).find_map(|source_row| {
+            let rows = &resize.rows[source_row..source_row + 2];
+            if rows.iter().any(|row| row.trim().is_empty()) {
+                return None;
+            }
+            let anchor = normalize(
+                &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+                resize.before_columns,
+            );
+            let anchor = anchor.strip_prefix("  ").unwrap_or(&anchor);
+            if anchor.len() < 16 {
+                return None;
+            }
+            let mut matches = fresh.match_indices(anchor);
+            matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            // Last start row that still contains the complete owned anchor.
+            // If it starts inside a row, preserve that complete boundary row.
+            let prefix = (0..newer + grid.screen_lines())
+                .rev()
+                .find(|&prefix| fresh_text(prefix as i32 - newer as i32).contains(anchor))?;
+            Some((source_row, prefix))
+        });
+        let Some((source_row, mut prefix)) = anchor else {
+            return false;
+        };
+        // Historical blank rows stay in the proof. At the owned boundary,
+        // a leading viewport blank may instead be part of its replacement.
+        // Try the full historical prefix first; exclude owned blanks only
+        // when the remaining prefix proves the same exact historical suffix.
+        let old_logical = resize.preceding_logical.as_str();
+        let first_fragment = self.row_to_text(Line(-(newer as i32))).unwrap_or_default();
+        let first_fragment = first_fragment.strip_prefix("  ").unwrap_or(&first_fragment);
+        let mut candidate = prefix;
+        let mut owned_blanks = if resize.rows[..source_row]
+            .iter()
+            .all(|row| row.trim().is_empty())
+        {
+            source_row
+        } else {
+            0
+        };
+        let prefix_proven = loop {
+            let rows = self.logical_text_rows(-(newer as i32), candidate as i32 - newer as i32);
+            let text = normalize(
+                &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+                grid.columns(),
+            );
+            let whole = old_logical
+                .strip_suffix(&text)
+                .is_some_and(|before| before.is_empty() || before.ends_with('\n'));
+            let partial = text.strip_prefix("  ").unwrap_or(&text);
+            if candidate != 0
+                && !text.is_empty()
+                && (whole || (first_fragment.width() >= 16 && old_logical.ends_with(partial)))
+            {
+                prefix = candidate;
+                break true;
+            }
+            if candidate == 0
+                || owned_blanks == 0
+                || !self
+                    .row_to_text(Line(candidate as i32 - newer as i32 - 1))
+                    .is_some_and(|row| row.trim().is_empty())
+            {
+                break false;
+            }
+            candidate -= 1;
+            owned_blanks -= 1;
+        };
+        let history_prefix = if prefix_proven { prefix.min(newer) } else { 0 };
+        let screen_prefix = if prefix_proven {
+            prefix.saturating_sub(newer)
+        } else {
+            0
+        };
+        // Collect proof before mutating any history coordinates.
+        let fresh_rows: Vec<String> = (-(newer as i32)..grid.screen_lines() as i32)
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
+        let owned = resize
+            .displaced_rows
+            .min(grid.history_size().saturating_sub(newer));
+        let source = normalize(
+            &resize.rows.iter().map(String::as_str).collect::<Vec<_>>(),
+            resize.before_columns,
+        );
+        // A physical fragment of a fully reflowed row is replaceable only
+        // inside a complete source logical record present in the redraw.
+        // Matching an arbitrary substring ("beta" in "betaX") proves nothing.
+        let replaced_source: Vec<&str> = source
+            .lines()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let text = row.trim_start();
+                (!text.is_empty()
+                    && fresh.lines().any(|line| {
+                        line.trim_start() == text
+                            || (index == 0 && text.width() >= 16 && line.ends_with(text))
+                    }))
+                .then_some(text)
+            })
+            .collect();
+        // Ink's hard-wrapped rows use the same existing normalization as the
+        // source proof. Associate each normalized record with its contiguous
+        // physical span, rather than searching another record for a fragment.
+        let owned_text = normalize(
+            &resize
+                .displaced_records
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            resize.before_columns,
+        );
+        let mut physical = resize.displaced_records.iter();
+        let owned_records: Vec<(usize, &str)> = owned_text
+            .lines()
+            .filter_map(|record| {
+                let (first_end, first) = physical.next()?;
+                let mut end = *first_end;
+                let mut length = first.len();
+                while length < record.len() {
+                    let (next_end, next) = physical.next()?;
+                    end = *next_end;
+                    length += 1 + next.trim_start().len();
+                }
+                (length == record.len()).then_some((end, record))
+            })
+            .collect();
+        let old_replaced: Vec<bool> = (0..owned)
+            .map(|row| {
+                let old = self
+                    .row_to_text(Line(row as i32 - newer as i32 - owned as i32))
+                    .unwrap_or_default();
+                if old.trim().is_empty() {
+                    resize.before_columns != resize.after_columns
+                        && fresh_rows.iter().any(|fresh| fresh == &old)
+                } else {
+                    fresh_rows.iter().any(|fresh| fresh == &old)
+                        || owned_records
+                            .iter()
+                            .find(|(end, _)| row + resize.displaced_rows - owned < *end)
+                            .is_some_and(|(_, record)| {
+                                replaced_source.contains(&record.trim_start())
+                            })
+                }
+            })
+            .collect();
+        let remaining = newer - history_prefix;
+        let mut removed = self
+            .term
+            .grid_mut()
+            .drop_history_before(remaining, history_prefix);
+        for row in 0..screen_prefix {
+            for col in 0..self.term.grid().columns() {
+                self.term.grid_mut()[Line(row as i32)][Column(col)] = Cell::default();
+            }
+        }
+        // Old rows are independent replacements, never an anchor-licensed block.
+        // Iterate oldest to newest so newer row offsets remain stable.
+        for (row, replaced) in old_replaced.into_iter().enumerate() {
+            if replaced {
+                removed += self
+                    .term
+                    .grid_mut()
+                    .drop_history_before(remaining + owned - row - 1, 1);
+            }
+        }
+        if screen_prefix != 0 {
+            self.suppressed_screen_prefix = screen_prefix;
+            // The erase/repaint preceding this suppression already dirtied
+            // these rows. Start fresh damage evidence for subsequent bytes,
+            // including a blank write over an already blank coordinate.
+            self.prev_rows.clear();
+            self.term.mark_fully_damaged();
+            self.term.reset_parse_damage();
+        }
+        removed + screen_prefix != 0
     }
 
     /// Override ANSI colors 0-15 with theme values.
@@ -1244,32 +1892,36 @@ impl TerminalGrid {
             });
         }
 
-        // Trim trailing whitespace-only spans with default attrs
-        while let Some(last) = spans.last() {
-            if last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-                && last.text.trim_end().is_empty()
-            {
-                spans.pop();
-            } else {
-                break;
+        // A wrapped row's final spaces are content, not unused grid padding.
+        // Its continuation is concatenated without a separator by text readers.
+        if !self.row_wrapped(line) {
+            // Trim trailing whitespace-only spans with default attrs
+            while let Some(last) = spans.last() {
+                if last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                    && last.text.trim_end().is_empty()
+                {
+                    spans.pop();
+                } else {
+                    break;
+                }
             }
-        }
-        if let Some(last) = spans.last_mut() {
-            let trimmed = last.text.trim_end().to_string();
-            if trimmed.is_empty()
-                && last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-            {
-                spans.pop();
-            } else {
-                last.text = trimmed;
+            if let Some(last) = spans.last_mut() {
+                let trimmed = last.text.trim_end().to_string();
+                if trimmed.is_empty()
+                    && last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                {
+                    spans.pop();
+                } else {
+                    last.text = trimmed;
+                }
             }
         }
 
@@ -1277,6 +1929,8 @@ impl TerminalGrid {
             spans,
             cols: num_cols as u16,
             chrome: false,
+            wrapped: self.row_wrapped(line),
+            partial: false,
         }
     }
 
@@ -1322,6 +1976,7 @@ impl TerminalGrid {
             if is_continuation {
                 if let Some(prev) = result.last_mut() {
                     prev.spans.extend(log_line.spans);
+                    prev.wrapped = log_line.wrapped;
                 } else {
                     result.push(log_line);
                 }
@@ -1495,6 +2150,14 @@ impl TerminalGrid {
             self.term.scroll_display(Scroll::Delta(delta));
             self.term.mark_fully_damaged();
         }
+    }
+
+    /// Scroll to an eviction-stable all-time row, or follow the tail with None.
+    /// Output between request and apply cannot shift a retained anchor; trimmed
+    /// rows clamp to the oldest retained row.
+    pub fn scroll_to_anchor(&mut self, anchor: Option<usize>) {
+        let offset = anchor.map_or(0, |row| self.screen_origin().saturating_sub(row));
+        self.scroll_to_offset(offset);
     }
 
     /// Total number of lines (screen + scrollback history).
@@ -1769,12 +2432,41 @@ impl TerminalGrid {
                 >= 2;
 
             if should_strip {
-                out.extend(reflow_quoted_run(&contents, num_cols));
+                out.extend(reflow_copied_run(&contents, num_cols, 4, false));
             } else {
                 out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
         }
 
+        out.join("\n")
+    }
+
+    /// Normalize only the composer run whose first row was selected from column zero.
+    fn normalize_copied_composer(text: &str, num_cols: usize) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let Some(first) = lines[0].strip_prefix("❯ ") else {
+            return Self::normalize_copied_selection(text, num_cols);
+        };
+        // Strip one marker and one margin; a second glyph and deeper indent are input.
+        let mut contents = vec![first];
+        let mut index = 1;
+        while index < lines.len() {
+            let Some(content) = lines[index].strip_prefix("  ") else {
+                break;
+            };
+            if content.is_empty() || gutter_content(lines[index]).is_some() {
+                break;
+            }
+            contents.push(content);
+            index += 1;
+        }
+        let mut out = reflow_copied_run(&contents, num_cols, 2, false);
+        if index < lines.len() {
+            out.push(Self::normalize_copied_selection(
+                &lines[index..].join("\n"),
+                num_cols,
+            ));
+        }
         out.join("\n")
     }
 
@@ -1795,6 +2487,22 @@ impl TerminalGrid {
             } else {
                 (end_row, end_col, start_row, start_col)
             };
+
+        let first_line = Line(r0 as i32 - history_size as i32);
+        // Selection text alone cannot distinguish a pasted glyph from composer chrome.
+        // Check the actual origin before cell extraction loses its column/wrap context.
+        let composer_anchor = c0 == 0
+            && num_cols >= 2
+            && first_line >= grid.topmost_line()
+            && first_line <= grid.bottommost_line()
+            && grid[first_line][Column(0)].c == '❯'
+            && grid[first_line][Column(1)].c == ' '
+            // Lost provenance follows the physical row even when RI/IL moves it.
+            && !grid[first_line].copy_origin_unknown
+            && (first_line == grid.topmost_line()
+                || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE));
 
         let mut result = String::new();
 
@@ -1823,8 +2531,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             result.push_str(&text);
 
             if abs_row < r1 {
@@ -1836,7 +2546,12 @@ impl TerminalGrid {
             }
         }
 
-        Self::normalize_copied_selection(result.trim_end_matches('\n'), num_cols)
+        let text = result.trim_end_matches('\n');
+        if composer_anchor {
+            Self::normalize_copied_composer(text, num_cols)
+        } else {
+            Self::normalize_copied_selection(text, num_cols)
+        }
     }
 
     /// Extract selection text using grid-relative rows from an optional frame snapshot.
@@ -2261,8 +2976,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             rows.push(text);
         }
         rows
@@ -2282,8 +2999,10 @@ impl TerminalGrid {
             }
             push_cell_text(&mut text, cell);
         }
-        let trimmed_len = text.trim_end().len();
-        text.truncate(trimmed_len);
+        if !self.row_wrapped(line) {
+            let trimmed_len = text.trim_end().len();
+            text.truncate(trimmed_len);
+        }
         Some(text)
     }
 
@@ -2355,9 +3074,22 @@ fn gutter_content(line: &str) -> Option<&str> {
 ///
 /// Blank rows, list markers and deeper indents always start a new line: they
 /// mark structure the author chose, which the width rule alone cannot see.
-fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
-    // Gutter overhead: two indent cells, the bar, and the separator space.
-    const GUTTER_COLS: usize = 4;
+fn reflow_copied_run(
+    contents: &[&str],
+    num_cols: usize,
+    margin_cols: usize,
+    exact_fit_wrap: bool,
+) -> Vec<String> {
+    reflow_copied_run_at_widths(contents, num_cols, margin_cols, exact_fit_wrap, None)
+}
+
+fn reflow_copied_run_at_widths(
+    contents: &[&str],
+    num_cols: usize,
+    margin_cols: usize,
+    exact_fit_wrap: bool,
+    source_widths: Option<&[usize]>,
+) -> Vec<String> {
     // Room for an agent's own right margin plus the ragged edge a greedy
     // wrapper leaves when the overflowing word is long.
     const WRAP_EVIDENCE_SLACK: usize = 24;
@@ -2365,13 +3097,11 @@ fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
     // every run through. Prose quotes do not happen at such widths anyway.
     const MIN_REFLOW_COLS: usize = 48;
 
-    let width = contents
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
-    let wrap_threshold = num_cols.saturating_sub(GUTTER_COLS + WRAP_EVIDENCE_SLACK);
-    if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
+    // Recorded Ink repaints can wrap an exact-fit word; clipboard cleanup
+    // retains its stricter rule for an ambiguous typed newline.
+    let width = contents.iter().map(|line| line.width()).max().unwrap_or(0);
+    let wrap_threshold = num_cols.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
+    if source_widths.is_none() && (num_cols < MIN_REFLOW_COLS || width < wrap_threshold) {
         return contents.iter().map(|line| (*line).to_string()).collect();
     }
     let mut out: Vec<String> = Vec::with_capacity(contents.len());
@@ -2382,19 +3112,32 @@ fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
     // short lines onto the paragraph.
     let mut previous_row: Option<(usize, usize)> = None;
 
-    for line in contents {
+    let mut recorded_max = std::collections::HashMap::new();
+    if let Some(widths) = source_widths {
+        for (line, &columns) in contents.iter().zip(widths) {
+            let max = recorded_max.entry(columns).or_insert(0usize);
+            *max = (*max).max(line.width());
+        }
+    }
+    for (index, line) in contents.iter().enumerate() {
+        let previous_columns =
+            source_widths.map_or(num_cols, |widths| widths[index.saturating_sub(1)]);
+        let previous_max = source_widths.map_or(width, |_| recorded_max[&previous_columns]);
+        let evidence = previous_columns >= MIN_REFLOW_COLS
+            && previous_max >= previous_columns.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
         let trimmed = line.trim_start();
-        let length = line.chars().count();
-        let indent = length - trimmed.chars().count();
+        let length = line.width();
+        let indent = length - trimmed.width();
 
         let joinable = match previous_row {
             Some((previous_length, previous_indent)) => {
-                !trimmed.is_empty()
+                evidence
+                    && !trimmed.is_empty()
                     && previous_length > previous_indent
                     && indent <= previous_indent
                     && !starts_list_item(trimmed)
-                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").chars().count()
-                        > width
+                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").width()
+                        > previous_max.saturating_sub(usize::from(exact_fit_wrap))
             }
             None => false,
         };
@@ -2441,7 +3184,83 @@ pub struct DamageGeometry {
 
 #[cfg(test)]
 mod tests {
+    /// Catches BEL being held until a grid frame is serialized for a hidden tab.
+    #[test]
+    fn hidden_bell_is_a_session_event_without_frame_serialization() {
+        let mut grid = super::TerminalGrid::new(2, 8, 10);
+        grid.process(b"\x07");
+        assert!(
+            grid.drain_events()
+                .iter()
+                .any(|e| matches!(e, super::TermEvent::Bell))
+        );
+        assert!(grid.drain_events().is_empty());
+    }
+
     use super::*;
+
+    // Catches DECALN keeping lost provenance or inheriting the active erase background.
+    #[test]
+    fn copied_selection_decaln_resets_loss_and_replaces_all_cells_with_default_e() {
+        let mut grid = TerminalGrid::new(2, 20, 1);
+        grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+        grid.resize_with_mode(3, 20, ReflowMode::None);
+        assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+        grid.process(b"\x1b[41m\x1b#8");
+        for line in 0..3 {
+            let row = &grid.term().grid()[Line(line)];
+            assert!(!row.copy_origin_unknown);
+            assert!(!row.reflow_wrap);
+            for column in 0..20 {
+                let cell = &row[Column(column)];
+                assert_eq!(cell.c, 'E');
+                assert_eq!(cell.bg, alacritty_terminal::term::cell::Cell::default().bg);
+                assert!(cell.flags.is_empty());
+            }
+        }
+        grid.process("\x1b[H❯ hello\x1b[K".as_bytes());
+        assert_eq!(grid.get_selection_text(0, 0, 0, 19), "hello");
+    }
+
+    // Catches whole-row ECH leaving origin loss behind, or partial ECH inventing a fresh origin.
+    #[test]
+    fn copied_selection_ech_full_row_clears_loss_but_partial_keeps_literal() {
+        for count in [19, 20, 999] {
+            let mut grid = TerminalGrid::new(2, 20, 1);
+            grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+            grid.resize_with_mode(3, 20, ReflowMode::None);
+            assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+            grid.process(format!("\x1b[H\x1b[{count}X").as_bytes());
+            let remains_unknown = count < 20;
+            assert_eq!(
+                grid.term().grid()[Line(0)].copy_origin_unknown,
+                remains_unknown
+            );
+            grid.resize_with_mode(3, 24, ReflowMode::None);
+            grid.process("❯ hello".as_bytes());
+            assert_eq!(
+                grid.get_selection_text(0, 0, 0, 23),
+                if remains_unknown {
+                    "❯ hello"
+                } else {
+                    "hello"
+                }
+            );
+        }
+    }
+
+    // Catches reactivating predecessor loss after a full erase starts a new composer.
+    #[test]
+    fn copied_selection_full_screen_erase_clears_origin_across_resize() {
+        let mut grid = TerminalGrid::new(2, 20, 1);
+        let _ = grid.process("aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n".as_bytes());
+        grid.resize_with_mode(3, 20, ReflowMode::None);
+        assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+        let _ = grid.process("\x1b[H\x1b[J❯ hello".as_bytes());
+        assert!(!grid.term().grid()[Line(0)].copy_origin_unknown);
+        grid.resize_with_mode(3, 24, ReflowMode::None);
+        assert_eq!(grid.get_selection_text(0, 0, 0, 23), "hello");
+    }
 
     // --- DEC 2026 synchronized update (see `flush_sync_timeout_if_needed`) ---
 
@@ -2532,7 +3351,10 @@ mod tests {
         /// track those colours — a guess would be worse than silence here.
         #[test]
         fn stays_silent_for_indexed_palette_queries() {
-            assert!(replies_to(b"\x1b]4;3;?\x1b\\", palette()).is_empty());
+            assert_eq!(
+                replies_to(b"\x1b]4;3;?\x1b\\", palette()),
+                [] as [std::string::String; 0]
+            );
         }
 
         #[test]
@@ -2648,6 +3470,98 @@ mod tests {
                 "the wire format ships whole rows"
             );
         }
+    }
+
+    /// Catches trimming a real separator at a soft margin and losing wrap metadata.
+    #[test]
+    fn softwrap_1977_preserves_original_spaces_in_text_and_log() {
+        for bytes in [
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-24.tcap")
+                .as_slice(),
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-64.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(bytes).unwrap();
+            let (rows, cols) = capture.geometry.unwrap();
+            let mut grid = TerminalGrid::new(rows, cols, 100);
+            let mut raw = Vec::new();
+            for record in capture.records {
+                raw.extend_from_slice(&record.data);
+                grid.process(&record.data);
+            }
+            let expected = String::from_utf8(raw).unwrap().replace("\r\n", "\n");
+            let join = |rows: Vec<(String, bool)>| {
+                let mut text = String::new();
+                let mut previous_wrap = true;
+                for (row, wraps) in rows {
+                    if !previous_wrap {
+                        text.push('\n');
+                    }
+                    text.push_str(&row);
+                    previous_wrap = wraps;
+                }
+                text.trim_end_matches('\n').to_owned()
+            };
+            assert_eq!(
+                join(
+                    grid.screen_text_rows()
+                        .into_iter()
+                        .zip(grid.screen_row_wraps())
+                        .collect()
+                ),
+                expected,
+                "MCP screen text at {cols} columns"
+            );
+            let lines = grid.screen_log_lines();
+            assert_eq!(
+                join(
+                    lines
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                ),
+                expected,
+                "mobile log at {cols} columns"
+            );
+            assert_eq!(
+                grid.get_selection_text(0, 0, rows as usize - 1, cols as usize - 1),
+                expected,
+                "copied text must preserve the same spaces"
+            );
+            let serialized = serde_json::to_value(&lines).unwrap();
+            assert!(
+                serialized
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line["wrapped"] == true),
+                "mobile must receive WRAPLINE"
+            );
+            grid.process(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8");
+            let history = grid.read_scrollback_log_lines(100);
+            assert!(
+                join(
+                    history
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                )
+                .starts_with(&expected),
+                "history must retain the same separators"
+            );
+        }
+    }
+
+    /// Catches dropping a styled whitespace-only span at a soft-wrap boundary.
+    #[test]
+    fn softwrap_1977_keeps_styled_margin_space() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process(b"abc\x1b[31m \x1b[0mdef");
+        let lines = grid.screen_log_lines();
+        assert_eq!(lines[0].text(), "abc ");
+        assert!(lines[0].wrapped);
+        assert!(lines[0].spans.last().unwrap().fg.is_some());
+        assert_eq!(grid.get_logical_line(0).1, "abc def");
     }
 
     /// The premise under F23: alacritty reports narrow column bounds when only a
@@ -2795,6 +3709,354 @@ mod tests {
             frame.len(),
             26 + 10 * (4 + 40 * 11),
             "ten whole rows, four-byte row headers, no start_col anywhere"
+        );
+    }
+
+    /// What a replay of one capture observed.
+    #[derive(Default)]
+    struct HistoryReplay {
+        committed_rows: usize,
+        live_rewrites: usize,
+        alt_records: usize,
+    }
+
+    /// Replays `.tcap` output records into a grid whose viewport is held `k` rows
+    /// above the bottom (0 = pinned to the tail) and checks the contract the scroll
+    /// row cache relies on (#1264-89c8): a row that entered history never changes,
+    /// every history row is present and contiguous in all-time order (a resize
+    /// repaint may replace history only after ordered content survival is proven),
+    /// and the viewport at offset `k` shows exactly the rows the absolute-index read returns
+    /// for that window. `resize_at` = (output record index, rows, cols).
+    fn replay_history_contract(
+        name: &str,
+        capture: &crate::pty_capture::DecodedCapture,
+        cap: usize,
+        k: usize,
+        resize_at: Option<(usize, u16, u16)>,
+    ) -> HistoryReplay {
+        use std::collections::HashMap;
+        let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+        let mut grid = TerminalGrid::new(rows, cols, cap);
+        let mut stats = HistoryReplay::default();
+        // All-time row index -> text, for rows already in history.
+        let mut committed: HashMap<usize, String> = HashMap::new();
+        let mut next_index = 0usize;
+        let mut screen: Vec<String> = Vec::new();
+        let outputs = capture
+            .records
+            .iter()
+            .filter(|r| r.direction == crate::pty_capture::CaptureDirection::Output);
+        for (step, rec) in outputs.enumerate() {
+            let before = grid.scrollback_count();
+            if let Some((_, r, c)) = resize_at.filter(|(at, _, _)| *at == step) {
+                let history_of = |g: &TerminalGrid| -> Vec<String> {
+                    match g.scrollback_count() {
+                        0 => Vec::new(),
+                        n => g.read_rows_in_range(0, n - 1),
+                    }
+                };
+                let flat = |g: &TerminalGrid| -> Vec<String> {
+                    g.read_rows_in_range(0, g.total_lines() - 1)
+                        .into_iter()
+                        .filter(|t| !t.trim().is_empty())
+                        .collect()
+                };
+                let old_rows = grid.total_lines() - grid.scrollback_count();
+                let (old_history, old_content) = (history_of(&grid), flat(&grid));
+                grid.resize_with_mode(r, c, ReflowMode::All);
+                if (r as usize) < old_rows {
+                    // Shrinking drops non-blank rows below the cursor by design, and
+                    // pushes the top of the screen into history: the old history
+                    // must survive as the prefix.
+                    assert_eq!(
+                        &history_of(&grid)[..old_history.len()],
+                        &old_history[..],
+                        "{name}: shrinking the screen changed existing history"
+                    );
+                } else {
+                    assert_eq!(
+                        flat(&grid),
+                        old_content,
+                        "{name}: growing the screen lost or reordered lines"
+                    );
+                }
+                // The all-time origin may shift with the new row count: rebuild.
+                committed.clear();
+                next_index = 0;
+                screen.clear();
+            }
+            let origin_before = grid.screen_origin();
+            let history_before = grid.read_scrollback_lines(0, grid.scrollback_count());
+            grid.process(&rec.data);
+            if grid.is_alternate_screen() {
+                stats.alt_records += 1;
+                continue;
+            }
+            if k > 0 {
+                grid.scroll_to_offset(k);
+            }
+            let history = grid.scrollback_count();
+            let base = grid.screen_origin().saturating_sub(history);
+            let retained = grid.read_scrollback_lines(0, history);
+            let coordinates_changed = grid.screen_origin() < origin_before
+                || retained
+                    .iter()
+                    .enumerate()
+                    .any(|(row, text)| committed.get(&(base + row)).is_some_and(|old| old != text));
+            if resize_at.is_some() && coordinates_changed && history != 0 {
+                // Resize repaint reconciliation removes only proven duplicates and
+                // rewinds the coordinates of newer rows. Prove content survival
+                // independently before rebuilding the coordinate-based oracle:
+                // every old retained row must still occur in order, with its
+                // multiplicity, in history plus the replacement screen.
+                let old_base = origin_before.saturating_sub(history_before.len());
+                let evicted = base.saturating_sub(old_base).min(history_before.len());
+                let all = grid.read_rows_in_range(0, grid.total_lines() - 1);
+                let mut remaining = all.iter();
+                for old in &history_before[evicted..] {
+                    assert!(
+                        remaining.any(|row| row == old),
+                        "{name} k={k} step {step}: reconciliation lost or reordered history row {old:?}; before={history_before:?}, after={all:?}"
+                    );
+                }
+                committed.clear();
+                next_index = base;
+            }
+
+            // Viewport at the held offset == the same window read by absolute index.
+            let offset = grid.display_offset();
+            let top = history - offset;
+            let vrows = grid.total_lines() - history;
+            let window = grid.read_rows_in_range(top, top + vrows - 1);
+            let shown: Vec<String> = (0..vrows).map(|r| grid.get_row_text(r)).collect();
+            assert_eq!(
+                shown, window,
+                "{name} k={k} step {step}: viewport differs from the rows it should show"
+            );
+
+            let now = grid.screen_text_rows();
+            if history == before && screen.len() == now.len() {
+                stats.live_rewrites += now.iter().zip(&screen).filter(|(a, b)| a != b).count();
+            }
+            screen = now;
+
+            // Rows below `base` were evicted by the cap; everything else must be
+            // there. New rows are recorded, known rows must be unchanged.
+            let full_scan = step % 50 == 0;
+            let from = if full_scan {
+                base
+            } else {
+                next_index.max(base)
+            };
+            let texts = if from - base < history {
+                grid.read_rows_in_range(from - base, history - 1)
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                texts.len(),
+                history.saturating_sub(from - base),
+                "{name}: history read short"
+            );
+            for (i, text) in texts.into_iter().enumerate() {
+                let idx = from + i;
+                match committed.get(&idx) {
+                    Some(seen) => assert_eq!(
+                        seen, &text,
+                        "{name} k={k} step {step}: history row {idx} changed after commit"
+                    ),
+                    None => {
+                        // A jump is legitimate only to the oldest retained row: the
+                        // cap evicted, or the agent erased scrollback (ESC[3J), rows
+                        // this replay never saw.
+                        assert!(
+                            idx == next_index || idx == base,
+                            "{name} k={k} step {step}: history rows skipped to {idx} (expected {next_index})"
+                        );
+                        committed.insert(idx, text);
+                        next_index = idx + 1;
+                        stats.committed_rows += 1;
+                    }
+                }
+            }
+            if history > 0 {
+                assert_eq!(
+                    next_index,
+                    base + history,
+                    "{name} k={k} step {step}: history rows missing (base {base}, history {history}, from {from})"
+                );
+            } else {
+                // Scrollback erased: nothing retained to compare, resume at the origin.
+                next_index = base;
+            }
+            committed.retain(|idx, _| *idx >= base);
+        }
+        stats
+    }
+
+    fn fixture_captures() -> Vec<(String, crate::pty_capture::DecodedCapture)> {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/fixtures/agent_prompts");
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("fixture directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("readable fixture");
+            let capture = crate::pty_capture::decode_capture(&bytes).expect("decodable fixture");
+            out.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                capture,
+            ));
+        }
+        assert!(
+            !out.is_empty(),
+            "no .tcap fixtures found in {}",
+            dir.display()
+        );
+        out
+    }
+
+    /// Real agent bytes, viewport held k rows up — k = 0 (tail), 1 and 3 (inside the
+    /// live region), a page, and deep history.
+    #[test]
+    fn history_rows_never_change_while_scrolled_up_over_real_captures() {
+        let mut checked = 0;
+        for (name, capture) in fixture_captures() {
+            let rows = capture.geometry.map_or(50, |(r, _)| r as usize);
+            for k in [0, 1, 3, rows / 2, rows, rows + 7] {
+                checked += replay_history_contract(&name, &capture, 10_000, k, None).committed_rows;
+            }
+        }
+        assert!(
+            checked > 1000,
+            "corpus too small to mean anything: {checked} rows"
+        );
+    }
+
+    /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
+    #[test]
+    fn history_rows_survive_the_scrollback_cap_over_real_captures() {
+        // One long session: every fixture back to back on the same grid.
+        let mut all = fixture_captures();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        let geometry = all[0].1.geometry;
+        let records: Vec<_> = all.into_iter().flat_map(|(_, c)| c.records).collect();
+        let session = crate::pty_capture::DecodedCapture { geometry, records };
+        for k in [0, 5] {
+            let stats = replay_history_contract("all fixtures", &session, 10, k, None);
+            assert!(
+                stats.committed_rows > 10,
+                "the session never exceeded the cap: the test proves nothing"
+            );
+        }
+    }
+
+    /// A rows-only resize in the middle of a redraw keeps history intact (shrink) and
+    /// every line in order (grow).
+    #[test]
+    fn history_content_survives_a_resize_during_redraw_over_real_captures() {
+        for (name, capture) in fixture_captures() {
+            let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+            for new_rows in [rows.saturating_sub(9).max(3), rows + 6] {
+                for at in [3, capture.records.len() / 2] {
+                    replay_history_contract(&name, &capture, 10_000, 4, Some((at, new_rows, cols)));
+                }
+            }
+        }
+    }
+
+    /// Catches an oracle treating the startup banner's proven on-screen
+    /// replacement as lost history after a synchronized resize repaint.
+    #[test]
+    fn startup_resize_repaint_moves_history_banner_to_screen_without_loss() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/claude-2.1.294-remote-startup-idle-20261013.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = TerminalGrid::new(rows, cols, 10_000);
+        let outputs: Vec<_> = capture
+            .records
+            .iter()
+            .filter(|record| record.direction == crate::pty_capture::CaptureDirection::Output)
+            .collect();
+        for (step, record) in outputs[..7].iter().enumerate() {
+            if step == 5 {
+                grid.resize_with_mode(rows - 9, cols, ReflowMode::All);
+            }
+            grid.process(&record.data);
+        }
+        let before = grid.read_scrollback_lines(0, grid.scrollback_count());
+        assert_eq!(before.len(), 9);
+        grid.process(&outputs[7].data);
+        let after = grid.read_scrollback_lines(0, grid.scrollback_count());
+        assert_eq!(after.len(), 5);
+        assert_eq!(after[..3], before[..3]);
+        assert!(after[3..].iter().all(String::is_empty));
+        assert_eq!(grid.screen_text_rows()[..3], before[3..6]);
+        assert!(before[3].contains("Claude Code"));
+        assert!(before[4].contains("Opus 5.5"));
+        assert!(before[5].contains("~/Gits/personal"));
+        let all = grid.read_rows_in_range(0, grid.total_lines() - 1);
+        let mut remaining = all.iter();
+        for row in &before {
+            assert!(remaining.any(|current| current == row));
+        }
+    }
+
+    /// Entering and leaving the alternate screen never touches primary history.
+    #[test]
+    fn alt_screen_round_trip_leaves_history_untouched() {
+        let mut grid = TerminalGrid::new(4, 20, 100);
+        for i in 0..10 {
+            let _ = grid.process(format!("l{i}\r\n").as_bytes());
+        }
+        let history = grid.scrollback_count();
+        let before = grid.read_rows_in_range(0, history - 1);
+        let _ = grid.process(b"\x1b[?1049hALT1\r\nALT2\r\nALT3\r\nALT4\r\nALT5\r\nALT6");
+        assert!(grid.is_alternate_screen());
+        let _ = grid.process(b"\x1b[?1049l");
+        assert!(!grid.is_alternate_screen());
+        assert_eq!(grid.scrollback_count(), history);
+        assert_eq!(grid.read_rows_in_range(0, history - 1), before);
+    }
+
+    /// Whole-corpus run: the operator's own captures, no size limit.
+    ///
+    /// ```text
+    /// TUIC_HISTORY_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+    ///   cargo test -p tuic-terminal history_rows_never_change_over_capture_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a capture corpus; see TUIC_HISTORY_CORPUS"]
+    fn history_rows_never_change_over_capture_corpus() {
+        let Ok(dir) = std::env::var("TUIC_HISTORY_CORPUS") else {
+            panic!("set TUIC_HISTORY_CORPUS to a directory of .tcap captures");
+        };
+        let (mut files, mut committed, mut live, mut alt) = (0usize, 0usize, 0usize, 0usize);
+        for entry in std::fs::read_dir(&dir).expect("readable corpus directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let capture = crate::pty_capture::decode_capture(
+                &std::fs::read(&path).expect("readable capture"),
+            )
+            .expect("decodable capture");
+            let name = path.display().to_string();
+            for k in [0, 2, 9, 40] {
+                let s = replay_history_contract(&name, &capture, 10_000, k, None);
+                committed += s.committed_rows;
+                live += s.live_rewrites;
+                alt += s.alt_records;
+            }
+            files += 1;
+        }
+        assert!(files > 0, "corpus held no usable .tcap captures");
+        println!(
+            "files {files}  history rows checked {committed}  live rows rewritten in place {live}  alt-screen records skipped {alt}"
         );
     }
 
@@ -3394,6 +4656,65 @@ mod tests {
         eprintln!("replayed {} bytes → {} history lines", data.len(), history);
     }
 
+    /// Real Claude Code (v2.1.286, Haiku) capture of "print LINE 001..250", taken
+    /// while the PTY was resized 20x100 -> 14x100 -> 26x100 -> 10x80 -> 24x100 ->
+    /// 16x100 -> 20x100 (byte offsets in `CLAUDE_LINES_RESIZES`). Claude answers each
+    /// SIGWINCH by wiping the visible screen and printing its last rows again.
+    ///
+    /// Every numbered line must survive exactly once, in order. Catches both
+    /// failures of the shrink: the top-clamped shrink keeps no row the wipe
+    /// erases (lines 1-3, 75-76 and 148-150 vanish), and a bottom-anchored shrink
+    /// that never takes back what the reprint repeats puts 77 and 78 in twice.
+    const CLAUDE_LINES_RESIZES: [(usize, u16, u16); 6] = [
+        (9146, 14, 100),
+        (21500, 26, 100),
+        (34739, 10, 80),
+        (45525, 24, 100),
+        (62285, 16, 100),
+        (86115, 20, 100),
+    ];
+
+    #[test]
+    fn resized_claude_repaint_keeps_every_line_once_in_order() {
+        let data = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/terminal_resize/claude-lines-resized.raw"),
+        )
+        .expect("fixture claude-lines-resized.raw");
+        for chunk in [4096, 61] {
+            let mut grid = TerminalGrid::new(20, 100, 10_000);
+            let mut pos = 0;
+            while pos < data.len() {
+                let mut end = (pos + chunk).min(data.len());
+                let next = CLAUDE_LINES_RESIZES.iter().find(|r| r.0 > pos);
+                if let Some(&(at, rows, cols)) = next {
+                    end = end.min(at);
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                    if pos == at {
+                        grid.resize_with_mode(rows, cols, ReflowMode::All);
+                    }
+                } else {
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                }
+            }
+            let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+            rows.extend(grid.screen_text_rows());
+            let numbers: Vec<u32> = rows
+                .iter()
+                .filter_map(|row| {
+                    row.find("LINE ")?
+                        .checked_add(5)
+                        .and_then(|i| row.get(i..i + 3))
+                })
+                .filter_map(|n| n.parse().ok())
+                .collect();
+            let expected: Vec<u32> = (1..=250).collect();
+            assert_eq!(numbers, expected, "chunk size {chunk}");
+        }
+    }
+
     #[test]
     fn new_creates_empty_grid() {
         let grid = TerminalGrid::new(24, 80, 1000);
@@ -3407,7 +4728,7 @@ mod tests {
     fn process_simple_text() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         let changed = grid.process(b"hello world");
-        assert!(!changed.is_empty());
+        assert_ne!(changed, [] as [crate::vt_log::ChangedRow; 0]);
         let first = &changed[0];
         assert_eq!(first.row_index, 0);
         assert_eq!(first.text, "hello world");
@@ -3418,7 +4739,7 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         let _ = grid.process(b"hello");
         let changed = grid.process(b"");
-        assert!(changed.is_empty());
+        assert_eq!(changed, [] as [crate::vt_log::ChangedRow; 0]);
     }
 
     #[test]
@@ -3555,7 +4876,7 @@ mod tests {
         let _ = grid.process(b"hello");
         // Move cursor to beginning of line and overwrite
         let changed = grid.process(b"\rworld");
-        assert!(!changed.is_empty());
+        assert_ne!(changed, [] as [crate::vt_log::ChangedRow; 0]);
         assert_eq!(changed[0].text, "world");
     }
 
@@ -3664,7 +4985,10 @@ mod tests {
         let mut grid = TerminalGrid::new(2, 10, 0);
         let _ = grid.process(b"cafe");
         let plain = grid.serialize_dirty_rows();
-        assert!(decode_cell_extras(&plain).is_empty());
+        assert_eq!(
+            decode_cell_extras(&plain),
+            [] as [(u16, u16, std::vec::Vec<u32>); 0]
+        );
 
         let changed = grid.process("\u{0301}\u{0327}".as_bytes());
         assert_eq!(
@@ -3697,7 +5021,10 @@ mod tests {
 
         let _ = grid.process(b"\x1b[1;10HX");
         let partial = grid.serialize_dirty_rows();
-        assert!(decode_cell_extras(&partial).is_empty());
+        assert_eq!(
+            decode_cell_extras(&partial),
+            [] as [(u16, u16, std::vec::Vec<u32>); 0]
+        );
 
         assert_eq!(
             decode_cell_extras(&grid.serialize_full_frame()),
@@ -3783,7 +5110,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"Hi");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let (num_rows, cursor_row, cursor_col, cursor_visible) = decode_header(&buf);
         assert!(num_rows >= 1, "at least row 0 dirty");
@@ -3974,7 +5301,7 @@ mod tests {
         let _ = grid.process(b"\x1b[?1000h\x1b[?1006h\x1b[?1004h");
         let _ = grid.process(b"X");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // frame_flags is at offset 17 in the 22-byte header
         let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
@@ -4216,6 +5543,69 @@ mod tests {
         assert_eq!(after, before);
     }
 
+    // #1264-89c8 criterion 3: with output landing while scrolled back, sweeping the
+    // whole buffer from the top shows every retained line once, in order, also
+    // after the scrollback cap has trimmed the oldest ones.
+    #[test]
+    fn scrolled_back_output_leaves_every_retained_line_in_order_at_the_cap() {
+        let (rows, cap, total) = (3usize, 10usize, 60usize);
+        let mut grid = TerminalGrid::new(rows as u16, 20, cap);
+        for i in 0..8 {
+            let _ = grid.process(format!("l{i}\r\n").as_bytes());
+        }
+        grid.scroll_to_offset(3);
+        for i in 8..total {
+            let sep = if i + 1 < total { "\r\n" } else { "" };
+            let _ = grid.process(format!("l{i}{sep}").as_bytes());
+            grid.scroll_to_offset(grid.display_offset());
+        }
+
+        // Top row at each offset, cap..=0, then the rest of the bottom page.
+        let mut seen = Vec::new();
+        for off in (0..=cap).rev() {
+            grid.scroll_to_offset(off);
+            seen.push(grid.get_row_text(0));
+        }
+        seen.extend((1..rows).map(|r| grid.get_row_text(r)));
+        let expected: Vec<String> = (total - cap - rows..total)
+            .map(|i| format!("l{i}"))
+            .collect();
+        assert_eq!(seen, expected);
+    }
+
+    /// Catches: converting an all-time anchor to an offset before output wins the lock.
+    #[test]
+    fn scroll_anchor_keeps_requested_rows_after_delayed_output() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        let _ = grid.process(b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+        // The client saw origin 4 and requested row 2. Output arrives before apply.
+        let _ = grid.process(b"\r\nl7\r\nl8\r\nl9\r\nl10\r\nl11");
+        grid.scroll_to_anchor(Some(2));
+        assert_eq!(grid.get_row_text(0), "l2");
+        let _ = grid.process(b"\r\nl12\r\nl13");
+        assert_eq!(grid.get_row_text(0), "l2");
+    }
+
+    /// Catches: capped scrollback reinterprets an evicted anchor as a newer retained row.
+    #[test]
+    fn scroll_anchor_clamps_evicted_rows_and_can_resume_tail() {
+        let mut grid = TerminalGrid::new(3, 20, 4);
+        for i in 0..12 {
+            let sep = if i == 11 { "" } else { "\r\n" };
+            let _ = grid.process(format!("l{i}{sep}").as_bytes());
+        }
+        grid.scroll_to_anchor(Some(2));
+        assert_eq!(grid.get_row_text(0), "l5");
+        grid.scroll_to_anchor(Some(7));
+        assert_eq!(grid.get_row_text(0), "l7");
+        grid.scroll_to_anchor(Some(usize::MAX));
+        assert_eq!(grid.get_row_text(0), "l9");
+        grid.scroll_to_anchor(None);
+        let _ = grid.process(b"\r\nl12");
+        assert_eq!(grid.display_offset(), 0);
+        assert_eq!(grid.get_row_text(0), "l10");
+    }
+
     #[test]
     fn scroll_to_offset_clamps_and_is_exact() {
         let mut grid = TerminalGrid::new(3, 20, 100);
@@ -4386,6 +5776,34 @@ mod tests {
         assert_eq!(grid.prompt_input_text().as_deref(), Some("cafe\u{0301}"));
     }
 
+    /// Catches inventing a space before a wide glyph that wraps at the margin.
+    #[test]
+    fn softwrap_1977_does_not_copy_wide_glyph_padding_as_content() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process("abc界x".as_bytes());
+
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 3),
+            "abc界x",
+            "copy must omit the synthetic leading-wide-character spacer"
+        );
+        let rows = grid.screen_text_rows();
+        let wraps = grid.screen_row_wraps();
+        let mut screen = String::new();
+        let mut previous_wrapped = true;
+        for (row, wrapped) in rows.into_iter().zip(wraps) {
+            if !previous_wrapped {
+                screen.push('\n');
+            }
+            screen.push_str(&row);
+            previous_wrapped = wrapped;
+        }
+        assert_eq!(screen.trim_end_matches('\n'), "abc界x");
+        let log = grid.screen_log_lines();
+        assert_eq!(log[0].text(), "abc");
+        assert_eq!(log[1].text(), "界x");
+    }
+
     #[test]
     fn get_selection_text_single_row() {
         let mut grid = TerminalGrid::new(5, 20, 0);
@@ -4513,6 +5931,59 @@ mod tests {
         // Row 0: "abcdefghij" (WRAPLINE), Row 1: "klmno" (no wrap), Row 2: "second"
         let text = grid.get_selection_text(0, 0, 2, 5);
         assert_eq!(text, "abcdefghijklmno\nsecond");
+    }
+
+    // Catches raw Claude prompt chrome/width wraps leaking into copied text.
+    #[test]
+    fn copied_selection_normalizes_captured_claude_prompt_without_losing_typed_break() {
+        let capture = include_str!("fixtures/claude-prompt-copy-1411.txt");
+        let mut grid = TerminalGrid::new(5, 148, 0);
+        let _ = grid.process(capture.replace('\n', "\r\n").as_bytes());
+        let expected = concat!(
+            "❯ la porta del piano terra non si apre piu, dipende da qualche script o errore del codice che la manda in blocco? nel senso che se digito il codice\n",
+            "  di apertura sulla tastiera non succede nulla!!"
+        );
+        assert_eq!(grid.get_selection_text(0, 0, 2, 147), expected);
+        // Reversed drag coordinates must use the same normalization seam.
+        assert_eq!(grid.get_selection_text(2, 147, 0, 0), expected);
+        // Selecting only the continuation has no prompt anchor: keep content.
+        assert_eq!(
+            grid.get_selection_text(1, 0, 2, 147),
+            "  codice\n    di apertura sulla tastiera non succede nulla!!"
+        );
+    }
+
+    // Catches prompt cleanup consuming code/table content or short typed lines.
+    #[test]
+    fn copied_selection_preserves_unanchored_code_tables_and_short_prompt_breaks() {
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process(b"    let x = 1;\r\n    | key | value |\r\n");
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 79),
+            "    let x = 1;\n    | key | value |"
+        );
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process("❯ first typed line\r\n  second typed line\r\n    indented code\r\n  ▎ first quote\r\n  ▎ second quote".as_bytes());
+        assert_eq!(
+            grid.get_selection_text(0, 0, 4, 79),
+            "first typed line\nsecond typed line\n  indented code\nfirst quote\nsecond quote"
+        );
+    }
+
+    // Catches prompt-shaped body rows restarting composer cleanup after the origin.
+    #[test]
+    fn copied_selection_keeps_later_literal_prompt_rows_and_indentation() {
+        for (input, expected) in [
+            ("header\r\n❯ literal\r\n  code", "header\n❯ literal\n  code"),
+            (
+                "❯ typed\r\nplain separator\r\n❯ literal\r\n  code",
+                "typed\nplain separator\n❯ literal\n  code",
+            ),
+        ] {
+            let mut grid = TerminalGrid::new(6, 80, 0);
+            let _ = grid.process(input.as_bytes());
+            assert_eq!(grid.get_selection_text(0, 0, 5, 79), expected);
+        }
     }
 
     #[test]
@@ -4746,14 +6217,14 @@ mod tests {
         let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         let count = grid.scrollback_count();
         let lines = grid.read_scrollback_lines(count + 100, 10);
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [std::string::String; 0]);
     }
 
     #[test]
     fn read_scrollback_no_history_returns_empty() {
         let grid = TerminalGrid::new(24, 80, 100);
         let lines = grid.read_scrollback_lines(0, 10);
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -4761,6 +6232,35 @@ mod tests {
         let grid = TerminalGrid::new(5, 20, 0);
         let text = grid.get_row_text(999);
         assert_eq!(text, "");
+    }
+
+    // Catches: OSC rows recorded at the history cap drifting after eviction, or
+    // being rebased with the end-of-chunk base instead of the event-time origin.
+    #[test]
+    fn osc_marker_rows_stay_absolute_across_eviction() {
+        for prefix_rows in [0, 4, 8] {
+            let mut grid = TerminalGrid::new(2, 40, 3);
+            for _ in 0..prefix_rows {
+                grid.process(b"old\r\n");
+            }
+            grid.drain_events();
+            let anchor = grid.screen_origin() + 1;
+            grid.process(b"\x1b[2;1Hanchor\x1b]133;A\x07\x1b]7770;state=prompt\x07\r\nnext\r\n");
+            let events = grid.drain_events();
+            let marker_rows: Vec<usize> = events
+                .iter()
+                .filter_map(|event| match event {
+                    TermEvent::Osc133 { line, .. } | TermEvent::Tuic { line, .. } => Some(*line),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(marker_rows, vec![anchor, anchor]);
+            let base = grid.screen_origin() - grid.scrollback_count();
+            assert_eq!(
+                grid.read_rows_in_range(anchor - base, anchor - base)[0].trim_end(),
+                "anchor"
+            );
+        }
     }
 
     #[test]
@@ -5413,7 +6913,7 @@ mod tests {
         // ESC[38;5;4m = indexed fg 4 (blue), ESC[48;5;3m = indexed bg 3 (yellow)
         let _ = grid.process(b"\x1b[38;5;4m\x1b[48;5;3mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
@@ -5452,7 +6952,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"\x1b[34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
@@ -5491,7 +6991,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"\x1b[1;34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, _, _, _, attrs0) = decode_cell(&buf, off0);
@@ -5529,7 +7029,7 @@ mod tests {
         // Scroll up to view history
         grid.scroll(5);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // Find cells — the reflowed content should be in the first rows
         // Row 0 should have the first 10 chars, row 1 the remaining 5
@@ -5581,7 +7081,7 @@ mod tests {
             \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
         let _ = grid.process(redraw);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // The prompt is ~82 chars. At 60 cols, it wraps.
         // Find 'P' of "POC-00001" in the git segment (skip past "DGQT92CJFP" at col ~25)
@@ -5673,7 +7173,7 @@ mod tests {
             \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
         let _ = grid.process(redraw);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // Find git segment cells on both rows — prompt wraps around col 50-60
         // Row 1: start of git segment text ("POC-00001...")
@@ -5981,6 +7481,265 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TermEvent::Title(t) if t == "after-the-panic")),
             "event delivery stopped after a panic under the lock; drained: {drained:?}"
+        );
+    }
+}
+
+/// Adversarial cases for the post-resize reprint merge (#1264).
+#[cfg(test)]
+mod reprint_merge_critic_tests {
+    use super::*;
+
+    const IDLE_FRAME: &[u8] = b"\x1b[?2026h\x1b[?2026l";
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        all_rows(grid)
+            .iter()
+            .filter(|r| !r.trim().is_empty())
+            .count()
+    }
+
+    /// Scenario shared by the cases below: 6x20 grid holding L01..L10, shrunk to
+    /// 4 rows, so history ends L06,L07 and the screen starts L08.
+    fn shrunk_numbered_grid() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// The program's repaint: home, then the last rows, inside one sync frame.
+    const REPAINT: &[u8] =
+        b"\x1b[?2026h\x1b[HL06\x1b[K\r\nL07\x1b[K\r\nL08\x1b[K\r\nL09\x1b[K\x1b[?2026l";
+
+    /// Catches: the merge fires on any frame end after a shrink whose history
+    /// tail happens to equal the screen head, with no repaint having happened.
+    /// A program that legitimately printed the same block twice (separators,
+    /// repeated `alpha/beta` records) loses real history rows.
+    #[test]
+    fn repeated_block_survives_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted printed rows"
+        );
+    }
+
+    /// Catches: same as above for a run of identical separator rows.
+    #[test]
+    fn identical_separator_rows_survive_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted separator rows"
+        );
+    }
+
+    /// Catches: the merge drops history rows but leaves `display_offset`
+    /// unchanged, so a user scrolled up (the #1264 situation) sees the view jump
+    /// by the dropped row count.
+    #[test]
+    fn scrolled_up_view_does_not_jump_when_rows_are_merged() {
+        let mut grid = shrunk_numbered_grid();
+        grid.scroll(4);
+        let d = grid.display_offset();
+        let top_before = grid.row_to_text(Line(-(d as i32))).unwrap();
+        grid.process(REPAINT);
+        assert_eq!(grid.scrollback_count(), 5, "scenario must merge L06,L07");
+        let d = grid.display_offset();
+        let top_after = grid.row_to_text(Line(-(d as i32))).unwrap();
+        assert_eq!(
+            top_after, top_before,
+            "viewport top row changed under a scrolled-up user"
+        );
+    }
+
+    /// Catches: the frame-end carry mishandles a FRAME_END split across chunks,
+    /// so the merge result depends on chunk boundaries.
+    #[test]
+    fn merge_result_does_not_depend_on_chunk_boundaries() {
+        let mut whole = shrunk_numbered_grid();
+        whole.process(REPAINT);
+        let expected = all_rows(&whole);
+        for chunk in 1..=REPAINT.len() {
+            let mut grid = shrunk_numbered_grid();
+            for piece in REPAINT.chunks(chunk) {
+                grid.process(piece);
+            }
+            assert_eq!(all_rows(&grid), expected, "chunk size {chunk}");
+        }
+    }
+
+    /// Catches: the rewind of `total_scrolled` breaks the eviction-stable base
+    /// (`total_scrolled - history_size`) the frontend keys rows by, when the
+    /// scrollback cap is already evicting.
+    #[test]
+    fn merge_keeps_the_eviction_base_when_the_cap_is_full() {
+        let mut grid = TerminalGrid::new(6, 20, 3);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let base = grid.screen_origin() - grid.scrollback_count();
+        grid.process(REPAINT);
+        assert_eq!(
+            grid.screen_origin() - grid.scrollback_count(),
+            base,
+            "evicted-row base moved"
+        );
+    }
+
+    /// Catches: a merge on the alternate screen, or a resize made on it, arms
+    /// the merge and eats primary history after the program exits.
+    #[test]
+    fn alt_screen_resize_never_merges_primary_history() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.process(b"\x1b[?1049h");
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = grid.primary_scrollback_count();
+        grid.process(IDLE_FRAME);
+        grid.process(b"\x1b[?1049l");
+        grid.process(IDLE_FRAME);
+        assert_eq!(grid.primary_scrollback_count(), before);
+    }
+}
+
+/// Round-2 adversarial cases for the "head rows changed since the last frame end" evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_evidence_critic_tests {
+    use super::*;
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows.iter().filter(|r| !r.trim().is_empty()).count()
+    }
+
+    /// Catches: the evidence rule is satisfied by any change in the head rows, so
+    /// new output that merely continues a repeating block (alpha/beta records)
+    /// scrolls the screen, changes the head versus the snapshot, matches the
+    /// periodic history tail and is "merged" away although nothing was reprinted.
+    #[test]
+    fn output_continuing_a_repeating_block_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid.process(b"alpha\r\n");
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "continued output lost rows at the frame end"
+        );
+    }
+
+    /// Catches: an unrelated in-place edit of one head row (status/spinner line)
+    /// that happens to produce text equal to the history tail counts as a repaint.
+    #[test]
+    fn unrelated_head_row_edit_equal_to_history_tail_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for row in ["Z1", "Z2", "Z3", "A", "B", "A", "C", "Q"] {
+            grid.process(format!("{row}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[2;1HB\x1b[K\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an in-place edit deleted history rows"
+        );
+    }
+}
+
+/// Round-3 guards for the unscrolled-full-rewrite evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_round3_critic_tests {
+    use super::*;
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn numbered_shrunk() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// Catches: a full-screen redraw that starts with ESC[2J (the fork pushes the
+    /// screen into history and raises total_scrolled) combined with the merge
+    /// drops a row that exists nowhere else. Every printed line must stay
+    /// reachable, however the chunks are cut.
+    #[test]
+    fn clear_screen_repaint_after_shrink_loses_no_line() {
+        let frame: &[u8] = b"\x1b[?2026h\x1b[2J\x1b[HL06\r\nL07\r\nL08\r\nL09\x1b[?2026l";
+        for chunk in [frame.len(), 7, 1] {
+            let mut grid = numbered_shrunk();
+            for piece in frame.chunks(chunk) {
+                grid.process(piece);
+            }
+            let rows = all_rows(&grid);
+            for i in 1..=10 {
+                let want = format!("L{i:02}");
+                assert!(
+                    rows.contains(&want),
+                    "{want} lost (chunk {chunk}): {rows:?}"
+                );
+            }
+        }
+    }
+
+    /// Catches: an in-place full-screen redraw on the primary screen (htop/less
+    /// style cursor addressing, new data in every row, no scroll) is read as a
+    /// reprint and takes history rows with it.
+    #[test]
+    fn in_place_redraw_with_new_data_keeps_history() {
+        let mut grid = numbered_shrunk();
+        let before = all_rows(&grid).iter().filter(|r| !r.is_empty()).count();
+        grid.process(b"\x1b[?2026h\x1b[HP1\x1b[K\r\nP2\x1b[K\r\nP3\x1b[K\r\nP4\x1b[K\x1b[?2026l");
+        let rows = all_rows(&grid);
+        // P1..P4 replaced L08,L09,L10 and a blank row; history keeps L01..L07.
+        for i in 1..=7 {
+            let want = format!("L{i:02}");
+            assert!(rows.contains(&want), "{want} lost: {rows:?}");
+        }
+        assert_eq!(
+            rows.iter().filter(|r| !r.is_empty()).count(),
+            before - 3 + 4
         );
     }
 }

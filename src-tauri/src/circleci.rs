@@ -67,6 +67,15 @@ fn resolve_token_from_vault_result(
     Ok(resolve_token_from_sources(vault, env, cli_config))
 }
 
+/// Stored TUIC credential only: Settings must not inspect environment or CLI fallback files.
+pub(crate) fn stored_token_status() -> &'static str {
+    match crate::credentials::get(crate::credentials::Credential::CircleCiToken) {
+        Ok(Some(token)) if !token.trim().is_empty() => "set",
+        Ok(_) => "unset",
+        Err(_) => "unavailable",
+    }
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn circleci_token_status() -> Result<serde_json::Value, String> {
     let (token, source) = resolve_token()?;

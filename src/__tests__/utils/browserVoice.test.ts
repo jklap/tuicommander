@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	audioSocketUrl,
 	type BrowserVoiceDeps,
 	connectBrowserVoice,
 	decodeReply,
 	encodeCapture,
+	openMicrophone,
 } from "../../utils/browserVoice";
 
 vi.mock("../../stores/appLogger", () => ({
@@ -37,14 +38,30 @@ function fakeContext() {
 		connect: vi.fn(),
 		disconnect: vi.fn(),
 	};
-	const played: { rate: number; samples: Float32Array; started: boolean }[] = [];
+	const played: { rate: number; samples: Float32Array; started: boolean; from?: number }[] = [];
+	const clock = { now: 0 };
 	const sources: { stop: ReturnType<typeof vi.fn> }[] = [];
+	// iOS creates a context suspended; it runs only once resumed in a gesture.
+	const lifecycle = { state: "running" as "running" | "suspended" };
+	const resume = vi.fn(async () => {
+		lifecycle.state = "running";
+	});
 	return {
+		lifecycle,
+		resume,
 		capture,
 		played,
 		sources,
+		clock,
 		context: {
+			get currentTime() {
+				return clock.now;
+			},
 			destination,
+			get state() {
+				return lifecycle.state;
+			},
+			resume,
 			createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
 			createScriptProcessor: () => capture,
 			createBuffer: (_channels: number, length: number, rate: number) => {
@@ -60,11 +77,12 @@ function fakeContext() {
 					buffer: null as { __rate: number; __samples: Float32Array } | null,
 					connect: vi.fn(),
 					onended: null as (() => void) | null,
-					start: () => {
+					start: (_when?: number, from?: number) => {
 						played.push({
 							rate: node.buffer?.__rate ?? 0,
 							samples: node.buffer?.__samples ?? new Float32Array(),
 							started: true,
+							from,
 						});
 					},
 					stop: vi.fn(),
@@ -110,6 +128,137 @@ describe("the browser audio wire format", () => {
 	});
 });
 
+describe("starting a browser voice session on iOS", () => {
+	it("resumes a suspended context in the arming gesture, before the microphone prompt is answered", async () => {
+		// catches: iOS leaves the AudioContext suspended, onaudioprocess never
+		// fires and every reply is silent while the mic light is on.
+		const nodes = fakeContext();
+		nodes.lifecycle.state = "suspended";
+		let answerPrompt: (stream: MediaStream) => void = () => {};
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia: () =>
+				new Promise<MediaStream>((resolve) => {
+					answerPrompt = resolve;
+				}),
+			createContext: () => nodes.context,
+			audioSession: () => undefined,
+		};
+
+		const started = connectBrowserVoice("b1", deps);
+		// The prompt is still open: `resume` must already have been called, since
+		// the gesture is gone by the time the user answers.
+		expect(nodes.resume).toHaveBeenCalledTimes(1);
+		answerPrompt({ getTracks: () => [] } as unknown as MediaStream);
+		await started;
+
+		expect(nodes.lifecycle.state).toBe("running");
+	});
+
+	it("resumes again when the context fell back to suspended during the prompt", async () => {
+		// catches: a context suspended again by the prompt stays silent.
+		const nodes = fakeContext();
+		nodes.resume.mockImplementationOnce(async () => {});
+		nodes.lifecycle.state = "suspended";
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia: async () => ({ getTracks: () => [] }) as unknown as MediaStream,
+			createContext: () => nodes.context,
+			audioSession: () => undefined,
+		};
+
+		await connectBrowserVoice("b1", deps);
+
+		expect(nodes.resume).toHaveBeenCalledTimes(2);
+		expect(nodes.lifecycle.state).toBe("running");
+	});
+
+	it("sets the audio session to play-and-record before the microphone opens", async () => {
+		// catches: the page stays in the default `auto` category when the mic
+		// opens, so iOS routes the reply as a ringer-volume sound.
+		const session = { type: "auto" };
+		const seenAtPrompt: string[] = [];
+		const nodes = fakeContext();
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia: async () => {
+				seenAtPrompt.push(session.type);
+				return { getTracks: () => [] } as unknown as MediaStream;
+			},
+			createContext: () => nodes.context,
+			audioSession: () => session,
+		};
+
+		await connectBrowserVoice("b1", deps);
+
+		expect(seenAtPrompt).toEqual(["play-and-record"]);
+	});
+
+	it("closes the socket and the context when the microphone is refused", async () => {
+		// catches: a refused prompt leaves the owner's socket and a live
+		// AudioContext behind, so the next arm is told the owner is taken.
+		const socket = new FakeSocket();
+		const nodes = fakeContext();
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => socket as unknown as WebSocket,
+			getUserMedia: async () => {
+				throw new Error("NotAllowedError");
+			},
+			createContext: () => nodes.context,
+			audioSession: () => undefined,
+		};
+
+		await expect(connectBrowserVoice("b1", deps)).rejects.toThrow("NotAllowedError");
+
+		expect(socket.closed).toBe(true);
+		expect((nodes.context as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalled();
+	});
+});
+
+describe("a replies-only browser voice session", () => {
+	it("opens the socket and the speaker but never the microphone", async () => {
+		// catches: replies-only still asks for the microphone, so a phone prompts
+		// for a device the user turned off and streams silence to the server.
+		const nodes = fakeContext();
+		const getUserMedia = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+		const session = { type: "auto" };
+		const deps: BrowserVoiceDeps = {
+			openSocket: () => new FakeSocket() as unknown as WebSocket,
+			getUserMedia,
+			createContext: () => nodes.context,
+			audioSession: () => session,
+		};
+
+		const voice = await connectBrowserVoice("b1", deps, false);
+
+		expect(getUserMedia).not.toHaveBeenCalled();
+		expect(nodes.capture.connect).not.toHaveBeenCalled();
+		expect(session.type).toBe("playback");
+		expect(() => voice.stop()).not.toThrow();
+	});
+});
+
+describe("openMicrophone", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("explains a non-secure origin instead of throwing a bare TypeError", async () => {
+		// catches: plain http leaves navigator.mediaDevices undefined and the
+		// user reads "Cannot read properties of undefined (reading 'getUserMedia')".
+		vi.stubGlobal("navigator", { mediaDevices: undefined });
+		vi.stubGlobal("isSecureContext", false);
+
+		await expect(openMicrophone()).rejects.toThrow(/https/);
+	});
+
+	it("does not blame the origin when the page is secure but the browser has no microphone API", async () => {
+		// catches: telling a user on https to "use https".
+		vi.stubGlobal("navigator", { mediaDevices: undefined });
+		vi.stubGlobal("isSecureContext", true);
+
+		await expect(openMicrophone()).rejects.toThrow(/cannot open the microphone/);
+	});
+});
+
 describe("a browser voice session", () => {
 	let socket: FakeSocket;
 	let nodes: ReturnType<typeof fakeContext>;
@@ -124,6 +273,7 @@ describe("a browser voice session", () => {
 			openSocket: () => socket as unknown as WebSocket,
 			getUserMedia: async () => ({ getTracks: () => tracks }) as unknown as MediaStream,
 			createContext: () => nodes.context,
+			audioSession: () => undefined,
 		};
 	});
 
@@ -184,6 +334,45 @@ describe("a browser voice session", () => {
 	});
 
 	/**
+	 * A voice over the reply that is not for us: the reply holds where it is and
+	 * goes on from there. Catches: a pause that restarts the reply from the
+	 * beginning, or one that suspends the context and takes the microphone with
+	 * it.
+	 */
+	it("holds the reply on pause and continues from the same position on resume", async () => {
+		await connectBrowserVoice("b1", deps);
+		const frame = new ArrayBuffer(4 + 4);
+		new DataView(frame).setUint32(0, 24_000, true);
+		socket.onmessage?.({ data: frame });
+		nodes.clock.now = 2.5;
+
+		socket.onmessage?.({ data: JSON.stringify({ type: "pause" }) });
+		expect(nodes.sources[0].stop).toHaveBeenCalled();
+		expect(nodes.played).toHaveLength(1);
+
+		nodes.clock.now = 9;
+		socket.onmessage?.({ data: JSON.stringify({ type: "resume" }) });
+
+		expect(nodes.played).toHaveLength(2);
+		expect(nodes.played[1].from).toBe(2.5);
+	});
+
+	/** A reply handed over while held waits instead of talking over the user. */
+	it("keeps a reply that arrives during a pause until the resume", async () => {
+		await connectBrowserVoice("b1", deps);
+		socket.onmessage?.({ data: JSON.stringify({ type: "pause" }) });
+		const frame = new ArrayBuffer(4 + 4);
+		new DataView(frame).setUint32(0, 24_000, true);
+		socket.onmessage?.({ data: frame });
+		expect(nodes.played).toHaveLength(0);
+
+		socket.onmessage?.({ data: JSON.stringify({ type: "resume" }) });
+
+		expect(nodes.played).toHaveLength(1);
+		expect(nodes.played[0].from).toBe(0);
+	});
+
+	/**
 	 * The microphone must close with the conversation. A tab that kept its
 	 * device light on after disarming is the failure a user notices and cannot
 	 * explain.
@@ -196,5 +385,54 @@ describe("a browser voice session", () => {
 		expect(tracks[0].stop).toHaveBeenCalled();
 		expect(nodes.capture.disconnect).toHaveBeenCalled();
 		expect(socket.closed).toBe(true);
+	});
+});
+
+describe("the screen lock of a browser voice session", () => {
+	const lock = { release: vi.fn(async () => {}) };
+	const request = vi.fn(async () => lock);
+	const deps = (listen: boolean): BrowserVoiceDeps => ({
+		openSocket: () => new FakeSocket() as unknown as WebSocket,
+		getUserMedia: async () => {
+			if (!listen) throw new Error("replies-only must not open the microphone");
+			return { getTracks: () => [] } as unknown as MediaStream;
+		},
+		createContext: () => fakeContext().context,
+		audioSession: () => undefined,
+	});
+	const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	beforeEach(() => {
+		localStorage.clear();
+		Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request } });
+	});
+	afterEach(() => {
+		Reflect.deleteProperty(navigator, "wakeLock");
+		vi.clearAllMocks();
+	});
+
+	// Catches: hands-free listening on a phone lets the screen lock and the conversation go deaf.
+	it("holds the lock while the microphone is open and releases it on stop", async () => {
+		const session = await connectBrowserVoice("b1", deps(true));
+		await flush();
+		expect(request).toHaveBeenCalledOnce();
+		session.stop();
+		expect(lock.release).toHaveBeenCalledOnce();
+	});
+
+	// Catches: a refused microphone start leaves the screen pinned awake.
+	it("takes no lock when the microphone fails to open", async () => {
+		const failing = { ...deps(true), getUserMedia: async () => Promise.reject(new Error("denied")) };
+		await expect(connectBrowserVoice("b1", failing)).rejects.toThrow("denied");
+		await flush();
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	// Catches: a replies-only conversation, which captures nothing, keeps the screen on.
+	it("takes no lock in a replies-only conversation", async () => {
+		const session = await connectBrowserVoice("b1", deps(false), false);
+		await flush();
+		expect(request).not.toHaveBeenCalled();
+		session.stop();
 	});
 });

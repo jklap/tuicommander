@@ -10,6 +10,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { formatRelativeTime } from "../../utils/time";
 import d from "../shared/dialog.module.css";
+import { Select } from "../ui/Select";
 import s from "./ProgressDialog.module.css";
 import { ProgressFlow } from "./ProgressFlow";
 
@@ -136,7 +137,8 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					<span class={s.project}>{displayName()}</span>
 				</div>
 				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
-					<select
+					<Select
+						compact
 						class={s.terminalSelect}
 						aria-label="Progress project"
 						value={project() ?? ""}
@@ -145,9 +147,10 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 						<For each={props.projects}>
 							{(path) => <option value={path}>{path.split(/[\\/]/).pop() || path}</option>}
 						</For>
-					</select>
+					</Select>
 				</Show>
-				<select
+				<Select
+					compact
 					class={s.terminalSelect}
 					aria-label="Progress terminal"
 					onChange={(event) => progressStore.selectPty(event.currentTarget.value || null)}
@@ -162,7 +165,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 				<div class={s.viewToggle} role="group" aria-label="Progress view">
 					<button type="button" aria-pressed={!isFlow()} onClick={() => progressStore.setView("list")}>
 						List

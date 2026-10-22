@@ -1,18 +1,27 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
+import { Select } from "../../components/ui/Select";
+import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
+import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
+import { setDesktopUI } from "../../utils/tabletRouting";
+import { MAX_MOBILE_FONT_SIZE, MIN_MOBILE_FONT_SIZE, mobileFontSizes } from "../mobileFontSize";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
+import { useKeyboardCorrection } from "../useKeyboardCorrection";
+import { useMobileVoice } from "../useMobileVoice";
 import styles from "./SettingsScreen.module.css";
 
 const SOUND_KEY = "tuic-mobile-sounds";
 
 interface SettingsScreenProps {
+	recoveryRevision?: number;
 	isConnected: boolean;
 }
 
 /** Convert base64url-encoded VAPID public key to Uint8Array for PushManager.subscribe. */
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
 	const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-	const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+	const base64 = (base64String + padding).replaceAll("-", "+").replaceAll("_", "/");
 	const raw = atob(base64);
 	return new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
 }
@@ -20,7 +29,13 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 type PushState = "unsupported" | "requires-https" | "requires-install" | "denied" | "default" | "subscribed";
 
 export function SettingsScreen(props: SettingsScreenProps) {
+	const keyboardCorrection = useKeyboardCorrection();
+	const voice = useMobileVoice(
+		() => "",
+		() => props.isConnected,
+	);
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
+	const [keepAwake, setKeepAwake] = createSignal(localStorage.getItem(KEEP_AWAKE_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
 	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
 	const [theme, setTheme] = createSignal(mobileTheme());
@@ -33,6 +48,10 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	onMount(() => {
 		setServerUrl(window.location.origin);
 		void detectPushState().then(setPushState);
+	});
+	createEffect(() => {
+		props.recoveryRevision;
+		setThemeError(null);
 		void loadMobileTheme()
 			.then(setTheme)
 			.catch((error: unknown) => {
@@ -172,6 +191,12 @@ export function SettingsScreen(props: SettingsScreenProps) {
 		localStorage.setItem(SOUND_KEY, String(next));
 	}
 
+	function toggleKeepAwake() {
+		const next = !keepAwake();
+		setKeepAwake(next);
+		localStorage.setItem(KEEP_AWAKE_KEY, String(next));
+	}
+
 	const pushStatusText = () => {
 		switch (pushState()) {
 			case "unsupported":
@@ -221,10 +246,97 @@ export function SettingsScreen(props: SettingsScreenProps) {
 			</section>
 
 			<section class={styles.section}>
+				<h3 class={styles.sectionTitle}>{t("mobile.settings.input", "INPUT")}</h3>
+				<div class={styles.row}>
+					<span class={styles.label}>{t("mobile.settings.keyboardCorrection", "Autocorrect and spellcheck")}</span>
+					<button
+						type="button"
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: keyboardCorrection.enabled() }}
+						aria-label={t("mobile.settings.keyboardCorrection", "Autocorrect and spellcheck")}
+						aria-pressed={keyboardCorrection.enabled()}
+						onClick={keyboardCorrection.toggle}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
+			</section>
+
+			<Show when={voice.available()}>
+				<section class={styles.section}>
+					<h3 class={styles.sectionTitle}>VOICE</h3>
+					<label class={styles.row}>
+						<span class={styles.label}>Hands-free listening</span>
+						<input
+							type="checkbox"
+							checked={voice.listening()}
+							onChange={(e) => voice.setListening(e.currentTarget.checked)}
+						/>
+					</label>
+					<label class={`${styles.row} ${styles.spokenReplies}`}>
+						<span class={styles.label}>Spoken replies</span>
+						<input
+							type="checkbox"
+							checked={voice.spokenReplies()}
+							onChange={(e) => voice.setSpokenReplies(e.currentTarget.checked)}
+						/>
+					</label>
+				</section>
+			</Show>
+
+			<section class={styles.section}>
 				<h3 class={styles.sectionTitle}>APPEARANCE</h3>
+				<For
+					each={
+						[
+							{ surface: "terminal", label: "Terminal" },
+							{ surface: "chat", label: "Chat" },
+						] as const
+					}
+				>
+					{({ surface, label }) => (
+						<div class={styles.row}>
+							<span class={styles.label}>{label}</span>
+							<div class={styles.fontSizeControl} role="group" aria-label={`${label} font size`}>
+								<button
+									type="button"
+									aria-label={`Smaller ${label} font`}
+									disabled={mobileFontSizes[surface]() === MIN_MOBILE_FONT_SIZE}
+									onClick={() => mobileFontSizes.step(surface, -1)}
+								>
+									−
+								</button>
+								<output aria-label={`${label} font size`} aria-live="polite">
+									{mobileFontSizes[surface]()} px
+								</output>
+								<button
+									type="button"
+									aria-label={`Larger ${label} font`}
+									disabled={mobileFontSizes[surface]() === MAX_MOBILE_FONT_SIZE}
+									onClick={() => mobileFontSizes.step(surface, 1)}
+								>
+									+
+								</button>
+							</div>
+						</div>
+					)}
+				</For>
+				<div class={styles.row}>
+					<span class={styles.label}>New text indicator</span>
+					<button
+						type="button"
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: transcriptPreferences.enabled() }}
+						aria-label="New text indicator"
+						aria-pressed={transcriptPreferences.enabled()}
+						onClick={() => transcriptPreferences.setEnabled(!transcriptPreferences.enabled())}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
 				<label class={styles.row}>
 					<span class={styles.label}>Theme</span>
-					<select
+					<Select
 						class={styles.select}
 						aria-label="Theme"
 						value={theme()}
@@ -246,7 +358,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
 					>
 						<option value="commander">Dark</option>
 						<option value="vscode-light">Light</option>
-					</select>
+					</Select>
 				</label>
 				<Show when={themeError()}>
 					<div class={styles.hint} role="alert" style={{ color: "var(--error)" }}>
@@ -290,11 +402,22 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						<span class={styles.toggleThumb} />
 					</button>
 				</div>
+				<div class={styles.row}>
+					<span class={styles.label}>Keep screen awake while dictating</span>
+					<button
+						class={styles.toggle}
+						classList={{ [styles.toggleOn]: keepAwake() }}
+						onClick={toggleKeepAwake}
+						aria-pressed={keepAwake()}
+					>
+						<span class={styles.toggleThumb} />
+					</button>
+				</div>
 			</section>
 
 			<section class={styles.section}>
 				<h3 class={styles.sectionTitle}>ACTIONS</h3>
-				<a href="/" class={styles.link}>
+				<a href="/" class={styles.link} onClick={() => setDesktopUI(true)}>
 					Open Desktop UI
 				</a>
 				<a href="/process/monitor" class={styles.link} target="_blank" rel="noopener">

@@ -17,6 +17,8 @@
  * | up | `{"type":"playback-ended"}` | the reply finished playing |
  * | down | binary | `u32` little-endian sample rate, then `f32` samples |
  * | down | `{"type":"stop"}` | stop playing and drop the queue |
+ * | down | `{"type":"pause"}` | hold the reply where it is, and any that arrives |
+ * | down | `{"type":"resume"}` | carry on from where it was held |
  *
  * Resampling happens here rather than on the server: the `AudioContext` is
  * created at 16 kHz and resamples the device's native rate for free, and
@@ -24,6 +26,7 @@
  */
 
 import { appLogger } from "../stores/appLogger";
+import { holdScreenAwake } from "./screenWakeLock";
 
 /** The rate Whisper wants, and therefore the rate the socket carries. */
 const CAPTURE_SAMPLE_RATE = 16_000;
@@ -51,23 +54,46 @@ export interface BrowserVoiceDeps {
 	getUserMedia(): Promise<MediaStream>;
 	/** Build the capture context, at the rate the socket carries. */
 	createContext(sampleRate: number): AudioContext;
+	/** The page's audio session where the browser has one (Safari 16.4+), else undefined. */
+	audioSession(): { type: string } | undefined;
+}
+
+/**
+ * The microphone, or a readable reason there is none.
+ *
+ * Over plain `http://` the browser hides `navigator.mediaDevices` entirely, so
+ * calling through it raises a bare `TypeError` that the arming error shows as
+ * is. The usual cause on a phone is the page being opened by IP or an HTTP
+ * Tailscale URL, and that is the one thing the user can fix.
+ */
+export function openMicrophone(): Promise<MediaStream> {
+	if (!navigator.mediaDevices?.getUserMedia) {
+		return Promise.reject(
+			new Error(
+				window.isSecureContext
+					? "This browser cannot open the microphone."
+					: "Voice needs a secure page: open TUICommander over https:// (the browser blocks the microphone on plain http).",
+			),
+		);
+	}
+	return navigator.mediaDevices.getUserMedia({
+		audio: {
+			// The browser's own cancellation, on top of the server's. They
+			// are solving the same problem at different distances: this one
+			// knows the device, and AEC3 in Rust knows what was sent to be
+			// played. Neither is sufficient alone on a laptop speaker.
+			echoCancellation: true,
+			noiseSuppression: true,
+			autoGainControl: true,
+		},
+	});
 }
 
 const browserDeps: BrowserVoiceDeps = {
 	openSocket: (url) => new WebSocket(url),
-	getUserMedia: () =>
-		navigator.mediaDevices.getUserMedia({
-			audio: {
-				// The browser's own cancellation, on top of the server's. They
-				// are solving the same problem at different distances: this one
-				// knows the device, and AEC3 in Rust knows what was sent to be
-				// played. Neither is sufficient alone on a laptop speaker.
-				echoCancellation: true,
-				noiseSuppression: true,
-				autoGainControl: true,
-			},
-		}),
+	getUserMedia: openMicrophone,
 	createContext: (sampleRate) => new AudioContext({ sampleRate }),
+	audioSession: () => (navigator as Navigator & { audioSession?: { type: string } }).audioSession,
 };
 
 /** The `ws://`/`wss://` audio socket for this origin. */
@@ -109,43 +135,118 @@ export function encodeCapture(samples: Float32Array): ArrayBuffer {
  * there: Rust refuses an owner with no client rather than falling back to its
  * own microphone, so a tab that armed first would be told its own name is
  * unknown.
+ *
+ * `listen` false is a replies-only conversation: the socket and the speaker
+ * are opened, the microphone is not.
  */
 export async function connectBrowserVoice(
 	owner: string,
 	deps: BrowserVoiceDeps = browserDeps,
+	listen = true,
 ): Promise<BrowserVoiceSession> {
+	// Everything up to the first `await` runs inside the arming gesture, which
+	// is the only place iOS lets a context leave `suspended` (and the only place
+	// it lets the audio category change). `getUserMedia` resolves later, after
+	// the prompt, by when the gesture no longer counts.
 	const socket = deps.openSocket(audioSocketUrl(owner));
 	socket.binaryType = "arraybuffer";
-
-	const stream = await deps.getUserMedia();
+	const session = deps.audioSession();
+	// The default category is `auto`, which on iOS plays the reply at ringer
+	// volume or not at all once the microphone is open.
+	if (session) session.type = listen ? "play-and-record" : "playback";
 	const context = deps.createContext(CAPTURE_SAMPLE_RATE);
-	const source = context.createMediaStreamSource(stream);
+	const resumed = context.resume();
+	// Observed below; this keeps a rejection during the mic prompt from being reported as unhandled.
+	resumed.catch(() => {});
+
+	let stream: MediaStream | undefined;
+	try {
+		if (listen) stream = await deps.getUserMedia();
+		await resumed;
+		if (context.state === "suspended") await context.resume();
+	} catch (err) {
+		// The socket is the conversation's claim on the owner name: a failed
+		// start must not leave it open, nor a context alive, nor a granted
+		// microphone running.
+		stream?.getTracks().forEach((track) => track.stop());
+		socket.close();
+		void context.close();
+		throw err;
+	}
+	// Held only once the microphone is open: a failed start above never took it.
+	const releaseScreen = stream ? holdScreenAwake() : () => {};
+	const source = stream ? context.createMediaStreamSource(stream) : undefined;
 	// `ScriptProcessorNode` rather than an `AudioWorklet`: a worklet needs a
 	// separate module URL, which the packaged frontend serves from a path the
 	// plugin loader also owns, and this node is deprecated rather than absent.
 	// The work per callback is a copy, not a computation.
-	const capture = context.createScriptProcessor(FRAME_SAMPLES, 1, 1);
+	const capture = source ? context.createScriptProcessor(FRAME_SAMPLES, 1, 1) : undefined;
 
-	capture.onaudioprocess = (event) => {
-		if (socket.readyState !== WebSocket.OPEN) return;
-		socket.send(encodeCapture(event.inputBuffer.getChannelData(0)));
-	};
-	source.connect(capture);
-	// A `ScriptProcessorNode` only runs while it is connected to a
-	// destination. Nothing is *heard* from it — it emits the silence its
-	// output buffer was created with — but without this the callback above
-	// never fires and the conversation hears nothing.
-	capture.connect(context.destination);
+	if (capture && source) {
+		capture.onaudioprocess = (event) => {
+			if (socket.readyState !== WebSocket.OPEN) return;
+			socket.send(encodeCapture(event.inputBuffer.getChannelData(0)));
+		};
+		source.connect(capture);
+		// A `ScriptProcessorNode` only runs while it is connected to a
+		// destination. Nothing is *heard* from it — it emits the silence its
+		// output buffer was created with — but without this the callback above
+		// never fires and the conversation hears nothing.
+		capture.connect(context.destination);
+	}
 
 	let playing: AudioBufferSourceNode | null = null;
-	const stopPlayback = () => {
-		playing?.stop();
+	// The reply being played or held, where it started and whether it is held.
+	// Pausing stops the node and remembers the position: suspending the
+	// context instead would stop the microphone with it.
+	let current: AudioBuffer | null = null;
+	let startedAt = 0;
+	let offset = 0;
+	let paused = false;
+
+	const detach = () => {
+		const node = playing;
 		playing = null;
+		node?.stop();
+	};
+	const stopPlayback = () => {
+		detach();
+		current = null;
+		offset = 0;
+		paused = false;
+	};
+	const startPlayback = (buffer: AudioBuffer, from: number) => {
+		const node = context.createBufferSource();
+		node.buffer = buffer;
+		node.connect(context.destination);
+		node.onended = () => {
+			if (playing !== node) return;
+			playing = null;
+			current = null;
+			// The server cannot see the end of playback, and without this the
+			// reply stays `speaking` until its rendered duration elapses.
+			if (socket.readyState === WebSocket.OPEN) {
+				socket.send(JSON.stringify({ type: "playback-ended" }));
+			}
+		};
+		startedAt = context.currentTime - from;
+		node.start(0, from);
+		playing = node;
 	};
 
 	socket.onmessage = (event) => {
 		if (typeof event.data === "string") {
-			if (JSON.parse(event.data).type === "stop") stopPlayback();
+			const type = JSON.parse(event.data).type;
+			if (type === "stop") stopPlayback();
+			if (type === "pause" && !paused) {
+				paused = true;
+				if (playing) offset = context.currentTime - startedAt;
+				detach();
+			}
+			if (type === "resume" && paused) {
+				paused = false;
+				if (current) startPlayback(current, offset);
+			}
 			return;
 		}
 		const { sampleRate, samples } = decodeReply(event.data as ArrayBuffer);
@@ -155,21 +256,12 @@ export async function connectBrowserVoice(
 		// reply 50% slow.
 		const buffer = context.createBuffer(1, samples.length, sampleRate);
 		buffer.getChannelData(0).set(samples);
+		// A reply that arrives while held waits for the resume.
+		const held = paused;
 		stopPlayback();
-		const node = context.createBufferSource();
-		node.buffer = buffer;
-		node.connect(context.destination);
-		node.onended = () => {
-			if (playing !== node) return;
-			playing = null;
-			// The server cannot see the end of playback, and without this the
-			// reply stays `speaking` until its rendered duration elapses.
-			if (socket.readyState === WebSocket.OPEN) {
-				socket.send(JSON.stringify({ type: "playback-ended" }));
-			}
-		};
-		node.start();
-		playing = node;
+		paused = held;
+		current = buffer;
+		if (!held) startPlayback(buffer, 0);
 	};
 
 	socket.onerror = () => {
@@ -178,11 +270,14 @@ export async function connectBrowserVoice(
 
 	return {
 		stop() {
+			releaseScreen();
 			stopPlayback();
-			capture.onaudioprocess = null;
-			capture.disconnect();
-			source.disconnect();
-			for (const track of stream.getTracks()) track.stop();
+			if (capture) {
+				capture.onaudioprocess = null;
+				capture.disconnect();
+			}
+			source?.disconnect();
+			for (const track of stream?.getTracks() ?? []) track.stop();
 			void context.close();
 			socket.close();
 		},

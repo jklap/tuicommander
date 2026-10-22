@@ -219,6 +219,9 @@ pub(crate) async fn invoke_js_http(
 /// Shared by the MCP `debug` tool and the HTTP `/debug/invoke_js` route.
 #[cfg(feature = "desktop")]
 pub(crate) fn eval_debug_script(state: &Arc<AppState>, script: &str) -> serde_json::Value {
+    if state.secrets.tools_blocked() {
+        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
+    }
     use tauri::Manager;
     let app_handle = state.app_handle.read().clone();
     let Some(handle) = app_handle else {
@@ -351,5 +354,22 @@ mod tests {
             vec!["error-0", "error-1", "error-2"],
             "expected the 3 older error entries, in order, not truncated away by the limit"
         );
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FrameWorkloadBody {
+    recording: String,
+}
+
+/// Same bounded, serialized writer as desktop IPC. Existing HTTP auth applies.
+pub(crate) async fn save_frame_workload(Json(body): Json<FrameWorkloadBody>) -> impl IntoResponse {
+    match crate::frame_workload::save_frame_workload(body.recording).await {
+        Ok(path) => Json(serde_json::json!(path)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
     }
 }

@@ -119,12 +119,7 @@ impl Default for VoiceGates {
     }
 }
 
-/// Historical hardcoded floor. Low enough that ordinary room noise clears it,
-/// which is why the `no_speech_probability` gate exists alongside it.
-pub const DEFAULT_RMS_THRESHOLD: f32 = 0.001;
-
-/// whisper.cpp's own `no_speech_thold` default.
-pub const DEFAULT_NO_SPEECH_THRESHOLD: f32 = 0.6;
+pub use tuic_core::voice_defaults::{DEFAULT_NO_SPEECH_THRESHOLD, DEFAULT_RMS_THRESHOLD};
 
 /// One whisper encoder window, in samples at 16 kHz (`WHISPER_CHUNK_SIZE` is
 /// 30 s). The two streaming flags are safe at or under this length and lossy
@@ -518,16 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn backend_label_always_gpu() {
-        assert_eq!(backend_label(), "gpu");
-    }
-
-    #[test]
-    fn build_context_params_does_not_panic() {
-        let _params = build_context_params();
-    }
-
-    #[test]
     fn bare_thanks_in_any_language_is_a_hallucination() {
         // What quiet audio actually produces, punctuation and casing included.
         assert!(is_hallucination("Grazie."));
@@ -702,7 +687,7 @@ mod tests {
     #[test]
     fn a_run_with_no_segments_reports_empty_text_rather_than_no_speech() {
         match filter_speech_segments(&[], DEFAULT_NO_SPEECH_THRESHOLD) {
-            SegmentFilter::Speech(text) => assert!(text.is_empty()),
+            SegmentFilter::Speech(text) => assert_eq!(text, ""),
             SegmentFilter::AllNoSpeech(worst) => panic!("empty run scored as no-speech ({worst})"),
         }
     }

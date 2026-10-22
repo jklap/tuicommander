@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rpc } from "../../transport";
 import { FilesScreen } from "../screens/FilesScreen";
 
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
 const files = new Map([
 	["src/hello.txt", "hello\n"],
 	["src/guide.md", "# Guide\n\n**Important** note.\n"],
 	["src/null.dat", "abc\0def"],
+	["src/abs.md", "![In](/repo-one/src/images/in.png) ![Out](/elsewhere/out.png)"],
 	[
 		"src/deep/guide.md",
 		"![Local](images/diagram.png) ![Web](https://example.com/logo.png) ![Inline](data:image/png;base64,AAAA)",
@@ -23,6 +26,7 @@ let failSave = false;
 let delayedSearch: Promise<Array<{ name: string; path: string; is_dir: boolean; size: number }>> | null = null;
 
 vi.mock("../../transport", () => ({
+	isTauri: () => false,
 	rpc: vi.fn(async (command: string, args?: Record<string, string>) => {
 		calls.push(command);
 		if (command === "load_repositories") return { repos: { "/repo-one": {}, "/repo-two": {} } };
@@ -54,10 +58,11 @@ vi.mock("../../transport", () => ({
 			if (args?.file === "src/image.bin") throw new Error("Failed to read file: stream did not contain valid UTF-8");
 			return files.get(args?.file ?? "") ?? "";
 		}
-		if (command === "write_file") {
+		if (command === "write_file_if_unchanged") {
 			if (failSave) throw new Error("disk full");
+			if (files.get(args?.file ?? "") !== args?.expected) return false;
 			files.set(args?.file ?? "", args?.content ?? "");
-			return undefined;
+			return true;
 		}
 		throw new Error(`Unexpected command: ${command}`);
 	}),
@@ -79,6 +84,40 @@ afterEach(() => {
 });
 
 describe("FilesScreen", () => {
+	it("retries a repository opened from the picker when its first directory read failed", async () => {
+		const [revision, setRevision] = createSignal(0);
+		const view = render(() => <FilesScreen recoveryRevision={revision()} />);
+		const repository = await waitFor(() => view.getByRole("button", { name: /repo-one/ }));
+		vi.mocked(rpc).mockRejectedValueOnce(new Error("Failed to fetch"));
+		await fireEvent.click(repository);
+		await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Could not open directory"));
+		setRevision(1);
+		await waitFor(() => expect(view.getByRole("searchbox", { name: "Search files" })).toBeTruthy());
+		expect(view.queryByRole("alert")).toBeNull();
+	});
+
+	it("does not discard a linked file draft on a second recovery after initialization failed", async () => {
+		const [revision, setRevision] = createSignal(0);
+		vi.mocked(rpc).mockRejectedValueOnce(new Error("Failed to fetch"));
+		const view = render(() => (
+			<FilesScreen
+				recoveryRevision={revision()}
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/deep/guide.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Could not load repositories"));
+		setRevision(1);
+		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "Edit" })));
+		await fireEvent.input(view.getByRole("textbox", { name: "File content" }), {
+			target: { value: "My unsaved review" },
+		});
+		setRevision(2);
+		// Drain the successful retry's promise chain before checking the retained editor.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(view.getByRole("textbox", { name: "File content" })).toHaveValue("My unsaved review");
+	});
+
 	it("opens a backend-resolved chat directory without treating it as a file", async () => {
 		linkedTarget.value = { absolute_path: "/home/boss/Gits/project/docs", is_directory: true };
 		const view = render(() => (
@@ -229,6 +268,23 @@ describe("FilesScreen", () => {
 		expect(images[2].getAttribute("src")).toBe("data:image/png;base64,AAAA");
 	});
 
+	// Catches: an absolute image path being joined to the file directory ("src//repo-one/..."), a 404.
+	it("maps an absolute image inside the repository to its repo-relative path and leaves one outside alone", async () => {
+		linkedTarget.value = { absolute_path: "/repo-one/src/abs.md", is_directory: false };
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/abs.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(1));
+		const url = new URL(view.container.querySelector<HTMLImageElement>("#markdown-content img")!.src);
+		expect(url.pathname).toBe("/fs/markdown-image");
+		expect(url.searchParams.get("file")).toBe("src/images/in.png");
+		// No route serves a path outside the repository: a visible placeholder replaces the broken img.
+		expect(view.getByRole("img", { name: "Image unavailable" })).toBeTruthy();
+	});
+
 	it("refuses large and binary files without offering an editor", async () => {
 		const view = render(() => <FilesScreen />);
 		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
@@ -261,5 +317,87 @@ describe("FilesScreen", () => {
 		expect(files.get("src/hello.txt")).toBe("hello\n");
 		await fireEvent.click(view.getByRole("button", { name: "Cancel" }));
 		expect(view.getByText("hello")).toBeTruthy();
+	});
+
+	describe("Markdown review", () => {
+		const openGuide = async (text: string) => {
+			files.set("src/guide.md", text);
+			const view = render(() => <FilesScreen />);
+			await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+			await openRepo(view.getByRole);
+			await fireEvent.click(view.getByRole("button", { name: /guide.md/ }));
+			await waitFor(() => expect(view.container.querySelector("#markdown-content")).toBeTruthy());
+			return view;
+		};
+		const boxes = (view: ReturnType<typeof render>) =>
+			view.container.querySelectorAll<HTMLInputElement>('#markdown-content input[type="checkbox"]');
+
+		it("writes only the tapped task line to disk", async () => {
+			// Catches a toggle applied to the wrong line (or the whole file rewritten) when several boxes are open.
+			const view = await openGuide("- [ ] first\n- [ ] second\n- [x] third\n");
+			await fireEvent.click(boxes(view)[1]);
+			await waitFor(() => expect(files.get("src/guide.md")).toBe("- [ ] first\n- [x] second\n- [x] third\n"));
+			await waitFor(() => expect(boxes(view)[1].checked).toBe(true));
+		});
+
+		it("toggles a checkbox from a tap in its enlarged 44px target, not only on the 13px box", async () => {
+			// Catches a tap just beside the box being ignored, which is unusable with a thumb.
+			const view = await openGuide("- [ ] first\n- [ ] second\n");
+			const box = boxes(view)[0];
+			box.getBoundingClientRect = () => new DOMRect(20, 100, 13, 13);
+			const item = box.closest("li") as HTMLElement;
+			await fireEvent.click(item, { clientX: 8, clientY: 118 });
+			await waitFor(() => expect(files.get("src/guide.md")).toBe("- [x] first\n- [ ] second\n"));
+		});
+
+		it("refuses to overwrite a file edited on disk meanwhile and reloads it", async () => {
+			// Catches a stale view silently replacing newer text written by the desktop.
+			const view = await openGuide("- [ ] first\n- [ ] second\n");
+			files.set("src/guide.md", "- [ ] first\n- [ ] second\nadded on desktop\n");
+			await fireEvent.click(boxes(view)[0]);
+			await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/changed on disk/i));
+			expect(files.get("src/guide.md")).toBe("- [ ] first\n- [ ] second\nadded on desktop\n");
+			await waitFor(() =>
+				expect(view.container.querySelector("#markdown-content")?.textContent).toContain("added on desktop"),
+			);
+		});
+
+		it("saves a block comment in the desktop tweak format", async () => {
+			// Catches a second, mobile-only comment format the desktop viewer cannot read back.
+			const view = await openGuide("# Digest\n\nShip the release on Friday.\n");
+			await waitFor(() => expect(view.container.querySelector("[data-comment-source-start]")).toBeTruthy());
+			await fireEvent.click(view.getByText("Ship the release on Friday."));
+			await fireEvent.click(view.getByRole("button", { name: "Comment" }));
+			await fireEvent.input(view.getByRole("textbox", { name: "Comment text" }), {
+				target: { value: "Monday instead" },
+			});
+			await fireEvent.click(view.getByRole("button", { name: "Save comment" }));
+			await waitFor(() =>
+				expect(files.get("src/guide.md")).toMatch(
+					/<!--tweak:block:c_\S+ @\S+\nMonday instead-->\nShip the release on Friday\./,
+				),
+			);
+			await waitFor(() => expect(view.container.querySelector(".tweak-block-highlight")).toBeTruthy());
+		});
+
+		it("keeps the comment draft when the file changed on disk", async () => {
+			// Catches a conflict discarding the text the user just typed.
+			const view = await openGuide("# Digest\n\nShip the release on Friday.\n");
+			await waitFor(() => expect(view.container.querySelector("[data-comment-source-start]")).toBeTruthy());
+			await fireEvent.click(view.getByText("Ship the release on Friday."));
+			await fireEvent.click(view.getByRole("button", { name: "Comment" }));
+			await fireEvent.input(view.getByRole("textbox", { name: "Comment text" }), {
+				target: { value: "Monday instead" },
+			});
+			files.set("src/guide.md", "# Digest\n\nShip the release on Friday.\n\nmore\n");
+			await fireEvent.click(view.getByRole("button", { name: "Save comment" }));
+			await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/changed on disk/i));
+			expect(files.get("src/guide.md")).not.toContain("tweak");
+			await waitFor(() => expect(view.container.querySelector("#markdown-content")?.textContent).toContain("more"));
+			await waitFor(() => expect(view.container.querySelector("[data-comment-source-start]")).toBeTruthy());
+			await fireEvent.click(view.getByText("Ship the release on Friday."));
+			await fireEvent.click(view.getByRole("button", { name: "Comment" }));
+			expect((view.getByRole("textbox", { name: "Comment text" }) as HTMLTextAreaElement).value).toBe("Monday instead");
+		});
 	});
 });

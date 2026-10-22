@@ -6,6 +6,7 @@ import type { BranchPrStatus } from "../../types";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
+const remoteRpc = vi.fn();
 const mockListen = tauriListen as ReturnType<typeof vi.fn>;
 
 const listenHandlers = new Map<string, ((event: { payload: unknown }) => void)[]>();
@@ -40,6 +41,7 @@ describe("githubStore", () => {
 			repositoriesStore: {
 				getPaths: mockGetPaths,
 				getActivePaths: mockGetPaths,
+				get: () => ({ displayName: "Repo" }),
 			},
 		}));
 
@@ -51,12 +53,52 @@ describe("githubStore", () => {
 			},
 		}));
 
+		remoteRpc.mockReset().mockResolvedValue(undefined);
+		vi.doMock("../../transport", async (importOriginal) => ({
+			...(await importOriginal<typeof import("../../transport")>()),
+			rpc: remoteRpc,
+		}));
 		mockInvoke.mockResolvedValue(undefined);
 		store = (await import("../../stores/github")).githubStore;
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
+	});
+
+	it("rejects colliding local PR paths and routes remote notices once without local automation", async () => {
+		const runtime = await import("../../transportRuntime");
+		runtime.setRemoteBaseUrlLookup(() => "http://daemon");
+		const notifications = (await import("../../stores/prNotifications")).prNotificationsStore;
+		const terminal = vi.fn();
+		store.setOnPrTerminal(terminal);
+		store.startPolling();
+		const transition = {
+			type: "merged",
+			repo_path: "/repo1",
+			branch: "feature/x",
+			pr_number: 42,
+			title: "Remote PR",
+			__tuic_origin: { connection: "mint", name: "Mint" },
+		};
+		emitEvent("github-transition", transition);
+		expect(remoteRpc).not.toHaveBeenCalled();
+		expect(notifications.state.notifications).toHaveLength(0);
+		runtime.setRepoConnectionLookup(() => "mint");
+		remoteRpc.mockResolvedValue([makePrStatus()]);
+		emitEvent("github-transition", transition);
+		await Promise.resolve();
+		await Promise.resolve();
+		emitEvent("github-transition", transition);
+		await Promise.resolve();
+		expect(remoteRpc).toHaveBeenCalledTimes(1);
+		expect(remoteRpc).toHaveBeenCalledWith("get_repo_pr_statuses", { path: "/repo1" }, "mint");
+		expect(notifications.state.notifications).toHaveLength(1);
+		expect(notifications.state.notifications[0]).toMatchObject({ connectionId: "mint", title: "[Mint] Remote PR" });
+		expect(terminal).not.toHaveBeenCalled();
+		emitEvent("github-pr-update", { repo_path: "/repo1", statuses: [] });
+		expect(store.getPrStatus("/repo1", "feature/x")?.number).toBe(42);
+		store.stopPolling();
 	});
 
 	function makePrStatus(overrides: Partial<BranchPrStatus> = {}): BranchPrStatus {
@@ -91,6 +133,8 @@ describe("githubStore", () => {
 			merge_commit_allowed: true,
 			squash_merge_allowed: true,
 			rebase_merge_allowed: true,
+			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
 			...overrides,
 		};
 	}
@@ -376,6 +420,35 @@ describe("githubStore", () => {
 				expect(issues[0].title).toBe("Bug");
 
 				store.stopPolling();
+			});
+		});
+
+		it("sends an OS notification for a ready transition of a known PR", async () => {
+			// Production path: github-transition event -> store -> native notice.
+			const notify = vi.fn();
+			vi.doMock("../../services/prNativeNotifications", () => ({ notifyPrTransition: notify }));
+			vi.resetModules();
+			const s = (await import("../../stores/github")).githubStore;
+			await testInScopeAsync(async () => {
+				s.updateRepoData("/repo1", [makePrStatus()]);
+				s.startPolling();
+				await vi.advanceTimersByTimeAsync(0);
+				emitEvent("github-transition", {
+					type: "ready",
+					repo_path: "/repo1",
+					branch: "feature/x",
+					pr_number: 42,
+					title: "Add feature",
+				});
+				expect(notify).toHaveBeenCalledWith(
+					expect.objectContaining({
+						prNumber: 42,
+						title: "Add feature",
+						type: "ready",
+						url: "https://github.com/org/repo/pull/42",
+					}),
+				);
+				s.stopPolling();
 			});
 		});
 

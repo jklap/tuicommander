@@ -391,13 +391,13 @@ mod platform {
             // does not, this is not the envelope this client understands, and
             // guessing which of the two numbers to believe would put a wrong
             // count on screen. Say so instead.
-            if let Some(showing) = found.showing {
-                if showing as usize != found.symbols.len() {
-                    bail!(
-                        "mdkb: code_find reported showing={showing} but sent {} rows",
-                        found.symbols.len()
-                    );
-                }
+            if let Some(showing) = found.showing
+                && showing as usize != found.symbols.len()
+            {
+                bail!(
+                    "mdkb: code_find reported showing={showing} but sent {} rows",
+                    found.symbols.len()
+                );
             }
             Ok(MdkbFindResult {
                 symbols: found.symbols,
@@ -419,7 +419,7 @@ pub(crate) mod tests {
     use tokio::net::{UnixListener, UnixStream};
 
     async fn spawn_mock_server() -> (PathBuf, tokio::task::JoinHandle<()>) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_support::short_socket_tempdir();
         let sock_path = dir.path().join("test.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
         let path = sock_path.clone();
@@ -697,7 +697,7 @@ pub(crate) mod tests {
     /// A daemon that accepts the connection and then goes silent. This is the
     /// shape that used to hang `call` for ever.
     pub(crate) async fn spawn_silent_server() -> (PathBuf, tokio::task::JoinHandle<()>) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_support::short_socket_tempdir();
         let sock_path = dir.path().join("silent.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
         let path = sock_path.clone();

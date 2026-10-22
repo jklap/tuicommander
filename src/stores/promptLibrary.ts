@@ -3,8 +3,10 @@ import { createStore, reconcile } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { SMART_PROMPTS_BUILTIN } from "../data/smartPromptsBuiltIn";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { isTauri } from "../transport";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
+import { mergeSettingsSnapshot } from "../utils/mergeSettingsSnapshot";
 import { appLogger } from "./appLogger";
 
 /** Prompt category */
@@ -81,9 +83,14 @@ function generateId(): string {
 
 /** Debounced persist to Rust backend — coalesces rapid updates (e.g. markAsUsed) */
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let savedPrompts: Record<string, SavedPrompt> = {};
+let promptEpoch = 0;
 function savePrompts(prompts: Record<string, SavedPrompt>): void {
 	if (saveTimer) clearTimeout(saveTimer);
+	const epoch = promptEpoch;
 	saveTimer = setTimeout(() => {
+		saveTimer = null;
+		const acknowledged = JSON.parse(JSON.stringify(prompts)) as Record<string, SavedPrompt>;
 		const promptArray = Object.values(prompts).map((p) => ({
 			id: p.id,
 			label: p.name,
@@ -92,6 +99,9 @@ function savePrompts(prompts: Record<string, SavedPrompt>): void {
 		}));
 		promptWriter
 			.save({ prompts: promptArray })
+			.then(() => {
+				if (epoch === promptEpoch) savedPrompts = acknowledged;
+			})
 			.catch((err) => appLogger[isTauri() ? "error" : "debug"]("store", "Failed to save prompt library", err));
 	}, 500);
 }
@@ -106,7 +116,92 @@ function createPromptLibraryStore() {
 		selectedCategory: "all",
 	});
 
+	function decodePrompts(entries: Array<{ id: string; label: string; text: string; pinned: boolean }>, live = false) {
+		let migrated = false;
+		const restored: Record<string, SavedPrompt> = {};
+		for (const entry of entries) {
+			// Try to parse full SavedPrompt from text field (migration format)
+			try {
+				const full = JSON.parse(entry.text) as SavedPrompt;
+				// Validate security-relevant fields before trusting deserialized data
+				if (
+					full.executionMode &&
+					full.executionMode !== "inject" &&
+					full.executionMode !== "headless" &&
+					full.executionMode !== "api" &&
+					full.executionMode !== "shell"
+				) {
+					appLogger.warn(
+						"store",
+						`Prompt "${entry.id}" has invalid executionMode "${full.executionMode}", resetting to inject`,
+					);
+					full.executionMode = "inject";
+				}
+				if (full.injectTarget && full.injectTarget !== "terminal" && full.injectTarget !== "compose") {
+					appLogger.warn("store", `Prompt "${entry.id}" has invalid injectTarget "${full.injectTarget}", removing`);
+					full.injectTarget = undefined;
+				}
+				if (full.preferredAgent) {
+					if (!AGENT_TYPES.includes(full.preferredAgent)) {
+						appLogger.warn(
+							"store",
+							`Prompt "${entry.id}" has invalid preferredAgent "${full.preferredAgent}", removing`,
+						);
+						delete full.preferredAgent;
+					}
+				}
+				if (full.placement && !Array.isArray(full.placement)) {
+					full.placement = undefined;
+				}
+				// Migrate legacy placement name: tab-context → terminal-context
+				if (Array.isArray(full.placement) && full.placement.some((p) => (p as string) === "tab-context")) {
+					full.placement = full.placement.map((p) =>
+						(p as string) === "tab-context" ? "terminal-context" : p,
+					) as SmartPlacement[];
+					migrated = true;
+				}
+				restored[full.id] = full;
+			} catch (err) {
+				appLogger.warn("store", `Prompt "${entry.id}" has non-JSON text field, using simple format`, err);
+				restored[entry.id] = {
+					id: entry.id,
+					name: entry.label,
+					content: entry.text,
+					category: "custom",
+					isFavorite: entry.pinned,
+					createdAt: live ? (savedPrompts[entry.id]?.createdAt ?? 0) : Date.now(),
+					updatedAt: live ? (savedPrompts[entry.id]?.updatedAt ?? 0) : Date.now(),
+				};
+			}
+		}
+		return { restored, migrated };
+	}
+
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "prompts",
+				read: () =>
+					invoke<{ prompts: Array<{ id: string; label: string; text: string; pinned: boolean }> }>(
+						"load_prompt_library",
+					),
+				apply: (remote) => {
+					const incoming = decodePrompts(remote?.prompts ?? [], true).restored;
+					const merged = mergeSettingsSnapshot(savedPrompts, state.prompts, incoming);
+					const pendingSave = saveTimer !== null;
+					if (saveTimer) {
+						clearTimeout(saveTimer);
+						saveTimer = null;
+					}
+					promptEpoch++;
+					promptWriter.adopt(remote ?? { prompts: [] }, remote ?? { prompts: [] });
+					savedPrompts = JSON.parse(JSON.stringify(incoming));
+					setState("prompts", reconcile(merged.value));
+					if (pendingSave && !merged.conflicts.length) savePrompts(state.prompts);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 		/** Load prompts from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
@@ -138,65 +233,10 @@ function createPromptLibraryStore() {
 				promptWriter.loaded({ prompts: loaded?.prompts ?? [] });
 				let migrated = false;
 				if (loaded?.prompts && loaded.prompts.length > 0) {
-					const restored: Record<string, SavedPrompt> = {};
-					for (const entry of loaded.prompts) {
-						// Try to parse full SavedPrompt from text field (migration format)
-						try {
-							const full = JSON.parse(entry.text) as SavedPrompt;
-							// Validate security-relevant fields before trusting deserialized data
-							if (
-								full.executionMode &&
-								full.executionMode !== "inject" &&
-								full.executionMode !== "headless" &&
-								full.executionMode !== "api" &&
-								full.executionMode !== "shell"
-							) {
-								appLogger.warn(
-									"store",
-									`Prompt "${entry.id}" has invalid executionMode "${full.executionMode}", resetting to inject`,
-								);
-								full.executionMode = "inject";
-							}
-							if (full.injectTarget && full.injectTarget !== "terminal" && full.injectTarget !== "compose") {
-								appLogger.warn(
-									"store",
-									`Prompt "${entry.id}" has invalid injectTarget "${full.injectTarget}", removing`,
-								);
-								full.injectTarget = undefined;
-							}
-							if (full.preferredAgent) {
-								if (!AGENT_TYPES.includes(full.preferredAgent)) {
-									appLogger.warn(
-										"store",
-										`Prompt "${entry.id}" has invalid preferredAgent "${full.preferredAgent}", removing`,
-									);
-									delete full.preferredAgent;
-								}
-							}
-							if (full.placement && !Array.isArray(full.placement)) {
-								full.placement = undefined;
-							}
-							// Migrate legacy placement name: tab-context → terminal-context
-							if (Array.isArray(full.placement) && full.placement.some((p) => (p as string) === "tab-context")) {
-								full.placement = full.placement.map((p) =>
-									(p as string) === "tab-context" ? "terminal-context" : p,
-								) as SmartPlacement[];
-								migrated = true;
-							}
-							restored[full.id] = full;
-						} catch (err) {
-							appLogger.warn("store", `Prompt "${entry.id}" has non-JSON text field, using simple format`, err);
-							restored[entry.id] = {
-								id: entry.id,
-								name: entry.label,
-								content: entry.text,
-								category: "custom",
-								isFavorite: entry.pinned,
-								createdAt: Date.now(),
-								updatedAt: Date.now(),
-							};
-						}
-					}
+					const decoded = decodePrompts(loaded.prompts);
+					const restored = decoded.restored;
+					migrated = decoded.migrated;
+					savedPrompts = JSON.parse(JSON.stringify(restored));
 					setState("prompts", restored);
 					if (migrated) savePrompts(restored);
 				}
@@ -416,7 +456,7 @@ function createPromptLibraryStore() {
 			}
 
 			// Sort by most recently used/updated
-			return [...prompts].sort((a, b) => {
+			return prompts.toSorted((a, b) => {
 				const aTime = a.lastUsed || a.updatedAt;
 				const bTime = b.lastUsed || b.updatedAt;
 				return bTime - aTime;

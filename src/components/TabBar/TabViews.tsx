@@ -91,6 +91,7 @@ interface TerminalTabViewProps extends SharedTabViewProps {
 	index: number;
 	designModeStatus?: "armed" | "stopped";
 	quickSwitcherActive: boolean;
+	tabHintsActive?: boolean;
 	isEditing: boolean;
 	showWorkspaceMetadata: boolean;
 	onFocusDetached?: (id: string) => void;
@@ -131,12 +132,13 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					isDetached() && s.detached,
 					awaitingInput() && s.awaitingInput,
 					awaitingInput() && AWAITING_CLASSES[awaitingInput()!],
-					!awaitingInput() && isBusy() && s.shellBusy,
+					!awaitingInput() && !terminal()?.providerRecovery && isBusy() && s.shellBusy,
 					!awaitingInput() && !isBusy() && isUnseen() && s.shellUnseen,
 					!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 					isExited() && s.shellExited,
-					terminal()?.isRemote && s.remoteTab,
+					terminal()?.isExternallyCreated && s.remoteTab,
 					terminal()?.standby && s.standby,
+					terminal()?.suspended && s.suspended,
 					...dragClasses(props),
 				)}
 				data-tab-id={props.id}
@@ -160,32 +162,36 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 				}}
 			>
 				<span class={s.tabIcon}>●</span>
-				<Show when={props.designModeStatus}>
+				<Show when={props.designModeStatus === "armed"}>
 					<span
-						class={cx(s.designModeBadge, props.designModeStatus === "armed" ? s.designModeArmed : s.designModeStopped)}
-						title={
-							props.designModeStatus === "armed"
-								? t("tabBar.designModeArmed", "Design Mode armed")
-								: t("tabBar.designModeStopped", "Design Mode stopped")
-						}
+						class={cx(s.designModeBadge, s.designModeArmed)}
+						title={t("tabBar.designModeArmed", "Design Mode armed")}
 					>
-						{props.designModeStatus === "armed" ? "D" : "D·"}
+						D
 					</span>
 				</Show>
 				<Show
 					when={props.isEditing}
 					fallback={
 						<span class={s.tabName}>
-							<Show when={terminal()?.isRemote && terminal()?.agentType}>
+							<Show when={terminal()?.isExternallyCreated && terminal()?.agentType}>
 								<span class={s.ptyPrefix}>PTY · </span>
 							</Show>
 							{terminal()?.name}
+							<Show when={terminal()?.providerRecovery}>
+								<span> · recovering</span>
+							</Show>
 							<Show when={terminal()?.standby}>
 								<span class={s.standbyBadge} title="Standby (paused)">
 									<svg viewBox="0 0 8 10" width="8" height="10" fill="currentColor">
 										<rect x="0" y="0" width="3" height="10" />
 										<rect x="5" y="0" width="3" height="10" />
 									</svg>
+								</span>
+							</Show>
+							<Show when={terminal()?.suspended}>
+								<span class={s.suspendedBadge} title={t("tabBar.suspended", "Suspended")}>
+									zz
 								</span>
 							</Show>
 							<Show when={isDetached()}>
@@ -238,8 +244,10 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 						<GlobeIcon size={11} />
 					</button>
 				</Show>
-				<Show when={props.quickSwitcherActive && props.index < 9}>
-					<span class={s.shortcutBadge}>{keyFor(`switch-tab-${props.index + 1}`)}</span>
+				<Show when={(props.tabHintsActive || props.quickSwitcherActive) && props.index < 9}>
+					<span class={s.shortcutBadge}>
+						{keyFor(`${props.tabHintsActive ? "switch-tab" : "switch-branch"}-${props.index + 1}`)}
+					</span>
 				</Show>
 				<Show when={props.showWorkspaceMetadata && hovered() && globalWorkspaceStore.isActive() && repoName()}>
 					<span class={s.repoOverlay}>{repoName()}</span>

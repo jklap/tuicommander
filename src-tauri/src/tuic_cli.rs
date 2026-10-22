@@ -65,6 +65,7 @@ pub(crate) fn get_cli_status() -> CliStatus {
 /// On macOS, uses osascript for admin privileges if needed.
 #[tauri::command]
 pub(crate) fn install_cli() -> Result<String, String> {
+    require_global_cli_mutation()?;
     let sidecar_path = resolve_sidecar_path()?;
     let install_path = resolve_install_path();
 
@@ -85,6 +86,7 @@ pub(crate) fn install_cli() -> Result<String, String> {
 /// Uninstall the CLI binary from system PATH.
 #[tauri::command]
 pub(crate) fn uninstall_cli() -> Result<(), String> {
+    require_global_cli_mutation()?;
     let install_path = resolve_install_path();
     if !std::path::Path::new(&install_path).exists() {
         return Ok(());
@@ -117,6 +119,9 @@ pub(crate) fn set_last_seen_version(version: String) {
 /// Auto-update: if the CLI is installed, atomically replace it with the current sidecar.
 /// Called off the setup path — silent, no elevation prompt (relies on directory permissions).
 pub(crate) fn auto_update_cli() {
+    if crate::agent_test::active() {
+        return;
+    }
     let install_path = resolve_install_path();
     if !std::path::Path::new(&install_path).exists() {
         return;
@@ -149,10 +154,20 @@ pub(crate) fn auto_update_cli() {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn require_global_cli_mutation() -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Err(
+            "Global CLI installation, update and removal are disabled in agent-test".into(),
+        );
+    }
+    Ok(())
+}
+
 fn replace_cli_atomically(
     sidecar: &std::path::Path,
     install_path: &std::path::Path,
 ) -> Result<(), String> {
+    require_global_cli_mutation()?;
     let staged = install_path.with_extension(format!("update.{}", uuid::Uuid::new_v4()));
     let result = (|| {
         std::fs::copy(sidecar, &staged).map_err(|e| format!("Failed to stage CLI update: {e}"))?;
@@ -180,6 +195,11 @@ fn replace_cli_atomically(
 }
 
 fn resolve_install_path() -> String {
+    #[cfg(test)]
+    if let Some(root) = crate::agent_test::test_root() {
+        return root.join("installed-tuic").to_string_lossy().into_owned();
+    }
+
     // macOS: /usr/local/bin (in default PATH, standard for user-installed CLIs)
     #[cfg(target_os = "macos")]
     {
@@ -220,6 +240,11 @@ fn sidecar_name() -> &'static str {
 /// packaged build and fell through to the dev path, which only exists on the
 /// build machine (the root cause of issue #52).
 fn resolve_sidecar_path() -> Result<String, String> {
+    #[cfg(test)]
+    if let Some(root) = crate::agent_test::test_root() {
+        return Ok(root.join("sidecar-tuic").to_string_lossy().into_owned());
+    }
+
     let name = sidecar_name();
 
     // Release: sidecar bundled alongside the main executable.
@@ -273,14 +298,31 @@ fn check_version_match(installed_path: &str) -> bool {
     }
 }
 
-/// True when we can overwrite the installed binary without elevation. Opening it
-/// for write (without truncating) is a faithful proxy for whether the startup
-/// auto-update's `fs::copy` will succeed — a root-owned file returns false here.
+/// Atomic updates stage a sibling and replace the directory entry, so probe the
+/// directory, not the executable. On macOS even a write-open without any writes
+/// can invalidate the signed executable's cached signature (#2129-1dfd).
 fn install_path_writable(path: &str) -> bool {
-    std::fs::OpenOptions::new().write(true).open(path).is_ok()
+    let path = std::path::Path::new(path);
+    #[cfg(windows)]
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.permissions().readonly())
+    {
+        // Windows refuses replacement of a read-only destination.
+        return false;
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    tempfile::Builder::new()
+        .prefix(".tuic-update-probe-")
+        .tempfile_in(parent)
+        .is_ok()
 }
 
 pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
+    require_global_cli_mutation()?;
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(dst).parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -345,6 +387,7 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
 }
 
 pub(crate) fn remove_with_elevation(path: &str) -> Result<(), String> {
+    require_global_cli_mutation()?;
     if std::fs::remove_file(path).is_ok() {
         return Ok(());
     }
@@ -393,6 +436,103 @@ pub(crate) fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolated_cli(test: impl FnOnce(&std::path::Path, &std::path::Path)) {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let installed = dir.path().join("installed-tuic");
+        let sidecar = dir.path().join("sidecar-tuic");
+        std::fs::write(&installed, b"daily-cli").unwrap();
+        std::fs::write(&sidecar, b"agent-test-cli").unwrap();
+        crate::agent_test::with_test_profile(dir.path(), || test(&installed, &sidecar));
+    }
+
+    // Catches: checking the old executable's write bit reports that atomic
+    // replacement needs elevation even when its directory permits replacement.
+    #[cfg(unix)]
+    #[test]
+    fn cli_update_probe_uses_install_directory_not_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let installed = dir.path().join("tuic");
+        std::fs::write(&installed, b"old-cli").unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        assert!(
+            install_path_writable(installed.to_str().unwrap()),
+            "atomic replacement needs a writable directory, not a writable executable"
+        );
+        assert_eq!(std::fs::read(&installed).unwrap(), b"old-cli");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "probe must clean up"
+        );
+    }
+
+    // Catches: the probe answers true unconditionally (or from the executable's
+    // own mode), so a read-only install directory is reported as auto-updatable.
+    #[cfg(unix)]
+    #[test]
+    fn cli_update_probe_rejects_read_only_install_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let installed = dir.path().join("tuic");
+        std::fs::write(&installed, b"old-cli").unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let root = std::fs::File::create(dir.path().join("root-check")).is_ok();
+        let writable = install_path_writable(installed.to_str().unwrap());
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        if root {
+            return; // permission bits do not bind root
+        }
+        assert!(
+            !writable,
+            "a read-only directory cannot take an atomic replacement"
+        );
+    }
+
+    #[test]
+    fn agent_test_cli_auto_update_preserves_global_binary() {
+        // Bug caught: ordinary desktop setup replaces the global CLI from agent-test.
+        isolated_cli(|installed, _| {
+            auto_update_cli();
+            assert_eq!(std::fs::read(installed).unwrap(), b"daily-cli");
+        });
+    }
+
+    #[test]
+    fn agent_test_cli_install_refuses_global_replacement() {
+        // Bug caught: the explicit installer bypasses startup isolation.
+        isolated_cli(|installed, _| {
+            let result = install_cli();
+            assert_eq!(std::fs::read(installed).unwrap(), b"daily-cli");
+            assert!(result.unwrap_err().contains("agent-test"));
+        });
+    }
+
+    #[test]
+    fn agent_test_cli_uninstall_refuses_global_removal() {
+        // Bug caught: explicit uninstall removes the daily CLI from agent-test.
+        isolated_cli(|installed, _| {
+            let result = uninstall_cli();
+            assert_eq!(std::fs::read(installed).unwrap(), b"daily-cli");
+            assert!(result.unwrap_err().contains("agent-test"));
+        });
+    }
+
+    #[test]
+    fn agent_test_cli_helpers_refuse_global_mutations() {
+        // Bug caught: another CLI caller bypasses the guarded command via elevation helpers.
+        isolated_cli(|installed, sidecar| {
+            let copy = copy_with_elevation(sidecar.to_str().unwrap(), installed.to_str().unwrap());
+            assert_eq!(std::fs::read(installed).unwrap(), b"daily-cli");
+            assert!(copy.unwrap_err().contains("agent-test"));
+            let remove = remove_with_elevation(installed.to_str().unwrap());
+            assert_eq!(std::fs::read(installed).unwrap(), b"daily-cli");
+            assert!(remove.unwrap_err().contains("agent-test"));
+        });
+    }
 
     #[test]
     fn cli_update_replaces_the_installed_binary_atomically() {

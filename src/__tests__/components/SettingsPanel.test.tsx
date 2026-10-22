@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("../../stores/settings", () => ({
 	settingsStore: {
 		state: {
+			customLaunchers: [],
 			ide: "vscode",
 			font: "JetBrains Mono",
 			defaultFontSize: 12,
@@ -49,6 +50,7 @@ vi.mock("../../stores/ui", () => ({
 	uiStore: {
 		state: {
 			settingsNavWidth: 180,
+			tasksViewPreferences: {},
 		},
 		setSettingsNavWidth: vi.fn(),
 	},
@@ -89,6 +91,7 @@ vi.mock("../../stores/repoSettings", () => ({
 }));
 
 import { SettingsPanel } from "../../components/SettingsPanel/SettingsPanel";
+import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 
 /** Nav items keyed by the group label row above them, in rendered order. */
@@ -110,6 +113,14 @@ function navGroups(container: HTMLElement): Record<string, string[]> {
 describe("SettingsPanel", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.spyOn(appLogger, "error").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		for (const [source, message] of vi.mocked(appLogger.error).mock.calls) {
+			expect([source, message]).toEqual(["config", "ego perimeter request failed"]);
+		}
+		vi.mocked(appLogger.error).mockRestore();
 	});
 
 	it("does not render when visible=false", () => {
@@ -167,7 +178,7 @@ describe("SettingsPanel", () => {
 		const item = Array.from(navItems).find((n) => n.textContent === "Keyboard Shortcuts")!;
 		fireEvent.click(item);
 
-		const heading = container.querySelector(".section h3");
+		const heading = container.querySelector(".section h2");
 		expect(heading!.textContent).toBe("Keyboard Shortcuts");
 		// Reused from HelpPanel's KeyboardShortcutsTab — same shortcut rows render here.
 		expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);
@@ -225,10 +236,10 @@ describe("SettingsPanel", () => {
 	it("puts every global page under its task group, one direct item each", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		expect(navGroups(container)).toEqual({
-			Application: ["General", "Appearance", "Notifications"],
+			Application: ["General", "All settings (Expert)", "Appearance", "Notifications"],
 			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
-			Integrations: ["MCP", "Remote Access", "Remote Machines", "Plugins"],
+			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Manage plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
 		});
 	});
@@ -247,10 +258,17 @@ describe("SettingsPanel", () => {
 		expect(headingTexts).toContain("IDE");
 	});
 
-	it("opens the successor page for the tab keys this reorganization retired", () => {
+	it("opens the successor page for the tab keys this reorganization retired", async () => {
 		// services split into MCP / Remote Access / Remote Machines, and providers
 		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "load_config") {
+				return Promise.resolve({ mcp_capabilities: { denied: [], migration_unknown_tools: [] } });
+			}
+			if (command === "load_mcp_upstreams") return Promise.resolve({ servers: [] });
+			return Promise.resolve(undefined);
+		});
 		try {
 			for (const [retired, label] of [
 				["services", "MCP"],
@@ -260,6 +278,8 @@ describe("SettingsPanel", () => {
 					<SettingsPanel visible={true} onClose={() => {}} initialTab={retired} />
 				));
 				expect(container.querySelector(".navItem.active")?.textContent, retired).toBe(label);
+				// Catches: unmounting the MCP page while its load_config continuation is pending.
+				if (retired === "services") await vi.waitFor(() => expect(container.textContent).toContain("Capabilities"));
 				unmount();
 			}
 		} finally {
@@ -307,6 +327,30 @@ describe("SettingsPanel", () => {
 		// RepoWorktreeTab has a h3 "Repository"
 		const h3 = container.querySelector(".section h3");
 		expect(h3!.textContent).toBe("Repository");
+	});
+
+	// Catches: closing the repository help scope before RepoScriptsTab hides every approved script explanation.
+	it("keeps repository script help inside the real SettingsPanel page scope", () => {
+		const view = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+		));
+		for (const [label, guidance] of [
+			["Dev Server URL", "An unsuitable selection changes the displayed behavior"],
+			["Setup Script", "Use it for repository-specific setup."],
+			["Run Script", "Set it for a repeatable development command."],
+			["Archive Script", "Use it when cleanup is required before removal."],
+		]) {
+			const badge = view.getByRole("button", { name: `Explain ${label}` });
+			fireEvent.click(badge);
+			const tip = document.getElementById(badge.getAttribute("aria-describedby")!);
+			expect(tip?.textContent).toContain(guidance);
+			expect(tip?.getAttribute("data-visible")).toBe("true");
+			fireEvent.keyDown(document, { key: "Escape" });
+			expect(tip?.getAttribute("data-visible")).toBeNull();
+		}
+		expect((view.getByLabelText("Setup Script") as HTMLTextAreaElement).value).toBe("");
+		expect((view.getByLabelText("Run Script") as HTMLTextAreaElement).value).toBe("");
+		expect((view.getByLabelText("Archive Script") as HTMLTextAreaElement).value).toBe("");
 	});
 
 	it("shows Reset to Defaults button only when repo nav item is active", () => {

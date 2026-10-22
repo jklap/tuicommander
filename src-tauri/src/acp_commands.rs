@@ -8,8 +8,8 @@
 //!
 //! The one thing this layer does own is process authority. `connect` and
 //! `reconnect` read the ego executable from configuration and pass it down; no
-//! argument can name a binary, so no caller over IPC or HTTP can choose what
-//! this host launches.
+//! argument on these shared connections names a binary. Conversation-specific
+//! launch authority lives in `acp_chat` and uses a dedicated peer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,8 +23,8 @@ use crate::acp::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpClientError, AcpConnectRequest, AcpConnectionId,
     AcpConnectionSettlement, AcpConnectionSnapshot, AcpDetachKind, AcpEventStream,
     AcpHostRequestId, AcpInteractionSettlement, AcpPendingInteraction, AcpReconnectRequest,
-    AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactRequest,
-    EgoCompactResponse, EgoHoldRequest, EgoHoldResponse,
+    AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactResponse,
+    EgoHoldRequest, EgoHoldResponse,
 };
 
 /// The one executable this host may launch for ACP, as configured right now.
@@ -45,6 +45,46 @@ pub(crate) fn ego_config(state: &AppState) -> Result<EgoAcpConfig, AcpClientErro
         executable: PathBuf::from(executable),
         profile: settings.ego_profile.clone(),
     })
+}
+
+/// The directory every AI Chat conversation runs in, from the
+/// `ai_chat_workspace` setting; empty means the home directory of this host.
+///
+/// Resolved here so the desktop and a browser get the same answer for the host
+/// that runs ego. A configured folder that does not exist is created; every
+/// refusal names the setting, because the person has to edit it to recover.
+pub(crate) async fn workspace_root(state: &AppState) -> Result<PathBuf, AcpClientError> {
+    let configured = state.config.read().ai_chat_workspace.trim().to_string();
+    let unusable = |reason: String| {
+        AcpClientError::invalid_input(format!(
+            "AI Chat workspace (setting ai_chat_workspace) is unusable: {reason}"
+        ))
+    };
+    let path = if configured.is_empty() {
+        dirs::home_dir().ok_or_else(|| unusable("the home directory is unavailable".into()))?
+    } else {
+        PathBuf::from(&configured)
+    };
+    if !path.is_absolute() {
+        return Err(unusable(format!(
+            "{} is not an absolute path",
+            path.display()
+        )));
+    }
+    tokio::fs::create_dir_all(&path)
+        .await
+        .map_err(|error| unusable(format!("cannot create {}: {error}", path.display())))?;
+    tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|error| unusable(format!("cannot open {}: {error}", path.display())))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn acp_workspace_root(
+    state: State<'_, Arc<AppState>>,
+) -> Result<PathBuf, AcpClientError> {
+    workspace_root(&state).await
 }
 
 pub(crate) async fn connect(
@@ -255,6 +295,18 @@ pub(crate) fn acp_subscribe(
     Ok(())
 }
 
+pub(crate) async fn session_new(
+    state: &AppState,
+    connection_id: AcpConnectionId,
+    authority: AcpSessionAuthority,
+) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+    let machine_profile = state.config.read().ego_profile.clone();
+    state
+        .acp
+        .new_session_for_repo(connection_id, authority, &machine_profile)
+        .await
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn acp_session_new(
@@ -262,7 +314,7 @@ pub(crate) async fn acp_session_new(
     connection_id: AcpConnectionId,
     authority: AcpSessionAuthority,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-    state.acp.new_session(connection_id, authority).await
+    session_new(&state, connection_id, authority).await
 }
 
 #[cfg(feature = "desktop")]
@@ -276,7 +328,10 @@ pub(crate) async fn acp_session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = cwd;
     request.cursor = cursor;
-    state.acp.list_sessions(connection_id, request).await
+    state
+        .acp
+        .list_sessions_for_display(connection_id, request)
+        .await
 }
 
 #[cfg(feature = "desktop")]
@@ -314,11 +369,9 @@ pub(crate) async fn acp_session_fork(
     connection_id: AcpConnectionId,
     session_id: v1::SessionId,
     authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-    state
-        .acp
-        .attach(connection_id, AcpAttachKind::Fork, session_id, authority)
-        .await
+    crate::acp_chat::fork(&state, connection_id, session_id, authority, at_message_id).await
 }
 
 #[cfg(feature = "desktop")]
@@ -452,16 +505,7 @@ pub(crate) async fn acp_session_compact(
     session_id: v1::SessionId,
     request_id: uuid::Uuid,
 ) -> Result<EgoCompactResponse, AcpClientError> {
-    state
-        .acp
-        .compact(
-            connection_id,
-            EgoCompactRequest {
-                session_id,
-                request_id,
-            },
-        )
-        .await
+    crate::acp_chat::compact(&state, connection_id, session_id, request_id).await
 }
 
 #[cfg(feature = "desktop")]
@@ -527,6 +571,67 @@ mod tests {
     use super::*;
     use crate::acp::{AcpClientEvent, AcpEventJournal};
 
+    fn state_with_workspace(value: &str) -> AppState {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().ai_chat_workspace = value.to_string();
+        state
+    }
+
+    /// Catches: connect refused on a machine without ~/Gits because the root is
+    /// composed from a hardcoded folder name instead of configuration.
+    #[tokio::test]
+    async fn an_unset_workspace_is_the_home_directory_never_a_fixed_folder() {
+        let state = state_with_workspace("");
+        let home = std::fs::canonicalize(dirs::home_dir().unwrap()).unwrap();
+        assert_eq!(workspace_root(&state).await.unwrap(), home);
+    }
+
+    /// Catches: the setting is read but ignored, so a user's chosen folder never applies.
+    #[tokio::test]
+    async fn a_configured_workspace_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with_workspace(dir.path().to_str().unwrap());
+        assert_eq!(
+            workspace_root(&state).await.unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+    }
+
+    /// Catches: a missing configured folder falls through to the generic
+    /// "invalid ACP root" refusal at canonicalize.
+    #[tokio::test]
+    async fn a_missing_configured_workspace_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("chat").join("root");
+        let state = state_with_workspace(wanted.to_str().unwrap());
+        let root = workspace_root(&state).await.unwrap();
+        assert!(wanted.is_dir());
+        assert_eq!(root, std::fs::canonicalize(&wanted).unwrap());
+    }
+
+    /// Catches: a bad setting is reported without naming it, leaving the user
+    /// with no idea what to edit.
+    #[tokio::test]
+    async fn an_unusable_workspace_names_the_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let under_file = file.join("sub");
+        for bad in [
+            "relative/path".to_string(),
+            file.to_string_lossy().into_owned(),
+            under_file.to_string_lossy().into_owned(),
+        ] {
+            let state = state_with_workspace(&bad);
+            let error = workspace_root(&state).await.unwrap_err();
+            assert!(
+                error.message.contains("ai_chat_workspace"),
+                "{bad}: {}",
+                error.message
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_conversation_peer_survives_reconnect_and_app_restart() {
         let config_dir = tempfile::tempdir().unwrap();
@@ -551,7 +656,11 @@ mod tests {
             first
         );
         restarted.config.write().ai_chat_peer_ids.insert(
-            root.path().to_string_lossy().into_owned(),
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
             uuid::Uuid::parse_str(&first).unwrap().simple().to_string(),
         );
         let repaired = peer_id_for_root(&restarted, root.path()).await.unwrap();

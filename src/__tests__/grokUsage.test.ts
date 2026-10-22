@@ -28,9 +28,12 @@ describe("Grok usage", () => {
 		expect(buildGrokTickerText(usage(null))).toBe("no data");
 	});
 
-	it("uses the shared warning thresholds", () => {
+	it("uses the shared blink boundary, catching premature critical priority", () => {
 		expect(getGrokTickerPriority(usage(69))).toBe(10);
 		expect(getGrokTickerPriority(usage(70))).toBe(50);
-		expect(getGrokTickerPriority(usage(90))).toBe(90);
+		expect(getGrokTickerPriority(usage(90))).toBe(50);
+		expect(getGrokTickerPriority(usage(95))).toBe(50);
+		expect(getGrokTickerPriority(usage(95.9))).toBe(50);
+		expect(getGrokTickerPriority(usage(96))).toBe(96);
 	});
 });

@@ -104,6 +104,18 @@ pub struct LogLine {
     /// it. Never serialized — consumers receive the already-filtered view.
     #[serde(skip)]
     pub chrome: bool,
+    /// True when the row this line ends on soft-wraps: its text continues in
+    /// the next log line (or the first screen row). Lets a reader that works
+    /// on text (redaction) rejoin a logical line that scrolled into the log
+    /// across separate `process` calls. Serialized so mobile readers use the
+    /// same exact boundary instead of guessing from row lengths.
+    pub wrapped: bool,
+    /// True when part of this line's logical line never reached the log (rows
+    /// evicted, or scrolled off while capture was suspended). Readers cannot
+    /// redact what they cannot see whole, so they hide such a line instead.
+    /// Never serialized.
+    #[serde(skip)]
+    pub partial: bool,
 }
 
 fn is_zero_u16(v: &u16) -> bool {
@@ -120,22 +132,43 @@ impl LogLine {
         s
     }
 
-    /// Strip structural tokens (`intent: ...`, `suggest: ...`) from span text.
-    /// These tokens are parsed by the output parser for state updates but should not
-    /// appear in rendered log output (PWA/REST consumers).
+    /// Strip suggestion tokens from span text. Intent rows stay visible so
+    /// PWA/REST consumers can tint the complete logical line, like the desktop.
     pub fn strip_structural_tokens(&mut self) {
         // The grammar lives in `output_parser`, next to the regexes that READ
         // these tokens. A second copy here knew only the two Ink bullets and
         // drifted: the parser learned Codex's `•`/`◦` and the ack prefix, this
         // did not, so tokens TUIC had consumed were still shown to the user.
         for span in &mut self.spans {
-            if span.text.contains("intent:") || span.text.contains("suggest:") {
+            if span.text.contains("suggest:") {
                 let replaced = output_parser::strip_plain_prefix_tokens(&span.text);
                 span.text = replaced.into_owned();
             }
         }
         // Remove spans that became empty after stripping
         self.spans.retain(|s| !s.text.is_empty());
+    }
+}
+
+/// Strip structural tokens from a run of rows, including the wrapped tail rows
+/// of a bracketed `suggest: [ … ]` that [`LogLine::strip_structural_tokens`]
+/// cannot see from one row. The tail rows are dropped; the head row is emptied
+/// as for any single-row token (#1380-05d8).
+fn strip_structural_blocks(lines: &mut Vec<LogLine>) {
+    let texts: Vec<String> = lines.iter().map(LogLine::text).collect();
+    let mut tail = vec![false; lines.len()];
+    for (i, head) in texts.iter().enumerate() {
+        if tail[i] || !head.contains("suggest:") {
+            continue;
+        }
+        let rows =
+            output_parser::suggest_tail_rows(head, texts[i + 1..].iter().map(String::as_str));
+        tail[i + 1..=i + rows].fill(true);
+    }
+    let mut is_tail = tail.into_iter();
+    lines.retain(|_| !is_tail.next().unwrap_or(false));
+    for line in lines {
+        line.strip_structural_tokens();
     }
 }
 
@@ -168,9 +201,9 @@ pub struct VtLogBuffer {
     capacity: usize,
     /// Whether the previous `process()` call saw the alternate screen active.
     was_alternate: bool,
-    /// Number of scrollback lines already read from the grid.
-    /// Used to detect new scrollback lines after each `process()`.
-    scrollback_read: usize,
+    /// Primary-screen origin at the last extraction, including evicted rows.
+    /// History length stops growing at the cap and cannot serve as this cursor.
+    scrollback_origin: usize,
     /// Monotonically increasing count of all log lines ever pushed (not bounded
     /// by capacity). Used as stable cursor for paginated reads.
     total_pushed: usize,
@@ -185,6 +218,12 @@ pub struct VtLogBuffer {
     /// narrowed the terminal and Ink is flooding scrollback with
     /// narrow re-renders. Cleared when pty_cols widens again.
     suppress_capture: bool,
+    /// The next line to be pushed continues a wrapped row that was scrolled
+    /// off without being logged, so its head is missing.
+    next_head_lost: bool,
+    /// Caller-computed secrets of the retained log, valid while `total_pushed`
+    /// and the wrap flags are unchanged.
+    secret_cache: Option<(usize, Vec<String>)>,
 }
 
 /// Internal scrollback capacity for the terminal grid. Must be large enough
@@ -200,11 +239,13 @@ impl VtLogBuffer {
             log: VecDeque::new(),
             capacity,
             was_alternate: false,
-            scrollback_read: 0,
+            scrollback_origin: 0,
             total_pushed: 0,
             max_cols: cols,
             pty_cols: cols,
             suppress_capture: false,
+            next_head_lost: false,
+            secret_cache: None,
         }
     }
 
@@ -255,12 +296,12 @@ impl VtLogBuffer {
         //
         // When suppress_capture is set (side panel halved the terminal
         // width), Ink re-renders push fragmented junk into scrollback.
-        // Skip capture but keep scrollback_read in sync. Inline TUIs use
+        // Skip capture but keep scrollback_origin in sync. Inline TUIs use
         // the same keep-cursor-in-sync path so disabling mouse mode does
         // not flush the TUI history into the log.
         if !is_alternate {
-            let total_sb = self.grid.scrollback_count();
-            let delta = total_sb.saturating_sub(self.scrollback_read);
+            let total_sb = self.grid.primary_screen_origin();
+            let delta = total_sb.saturating_sub(self.scrollback_origin);
             if delta > 0 {
                 if !self.suppress_capture && !inline_tui {
                     let mut new_lines = self.grid.read_scrollback_log_lines(delta);
@@ -270,17 +311,20 @@ impl VtLogBuffer {
                         ll.cols = pty_cols;
                         self.push_log_line(ll);
                     }
+                } else {
+                    self.note_capture_gap();
                 }
-                self.scrollback_read = total_sb;
             }
+            // Reconciliation may rewind the origin; resynchronize even without new rows.
+            self.scrollback_origin = total_sb;
         }
 
         self.was_alternate = is_alternate;
         changed
     }
 
-    /// Resize with reflow. The reflow_wrap flag on Row prevents stale
-    /// natural wraps from merging — only shrink-produced wraps get merged.
+    /// Resize with full reflow so visible logical lines keep their content
+    /// and natural soft-wrap continuity for terminal and redaction readers.
     /// Alt screen and reflow_history=false disable reflow entirely.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let prev = self.pty_cols;
@@ -305,7 +349,8 @@ impl VtLogBuffer {
         // alternate-screen app is active. Keep the durable-log cursor in the
         // primary coordinate space; syncing it to alt history suppresses normal
         // shell capture after exit until primary history catches up.
-        self.scrollback_read = self.grid.primary_scrollback_count();
+        self.scrollback_origin = self.grid.primary_screen_origin();
+        self.note_capture_gap();
     }
 
     /// All finalized log lines (oldest first).
@@ -340,9 +385,7 @@ impl VtLogBuffer {
             .filter(|line| !line.chrome)
             .cloned()
             .collect();
-        for line in &mut slice {
-            line.strip_structural_tokens();
-        }
+        strip_structural_blocks(&mut slice);
         (slice, total)
     }
 
@@ -352,6 +395,78 @@ impl VtLogBuffer {
     /// when available — no re-parsing needed.
     pub fn screen_rows(&self) -> Vec<String> {
         self.grid.screen_text_rows()
+    }
+
+    /// Per screen row: true when the row soft-wraps into the next one.
+    pub fn screen_row_wraps(&self) -> Vec<bool> {
+        self.grid.screen_row_wraps()
+    }
+
+    /// `compute(self)` for the retained log, recomputed only after a push or a
+    /// capture gap: polling agents read far more often than the log changes.
+    pub fn cached_log_secrets(
+        &mut self,
+        compute: impl FnOnce(&Self) -> Vec<String>,
+    ) -> Vec<String> {
+        if let Some((generation, secrets)) = &self.secret_cache
+            && *generation == self.total_pushed
+        {
+            return secrets.clone();
+        }
+        let secrets = compute(self);
+        self.secret_cache = Some((self.total_pushed, secrets.clone()));
+        secrets
+    }
+
+    /// Text of the history rows that soft-wrap into the first screen row.
+    pub fn screen_head_context(&self) -> String {
+        self.grid.screen_head_context()
+    }
+
+    /// Offset of the first line of the logical line that contains `offset`:
+    /// walks back while the previous retained line soft-wraps into it.
+    fn logical_line_start(&self, offset: usize) -> usize {
+        let oldest = self.oldest_offset();
+        if offset >= self.total_pushed {
+            return offset; // nothing new to read, so nothing to complete
+        }
+        let mut start = offset.max(oldest);
+        while start > oldest && self.log[start - 1 - oldest].wrapped {
+            start -= 1;
+        }
+        start
+    }
+
+    /// Like [`Self::lines_since_owned`], but whole logical lines: the window
+    /// starts at the head of the line holding `offset` and, when its last row
+    /// wraps, runs on to the end of that line. Lines with pieces missing from
+    /// the log are replaced by `[REDACTED]`, together with their continuation.
+    /// Returns `(lines, start, end)` in source-row positions, including skipped
+    /// chrome slots. `end` is the next page boundary, not the total log size.
+    pub fn lines_since_logical(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize, usize) {
+        if offset >= self.total_pushed {
+            return (Vec::new(), self.total_pushed, self.total_pushed);
+        }
+        let start = self.logical_line_start(offset);
+        let oldest = self.oldest_offset();
+        let mut end = start.saturating_add(limit.max(1)).min(self.total_pushed);
+        while end < self.total_pushed && self.log[end - 1 - oldest].wrapped {
+            end += 1;
+        }
+        let (mut lines, _) = self.lines_since_owned(start, end - start);
+        let mut hiding = false;
+        let mut previous_wrapped = false;
+        for line in &mut lines {
+            hiding = line.partial || (hiding && previous_wrapped);
+            previous_wrapped = line.wrapped;
+            if hiding {
+                line.spans = vec![LogSpan {
+                    text: "[REDACTED]".to_string(),
+                    ..LogSpan::default()
+                }];
+            }
+        }
+        (lines, start, end)
     }
 
     /// Borrowed view of cached screen rows — avoids cloning when caller holds the lock.
@@ -379,9 +494,7 @@ impl VtLogBuffer {
     /// Used by mobile/REST to render screen content with colors.
     pub fn screen_log_lines(&self) -> Vec<LogLine> {
         let mut lines = self.grid.screen_log_lines();
-        for line in &mut lines {
-            line.strip_structural_tokens();
-        }
+        strip_structural_blocks(&mut lines);
         // Trim trailing empty lines
         while let Some(last) = lines.last() {
             if last.spans.is_empty() {
@@ -479,6 +592,10 @@ impl VtLogBuffer {
 
     pub fn grid_scroll_to_offset(&mut self, offset: usize) {
         self.grid.scroll_to_offset(offset);
+    }
+
+    pub fn grid_scroll_to_anchor(&mut self, anchor: Option<usize>) {
+        self.grid.scroll_to_anchor(anchor);
     }
 
     pub fn grid_display_offset(&self) -> usize {
@@ -608,12 +725,34 @@ impl VtLogBuffer {
         self.grid.approx_bytes()
     }
 
-    fn push_log_line(&mut self, line: LogLine) {
-        if self.log.len() >= self.capacity {
-            self.log.pop_front();
+    fn push_log_line(&mut self, mut line: LogLine) {
+        line.partial |= std::mem::take(&mut self.next_head_lost);
+        let mut evicted_wrapped = false;
+        if self.log.len() >= self.capacity
+            && let Some(evicted) = self.log.pop_front()
+        {
+            evicted_wrapped = evicted.wrapped;
         }
         self.log.push_back(line);
         self.total_pushed += 1;
+        // The oldest retained line now continues a line whose head is gone.
+        if evicted_wrapped && let Some(front) = self.log.front_mut() {
+            front.partial = true;
+        }
+    }
+
+    /// Rows were scrolled off (or history was rewritten by a resize) without
+    /// being logged: the log tail lost its continuation and the next line will
+    /// have lost its head. Flag both so readers hide them rather than leak.
+    fn note_capture_gap(&mut self) {
+        self.secret_cache = None;
+        if let Some(last) = self.log.back_mut()
+            && last.wrapped
+        {
+            last.wrapped = false;
+            last.partial = true;
+        }
+        self.next_head_lost = self.grid.newest_history_row_wraps();
     }
 }
 

@@ -87,6 +87,17 @@ function createTabOrderingStore() {
 			);
 		},
 
+		/** Append a restore batch without repeatedly scanning the growing order. */
+		insertMany(ids: readonly string[]): void {
+			const seen = new Set(state.order);
+			const added = ids.filter((id) => {
+				if (seen.has(id)) return false;
+				seen.add(id);
+				return true;
+			});
+			if (added.length) setState("order", (order) => [...order, ...added]);
+		},
+
 		/** Forget a closed tab. No-op for an unknown id. */
 		remove(id: string): void {
 			setState(
@@ -210,6 +221,15 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 			setState("_order", (o) => [...o, tab.id]);
 			tabOrderingStore.insert(tab.id);
 			return tab.id;
+		},
+
+		/** Internal: append fresh restored tabs, preserving order and pane selection. */
+		_addTabsBackground(tabs: readonly T[]): void {
+			if (!tabs.length) return;
+			for (const tab of tabs) setState("tabs", tab.id, tab);
+			const ids = tabs.map((tab) => tab.id);
+			setState("_order", (order) => [...order, ...ids]);
+			tabOrderingStore.insertMany(ids);
 		},
 
 		/** Internal: get next auto-increment id with the given prefix (e.g. "diff-1"). */

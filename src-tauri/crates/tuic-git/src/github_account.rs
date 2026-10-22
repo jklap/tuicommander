@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 /// rejects anything that isn't a bare hostname. Using the type everywhere (vs a
 /// raw `String`) prevents URL/path injection AND duplicate-key drift from casing
 /// or trailing dots.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitHubHost {
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates host for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     host: String,
 }
 
@@ -131,27 +132,30 @@ pub type GitHubAccountId = String;
 
 /// How an account authenticates. github.com mirrors the existing token-source
 /// chain; GitHub Enterprise Server uses a pasted Personal Access Token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountKind {
     /// github.com via OAuth Device Flow (keyring `GithubOauthToken` slot).
+    #[serde(alias = "github_com_gh_cli")]
     GithubComOauth,
     /// github.com via `GH_TOKEN`/`GITHUB_TOKEN` environment variable.
     GithubComEnv,
-    /// github.com via `gh` CLI.
-    GithubComGhCli,
     /// GitHub Enterprise Server via pasted Personal Access Token.
     GhePat,
 }
 
 /// A configured GitHub account: a host + how it authenticates + (once validated)
 /// the resolved viewer login.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitHubAccount {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub id: GitHubAccountId,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates host for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub host: GitHubHost,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-not-setting" = "Resolved GitHub viewer identity; supplied by account verification."))]
     pub login: Option<String>,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates kind for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub kind: AccountKind,
 }
 

@@ -1,0 +1,4 @@
+:root { --bg-primary:#1e1e1e; --bg-secondary:#252526; --fg-primary:#cccccc; --border:#3e3e42; }
+body { background:var(--bg-primary); color:var(--fg-primary); font:12px monospace; padding:12px; }
+h1 { font-size:14px; } button { background:var(--bg-secondary); color:var(--fg-primary); border:1px solid var(--border); padding:6px 12px; }
+pre { white-space:pre-wrap; }

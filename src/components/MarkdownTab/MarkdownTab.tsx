@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { reviewAgents as repositoryReviewAgents } from "../../../browser-extension/design-mode/reviewAgents.js";
 import { usePty } from "../../hooks/usePty";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
@@ -14,7 +15,9 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
+import { buildMarkdownReviewPrompt } from "../../utils/markdownReviewPrompt";
 import { isAbsolutePath, joinPath, normalizeSep, pathDirname } from "../../utils/pathUtils";
+import { consumePendingHeading, setPendingHeading } from "../../utils/pendingHeadings";
 import {
 	insertTweakBlockComment,
 	insertTweakComment,
@@ -32,7 +35,10 @@ import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
+import { Select } from "../ui/Select";
 import { CommentOverlay } from "./CommentOverlay";
+import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
+import { liveModeSupported } from "./liveMarkdown";
 import s from "./MarkdownTab.module.css";
 
 export interface MarkdownTabProps {
@@ -54,9 +60,6 @@ function isMissingFileError(msg: string): boolean {
 	return msg.includes("No such file") || msg.includes("os error 2");
 }
 
-/** Anchor requested for a Markdown tab that has not finished loading yet. */
-const pendingHeadings = new Map<string, string>();
-
 type MarkdownLinkTarget =
 	| { kind: "heading"; anchor: string }
 	| {
@@ -65,8 +68,8 @@ type MarkdownLinkTarget =
 			open_path: string;
 			is_directory: boolean;
 			same_document: boolean;
-			anchor?: string;
-			line?: number;
+			anchor?: string | null;
+			line?: number | null;
 	  }
 	| { kind: "missing"; path: string }
 	| { kind: "blocked"; reason: string };
@@ -96,6 +99,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
 	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
 	const [sendingChanges, setSendingChanges] = createSignal(false);
+	// True once this tab wrote the file (checkbox, tweak, live edit) and no agent has been told yet.
+	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
+	const [sentCommentIds, setSentCommentIds] = createSignal<ReadonlySet<string>>(new Set());
 	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 	const repo = useRepository();
 	const pty = usePty();
@@ -328,9 +334,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		if (tab.type !== "file" || !body || loading() || mdTabsStore.state.activeId !== tab.id) return;
 		const root = tab.fsRoot || tab.repoPath;
 		const absolute = normalizeSep(isAbsolutePath(tab.filePath) ? tab.filePath : joinPath(root, tab.filePath));
-		const anchor = pendingHeadings.get(absolute);
+		const anchor = consumePendingHeading(absolute);
 		if (!anchor) return;
-		pendingHeadings.delete(absolute);
 		requestAnimationFrame(() => scrollToHeading(anchor));
 	});
 
@@ -358,7 +363,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				toastsStore.add("Could not open link", resolved.reason, "error");
 				return;
 			}
-			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
+			if (resolved.anchor && resolved.same_document && resolved.line == null) {
 				scrollToHeading(resolved.anchor);
 				return;
 			}
@@ -371,10 +376,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				uiStore.setFileBrowserPanelVisible(true);
 				return;
 			}
-			if (resolved.anchor && /\.mdx?$/i.test(resolved.open_path)) {
-				const tabPath = isAbsolutePath(resolved.open_path) ? resolved.open_path : joinPath(root, resolved.open_path);
-				pendingHeadings.set(normalizeSep(tabPath), resolved.anchor);
-			}
+			setPendingHeading(root, resolved);
 			openFileAction(resolved.open_path, ft.repoPath, ft.fsRoot, resolved.line);
 		} catch (err) {
 			appLogger.error("app", "Markdown link target lookup failed", { href, error: String(err) });
@@ -400,6 +402,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				return false;
 			}
 			setContent(updatedContent);
+			setEditedSinceSend(true);
 			return true;
 		} catch (err) {
 			appLogger.error("app", "writeTweakedSource: write failed", err);
@@ -478,6 +481,15 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	const [liveMode, setLiveMode] = createSignal(false);
+	const [liveDirty, setLiveDirty] = createSignal(false);
+	const liveAvailable = () => props.tab.type === "file" && liveModeSupported(content());
+	const toggleLive = () => {
+		if (liveMode() && liveDirty() && !window.confirm(t("markdownTab.liveDiscard", "Discard unsaved changes?"))) return;
+		setLiveDirty(false);
+		setLiveMode(!liveMode());
+	};
+
 	const handleEdit = () => {
 		const tab = props.tab;
 		if (tab.type === "file") {
@@ -512,16 +524,16 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const canSend = () => !!selectedAgentSession() && !sendingChanges();
+	const hasReviewChanges = () =>
+		editedSinceSend() || reviewComments().some((comment) => !sentCommentIds().has(comment.id));
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
 		if (tab.type !== "file") return [];
-		return terminalsStore
-			.getIds()
-			.map((id) => terminalsStore.get(id))
-			.filter((terminal): terminal is NonNullable<typeof terminal> =>
-				Boolean(terminal?.sessionId && terminal.agentType && terminal.repoPath === tab.repoPath),
-			)
-			.map((terminal) => ({ sessionId: terminal.sessionId!, label: terminal.name }));
+		return repositoryReviewAgents(
+			terminalsStore.getIds().map((id) => terminalsStore.get(id)),
+			tab.repoPath,
+		);
 	});
 
 	createEffect(() => {
@@ -533,15 +545,15 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const handleSendChanges = async () => {
 		const sessionId = selectedAgentSession();
 		const path = fullPath()?.replace(/[\r\n\0]/g, "");
-		const count = reviewComments().length;
-		if (!sessionId || !path || count === 0 || sendingChanges()) return;
+		const comments = reviewComments();
+		const count = comments.length;
+		if (!sessionId || !path || !hasReviewChanges() || sendingChanges()) return;
+		const sentContent = content();
 		setSendingChanges(true);
 		try {
-			const noun = count === 1 ? "comment" : "comments";
-			const outcome = await pty.enqueueCommand(
-				sessionId,
-				`Open ${path}, re-read the whole file: apply the ${count} embedded tweak review ${noun}, treat every other change since your last write (checkbox toggles, edited text) as the user's answer, remove each resolved tweak marker, and leave unrelated files unchanged.`,
-			);
+			const outcome = await pty.enqueueCommand(sessionId, buildMarkdownReviewPrompt(path, count));
+			setSentCommentIds(new Set(comments.map((comment) => comment.id)));
+			if (content() === sentContent) setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
 			toastsStore.add(
@@ -560,6 +572,26 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	// The focused element is the non-scrolling wrapper, so the browser never pages
+	// the .content child on its own. Handle the bare paging keys here; leave
+	// modified keys (Shift+PageUp = terminal scroll) and form controls alone.
+	const handlePagingKey = (ev: KeyboardEvent) => {
+		const el = scrollEl();
+		if (!el || liveMode() || ev.defaultPrevented || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+		const target = ev.target as HTMLElement;
+		if (target.closest("input, textarea, select, [contenteditable]")) return;
+		const page = Math.max(el.clientHeight - 40, 1);
+		const top = {
+			PageDown: el.scrollTop + page,
+			PageUp: el.scrollTop - page,
+			Home: 0,
+			End: el.scrollHeight - el.clientHeight,
+		}[ev.key];
+		if (top === undefined) return;
+		ev.preventDefault();
+		el.scrollTop = top;
+	};
+
 	const handleCopyPath = () => {
 		const path = fullPath();
 		if (!path) return;
@@ -573,7 +605,14 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	return (
-		<div ref={wrapperRef} class={s.wrapper} tabIndex={-1} data-focus-target="md-tab" data-tab-id={props.tab.id}>
+		<div
+			ref={wrapperRef}
+			class={s.wrapper}
+			tabIndex={-1}
+			data-focus-target="md-tab"
+			data-tab-id={props.tab.id}
+			onKeyDown={handlePagingKey}
+		>
 			<div class={e.header} onContextMenu={handleHeaderContextMenu}>
 				<span class={e.filename} title={displayPath()}>
 					{displayPath()}
@@ -584,6 +623,23 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							<path d="M11.13 1.47a1.5 1.5 0 0 1 2.12 0l1.28 1.28a1.5 1.5 0 0 1 0 2.12L5.9 13.5a1 1 0 0 1-.5.27l-3.5.87a.5.5 0 0 1-.6-.6l.87-3.5a1 1 0 0 1 .27-.5L11.13 1.47ZM12.2 2.53l-8.46 8.47-.58 2.34 2.34-.58 8.47-8.46-1.77-1.77Z" />
 						</svg>
 						{t("markdownTab.editBtn", "Edit")}
+					</button>
+					<button
+						class={e.btn}
+						classList={{ [e.active]: liveMode() }}
+						disabled={!liveMode() && !liveAvailable()}
+						onClick={toggleLive}
+						title={
+							liveAvailable() || liveMode()
+								? t("markdownTab.live", "Live edit: click a block to edit its source")
+								: t(
+										"markdownTab.liveUnavailable",
+										"Live edit needs LF or CRLF line endings throughout and a file under 500 KB",
+									)
+						}
+					>
+						{t("markdownTab.liveBtn", "Live")}
+						<Show when={liveDirty()}> ●</Show>
 					</button>
 					<Show when={(props.tab as FileTab).repoPath}>
 						<button
@@ -608,12 +664,13 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							{t("markdownTab.diffBtn", "Diff")}
 						</button>
 					</Show>
-					<Show when={reviewComments().length > 0}>
+					<Show when={hasReviewChanges()}>
 						<div class={s.agentActions}>
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
 							</label>
-							<select
+							<Select
+								compact
 								id={`review-agent-${props.tab.id}`}
 								class={s.agentSelect}
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
@@ -625,10 +682,11 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 									<option value="">{t("markdownTab.noAgents", "No agents")}</option>
 								</Show>
 								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
-							</select>
+							</Select>
 							<button
 								class={e.btn}
-								disabled={!selectedAgentSession() || sendingChanges()}
+								disabled={!canSend()}
+								data-ready={canSend() ? "true" : undefined}
 								onClick={() => void handleSendChanges()}
 								title={t("markdownTab.sendChanges", "Send changes to agent")}
 								aria-label={t("markdownTab.sendChanges", "Send changes to agent")}
@@ -654,37 +712,60 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				matchCount={matchCount()}
 			/>
 
-			<div class={s.content} ref={(el) => setScrollEl(el)}>
-				<Show when={searchVisible()}>
-					<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
-				</Show>
-				<ContentRenderer
+			<Show
+				when={liveMode()}
+				fallback={
+					<div class={s.content} ref={(el) => setScrollEl(el)}>
+						<Show when={searchVisible()}>
+							<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
+						</Show>
+						<ContentRenderer
+							content={content()}
+							commentableBlocks={props.tab.type === "file"}
+							baseDir={baseDir()}
+							onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
+							onCheckboxToggle={(idx, mark, col) => {
+								void handleCheckboxToggle(idx, mark, col);
+							}}
+							contentRef={(el) => {
+								contentRef = el;
+								setOverlayContentEl(el);
+							}}
+							fontSize={props.tab.fontSize}
+							emptyMessage={
+								loading()
+									? t("markdownTab.loading", "Loading...")
+									: error()
+										? `${t("markdownTab.error", "Error:")} ${error()}`
+										: t("markdownTab.noContent", "No content")
+							}
+						/>
+					</div>
+				}
+			>
+				<LiveMarkdownEditor
 					content={content()}
-					commentableBlocks={props.tab.type === "file"}
+					onSave={writeTweakedSource}
+					readDisk={() => {
+						const ft = props.tab as FileTab;
+						return readFileContent(ft.fsRoot || ft.repoPath, ft.filePath);
+					}}
+					onDirtyChange={setLiveDirty}
 					baseDir={baseDir()}
 					onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
-					onCheckboxToggle={(idx, mark, col) => {
-						void handleCheckboxToggle(idx, mark, col);
-					}}
-					contentRef={(el) => {
-						contentRef = el;
-						setOverlayContentEl(el);
-					}}
 					fontSize={props.tab.fontSize}
-					emptyMessage={
-						loading()
-							? t("markdownTab.loading", "Loading...")
-							: error()
-								? `${t("markdownTab.error", "Error:")} ${error()}`
-								: t("markdownTab.noContent", "No content")
-					}
 				/>
-			</div>
+			</Show>
 
 			{/* Mount CommentOverlay ONLY for the active file tab — otherwise every
           open markdown tab would attach its own selectionchange listener and
           they'd all fire on every cursor move across the app. */}
-			<Show when={props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()} keyed>
+			<Show
+				when={
+					!liveMode() && props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()
+				}
+				keyed
+			>
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}

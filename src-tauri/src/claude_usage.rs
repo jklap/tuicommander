@@ -222,6 +222,86 @@ pub struct ProjectEntry {
 /// In-memory cache: project_slug → (file_name → CachedFileStats)
 pub type SessionStatsCache = HashMap<String, HashMap<String, CachedFileStats>>;
 
+/// The scan gate serializes refreshes while the independent callback retains
+/// events arriving during I/O for the next pass. Only top-level JSONL files
+/// contribute usage; subagent transcripts are deliberately outside this cache.
+#[derive(Default)]
+pub(crate) struct UsageScan {
+    root: Option<PathBuf>,
+    watcher: Option<notify::RecommendedWatcher>,
+    events: Arc<parking_lot::Mutex<UsageChanges>>,
+    seen: HashSet<PathBuf>,
+    pending: HashSet<PathBuf>,
+    reconciled_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct UsageChanges {
+    paths: HashSet<PathBuf>,
+    rescan: bool,
+}
+
+impl UsageScan {
+    fn prepare(&mut self, root: &Path) {
+        use notify::Watcher;
+        if self.root.as_deref() != Some(root) {
+            *self = Self::default();
+            self.root = Some(root.to_path_buf());
+        }
+        if self.watcher.is_none() {
+            let events = Arc::clone(&self.events);
+            let watched_root = root.to_path_buf();
+            self.watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    let mut changes = events.lock();
+                    let Ok(event) = event else {
+                        changes.rescan = true;
+                        return;
+                    };
+                    if event.kind.is_access() {
+                        return;
+                    }
+                    if event.need_rescan() || event.paths.is_empty() {
+                        changes.rescan = true;
+                    }
+                    for path in event.paths {
+                        let Ok(relative) = path.strip_prefix(&watched_root) else {
+                            continue;
+                        };
+                        let depth = relative.components().count();
+                        if depth < 2 {
+                            changes.rescan = true;
+                        } else if depth == 2 && path.extension().is_some_and(|e| e == "jsonl") {
+                            changes.paths.insert(path);
+                        }
+                    }
+                    if changes.paths.len() > 16_384 {
+                        changes.paths.clear();
+                        changes.rescan = true;
+                    }
+                })
+                .ok()
+                .and_then(|mut watcher| {
+                    watcher.watch(root, notify::RecursiveMode::Recursive).ok()?;
+                    Some(watcher)
+                });
+        }
+        let mut changes = self.events.lock();
+        self.pending.extend(changes.paths.drain());
+        if self.pending.len() > 16_384
+            || std::mem::take(&mut changes.rescan)
+            || self.watcher.is_none()
+            || self
+                .reconciled_at
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(30 * 60))
+        {
+            self.seen.clear();
+            self.pending.clear();
+            self.reconciled_at = Some(Instant::now());
+        }
+    }
+}
+
 const CACHE_FILENAME: &str = "claude-usage-cache.json";
 
 /// Load the cache from disk, or return an empty map on any error.
@@ -1200,43 +1280,76 @@ pub async fn get_claude_session_stats_impl(
     get_claude_session_stats_from_dir(state, scope, &projects_dir).await
 }
 
+#[cfg(test)]
+thread_local! {
+    static SESSION_FILE_STATS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 async fn get_claude_session_stats_from_dir(
     state: &Arc<crate::AppState>,
     scope: String,
     projects_dir: &std::path::Path,
 ) -> Result<SessionStats, String> {
+    let projects_root = match projects_dir.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionStats::default());
+        }
+        Err(error) => return Err(format!("Failed to resolve projects dir: {error}")),
+    };
+    let projects_dir = projects_root.as_path();
+    // Single-flight across scopes: concurrent refreshes must not clone the same
+    // old parse cache and overwrite each other's newly ingested transcripts.
+    let mut scan = state.claude_usage_scan.lock();
+    scan.prepare(projects_dir);
     let cache_mutex = state.claude_usage_cache.lock();
     // Clone the cache so we can release the lock during I/O
     let mut cache = cache_mutex.clone();
     drop(cache_mutex);
 
-    if !projects_dir.exists() {
-        return Ok(SessionStats::default());
-    }
-
-    // List project directories
-    let project_dirs: Vec<(String, PathBuf)> = std::fs::read_dir(projects_dir)
-        .map_err(|e| format!("Failed to read projects dir: {e}"))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.is_dir() {
-                let slug = entry.file_name().to_string_lossy().to_string();
-                Some((slug, path))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Filter by scope
-    let filtered: Vec<&(String, PathBuf)> = match scope.as_str() {
-        "all" => project_dirs.iter().collect(),
-        other => project_dirs
-            .iter()
-            .filter(|(slug, _)| slug == other)
-            .collect(),
+    // A scoped request resolves that one slug directly. Directory entry types
+    // avoid a metadata lookup for every historical project in all-project scope.
+    let mut symlink_projects = HashSet::new();
+    let project_dirs: Vec<(String, PathBuf)> = if scope == "all" {
+        std::fs::read_dir(projects_dir)
+            .map_err(|e| format!("Failed to read projects dir: {e}"))?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let file_type = entry.file_type().ok()?;
+                if file_type.is_symlink() {
+                    symlink_projects.insert(entry.file_name().to_string_lossy().into_owned());
+                }
+                (file_type.is_dir() || (file_type.is_symlink() && entry.path().is_dir())).then(
+                    || {
+                        (
+                            entry.file_name().to_string_lossy().into_owned(),
+                            entry.path(),
+                        )
+                    },
+                )
+            })
+            .collect()
+    } else {
+        let mut components = Path::new(&scope).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Ok(SessionStats::default());
+        }
+        let path = projects_dir.join(&scope);
+        if path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            symlink_projects.insert(scope.clone());
+        }
+        if path.is_dir() {
+            vec![(scope.clone(), path)]
+        } else {
+            Vec::new()
+        }
     };
+    let filtered: Vec<&(String, PathBuf)> = project_dirs.iter().collect();
 
     let mut cache_dirty = false;
 
@@ -1245,7 +1358,7 @@ async fn get_claude_session_stats_from_dir(
         project_dirs.iter().map(|(s, _)| s.as_str()).collect();
     let stale_slugs: Vec<String> = cache
         .keys()
-        .filter(|k| !existing_slugs.contains(k.as_str()))
+        .filter(|k| (scope == "all" || *k == &scope) && !existing_slugs.contains(k.as_str()))
         .cloned()
         .collect();
     for slug in stale_slugs {
@@ -1283,12 +1396,24 @@ async fn get_claude_session_stats_from_dir(
             .cloned()
             .collect();
         for f in stale_files {
+            scan.seen.remove(&dir.join(&f));
+            scan.pending.remove(&dir.join(&f));
             project_cache.remove(&f);
             cache_dirty = true;
         }
 
         // Incremental parse each file
         for (name, path) in &jsonl_files {
+            // Recursive watchers need not follow a project directory symlink.
+            // Keep validation for those targets rather than trust absent events.
+            if !symlink_projects.contains(slug)
+                && scan.seen.contains(path)
+                && !scan.pending.contains(path)
+            {
+                continue;
+            }
+            #[cfg(test)]
+            SESSION_FILE_STATS.with(|stats| stats.set(stats.get() + 1));
             let current_size = match std::fs::metadata(path) {
                 Ok(m) => m.len(),
                 Err(_) => continue,
@@ -1304,7 +1429,10 @@ async fn get_claude_session_stats_from_dir(
 
             match cached {
                 Some(c) if c.file_size == current_size && !needs_migration => {
-                    // Unchanged and has hourly data — skip
+                    // Unchanged and has hourly data — skip future stats until
+                    // a watcher event or reconciliation invalidates this file.
+                    scan.seen.insert(path.clone());
+                    scan.pending.remove(path);
                     continue;
                 }
                 Some(c) if current_size > c.file_size && !needs_migration => {
@@ -1347,6 +1475,13 @@ async fn get_claude_session_stats_from_dir(
                         }
                     }
                 }
+            }
+            if project_cache
+                .get(name)
+                .is_some_and(|c| c.file_size == current_size)
+            {
+                scan.seen.insert(path.clone());
+                scan.pending.remove(path);
             }
         }
     }
@@ -1779,6 +1914,26 @@ mod tests {
         )
     }
 
+    async fn wait_for_usage_event(state: &crate::AppState, path: &Path) {
+        // Setup only: the next assertion is about incremental parsing, not the
+        // operating system's watcher delivery latency under machine load.
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let ready = {
+                    let scan = state.claude_usage_scan.lock();
+                    let changes = scan.events.lock();
+                    changes.rescan || changes.paths.contains(path)
+                };
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("usage watcher must deliver the filesystem change before refresh");
+    }
+
     #[tokio::test]
     async fn session_stats_cache_tracks_growth_truncation_and_deletion() {
         let dir = tempfile::tempdir().unwrap();
@@ -1803,6 +1958,7 @@ mod tests {
             .unwrap()
             .write_all(transcript(200, 80, "s1", "2026-07-30T11").as_bytes())
             .unwrap();
+        wait_for_usage_event(&state, &session).await;
         let grown = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
             .await
             .unwrap();
@@ -1810,6 +1966,7 @@ mod tests {
         assert_eq!(grown.active_hours, 2);
 
         std::fs::write(&session, transcript(7, 3, "s2", "2026-07-30T12")).unwrap();
+        wait_for_usage_event(&state, &session).await;
         let truncated = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
             .await
             .unwrap();
@@ -1829,6 +1986,82 @@ mod tests {
             .unwrap();
         assert!(deleted_project.per_project.is_empty());
         assert!(!state.claude_usage_cache.lock().contains_key("project-a"));
+    }
+
+    /// Catches a warm Usage refresh still statting every historical JSONL
+    /// before its already-populated parse cache can reject unchanged files.
+    #[tokio::test]
+    async fn session_stats_warm_refresh_does_not_stat_unchanged_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
+        let projects = dir.path().join("projects");
+        let project = projects.join("project-a");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("session.jsonl"),
+            transcript(10, 1, "s1", "2026-07-30T10"),
+        )
+        .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        SESSION_FILE_STATS.with(|stats| stats.set(0));
+        let first = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        assert_eq!(first.total_input_tokens, 10);
+        SESSION_FILE_STATS.with(|stats| assert_eq!(stats.get(), 1));
+        let second = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        assert_eq!(second.total_input_tokens, 10);
+        SESSION_FILE_STATS.with(|stats| {
+            assert_eq!(
+                stats.get(),
+                1,
+                "warm refresh must not stat unchanged history"
+            )
+        });
+    }
+
+    /// Catches a single active transcript invalidating every historical file,
+    /// or a missed watcher event never being repaired by reconciliation.
+    #[tokio::test]
+    async fn session_stats_only_stats_the_changed_transcript_then_reconciles() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
+        let projects = dir.path().join("projects");
+        let project = projects.join("project-a");
+        std::fs::create_dir_all(&project).unwrap();
+        for name in ["active.jsonl", "history.jsonl"] {
+            std::fs::write(project.join(name), transcript(10, 1, name, "2026-07-30T10")).unwrap();
+        }
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        let active = project.join("active.jsonl");
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&active)
+            .unwrap()
+            .write_all(transcript(7, 1, "active.jsonl", "2026-07-30T11").as_bytes())
+            .unwrap();
+        wait_for_usage_event(&state, &active).await;
+        SESSION_FILE_STATS.with(|stats| stats.set(0));
+        let updated = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        assert_eq!(updated.total_input_tokens, 27);
+        SESSION_FILE_STATS
+            .with(|stats| assert_eq!(stats.get(), 1, "only the changed transcript needs metadata"));
+        state.claude_usage_scan.lock().reconciled_at =
+            Some(Instant::now() - Duration::from_secs(30 * 60));
+        SESSION_FILE_STATS.with(|stats| stats.set(0));
+        get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        SESSION_FILE_STATS
+            .with(|stats| assert_eq!(stats.get(), 2, "reconciliation validates all history"));
     }
 
     #[tokio::test]
@@ -2014,8 +2247,9 @@ mod tests {
                 .unwrap()
                 .five_hour
                 .unwrap()
-                .utilization,
-            42.0
+                .utilization
+                .to_bits(),
+            42.0_f64.to_bits()
         );
         assert!(try_get_fresh_cache(&second).is_none());
         assert!(get_stale_cache(&second).is_none());

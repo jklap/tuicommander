@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke } from "../invoke";
-import { compareSemver } from "../plugins/pluginLoader";
+import { compareSemver } from "../utils/semver";
 
 /** A plugin entry from the remote registry */
 export interface RegistryEntry {
@@ -13,6 +13,8 @@ export interface RegistryEntry {
 	minAppVersion: string;
 	capabilities: string[];
 	downloadUrl: string;
+	/** SHA-256 of the published payload tree, excluding mutable plugin data. */
+	contentSha256?: string;
 }
 
 interface RegistryStoreState {
@@ -52,10 +54,17 @@ async function refresh(): Promise<void> {
 }
 
 /** Check if a plugin has an update available (semver-aware) */
-function hasUpdate(installedId: string, installedVersion: string): RegistryEntry | null {
+function hasUpdate(
+	installedId: string,
+	installedVersion: string,
+	installedContentSha256?: string,
+): RegistryEntry | null {
 	const entry = state.entries.find((e) => e.id === installedId);
 	if (!entry) return null;
-	return compareSemver(entry.latestVersion, installedVersion) > 0 ? entry : null;
+	const versionOrder = compareSemver(entry.latestVersion, installedVersion);
+	if (versionOrder > 0) return entry;
+	if (versionOrder < 0) return null;
+	return entry.contentSha256 && installedContentSha256 && entry.contentSha256 !== installedContentSha256 ? entry : null;
 }
 
 export const registryStore = {

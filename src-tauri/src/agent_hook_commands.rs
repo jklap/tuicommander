@@ -25,6 +25,10 @@ fn hook_map_for(agent_type: &str) -> Option<Vec<HookEntry>> {
 /// The settings file an agent reads its hooks from. Claude/Gemini merge into a
 /// shared `settings.json`; Grok owns its own `~/.grok/hooks/tuic.json`.
 fn hook_settings_path(agent_type: &str) -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = crate::agent_test::test_root() {
+        return Some(root.join(agent_type).join("settings.json"));
+    }
     let home = dirs::home_dir()?;
     match agent_type {
         "claude" => Some(home.join(".claude/settings.json")),
@@ -152,6 +156,9 @@ pub(crate) fn set_agent_hook_instrumentation(
     agent_type: String,
     enabled: bool,
 ) -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Err("Global agent hook changes are disabled in agent-test".into());
+    }
     persist_flag(&agent_type, enabled)?;
     if let Some(path) = hook_settings_path(&agent_type) {
         apply_at(&agent_type, &path, enabled)?;
@@ -201,6 +208,37 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn agent_test_hook_toggle_refuses_before_persistence_and_shared_writes() {
+        // Bug caught: a named instance still rewrites shared hooks and persists a lying flag.
+        for agent in ["claude", "gemini", "grok", "codex", "opencode"] {
+            for enabled in [true, false] {
+                let dir = TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+                let config = dir.path().join("instance");
+                std::fs::create_dir(&config).unwrap();
+                let _config = crate::config::set_config_dir_override(config.clone());
+                let settings = dir.path().join(agent).join("settings.json");
+                std::fs::create_dir(settings.parent().unwrap()).unwrap();
+                // Use the real installer to seed valid agent-specific content for removal.
+                apply_at(agent, &settings, true).unwrap();
+                let before = std::fs::read(&settings).unwrap();
+                let codex_config = settings.with_file_name("config.toml");
+                let codex_before = std::fs::read(&codex_config).ok();
+                crate::agent_test::with_test_profile(dir.path(), || {
+                    let result = set_agent_hook_instrumentation(agent.into(), enabled);
+                    assert_eq!(
+                        std::fs::read_dir(&config).unwrap().count(),
+                        0,
+                        "{agent}/{enabled}: refusal must precede instance flag persistence"
+                    );
+                    assert_eq!(std::fs::read(&settings).unwrap(), before);
+                    assert_eq!(std::fs::read(&codex_config).ok(), codex_before);
+                    assert!(result.unwrap_err().contains("agent-test"));
+                });
+            }
+        }
+    }
+
+    #[test]
     fn config_agent_hook_apply_installs_then_uninstalls() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
@@ -214,12 +252,12 @@ mod tests {
     fn config_agent_hook_unsupported_agent_writes_nothing() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
-        apply_at("aider", &path, true).unwrap();
+        apply_at("unknown-agent", &path, true).unwrap();
         assert!(
             !path.exists(),
             "unsupported agent must not write a settings file"
         );
-        assert_eq!(state_at("aider", &path), InstallState::NotInstalled);
+        assert_eq!(state_at("unknown-agent", &path), InstallState::NotInstalled);
     }
 
     #[test]

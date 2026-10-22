@@ -43,6 +43,22 @@ describe("PrStateBadge conflict rendering", () => {
 	});
 });
 
+describe("PrStateBadge unresolved threads", () => {
+	it("shows Comments instead of Ready when an approved PR has unresolved threads", () => {
+		const text = render(() => (
+			<PrStateBadge
+				prNumber={9}
+				state="open"
+				conflictState="clear"
+				mergeable="MERGEABLE"
+				reviewDecision="APPROVED"
+				unresolvedThreads={3}
+			/>
+		)).container.textContent;
+		expect(text).toBe("#9 Comments");
+	});
+});
+
 /**
  * The branch-row form drops the pill and the state word to save width, so the
  * state must survive somewhere a reader can reach it: the tooltip, which has to

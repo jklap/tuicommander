@@ -1,15 +1,15 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import AnsiToHtml from "ansi-to-html";
 // DOMPurify's template scrubbing relies on a complete NodeIterator implementation.
 // The component tests therefore use jsdom instead of the suite-wide happy-dom
 // environment so security behavior matches real browser engines.
 import DOMPurify from "dompurify";
-import { marked, type Tokens } from "marked";
+import { marked, Renderer, type Tokens } from "marked";
 import "./markdown-content.css";
 import { type Component, createEffect, createMemo, Index, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { rewriteLocalImages } from "../../utils/repoImageUrl";
 import { stripAnsi } from "../../utils/stripAnsi";
 import {
 	findTweakCommentBlocks,
@@ -19,7 +19,8 @@ import {
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
-import { filePathRegex } from "../Terminal/linkProvider";
+import { filePathRegex, isWholeFilePath } from "../Terminal/linkProvider";
+import { type ChatTableActions, enhanceChatTables, tableSources } from "./chatTables";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -31,13 +32,20 @@ const ALLOWED_URI_REGEXP =
 
 export interface ContentRendererProps {
 	content: string;
+	/** Provider-authored content cannot supply CSS that changes the host UI. */
+	untrustedContent?: boolean;
 	/** Opt-in copy action for fenced code blocks. Receives the original source text. */
 	onCodeCopy?: (text: string) => void;
+	/** AI Chat only: smart columns and exact-source table actions. */
+	tableActions?: ChatTableActions;
 	/** Turn plain file paths into links; the caller still resolves and validates them. */
 	autoLinkFiles?: boolean;
 	emptyMessage?: string;
-	/** Called for local file, directory, and heading links (raw href passed as argument). */
-	onLinkClick?: (href: string) => void;
+	/**
+	 * Called for local file, directory, and heading links (raw href passed as argument).
+	 * Resolving to `false` reports a dead target: the clicked link is replaced by its text.
+	 */
+	onLinkClick?: (href: string) => void | Promise<boolean | void>;
 	/**
 	 * Called when a checkbox is clicked (source line, new mark, and — for a
 	 * whole-cell checkbox in a table — the column of its `[`, since one row can
@@ -118,6 +126,11 @@ const ANSI_CSI_RE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/;
 // Custom renderer: code blocks with ANSI sequences render with colors.
 marked.use({
 	renderer: {
+		table(token: Tokens.Table) {
+			return Renderer.prototype.table
+				.call(this, token)
+				.replace("<table>", `<table data-raw-table="${encodeURIComponent(token.raw)}">`);
+		},
 		code(token: Tokens.Code) {
 			const lang = token.lang ?? "";
 			const baseCls = lang ? `language-${lang}` : "";
@@ -126,7 +139,7 @@ marked.use({
 				const cls = [baseCls, "ansi-block"].filter(Boolean).join(" ");
 				return `<pre data-raw-code="${raw}"><code class="${cls}">${ansiConverter.toHtml(token.text)}</code></pre>\n`;
 			}
-			const escaped = token.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+			const escaped = token.text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 			return `<pre data-raw-code="${raw}"><code${baseCls ? ` class="${baseCls}"` : ""}>${escaped}</code></pre>\n`;
 		},
 	},
@@ -274,6 +287,11 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
 				const wrapper = document.createElement("div");
 				wrapper.className = "mermaid-diagram";
 				wrapper.innerHTML = svg;
+				// The diagram stands where the block was: it keeps the block's source range and comment metadata.
+				for (const [key, value] of Object.entries(pre.dataset)) {
+					if (key.startsWith("commentSource") || key.startsWith("tweak")) wrapper.dataset[key] = value ?? "";
+				}
+				if (pre.classList.contains("tweak-block-highlight")) wrapper.classList.add("tweak-block-highlight");
 				pre.replaceWith(wrapper);
 			} catch {
 				pre.dataset.mermaidRendered = "error";
@@ -296,7 +314,13 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
  */
 function renderMarkdownSegment(
 	source: string,
-	opts: { baseDir?: string; imageSrc?: (path: string) => string; lineOffset: number },
+	opts: {
+		baseDir?: string;
+		imageSrc?: (path: string) => string;
+		lineOffset: number;
+		untrustedContent?: boolean;
+		smartTables?: boolean;
+	},
 ): string {
 	const raw = stripAnsiOutsideCodeBlocks(source);
 	try {
@@ -316,16 +340,17 @@ function renderMarkdownSegment(
 		//    applied to the rendered DOM afterwards), then parse markdown.
 		const withSentinels = injectTweakSentinels(cleaned);
 		let html = marked.parse(withSentinels, { async: false }) as string;
-
-		// 4. Rewrite relative image src attributes to loadable asset:// URLs.
-		const baseDir = opts.baseDir;
-		if (baseDir || opts.imageSrc) {
+		if (opts.smartTables) {
+			const originals = tableSources(source);
+			let tableIndex = 0;
 			html = html.replace(
-				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
-				(_, prefix, relativePath) =>
-					`${prefix}${opts.imageSrc ? opts.imageSrc(relativePath) : convertFileSrc(`${baseDir}/${relativePath}`)}"`,
+				/data-raw-table="[^"]*"/g,
+				() => `data-raw-table="${encodeURIComponent(originals[tableIndex++] ?? "")}"`,
 			);
-		}
+		} else html = html.replace(/ data-raw-table="[^"]*"/g, "");
+
+		// 4. Resolve local images through the active transport and repository boundary.
+		html = rewriteLocalImages(html, opts.baseDir, opts.imageSrc);
 
 		// 5. Make GFM task-list checkboxes interactive and inject source-line metadata.
 		//    Sequential checkbox index in the HTML maps to lineMap[domIndex]. Both
@@ -378,7 +403,8 @@ function renderMarkdownSegment(
 			html = template.innerHTML;
 		}
 		return DOMPurify.sanitize(stripEventHandlers(html), {
-			FORBID_TAGS: ["form", "map", "area"],
+			FORBID_TAGS: opts.untrustedContent ? ["form", "map", "area", "style"] : ["form", "map", "area"],
+			FORBID_ATTR: opts.untrustedContent ? ["style"] : [],
 			ADD_ATTR: [
 				"data-tuic-href",
 				"data-tweak-id",
@@ -393,7 +419,8 @@ function renderMarkdownSegment(
 		});
 	} catch (err) {
 		appLogger.error("app", "Markdown parsing error", err);
-		return `<pre>${raw}</pre>`;
+		const escaped = raw.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+		return `<pre>${escaped}</pre>`;
 	}
 }
 
@@ -402,7 +429,13 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	const processedContent = createMemo(() =>
 		props.incremental
 			? ""
-			: renderMarkdownSegment(props.content ?? "", { baseDir: props.baseDir, imageSrc: props.imageSrc, lineOffset: 0 }),
+			: renderMarkdownSegment(props.content ?? "", {
+					baseDir: props.baseDir,
+					imageSrc: props.imageSrc,
+					lineOffset: 0,
+					untrustedContent: props.untrustedContent,
+					smartTables: !!props.tableActions,
+				}),
 	);
 
 	/**
@@ -418,6 +451,8 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let renderedFor: MarkdownSegment[] = [];
 	let renderedBaseDir: string | undefined;
 	let renderedImageSrc: ContentRendererProps["imageSrc"];
+	let renderedUntrusted: boolean | undefined;
+	let renderedSmartTables: boolean | undefined;
 	const incrementalContent = createMemo(() => {
 		if (!props.incremental) return { committed: [] as string[], tail: "" };
 		split = splitStream(props.content ?? "", split);
@@ -426,9 +461,16 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// Segment identity is not the whole cache key: `baseDir` rewrites image
 		// src values, so cached HTML from another directory points at the wrong
 		// files.
-		if (props.baseDir !== renderedBaseDir || props.imageSrc !== renderedImageSrc) {
+		if (
+			props.baseDir !== renderedBaseDir ||
+			props.imageSrc !== renderedImageSrc ||
+			props.untrustedContent !== renderedUntrusted ||
+			!!props.tableActions !== renderedSmartTables
+		) {
 			renderedBaseDir = props.baseDir;
 			renderedImageSrc = props.imageSrc;
+			renderedUntrusted = props.untrustedContent;
+			renderedSmartTables = !!props.tableActions;
 			renderedHtml = [];
 			renderedFor = [];
 		} else if (n > committed.length || (n > 0 && committed[n - 1] !== renderedFor[n - 1])) {
@@ -441,6 +483,8 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					baseDir: props.baseDir,
 					imageSrc: props.imageSrc,
 					lineOffset: committed[i].lineOffset,
+					untrustedContent: props.untrustedContent,
+					smartTables: !!props.tableActions,
 				}),
 			);
 			renderedFor.push(committed[i]);
@@ -451,6 +495,8 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				baseDir: props.baseDir,
 				imageSrc: props.imageSrc,
 				lineOffset: split.tail.lineOffset,
+				untrustedContent: props.untrustedContent,
+				smartTables: !!props.tableActions,
 			}),
 		};
 	});
@@ -525,7 +571,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		) {
 			appLogger.debug("app", "Blocked Markdown link scheme", { href });
 		} else if (props.onLinkClick) {
-			props.onLinkClick(href);
+			void Promise.resolve(props.onLinkClick(href)).then((opened) => {
+				if (opened !== false) return;
+				deadHrefs.add(href);
+				if (anchor.isConnected) anchor.replaceWith(...anchor.childNodes);
+			});
 		} else if (href.startsWith("#")) {
 			const heading = Array.from(containerRef?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find(
 				(el) =>
@@ -543,6 +593,23 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	};
 
 	let containerRef: HTMLDivElement | undefined;
+	// Hrefs that resolved to nothing; the auto-link pass must not turn their text back into links.
+	const deadHrefs = new Set<string>();
+	createEffect(() => {
+		processedContent();
+		incrementalContent();
+		const actions = props.tableActions;
+		if (!actions) return;
+		let active = true;
+		let dispose: (() => void) | undefined;
+		queueMicrotask(() => {
+			if (active && containerRef) dispose = enhanceChatTables(containerRef, actions);
+		});
+		onCleanup(() => {
+			active = false;
+			dispose?.();
+		});
+	});
 
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
 	// and render Mermaid diagrams from ```mermaid code blocks.
@@ -564,7 +631,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				const nodes: Text[] = [];
 				while (walker.nextNode()) {
 					const node = walker.currentNode as Text;
-					if (!node.parentElement?.closest("a, code, pre, button, textarea, input")) nodes.push(node);
+					const parent = node.parentElement;
+					if (!parent) continue;
+					// Inline code links only when the whole span is one path: `src/a.ts:12`, not `cat src/a.ts`.
+					const wholePath = parent.tagName === "CODE" && !parent.closest("a, pre") && isWholeFilePath(node.data);
+					if (wholePath || !parent.closest("a, code, pre, button, textarea, input")) nodes.push(node);
 				}
 				for (const node of nodes) {
 					const source = node.textContent ?? "";
@@ -573,6 +644,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					let end = 0;
 					for (const match of source.matchAll(regex)) {
 						const path = match[1];
+						if (deadHrefs.has(path)) continue;
 						const start = match.index + match[0].indexOf(path);
 						fragment.append(document.createTextNode(source.slice(end, start)));
 						const anchor = document.createElement("a");

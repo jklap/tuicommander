@@ -36,6 +36,27 @@ beforeEach(() => {
 });
 
 describe("acpTranscript: messages", () => {
+	// Catches: steering creates an optimistic bubble or merges its echo into the preceding reply.
+	it("shows mid-turn steering once at the echoed conversation position", () => {
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "desktop" }));
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "user_message_chunk", content: text("desktop"), messageId: "first" }),
+		);
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "agent_message_chunk", content: text("working"), messageId: "reply" }),
+		);
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "user_message_chunk", content: text("phone"), messageId: "steer" }),
+		);
+		expect(acpTranscript.entries(SESSION).map((entry) => entry.kind)).toEqual(["user", "agent", "user"]);
+		expect(
+			acpTranscript
+				.entries(SESSION)
+				.filter((entry) => entry.kind === "user")
+				.map((entry) => entry.text),
+		).toEqual(["desktop", "phone"]);
+	});
+
 	// Catches: appending an ACP echo to the promptSent bubble doubles the user's text.
 	it("shows a sent prompt once when ego echoes it in chunks", () => {
 		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "Diagnose connection" }));
@@ -218,4 +239,97 @@ describe("acpTranscript: starting over", () => {
 
 		expect(acpTranscript.entries(SESSION)).toEqual([{ id: "e1", kind: "user", text: "hello" }]);
 	});
+});
+
+describe("acpTranscript: ego notice cards", () => {
+	const card = (action: unknown, body = "Worker finished: RESULT") => ({
+		sessionUpdate: "agent_message_chunk",
+		messageId: "result-42",
+		content: text(body),
+		_meta: { ego: { salience: "card", action } },
+	});
+
+	// Catches: out-of-turn updates dropped, or a card glued onto the previous reply.
+	it("folds a notice that arrives after the turn settled as its own entry, in arrival order", () => {
+		acpTranscript.applyFrame(frame({ kind: "turnStarted" }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", content: text("Done.") }));
+		acpTranscript.applyFrame(frame({ kind: "turnSettled", stopReason: "end_turn", usage: null }));
+		acpTranscript.applyFrame(update(card({ kind: "open_result", path: "/w/results/worker.md" })));
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", content: text("Next turn.") }));
+		expect(acpTranscript.entries(SESSION)).toEqual([
+			{ id: "e1", kind: "agent", text: "Done." },
+			{
+				id: "e2",
+				kind: "notice",
+				text: "Worker finished: RESULT",
+				action: { kind: "open_result", path: "/w/results/worker.md" },
+			},
+			{ id: "e3", kind: "agent", text: "Next turn." },
+		]);
+	});
+
+	// Catches: answer/approve payloads lost, or an unknown action producing a dead button.
+	it("reads the answer and approve payloads and drops an action it does not know", () => {
+		acpTranscript.applyFrame(update(card({ kind: "answer", question_id: "q1" })));
+		acpTranscript.applyFrame(update(card({ kind: "approve", request_id: "r1" })));
+		acpTranscript.applyFrame(update(card({ kind: "teleport" })));
+		acpTranscript.applyFrame(update(card({ kind: "open_result" })));
+		expect(acpTranscript.entries(SESSION).map((entry) => (entry.kind === "notice" ? entry.action : "x"))).toEqual([
+			{ kind: "answer", questionId: "q1" },
+			{ kind: "approve", requestId: "r1" },
+			undefined,
+			undefined,
+		]);
+	});
+
+	// Catches: breaking non-ego or older ego sessions by treating every message as a card.
+	it("renders an update without _meta, or with another salience, as ordinary agent text", () => {
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", content: text("plain ") }));
+		acpTranscript.applyFrame(
+			update({
+				sessionUpdate: "agent_message_chunk",
+				content: text("text"),
+				_meta: { ego: { salience: "activity" } },
+			}),
+		);
+		expect(acpTranscript.entries(SESSION)).toEqual([{ id: "e1", kind: "agent", text: "plain text" }]);
+	});
+});
+
+// Catches: durable message IDs discarded or separate replies merged, making a mid-history fork target the tip.
+it("keeps durable message IDs across chunks and separate replies", () => {
+	for (const [messageId, body] of [
+		["reply-one", "first "],
+		["reply-one", "reply"],
+		["reply-two", "second reply"],
+	])
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", messageId, content: text(body) }));
+	expect(
+		acpTranscript
+			.entries(SESSION)
+			.map((entry) => ({ messageId: entry.messageId, text: "text" in entry ? entry.text : "" })),
+	).toEqual([
+		{ messageId: "reply-one", text: "first reply" },
+		{ messageId: "reply-two", text: "second reply" },
+	]);
+});
+
+// Catches: replay origin discarded or inherited and local chunks glued into one reply.
+it("keeps inherited replay separate from the child's own reply", () => {
+	acpTranscript.applyFrame(
+		update({
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: text("Inherited"),
+			_meta: { ego: { inherited: true } },
+		}),
+	);
+	acpTranscript.applyFrame(
+		update({ sessionUpdate: "agent_message_chunk", messageId: "child", content: text("Local") }),
+	);
+	expect(acpTranscript.entries(SESSION)).toEqual([
+		expect.objectContaining({ kind: "agent", text: "Inherited", messageId: "parent", inherited: true }),
+		expect.objectContaining({ kind: "agent", text: "Local", messageId: "child" }),
+	]);
+	expect(acpTranscript.entries(SESSION)[1].inherited).toBeUndefined();
 });

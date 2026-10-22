@@ -1,4 +1,4 @@
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
@@ -24,6 +24,7 @@ vi.mock("../../../transport", async (importOriginal) => ({
 }));
 
 import { GeneralTab } from "../../../components/SettingsPanel/tabs/GeneralTab";
+import { settingsStore } from "../../../stores/settings";
 
 function headingTexts(container: HTMLElement): string[] {
 	return Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim() ?? "");
@@ -55,27 +56,78 @@ describe("GeneralTab developer tools sections", () => {
 
 	afterEach(() => cleanup());
 
-	it("renders TUIC CLI, Code Intelligence, IDE and Custom Launchers on desktop", async () => {
-		const { container, findByText } = render(() => <GeneralTab />);
-
-		await findByText("Installed at /usr/local/bin/tuic");
-		const headings = headingTexts(container);
-		expect(headings).toContain("TUIC CLI");
-		expect(headings).toContain("Code Intelligence");
-		expect(headings).toContain("IDE");
-		expect(headings).toContain("Custom Launchers");
-		expect(hasLabel(container, "Default IDE")).toBe(true);
+	// Catches: desktop-only children leave a misleading empty Local tools card in browser mode.
+	it("hides the desktop-only Local tools card in browser mode", () => {
+		mockIsTauri.mockReturnValue(false);
+		const view = render(() => <GeneralTab />);
+		expect(view.queryByRole("region", { name: "Local tools" })).toBeNull();
 	});
 
-	it("renders the ego section directly after Code Intelligence, with the desktop picker", async () => {
-		const { container, findByText } = render(() => <GeneralTab />);
+	// Catches: the tray selector changes no preference or Never still offers Background.
+	it("applies the tray preference and removes Background when Never is selected", () => {
+		settingsStore.setTrayIcon("background_only");
+		const view = render(() => <GeneralTab />);
+		const label = Array.from(view.container.querySelectorAll("label")).find(
+			(item) => item.textContent === "Tray and menu-bar icon",
+		);
+		const select = label?.htmlFor ? view.container.querySelector(`#${label.htmlFor}`) : null;
+		expect(select).toBeTruthy();
+		try {
+			fireEvent.change(select!, { target: { value: "never" } });
+			expect(settingsStore.state.trayIcon).toBe("never");
+			expect(view.container.querySelector('option[value="background"]')).toBeNull();
+		} finally {
+			settingsStore.setTrayIcon("background_only");
+		}
+	});
 
-		await findByText("Installed at /usr/local/bin/tuic");
-		const headings = headingTexts(container);
-		expect(headings[headings.indexOf("Code Intelligence") + 1]).toBe("ego");
-		expect(hasLabel(container, "ego executable")).toBe(true);
-		expect(container.querySelector("input[placeholder='/usr/local/bin/ego']")).toBeNull();
-		expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent === "Select…")).toBe(true);
+	// Catches: the close preference being visible but not wired to persistence, or exposed in browser mode.
+	it("offers a working close-policy select only on desktop", () => {
+		const save = vi.spyOn(settingsStore, "setCloseBehavior").mockImplementation(() => {});
+		const view = render(() => <GeneralTab />);
+		const select = Array.from(view.container.querySelectorAll("select")).find((element) =>
+			Array.from(element.options).some((option) => option.value === "background"),
+		);
+		expect(select).toBeDefined();
+		fireEvent.change(select!, { target: { value: "background" } });
+		expect(save).toHaveBeenCalledWith("background");
+		view.unmount();
+		mockIsTauri.mockReturnValue(false);
+		const browser = render(() => <GeneralTab />);
+		expect(hasLabel(browser.container, "When closing the main window")).toBe(false);
+		save.mockRestore();
+	});
+
+	// Catches: the Local tools regrouping drops a tool row or its installed-state controls.
+	it("groups TUIC CLI, Code Intelligence and Custom Launchers in order with their controls", async () => {
+		const view = render(() => <GeneralTab />);
+
+		await view.findByText("Installed at /usr/local/bin/tuic");
+		const localTools = view.getByRole("region", { name: "Local tools" });
+		expect(Array.from(localTools.querySelectorAll("label")).map((label) => label.textContent)).toEqual([
+			"TUIC CLI",
+			"Code Intelligence",
+			"Custom Launchers",
+		]);
+		expect(within(localTools).getByText("Installed at /usr/local/bin/mdkb v1.0")).toBeTruthy();
+		expect(within(localTools).getAllByRole("button", { name: "Uninstall" })).toHaveLength(2);
+		expect(within(localTools).getByRole("button", { name: "Add launcher" })).toBeTruthy();
+		expect(within(view.getByRole("region", { name: "IDE" })).getByLabelText("Default IDE")).toBeTruthy();
+	});
+
+	// Catches: regrouping local tools moves ego into that card or removes its native picker.
+	it("keeps Local tools first and ego before IDE, with the desktop picker", async () => {
+		const view = render(() => <GeneralTab />);
+
+		await view.findByText("Installed at /usr/local/bin/tuic");
+		const headings = headingTexts(view.container);
+		expect(headings[0]).toBe("Local tools");
+		expect(headings[headings.indexOf("Updates") + 1]).toBe("ego");
+		expect(headings[headings.indexOf("ego") + 1]).toBe("IDE");
+		const ego = view.getByRole("region", { name: "ego" });
+		expect(within(ego).getByText("ego executable")).toBeTruthy();
+		expect(ego.querySelector("input[placeholder='/usr/local/bin/ego']")).toBeNull();
+		expect(within(ego).getByRole("button", { name: "Select…" })).toBeTruthy();
 	});
 
 	it("shows the ego section with experimental features off", () => {
@@ -95,9 +147,10 @@ describe("GeneralTab developer tools sections", () => {
 		// A browser names the ego path by hand: no native file picker exists.
 		expect(headings).toContain("ego");
 		expect(container.querySelector("input[placeholder='/usr/local/bin/ego']")).not.toBeNull();
-		expect(headings).not.toContain("TUIC CLI");
-		expect(headings).not.toContain("Code Intelligence");
-		expect(headings).not.toContain("Custom Launchers");
+		expect(hasLabel(container, "TUIC CLI")).toBe(false);
+		expect(hasLabel(container, "Code Intelligence")).toBe(false);
+		expect(hasLabel(container, "Custom Launchers")).toBe(false);
+		expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent === "Add launcher")).toBe(false);
 		expect(mockInvoke).not.toHaveBeenCalledWith("get_cli_status");
 		expect(mockInvoke).not.toHaveBeenCalledWith("mdkb_status");
 	});

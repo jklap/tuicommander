@@ -1,9 +1,10 @@
 import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
-import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
+import { type AgentLifecycleState, type ProviderRecovery, type ShellState, terminalsStore } from "../stores/terminals";
 import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
@@ -11,12 +12,18 @@ const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type BackendSessionState = {
+	provider_recovery?: ProviderRecovery | null;
+	codex_binding?: { session_id: string } | null;
+	agent_type?: string | null;
 	shell_state?: string;
 	agent_state?: string;
+	abandoned_since_ms?: number;
 	agent_intent?: string | null;
 	last_prompt?: string | null;
 	awaiting_input?: boolean;
 	question_confident?: boolean;
+	question_text?: string;
+	choice_prompt?: ChoicePrompt;
 	background_work?: boolean;
 	queued_commands?: number;
 	last_activity_ms?: number;
@@ -77,18 +84,28 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 	const isAwaiting = state?.awaiting_input === true;
 	terminalsStore.update(termId, {
 		agentState: toAgentLifecycleState(state?.agent_state),
+		providerRecovery: state?.provider_recovery ?? null,
 		// SessionState snapshots are complete. Rust omits Option::None fields,
 		// therefore absence retracts context instead of meaning "unchanged".
 		agentIntent: state?.agent_intent ?? null,
 		lastPrompt: state?.last_prompt ?? null,
 		awaitingInput: isAwaiting ? "question" : null,
 		awaitingInputConfident: state?.question_confident === true,
+		questionText: isAwaiting ? (state?.question_text ?? null) : null,
+		choicePrompt: isAwaiting ? (state?.choice_prompt ?? null) : null,
 		backgroundWork: state?.background_work === true,
+		abandonedSinceMs: state?.abandoned_since_ms ?? null,
 		// Omitted by the backend when zero (serde skips it), so absence is an
 		// empty queue — not "unknown".
 		queuedCommands: state?.queued_commands ?? 0,
 		lastActivityAt: state?.last_activity_ms ?? null,
 		...(shellState !== undefined ? { shellState } : {}),
+	});
+	applyAgentIdentity(termId, toAgentType(state?.agent_type ?? null));
+	const exactId = state?.agent_type === "codex" ? (state.codex_binding?.session_id ?? null) : null;
+	terminalsStore.update(termId, {
+		exactAgentSessionId: exactId,
+		...(exactId ? { agentSessionId: exactId } : {}),
 	});
 	if (wasAwaiting !== isAwaiting) {
 		pluginRegistry.dispatchStructuredEvent(
@@ -105,7 +122,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
  * a visible-but-idle window costs zero IPC — this replaced a 1 Hz
  * `list_active_sessions` poll that ran for as long as any terminal existed.
  */
-function applySessionStateEvent(payload: unknown): void {
+export function applySessionStateEvent(payload: unknown): void {
 	const event = payload as SessionLifecycleResponse | null;
 	const sessionId = event?.session_id;
 	if (typeof sessionId !== "string") return;
@@ -125,11 +142,24 @@ export function syncAgentLifecycleStates(): Promise<void> {
 	return lifecycleSyncInFlight;
 }
 
+/** Recovery must read state from after the gap: a snapshot already in flight
+ * may have been captured before it, so run one fresh snapshot once it settles. */
+async function resyncAgentLifecycleStates(): Promise<void> {
+	await lifecycleSyncInFlight?.catch(() => {});
+	await syncAgentLifecycleStates();
+}
+
 async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
 	const requestedSessions = new Map<
 		string,
-		{ sessionId: string; shellStateRevision: number; agentIntent: string | null; lastPrompt: string | null }
+		{
+			sessionId: string;
+			shellStateRevision: number;
+			agentIntent: string | null;
+			lastPrompt: string | null;
+			agentType: AgentType | null;
+		}
 	>();
 	for (const termId of terminalsStore.getIds()) {
 		const terminal = terminalsStore.get(termId);
@@ -141,6 +171,7 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 				shellStateRevision: revision,
 				agentIntent: terminal?.agentIntent ?? null,
 				lastPrompt: terminal?.lastPrompt ?? null,
+				agentType: terminal?.agentType ?? null,
 			});
 		}
 	}
@@ -179,7 +210,8 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 			requested?.sessionId === session.session_id &&
 			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId) &&
 			requested.agentIntent === (terminalsStore.get(termId)?.agentIntent ?? null) &&
-			requested.lastPrompt === (terminalsStore.get(termId)?.lastPrompt ?? null);
+			requested.lastPrompt === (terminalsStore.get(termId)?.lastPrompt ?? null) &&
+			requested.agentType === (terminalsStore.get(termId)?.agentType ?? null);
 		if (!snapshotIsFresh) continue;
 		applySessionState(termId, session.session_id, session.state);
 	}
@@ -199,6 +231,46 @@ export type DetectionSource = "idle" | "busy" | "poll";
 function toAgentType(value: string | null): AgentType | null {
 	if (value === null) return null;
 	return (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
+}
+
+/** Apply identity before plugin dispatch so both snapshot and discovery paths agree. */
+function applyAgentIdentity(termId: string, agentType: AgentType | null): void {
+	const current = terminalsStore.get(termId);
+	if (!current) return;
+	const prevAgentType = current.agentType;
+	if (prevAgentType !== agentType) {
+		appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
+
+		const sessId = current.sessionId;
+
+		// Notify stop of previous agent BEFORE updating the store. Plugin dispatch
+		// filters read the current store.agentType, so agent-stopped must fire
+		// while the previous type is still current or filtered plugins miss it
+		// (their internal per-session tracking then leaks across agent changes —
+		// e.g. cache-keepalive kept writing to a session that switched claude→codex).
+		if (prevAgentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
+		}
+
+		terminalsStore.update(termId, { agentType, exactAgentSessionId: null });
+
+		// Reset agent-specific state carried over from the previous agent.
+		if (prevAgentType !== null) {
+			terminalsStore.update(termId, { agentSessionId: null });
+		}
+
+		// Notify start of new agent AFTER updating the store so filtered plugins
+		// for the new type see the event and receive the synthetic shell-state replay.
+		if (agentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
+			// Replay current shell state to plugins filtered by agentType — they missed
+			// events dispatched before detection completed (agentType was still stale).
+			const freshShellState = terminalsStore.get(termId)?.shellState;
+			if (freshShellState) {
+				pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
+			}
+		}
+	}
 }
 
 /**
@@ -238,39 +310,7 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 		if (source !== "idle") return; // Not a reliable clearing signal — skip
 	}
 
-	if (prevAgentType !== agentType) {
-		appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
-
-		const sessId = current.sessionId;
-
-		// Notify stop of previous agent BEFORE updating the store. Plugin dispatch
-		// filters read the current store.agentType, so agent-stopped must fire
-		// while the previous type is still current or filtered plugins miss it
-		// (their internal per-session tracking then leaks across agent changes —
-		// e.g. cache-keepalive kept writing to a session that switched claude→codex).
-		if (prevAgentType !== null && sessId) {
-			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
-		}
-
-		terminalsStore.update(termId, { agentType });
-
-		// Reset agent-specific state carried over from the previous agent.
-		if (prevAgentType !== null) {
-			terminalsStore.update(termId, { agentSessionId: null });
-		}
-
-		// Notify start of new agent AFTER updating the store so filtered plugins
-		// for the new type see the event and receive the synthetic shell-state replay.
-		if (agentType !== null && sessId) {
-			pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
-			// Replay current shell state to plugins filtered by agentType — they missed
-			// events dispatched before detection completed (agentType was still stale).
-			const freshShellState = terminalsStore.get(termId)?.shellState;
-			if (freshShellState) {
-				pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
-			}
-		}
-	}
+	applyAgentIdentity(termId, agentType);
 
 	// Attempt session discovery when an agent is running.
 	// Agents with sessionDiscovery: always re-discover (session ID changes after /clear, /new, etc.).
@@ -303,7 +343,7 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 			}
 
 			try {
-				const found = await invoke<{ sessionId: string; launchCommand: string | null } | null>(
+				const found = await invoke<{ sessionId: string; launchCommand: string | null; provider: string | null } | null>(
 					"discover_agent_session",
 					{
 						agentType,
@@ -313,12 +353,14 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 						envOverrides: {},
 					},
 				);
-				if (found && found.sessionId !== current.agentSessionId) {
+				const exactId = agentType === "codex" ? terminalsStore.get(termId)?.exactAgentSessionId : null;
+				const sessionId = exactId ?? found?.sessionId;
+				if (sessionId && sessionId !== terminalsStore.get(termId)?.agentSessionId) {
 					appLogger.debug(
 						"app",
-						`[AgentDetect] ${termId} discovered agentSessionId "${found.sessionId}" (was "${current.agentSessionId}")`,
+						`[AgentDetect] ${termId} discovered agentSessionId "${sessionId}" (was "${current.agentSessionId}")`,
 					);
-					terminalsStore.update(termId, { agentSessionId: found.sessionId });
+					terminalsStore.update(termId, { agentSessionId: sessionId });
 				}
 				// The rebuilt command is ground truth read from the live process: it names
 				// the real binary and the env (CLAUDE_CONFIG_DIR) that decides which store
@@ -326,6 +368,10 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 				// before exec, so TUIC only ever sees "c2".
 				if (found?.launchCommand && found.launchCommand !== current.agentLaunchCommand) {
 					terminalsStore.update(termId, { agentLaunchCommand: found.launchCommand });
+				}
+				const provider = found?.provider ?? null;
+				if (found && provider !== (current.agentProvider ?? null)) {
+					terminalsStore.update(termId, { agentProvider: provider });
 				}
 			} catch (err) {
 				appLogger.debug("app", `[AgentDetect] ${termId} discover_agent_session failed`, err);
@@ -421,7 +467,7 @@ export function useAgentPolling(): void {
 				onResync: (reason) => {
 					if (subscriptionDisposed) return;
 					appLogger.debug("app", `[AgentLifecycle] resync after ${reason}`);
-					void syncAgentLifecycleStates();
+					void resyncAgentLifecycleStates();
 				},
 			},
 		)

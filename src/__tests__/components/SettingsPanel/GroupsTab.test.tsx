@@ -116,4 +116,24 @@ describe("AppearanceTab — Repository Groups", () => {
 		fireEvent.click(firstSwatch);
 		expect(mockSetGroupColor).toHaveBeenCalledWith("g1", expect.any(String));
 	});
+	// Catches: a failed rename closes the editor or discards the rejected draft after the card migration.
+	it("keeps an invalid group rename editable and Escape restores the saved name", () => {
+		setGroups({ g1: { id: "g1", name: "Work", color: "", collapsed: false, repoOrder: [] } }, ["g1"]);
+		const view = render(() => <AppearanceTab />);
+		fireEvent.dblClick(view.getByText("Work"));
+		const input = view.getByRole("textbox", { name: "Group name: Work" });
+		fireEvent.input(input, { target: { value: "   " } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(mockRenameGroup).not.toHaveBeenCalled();
+		expect(input).toHaveValue("   ");
+		expect(input).toHaveAttribute("aria-invalid", "true");
+		fireEvent.input(input, { target: { value: "Personal" } });
+		mockRenameGroup.mockReturnValueOnce(false);
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(input).toHaveValue("Personal");
+		expect(view.getByText("A group with this name already exists")).toBeInTheDocument();
+		fireEvent.keyDown(input, { key: "Escape" });
+		expect(view.queryByRole("textbox", { name: "Group name: Work" })).toBeNull();
+		expect(view.getByText("Work")).toBeInTheDocument();
+	});
 });

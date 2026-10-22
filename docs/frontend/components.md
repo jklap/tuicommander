@@ -1,6 +1,54 @@
 # Components
 
+Repository Settings uses scoped cards and responsive labelled rows. The existing repository update callbacks and export command remain authoritative. Reset is presented with its repository scope and consequences rather than as an unscoped footer action.
+
+Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.
+
+Workspace Settings pages use `SettingPageHeader`, `SectionCard`, and opt-in row fields. `WorkspaceTabs.module.css` scopes shortcut action-first layout without changing capture handlers or global Settings styles.
+
+Application Settings tabs opt into `SettingFields` row presentation. The default stacked layout remains available to unchanged consumers. Row controls use `SettingRow` for label and hint association; slider input and commit events remain separate.
+
+
+`ui/Select`, `ui/Input` and `ui/Textarea` forward native form attributes and events.
+`ui/SegmentedControl` provides a keyboard-accessible single-choice view switch.
+All four share `ui/FormControls.module.css`; screen CSS owns layout only.
+The native-select guard in `src/__tests__/nativeSelect.test.ts` rejects new raw
+selects outside `ui/` and requires the explicit pending-migration list to shrink.
+
+`Tasks/detail/TasksDetail` is the core work-item detail surface. Its props are
+`provider`, `reference`, optional `visible`, `onClose` and `onItemChange`.
+It renders schema-driven fields, sanitized Markdown, all declared comment
+variants, cursor pagination, a comment composer and provider transition actions.
+The shell must pass visibility to pause the default 60-second refresh timer.
+Read-only enum fields resolve provider option IDs to their schema labels, falling back to the stored value when an option is unknown. Editing still sends the option ID.
+
+`useTasksDetail` fences responses by item generation and serializes mutations.
+Committed mutations remain accepted if reloading opened comment pages fails;
+the view reports the history error and Retry reloads those pages.
+`TaskMarkdown` preserves reader disclosure state across provider refreshes.
+Shell mounting and provider registration are owned by the Tasks integration.
+
+`Tasks/create/TasksCreate` is the core work-item create form. Its props are
+`provider`, `onCreated(detail)` and optional `onCancel`. It renders the item-type
+picker and per-type fields with `SettingField` and `SettingMultiSelect`.
+`useTasksCreate` fences schema responses by generation and submits once;
+`createDraft` converts control values to tagged field values.
+`TaskCreateUser` renders static choices and optional provider user searches, with
+request cancellation and stale-response fencing. Free labels keep raw text until
+collection; required-field messages sit beside their inputs.
+
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
 All components are SolidJS functional components in `src/components/`.
+
+`Tasks/roadmap/TasksRoadmap` consumes a data-only `WorkItemProvider`, optional host
+start/target date field IDs and an item-opening callback. It reuses `createTasksQuery`
+and the list's virtual rows for undated items; `RoadmapTimeline` virtualizes dated rows.
+Month/quarter controls navigate local calendar geometry from `calendar.ts`. The default
+field mapping uses the first two date descriptors in provider order. Missing, invalid
+or reversed dates stay in the side list. Shell mounting is a separate integration step.
+
+`MobileViewBanner` offers browser clients a link to `/mobile`. On tablets it remains visible, even if previously dismissed on a phone, so users who chose desktop in mobile Settings can return. Switching clears the device-local desktop preference; native Tauri never renders the banner.
 
 ## Component Tree
 
@@ -74,7 +122,7 @@ App.tsx (central orchestrator)
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
-├── DictationToast/           # Dictation recording/transcribing indicator
+├── DictationToast/           # Dictation recording/transcribing indicator, hands-free meter, reply controls and the spoken-replies toggle
 ├── ConfirmDialog/            # Reusable in-app confirmation dialog
 ├── RenameBranchDialog/       # Branch rename dialog
 ├── CreateWorktreeDialog/     # Worktree creation dialog
@@ -112,27 +160,38 @@ its window renders, so its renderer stays outside the initial desktop graph.
 `SessionControls` lists ego's durable `session/list` results by `updatedAt` and
 loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
 binding from app config after a fresh document opens.
-The control bar summarizes the current model and mode. Its session settings
+The control bar summarizes the current model and mode, with pending values while
+the selected attachment has not published options. Its session settings
 button opens a shared-style modal with one labeled select and description per
 ACP select config option. Choices and displayed values come from the selected
 session's latest attachment snapshot. Flat choices use ACP `value` fields;
 grouped choices use `group` and nested `options`. Rejected changes show an error
 in the modal.
 The panel draws open chat tabs from `aiChatTabs`; each tab selects one ACP
-session on the repository's connection. A detached window reads the saved tab
-list and replays each open conversation. `aiChatDraft` keeps unsent text and
+session on the shared default connection or its saved custom-launch connection.
+Selecting a restored tab connects and attaches or replays it without a prompt;
+the panel shows connecting status, or the reason and Retry after a refusal.
+Concurrent selections share a pending default connection and only the latest
+selection changes focus. A detached window reads the saved tab list.
+`aiChatDraft` keeps unsent text and
 staged images per tab while the document is mounted.
 ACP session title updates rename the panel header and picker entry. The usage
 footer shows context-window occupancy and the reported cumulative cost.
-Untitled sessions use their first prompt or latest activity time in the picker,
-with the session ID in the option tooltip. Small single-choice elicitation
+Untitled sessions use their first prompt or latest activity time in tabs and the picker,
+with the session ID in the tooltip. Small single-choice elicitation
 forms use direct answer buttons and Cancel. Prompt failures and empty completed
 turns appear in the transcript.
+`Transcript` displays one provider-retry status line. `useAcpChat` supplies its
+live countdown, clamped at “retrying now”, through a panel-owned timer. User-message
+Copy buttons use a single unwrapped line, including in the full app shell.
+
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
-text selection, find/select-all/clear shortcuts, and local file paths use the
+Messages, tool output and code blocks have copy actions. Chat preserves fenced-code padding inside highlighted answers and places Copy in a normal-flow row above the code, so the control neither clips nor covers wrapped text. The transcript has
+text selection and find/select-all/clear shortcuts. Find selects phrases across
+inline Markdown within each block, skips collapsed disclosure bodies, and closes
+on Escape from the input or navigation buttons. Local file paths use the
 terminal's backend path resolver and file opener. Web links use the shared
 external URL opener. A detached AI Chat window sends resolved file links to
 the main window's same file opener, where the editor and viewer tabs live.
@@ -152,11 +211,37 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
+
+`SessionDetailScreen` replaces its state with each complete WebSocket or polled
+session snapshot, except polls whose `last_activity_ms` is older than the applied
+state. Equal timestamps remain replaceable; this field is not a protocol revision.
+Omitted optional fields mean cleared state, not missing deltas.
+A fresh poll can therefore retire a stale socket's agent identity and question,
+return Chat to CLI, and route the composer to the remaining shell after agent exit.
+
+Mobile connection presentation follows `useSessions`, not the independent version poll. Recovery increments a root revision consumed by Files, Chat settings, Activity, Settings and Progress discovery. Failed Files reads retry without replacing unsaved edits. During an outage, tab views stay mounted but hidden so contradictory empty/setup errors do not replace the shared connection banner. Mobile Chat hydrates settings quietly and does not infer missing ego configuration from an unsuccessful read.
+
+`OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
+It reads repository-scoped desktop file metadata and refetches on tab changes,
+repository changes and SSE resynchronization. Selecting an entry keeps the
+session mounted and opens `FilesScreen` with the entry’s original checkout root.
+
+`OutputView` keeps a 500-line live tail while following. While the reader is
+scrolled up or touching the output, it retains the loaded rows instead of
+evicting the content being read. Older-history pages extend that reading window.
+The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
+
+Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
+
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
 the row. Mobile AI Chat uses the shared composer to stage images as ACP image
 blocks and other files as ACP resource links with a readable path in text.
-The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+The mobile PWA opens on Sessions. Its bottom tabs are Sessions, Chat (only with ego configured),
 Files, Progress, and Activity; Settings opens from the app-bar overflow.
 The session detail screen loads after a session is selected (or opened from a
 deep link), keeping its terminal and attachment controls out of the Sessions
@@ -167,7 +252,7 @@ the backend list and card order remain unchanged. Closing search clears the quer
 Waiting sessions sort above idle agents and shells without changing order within each
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
-session; each banner shows its session name and repository.
+session from the AWAITING tile, without a duplicate app-bar count; each banner shows its session name and repository.
 Each session card uses separate buttons to open or kill the session. Both have
 accessible names, and the kill button has a 44 px hit area. The list reserves
 space below its last card so the floating new-session button cannot cover it.
@@ -177,6 +262,12 @@ display name, repository/branch and elapsed state, tasks count, and overflow.
 The name, tasks, and session-scoped Progress open temporary sheets over the
 terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
 remain reachable in overflow. No fixed intent/task rows reduce terminal space.
+
+`MobileApp` measures `visualViewport.height` and `offsetTop` into the fixed shell's
+CSS variables. Resize, viewport scroll, `pageshow`, foreground `visibilitychange`
+and document `resume` share one animation-frame measurement. Lifecycle listeners
+are removed on unmount. This prevents stale geometry after a restore without a
+viewport event; it does not establish the cause of the reported iPhone grey screen.
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
@@ -192,6 +283,8 @@ resolved path. HTTP(S) output links open outside the PWA.
 Markdown images in the Files viewer resolve relative to their source file and
 load through the authenticated `/fs/markdown-image` route.
 
+`FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls select a live agent in the owning repository and call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
+
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
 block counts. Mobile Settings shows app/server versions and a persistent Dark
@@ -199,10 +292,25 @@ or Light choice using the desktop theme tokens. Its server-side `mobile_theme`
 preference is independent of the desktop terminal theme.
 
 The detail keybar and composer each keep their previous total height while their
-controls use 44 px touch targets. The keybar slash button opens a local
-agent-specific command menu without writing to the PTY; picking a command
-updates the input, while the close button restores the prior draft. A vanished
-session keeps its output visible but disables both input controls.
+controls use 44 px touch targets. The keybar slash button inserts `/` at the
+composer selection through the same input path as typing. It preserves the surrounding draft, syncs the same
+PTY delta, and shows the agent parser menu with navigation. Picking a command
+updates the input; closing the menu clears the input through the same sync path.
+A vanished session keeps its output visible but disables both input controls.
+
+The mobile composer owns its draft. PTY prompt snapshots do not create a draft
+or extend it on their own: a hands-free paste can be visible before Enter, and
+a queued agent message can look like prompt input. A Tab request from the
+composer or keybar accepts one strict extension of a nonempty local draft.
+Explicit keybar Up/Down accepts one history replacement after its PTY write is
+acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
+Typing, sending, Escape, or a failed write cancels the request. A history response
+arriving before the HTTP acknowledgement is dropped, causing a missed recall.
+Because snapshots have no causal request ID, an unrelated delayed snapshot after
+the acknowledgement can still be mistaken for history.
 
 ## Core Components
 
@@ -222,6 +330,7 @@ Native terminal renderer with full PTY integration.
 - Applies font, theme, and zoom settings
 - Link detection for clickable URLs
 - Selection management for copy operations
+- Terminal search retains match highlights across unchanged or colour-only grid frames; changed text invalidates affected rows before the backend refresh completes.
 
 `CanvasTerminal` keeps frame decode, reconciliation, scheduling, and paint in
 one imperative hot path. Sibling controllers own selection/search state, link
@@ -232,7 +341,15 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
-Repository tree with branch management.
+Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID, child PID, or alias. PID and alias come from the owning row of an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; they are checked again before copying. Unknown PID and absent alias entries are hidden, including exited or suspended sessions. Both desktop and mobile copy confirmation uses the toast store.
+
+Repository tree with branch management. Touch branch rows reveal their existing
+actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
+row identity permits one open tray across repositories; vertical scrolling and
+mouse interactions keep their existing behavior.
+
+Branch rows keep the status icon separate from the always-visible agents disclosure button. Clicking status selects the workspace; the chevron toggles its agents.
+
 
 **Features:**
 - Expandable/collapsible repository entries
@@ -300,7 +417,7 @@ label row above its pages, and the configured repositories follow under
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
-  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
@@ -347,6 +464,10 @@ one group under a shared label.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
+Hands-free listening is a standard toggle beside it (also in mobile Settings); off arms a replies-only conversation. The `DictationToast` carries a speaker button (`aria-pressed`) that flips the same spoken-replies setting while recording or while a conversation is armed. Spoken replies is a standard toggle, also available in the mobile conversation
+header and mobile Settings. It stays visible in browser mode and saves the
+backend device preference; it does not stop microphone dictation.
+
 The **Voice** page (nav key `dictation`). One `<h3>` per section. Speech-to-text and
 text-to-speech are separate sections, and each keeps its own advanced controls
 at its bottom — there is deliberately no shared "Advanced" section:
@@ -387,7 +508,7 @@ The two voice sections:
   voice row is **Active** when it is the selected voice; only a language row is
   active for the language.
 - **Hands-free conversation** (`HandsFreeControls`) — a terminal picker, Start /
-  Stop, the polled phase, the activation phrase, the hold-back slider, the
+  Stop (accent Start, distinct Stop), a coloured Running/Stopped indicator, the polled phase, the activation phrase, the hold-back slider, the
   earcons toggle, the "notify model" toggle and, while that is on, the start
   notice textarea. Its placeholder is `getDefaultHandsFreeStartNotice()` — Rust
   owns the built-in text, the frontend keeps no copy. The slider edits the
@@ -462,6 +583,8 @@ The agent badge appears when the active terminal has a recognized agent type. It
 - **PTY usage limit (priority 3):** Parsed from terminal output by the output parser (e.g. Claude's `[C1 S30 K26]` status line). Stored on the terminal entry as `usageLimit`. Applies to all agents that emit usage info.
 - **Agent name (priority 4):** Fallback — just shows the agent type name.
 
+**Usage blink threshold:** API ticker priorities and PTY percentages apply the critical animation only from 96% usage. Usage from 70% to below 96% stays warning-coloured. Dashboard critical colours remain at 90%.
+
 **Ticker integration:** When the active agent is `claude` and the Claude Usage ticker is active, the ticker message is absorbed into the agent badge (priority 2) and hidden from the separate ticker area. Other ticker messages (from plugins, etc.) display normally.
 
 **Pendulum ticker:** When the status info text overflows its container, a CSS pendulum animation scrolls the text back and forth at ~50px/s. Clicking the text dismisses the notification until the message changes.
@@ -484,9 +607,18 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
-The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
+The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
+
+The project-scoped Plans and Stories dialog supports manual plan/story actions
+and a separate Run history view. Run history reads persisted run snapshots and
+ordered events through `workflow_run_action`; `workflowRunSignals` is a wake hint
+that causes a cursor-based read, so missed or duplicate notifications cannot
+replace the backend's durable sequence. The view pages events and stays usable
+without starting a workflow.
+The review view offers Approve in both the desktop app and browser. The backend
+rejects approval from the managed session that claimed the story.
 
 ### ProgressDialog (`ProgressDialog/`)
 
@@ -499,6 +631,8 @@ and no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.
 The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
+On macOS, clicking a native `done` or `blocked` notification opens this dialog
+for the notification's project and source terminal, even if another project is active.
 
 Opening asks the shared journal once, for the selected PTY or project. The old panel
 fanned out across every registered repository and answered with one red
@@ -556,7 +690,7 @@ system and never turns an absent provider value into zero.
 | `CiRing` | SVG circular CI status indicator with proportional segments |
 | `DiffViewer` | Syntax-highlighted unified diff renderer |
 | `Dropdown` | Reusable dropdown select component |
-| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
+| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), with escaped preformatted text on parser failure, interactive checkboxes, tweak highlights, and click interception for every rendered link; Mermaid 12 diagrams retain the dark theme and strict security setting while using upstream layout and appearance defaults; `MarkdownTab` sends local href resolution to Rust |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
 | `PromptOption` | Agent prompt multiple-choice option |
 | `StatusBadge` | Git status badges (clean/dirty/conflict) |
@@ -589,6 +723,13 @@ system and never turns an absent provider value into zero.
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
 
+Dashboard row navigation uses the shared `navigateToTerminal` path. It opens the
+manual Global Workspace for parked sessions before activating their content,
+leaves that workspace for a repository session that is not a member, and focuses
+its existing pane group when present. Undocked terminals use the full-page overlay
+without changing the split layout being left. Existing tab/session bindings are
+preserved. Notification and detached-dashboard navigation use the same path.
+
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
 in its detached window. On startup and reopening, saved detached geometry cannot
 make the Activity window larger than its 550×650 default; smaller saved sizes
@@ -596,3 +737,165 @@ remain in effect. `SubAgentIcon` supplies the shared 11px robot marker
 for both the dashboard and sidebar; only its tooltip/accessible name contains
 the parent name. The session list supplies each parent's live `tuic_session`
 when its PTY ID differs from that identity.
+
+## Private secret form
+
+`SecretForm` is a standalone entry (`secret-form.html`, `src/secretForm.tsx`),
+mounted in a separate backend-created WebView or a capability-gated browser.
+It imports no App stores, debug globals or logging handlers. Sensitive input
+values stay in input elements until submit, then are cleared and unmounted
+before IPC/HTTP entry. Only requested fields render; approval instead shows
+exact argv/names/directory and optional template consent.
+
+`SettingsPanel/tabs/TelegramTab` renders the shared Telegram setup controls in desktop Settings and, when opened, in mobile `SettingsScreen`. All validation, pairing, private-file writes and polling ownership remain in Rust. The registered agent is read-only; agents opt in through MCP rather than a destination selector.
+
+Pending agent commands in `Terminal` drain once when both the command and an idle shell session are available. Parsed events, shell-state synchronization and WebSocket snapshots feed this same readiness check, including late launch preparation.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
+
+Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+
+`StoriesDialog` run history embeds `RunIncidents`. It renders backend-owned cause and recovery suggestion text with run/attempt/story/session/task identities. It refreshes on run cursor changes and explicit operator refresh, ignores stale responses after selection changes, and discloses unavailable evidence. It does not execute recovery.
+
+Rich `RepoSection` metadata shows PR and worktree count chips only for positive counts, with reactive store updates.
+
+In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.
+
+In rich mode, ungrouped repositories with open terminals appear first, followed by an Idle section. Manual order is preserved inside each section. Idle headers start on one line; disclosure reveals their branches without changing activity or saved order. Headers count agents in the backend working state, independently of open-terminal membership.
+
+Rich active/idle sections also apply independently inside each existing repository group. Group membership and group ordering remain intact; active-only filtering hides idle-only groups and empty Idle headings.
+
+Rich merged linked worktrees with no sessions and verified lifecycle facts use a one-line summary: Merged, N uncommitted, Clean up. Live, unmerged, or unknown worktrees retain full rows. Clean up enters the existing lifecycle preflight and confirmation workflow; cancellation preserves the worktree.
+
+Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.
+
+### Browser repository picker
+
+`ApplicationOverlays` uses `RemoteRepoPicker` for browser **Add Repository** as well as connected daemon folders. An omitted `connectionId` browses the serving TUIC with the existing `get_home_directory` and `list_directory` RPCs; an explicit ID browses that daemon. Selection and cancellation resolve the existing path prompt. Native desktop selection still uses the OS dialog.
+
+### AutomationsDialog
+
+`src/components/AutomationsDialog/` provides a machine-local scheduled-run dialog.
+`AutomationsHost` loads it on demand from the command palette. The searchable
+list shows the stored zone, next occurrence and last status, including overlap
+skips. The editor supports literal prompts, run config, workspace, precheck,
+limits, backend cadence presets and backend schedule previews. Once uses
+`once_local` plus the stored zone, without browser timezone conversion. Pause, Run now,
+save, confirmed deletion and recent history share one adapter. Deletion retains
+saved history. Escape uses the modal stack; Tab stays in the dialog.
+
+The Step 8 API is a separate integration dependency. `transportAdapter.ts` is the
+only provisional command-envelope boundary; tests inject `AutomationAdapter`.
+No schedules or launch decisions are calculated in TypeScript.
+
+`RunsView` in the Automations dialog renders all-history pages and backend 24h/7d summaries. `RunOutput` renders saved stdout/stderr and immutable workspace details. View run only focuses a live terminal with matching daemon ownership; unavailable sessions never launch a replacement.
+
+### Reusable setting field controls
+
+`SettingsPanel/SettingFields.tsx` exports `SettingAccount`, `SettingList`,
+`SettingMultiSelect`, `SettingStatus` and `SettingButton`. The implementations in
+`SettingsPanel/fields/` share the existing label and hint layout. Editable rows use
+stable IDs; multiselect uses checkboxes; status is read-only. The account picker
+loads the core account list and delegates Add to a token-free native-flow callback.
+These controlled components do not persist settings or define catalogue fields.
+The dev-only `fields/preview.html` mounts the actual controls for visual checks.
+
+The Precheck section includes a default-off stdout context checkbox. It edits
+`precheck.inject_output` through the existing store and shared save API, without
+changing prompt text. Disabling and re-enabling the precheck resets the flag.
+
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The phone More menu uses the same Start/Stop voice call labels. The composer dictation button keeps its microphone icon.
+
+### Mobile composer browser dictation
+
+Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.
+
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser errors request cancellation through the same shutdown path as an edit or send. Browser failures are logged as well as toasted; the existing “Dictation failed” label stays beside the mic in the keyboard-visible composer until the next take starts. The hook also stops on send, session end, or unmount. No setting or backend route is added. Bounded lifecycle diagnostics use source `dictation`, level `debug`: start attempt, first result, first error with code, abort request, end and ownership release. Each record includes the captured session ID, a random take ID and a per-take sequence number, not transcript text. The sequence preserves event order even if uploads arrive out of order. Unbound AI Chat drafts use a null session ID. At most six records are emitted per take; they reach the owner through the existing log route.
+
+`IdeasOverlay` reuses the same hook and `MobileDictationButton`. `SessionDetailScreen` passes its existing voice-call and terminal-dictation recording signals to block the Ideas hook and disable its mic while either owns the microphone. It supplies an optional `getSelection` accessor, so each take captures its insertion range and replaces only that range as hypotheses change. Empty hypotheses preserve the original selection. Typing and explicit idea submission cancel recognition before changing the draft. Speech updates only the unsaved idea input, never the terminal or idea store. The hook keeps tail insertion for consumers that omit `getSelection`.
+
+## Tasks board
+
+`Tasks/board/TasksBoard.tsx` renders the provider/core board projection. Each lane
+has a virtualized card list. Pointer capture supports drag and drop; the native
+move menu provides keyboard and touch access. Moves dispatch the provider's per-card
+action, show pending feedback, and restore the origin on rejection. Cancellation
+and scope changes clean up drag state. Consumers refresh the projection after a
+successful move by merging page one into the loaded cards. Other loaded pages are
+retained until reload. The move menu stays open when its own list scrolls; scrolling
+outside it dismisses it. The view does not infer workflow transitions.
+
+Terminal marker layout uses `viewportProjection.ts`: suggest anchors and hard-wrapped tails consume no display row; answer marker cells and their trailing space consume no display columns. Intent stays visible. Grid painting, cursor/IME, selection, search and link hit testing use the same reversible projection, including cache-driven smooth scrolling; PTY cells and absolute scrollback/copy coordinates remain unchanged.
+
+Submitting a new prompt clears old choices and reopens follow-up delivery. A `user-input` event can arrive after `shell-state: busy`, so it must not dismiss the choices for the new turn.
+Tasks `useStartWork` obtains the brief from `build_start_work_prompt` before the
+provider action, with a pending state covering that read. The Rust builder reads
+`.tuic-start-work.md` in the repository root; absent files use the legacy brief.
+Read failures use the existing error/Retry state. Host delivery retains the
+untrusted-content wrapper and 12,000-character cap.
+
+### Terminal Compose attachments
+
+`ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.
+
+The desktop macOS General page includes **Hide Dock icon in background** under
+Confirmations. It uses the shared setting toggle and persists
+`background.hide_dock_icon`; browser settings omit this native control.
+
+The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
+
+Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
+
+The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
+
+Answer overlay caching includes cell height and projected row positions as well as marker content, so font loading and theme remeasurement cannot retain old rule geometry.
+
+Tasks list controls use provider-declared field sort, group and filter capabilities.
+A rejected selection restores the last successful query and shows the provider reason.
+
+Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matches, Tasks collects the complete search/preset scope and uses the Rust projection for all-field sort, group and filter. A changed total, missing rows or a nonterminal cursor cannot establish completeness. Unknown totals and larger lists keep provider-supported server controls. No extra cache or persisted state is added.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+TasksDetail provides Follow task / Unfollow task in its toolbar. Settings → Notifications has a Tasks section with an independent default-off OS notice preference.
+
+FileBrowserPanel subscribes to successful folder-drop completion and routes it through its existing mutation refresh. The subscription is scoped to the filesystem root and owning connection, and is removed when the panel unmounts.
+
+### Settings presentation vocabulary
+
+`SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.
+
+Settings integration keeps `SettingsPanel` as the page-selection owner. Search catalogue reads do not mount page consumers; plugin `describe` supplies navigation and search while scoped `get` starts only when the editor mounts. Search reveals expert keys before the next-frame scroll without persisting Expert Mode. Section links preserve retired-tab mappings, ignore missing anchors and cancel scheduled work on close. `pluginSettingsTab.test.tsx`, `settingsPanelSearch.test.tsx`, `settingsPanelExpert.test.tsx` and `DeepLinkSection.test.tsx` cover these shared boundaries, including local loading/errors and removal during pending plugin reads. No global save transaction or status inference belongs in the shell.
+
+The Pocket Voice picker includes installed and downloadable catalogue voices for the active language. A missing configured voice stays selected with a Not Downloaded label and an adjacent Download row.
+
+Terminal ego provider recovery: the tab replaces its busy animation with a
+recovering label. StatusBar mounts ProviderRecoveryStatus only while a complete
+backend recovery snapshot exists; its one-second display timer stops on unmount.
+The component displays phase, attempt, next-time and a zero-clamped countdown,
+with a single-flight Force retry button using the shared backend retry transaction.
+A non-empty composer refuses the retry; the status bar displays the error.
+
+Voice correction controls carry `corrections.replacements.{from}.from` and
+`corrections.replacements.{from}.to` catalogue identities. Import, add and remove
+retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.
+
+### Context menu viewport bounds
+
+Context menus use their unscaled layout size to stay within an 8px viewport margin.
+Oversized menus scroll; their minimum width also shrinks in narrow windows.
+Shell workspace rows do not offer branch workflow actions or Git smart prompts.
+
+Shell-folder rows offer the same available-agent menu as Git workspace rows.
+Launching an agent uses the folder as its working directory, without creating a
+branch or worktree. The Add Terminal button also offers agents on a long press.

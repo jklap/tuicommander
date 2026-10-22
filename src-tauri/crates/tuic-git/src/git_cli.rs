@@ -12,6 +12,18 @@ use std::time::{Duration, Instant};
 
 use tuic_core::cli::{enriched_path, resolve_cli};
 
+#[cfg(test)]
+thread_local! {
+    static COMMAND_COUNTS: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Thread-local so parallel fixture tests cannot contaminate spawn measurements.
+#[cfg(test)]
+pub(crate) fn take_command_counts() -> std::collections::BTreeMap<String, usize> {
+    COMMAND_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()))
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -120,7 +132,29 @@ impl GitCmd {
     }
 
     /// Run the command to completion, honoring [`GitCmd::timeout`] when set.
-    fn output(&mut self) -> Result<std::process::Output, GitError> {
+    fn output(&mut self, input: Option<&[u8]>) -> Result<std::process::Output, GitError> {
+        #[cfg(test)]
+        COMMAND_COUNTS.with(|counts| {
+            let args = self
+                .cmd
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>();
+            let family = args
+                .iter()
+                .scan(false, |skip_operand, arg| {
+                    let skip = *skip_operand;
+                    *skip_operand = matches!(arg.as_ref(), "-c" | "-C");
+                    Some((arg, skip))
+                })
+                .find(|(arg, skip)| !skip && !arg.starts_with('-'))
+                .map(|(arg, _)| arg.to_string())
+                .unwrap_or_default();
+            *counts.borrow_mut().entry(family).or_default() += 1;
+        });
+        if let Some(input) = input {
+            return output_with_input(&mut self.cmd, self.timeout, Some(input));
+        }
         match self.timeout {
             Some(t) => output_with_deadline(&mut self.cmd, t),
             None => self.cmd.output().map_err(GitError::SpawnFailed),
@@ -131,8 +165,17 @@ impl GitCmd {
     ///
     /// Returns `GitOutput` containing raw (untrimmed) stdout on success.
     pub fn run(mut self) -> Result<GitOutput, GitError> {
-        let output = self.output()?;
+        let output = self.output(None)?;
+        Self::checked_output(output)
+    }
 
+    /// Run git with a finite stdin payload, requiring success.
+    pub fn run_with_input(mut self, input: &str) -> Result<GitOutput, GitError> {
+        let output = self.output(Some(input.as_bytes()))?;
+        Self::checked_output(output)
+    }
+
+    fn checked_output(output: std::process::Output) -> Result<GitOutput, GitError> {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(GitError::NonZeroExit {
@@ -183,7 +226,7 @@ impl GitCmd {
     /// of exit code. Use for callsites that need to inspect exit code and
     /// stderr independently (e.g. `run_git_command` which never returns Err).
     pub fn run_raw(mut self) -> Result<std::process::Output, GitError> {
-        self.output()
+        self.output(None)
     }
 }
 
@@ -202,17 +245,35 @@ pub fn output_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, GitError> {
+    output_with_input(cmd, Some(timeout), None)
+}
+
+fn output_with_input(
+    cmd: &mut Command,
+    timeout: Option<Duration>,
+    input: Option<&[u8]>,
+) -> Result<std::process::Output, GitError> {
     use std::io::Read;
+    use std::io::Write;
 
     // `Command::output()` nulls stdin; `spawn()` inherits it. Match `output()`,
     // or a deadlined child could park on a read of the app's stdin — the exact
     // unbounded wait this function exists to bound.
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(GitError::SpawnFailed)?;
+    let writer = input.map(|input| {
+        let input = input.to_vec();
+        let mut stdin = child.stdin.take().expect("stdin piped above");
+        std::thread::spawn(move || stdin.write_all(&input))
+    });
     let mut out_pipe = child.stdout.take().expect("stdout piped above");
     let mut err_pipe = child.stderr.take().expect("stderr piped above");
     let out_reader = std::thread::spawn(move || {
@@ -226,7 +287,7 @@ pub fn output_with_deadline(
         buf
     });
 
-    let deadline = Instant::now() + timeout;
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
     // Backs off from 1ms to 50ms so a fast command is not delayed by the poll
     // granularity while a slow one costs almost no wakeups.
     let mut poll = Duration::from_millis(1);
@@ -234,7 +295,9 @@ pub fn output_with_deadline(
         match child.try_wait().map_err(GitError::SpawnFailed)? {
             Some(status) => break status,
             None => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline
+                    .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                    .unwrap_or(poll);
                 if remaining.is_zero() {
                     // DEFERRED (2026-09-25) — kill/reap covers the direct child only.
                     // Killing a whole process tree needs process groups on
@@ -243,7 +306,9 @@ pub fn output_with_deadline(
                     let _ = child.kill();
                     // Reap it, so a timeout never leaves a zombie behind.
                     let _ = child.wait();
-                    return Err(GitError::TimedOut { after: timeout });
+                    return Err(GitError::TimedOut {
+                        after: timeout.expect("deadline set"),
+                    });
                 }
                 std::thread::sleep(poll.min(remaining));
                 poll = (poll * 2).min(Duration::from_millis(50));
@@ -251,6 +316,13 @@ pub fn output_with_deadline(
         }
     };
 
+    if let Some(writer) = writer {
+        let written = writer.join().expect("stdin writer panicked");
+        // Preserve Git's diagnostic if it rejected input and closed the pipe.
+        if status.success() {
+            written.map_err(GitError::SpawnFailed)?;
+        }
+    }
     Ok(std::process::Output {
         status,
         stdout: out_reader.join().unwrap_or_default(),
@@ -618,6 +690,9 @@ pub fn git_cmd(cwd: &Path) -> GitCmd {
     cmd.current_dir(cwd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("PATH", enriched_path());
+    // Git for Windows otherwise refuses valid deep worktree and ref paths.
+    #[cfg(windows)]
+    cmd.args(["-c", "core.longpaths=true"]);
     cmd.arg("--no-optional-locks");
     tuic_core::cli::apply_no_window(&mut cmd);
     GitCmd {
@@ -814,9 +889,18 @@ DU src/deleted.rs
     /// filename, on a line whose actual code is a plain modification.
     #[test]
     fn parse_conflicted_files_porcelain_ignores_conflict_codes_inside_names() {
-        assert!(parse_conflicted_files_porcelain("?? UUID.md\n").is_empty());
-        assert!(parse_conflicted_files_porcelain("?? AAA.md\n M src/DD.rs\n").is_empty());
-        assert!(parse_conflicted_files_porcelain("").is_empty());
+        assert_eq!(
+            parse_conflicted_files_porcelain("?? UUID.md\n"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            parse_conflicted_files_porcelain("?? AAA.md\n M src/DD.rs\n"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            parse_conflicted_files_porcelain(""),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             parse_conflicted_files_porcelain("?? notes.txt\nUU file.rs\n"),
             vec!["file.rs".to_string()]
@@ -1256,11 +1340,35 @@ DU src/deleted.rs
         assert!(lock.exists(), "a fresh lock is kept without asking anyone");
     }
 
+    /// Catches: Windows -c operands being counted as subcommands instead of status/cherry.
     #[test]
-    fn test_run_success() {
+    fn command_counts_skip_windows_global_config_operands() {
         let (_dir, path) = setup_test_repo();
-        let out = git_cmd(&path).args(["status", "--porcelain"]).run();
-        assert!(out.is_ok());
+        take_command_counts();
+        // Exercise the Windows-injected argv on every host, including Linux rb.
+        git_cmd(&path)
+            .args(["-c", "core.longpaths=true", "status", "--porcelain"])
+            .run()
+            .unwrap();
+        git_cmd(&path)
+            .args([
+                "-c",
+                "core.longpaths=true",
+                "-c",
+                "core.autocrlf=false",
+                "status",
+                "--porcelain",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&path)
+            .args(["status", "--porcelain"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            take_command_counts(),
+            std::collections::BTreeMap::from([("status".into(), 3),])
+        );
     }
 
     #[test]
@@ -1432,11 +1540,13 @@ DU src/deleted.rs
     #[test]
     fn test_env_is_passed() {
         let (_dir, path) = setup_test_repo();
-        // GIT_AUTHOR_NAME env var should be visible in the subprocess
+        // `git status` ignores the variable, so the old is_ok() check passed even when
+        // env() dropped it. `git var` echoes the author identity built from it.
         let out = git_cmd(&path)
             .env("GIT_AUTHOR_NAME", "TestBot")
-            .args(["status", "--porcelain"])
-            .run();
-        assert!(out.is_ok());
+            .args(["var", "GIT_AUTHOR_IDENT"])
+            .run()
+            .expect("git var");
+        assert!(out.stdout.starts_with("TestBot <"), "{:?}", out.stdout);
     }
 }

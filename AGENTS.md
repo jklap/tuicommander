@@ -126,14 +126,25 @@ been. Where the deadline is not the subject, pass an explicit bound instead
 do so. When a timing assertion does fire, its message must name what actually broke —
 otherwise the next reader spends a day re-diagnosing the wrong subsystem.
 
+## Agent desktop verification
+
+Use `make agent-test` from a linked worktree for authorized macOS desktop live
+checks, never `make dev`, `make test` or the daily executable. Start with
+`make agent-test AGENT_TEST_DRY_RUN=1`; stop with `make agent-test-stop`.
+See [Development Setup](docs/guides/development-setup.md#isolated-agent-desktop-checks-macos)
+for the preset namespace, port, distinct binary and shared-resource audit.
+This target disables global shortcuts, microphone/dictation, Telegram and updater.
+It does not authorize restarting Boss's app or substituting a desktop launch when
+the active assignment permits implementation-only work.
+
 ## Test instance vs orchestrator instance — READ BEFORE TESTING
 
 There are TWO running TUICommander instances; do not confuse them:
 
 - **Orchestrator instance** — the one this agent is embedded in. The `tuicommander` MCP tools and `debug invoke_js` target THIS instance (Mission Control on `:14319`, app logs on `:9876`). It does **NOT** run your worktree build, so testing it proves nothing about your changes.
-- **Test instance** — the worktree dev build you start with `make dev`. Test your changes against it **only via its HTTP API on `http://127.0.0.1:9877`**. MCP/`invoke_js` cannot reach it.
+- **Test instance** — the isolated worktree build started with `make agent-test` when desktop execution is authorized. Test it **only via its own HTTP API, default `http://127.0.0.1:19876`**. MCP/`invoke_js` cannot reach it. Implementation-only assignments must not launch it.
 
-9877 endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `POST /sessions/{id}/terminal/scroll-to-offset {offset}` (coalesced display-offset jump; powers wheel + scrollbar-drag in browser mode), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
+Test-instance endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `POST /sessions/{id}/terminal/scroll-to-offset {offset}` (coalesced display-offset jump; powers wheel + scrollbar-drag in browser mode), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
 
 Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not observable over HTTP** — those still need a visual check with Boss.
 
@@ -141,9 +152,9 @@ Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not o
 
 You can exercise features through the **web UI** instead of the Tauri desktop app — every instance serves the full frontend at `http://localhost:<port>/` (`static_files.rs` `FRONTEND_DIST`). Loading it in a real browser is **browser mode** (`isTauri() === false`), the exact web/PWA path a remote client sees.
 
-- **Port:** the primary/only instance serves on **:9876**; if that's free (no conflict), point the browser there. If the orchestrator already holds 9876, bring up a **second debug instance** — it auto-retries to **:9877** (the single-instance lock is `#[cfg(not(debug_assertions))]`, so a *debug* build can run a 2nd copy alongside the orchestrator). Note: `TUIC_PORT` is honored ONLY by the headless `tuic-remote` binary — the desktop `make dev` build **ignores** it and relies on the `9876→9877→9878` retry. So: use :9876 when unconflicted, else :9877.
+- **Port:** authorized agent desktop checks use `make agent-test`, preset to `http://127.0.0.1:19876/`. Do not launch another desktop through `make dev` or use the orchestrator's :9876 for change verification. The agent-test port is explicit and has no next-port fallback; see the development guide for overrides.
 - **Drive it with `agent-browser`**, always via the stealth wrapper (see global rules). `@ref` CDP clicks are trusted and work (open modals/panels/tabs); **JS-dispatched keydown is `isTrusted:false`** so app keyboard shortcuts (Cmd+P, etc.) are ignored — click UI, never synthesize keys. Use a persistent `--session <name>`, restart the browser periodically (snapshots/clicks degrade after many calls), and wrap each call in a `perl alarm` timeout (macOS has no `timeout`/`gtimeout`).
-- **Isolation caveat:** a 2nd debug instance has isolated backend/sessions (its own PTY/agent state), but by default there is no config-dir split — debug and release builds read and write the exact same config directory and the same `config.json`/`repositories.json` (see `docs/backend/config.md`), protected by a cross-process file lock so concurrent saves don't clobber each other. A toggle flipped in the dev build IS visible to the installed app and vice versa. It still **shares the filesystem** with the orchestrator — never run repo-mutating tests against Boss's repos, and expect possible SQLite contention on `tunnel_audit.db` (same shared dir, not covered by the config lock). **Launch a verification/test instance with `TUIC_APP_INSTANCE=<id>`** (any lowercase DNS label) to get a real, code-enforced isolated config directory instead — `instances/<id>/`, entirely separate from Boss's production files (#763-d219; see `docs/backend/config.md`). Prefer this over the shared default whenever a test is going to add or remove repositories.
+- **Isolation:** `make agent-test` selects `TUIC_APP_INSTANCE=agent-test` with a distinct binary, app identity and socket. It does not copy the daily config and disables global input, microphone, Telegram and updater. Ordinary default-instance debug/release launches still share config, so do not use them as substitutes. Filesystem access remains shared: use throwaway repositories, never Boss's repositories, for repo-mutating checks.
 - **The Command Palette DOES render in web mode.** `App.tsx:984` mounts it unconditionally as `<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />`; `browserMode` filters the action list down to the HTTP-safe subset in `BROWSER_ACTION_IDS`/`BROWSER_ACTION_PREFIXES` (`CommandPalette.tsx:27-103`), which **includes** `search-files` and `search-file-contents`. Only the *opening shortcut* is unavailable to `agent-browser`: a JS-dispatched Cmd+P is `isTrusted:false`, so click the UI instead — that is a test-harness limit, not a missing feature.
 - **Desktop-only features do NOT render in web mode** — IdeLauncher, Dictation, Global Hotkey, detach-panel windows, updater, native file drop, user-plugin install, MCP/hooks config. Built-in plugins DO load. See mdkb `web-mode-verification-2026-07-02` for the verified inventory before reporting a feature "missing".
 
@@ -238,7 +249,7 @@ So when you add a discovery-based agent, look for a pid registry *first*. Codex 
 
 **Forced injection (Goose).** Shell wrapper injects `--name $TUIC_SESSION` into `goose session/run` commands. The TUIC tab UUID IS the goose session name. Discovery returns `None` (SQLite storage, no filesystem scan). Resume uses `tuicSession`.
 
-**No session tracking (Aider, Amp, Cursor, Droid, OpenCode, pi).** Either no local session files, cloud-only, or no UUID-based resume. `TUIC_SESSION` env var is available but unused.
+**No session tracking (Amp, Cursor, Droid, OpenCode, pi).** Either no local session files, cloud-only, or no UUID-based resume. `TUIC_SESSION` env var is available but unused.
 
 When adding a new agent: choose discovery-based if the agent writes session files to disk (add `sessionDiscovery` to `agents.ts` and a Rust `discover_*_session` to `agent_session.rs`). Choose forced injection only when discovery is impossible (e.g., SQLite-only storage).
 
@@ -279,6 +290,10 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 ```
 Frontend unresponsive: no heartbeat for 30s — the WebView main thread is blocked or gone.
 ```
+
+**Whole-process silence is not proof of a frontend-only block.** On 2026-10-20 an occluded agent-test instance without a power assertion showed a 41.6 s callback gap, 40 s backend-log silence, `Sleep-wake detected` lines, ~100 threads at priority 4, and a sync IPC command sampled in `rename(2)` over the gap. Historical attribution remains open. A controlled replay with normal-priority CPU contention reproduced a 36.753 s callback gap; adding the `app_nap.rs` process-lifetime activity alone reduced the maximum to 2.561 s. Independent backend requests still completed in that RED, so it does not reproduce the original backend outage. See `scripts/stall-workload/OCCLUDED-RESULTS.md` (story 1638-c94c).
+
+**Persistent stall evidence:** selected numeric slow-event metadata survives ring overflow and graceful restart in a bounded journal. See `docs/backend/stall-journal.md` for retention, replay inputs and limits; this is not proof of historical stall attribution.
 
 **Lost document (always on, desktop only):** a *second*, different white screen. The `webview-recovery` thread reads the main frame's URL every 15s (`webview_recovery.rs`); anything on the `about:` scheme means the app is no longer in the DOM, and it navigates back to the last healthy URL by itself, logging once. This is not the heartbeat's job and the heartbeat cannot see it: the app is gone rather than blocked, so it never beats from the blank document, and "never beat" is deliberately silent (`tuic-remote` has no WebView).
 
@@ -455,6 +470,23 @@ notification is insufficient evidence: it also arrives after normal prose at
 the ready composer. Unambiguous permission notifications remain raw-stream
 signals because the VT parser consumes escape sequences before clean-row parsing.
 
+**Uncertain ego injection recovery** uses the native empty-composer adapter, not
+silence alone. Only a post-uncertainty repaint followed by 1.5 seconds of stable
+Ready may clear the uncertainty flag. Retained or wrapped drafts and modal rows
+fail closed. The foreground probe still gates idle; recovery never requeues the
+uncertain payload, but normal idle flush can deliver the next queued BG wake.
+The adapter shapes are recorded in `ego-composer-1957*.tcap`.
+
+Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. The complete footer must be the last nonblank content: answered selector history above newer output or a composer must never re-arm awaiting. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
+
+Ego empty-title native awaiting markers are lifecycle events, not screen text: never deduplicate them through selector repaint state. MCP approval titles can contain explicit CRLF continuation rows before `Risk:`; preserve the complete contiguous `Allow …?` title and the exact native controls.
+
+Ego selector and free-text titles share diagnostic, working-row and submitted-composer boundaries. Default-mode approvals require the native Allow/Risk/y-a-n-e-d shape; n replaces choices with the refusal explanation prompt, and Enter settles it. Approval footer height is variable: read all rows after the last Risk anchor, require ordered native keys and the final details control, and reject retained approvals above newer output (`ego-wrapped-approval-2102.tcap`).
+
+Codex native question parsing targets installed 0.162.1: `⌃]` / `⇧→` footer, Shift+Left to open, immediate numeric answers. The queued-panel heading is required; imperative titles are accepted only behind that exact panel shape. Enforced command approvals instead require their exact confirm/cancel footer and command question title; numeric refusal submits immediately. While the same native dialog and its unanswered controls remain active, a delayed idle hook cannot retract the approval or a /plan question. Answer input or a departed dialog permits normal completion. The distinct `/plan` question requires its Question counter and exact tab/enter/esc footer, either one wide row or three narrow rows. Narrow answer and description continuations stay in their native columns; second-column descriptions become hints, not answer labels (`codex-first-plan-narrow-2094.tcap`).
+
+Grok native radio forms require a strict framed Ask or enforced-approval shape. Ask ends with z and a waiting header; enforced approvals carry title, command and scope controls. Numeric keys answer immediately. Selecting z retires choice buttons before publishing a text-only wait.
+
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
 whatever sets it owns nothing until something retracts it. These paths clear it:
@@ -466,10 +498,13 @@ whatever sets it owns nothing until something retracts it. These paths clear it:
 | `resolve_choice_prompt_input` | an option keypress | no `choice_prompt` was ever set |
 | `question-cleared` | silence timer sees the question gone from the screen | — (the backstop; low-confidence only) |
 | `protocol-question-cleared` | Claude renders `User declined to answer questions` after Esc and returns to a ready composer | a dialog is still open or a different question replaced it |
+| `progress-superseded` | the same PTY reports `progress done` or journals a `delegated` hand-off after a `progress blocked` | a dialog or any other confident question replaced the blocked one — only `source=progress-blocked` evidence clears |
 
 `question-cleared` is the backstop that catches the rest. It never touches a
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
+
+**Dialog recovery requires an active agent identity.** After foreground observation returns to the shell, a retained Ink footer or question title above its prompt is history, not a live dialog. Both full-screen recovery and silence-timer chat heuristics require that identity. Never re-arm awaiting from shell output just because that footer remains visible (`claude-question-exit-2091.tcap`).
 
 **The mirror failure is a SET that never comes back.** A multi-question
 `AskUserQuestion` answers one sub-question at a time; each repaints its title and
@@ -525,7 +560,7 @@ After non-trivial implementations, write an mdkb `memory_write` entry. Content: 
 
 Do NOT flag these as security issues in reviews — they are intentional design choices.
 
-- **CSP is intentionally wide open.** TUIC is a local dev tool, not a SaaS. The user IS the trust boundary. The CSP uses a single permissive `default-src` that allows `https:`, `http:`, `data:`, `blob:`, `unsafe-inline`, etc. **NEVER tighten the CSP.** Every time we've had per-directive restrictions, some iframe content (reveal.js slides, plugin panels, dashboards) broke. The only specific directive kept is `frame-src` (for localhost wildcard ports). If you feel the urge to add CSP restrictions, don't — read this bullet point again.
+- **CSP is intentionally wide open.** TUIC is a local dev tool, not a SaaS. The user IS the trust boundary. The CSP uses a single permissive `default-src` that allows `https:`, `http:`, `data:`, `blob:`, `unsafe-inline`, etc. **NEVER tighten the CSP.** Every time we've had per-directive restrictions, some iframe content (reveal.js slides, plugin panels, dashboards) broke. No per-directive CSP is allowed, including `frame-src`: frames must inherit the permissive `default-src`. If you feel the urge to add CSP restrictions, don't — read this bullet point again.
 - **`dangerousDisableAssetCspModification: ["style-src", "script-src"]`** in `tauri.conf.json` — **DO NOT REMOVE.** Tauri auto-injects sha256 hashes for inline `<script>` tags. Per CSP3, hashes silently disable `'unsafe-inline'`. This kills all JS in srcdoc iframes (plugins, HTML previews). The override prevents Tauri from injecting those hashes.
 - **`lazy_static` in `tuic-terminal/src/output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. The remaining direct users are `tuic-terminal/src/output_parser.rs`, `pty.rs`, `state.rs` and `tuic-core/src/error_classification.rs`; they migrate opportunistically. (This used to say "modules outside `ai_agent/`", which stopped parsing when #784-0aec deleted all but two files there.)
 - **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
@@ -593,3 +628,7 @@ We maintain a patched `alacritty_terminal` at `src-tauri/patches/alacritty_termi
 When using Codex, follow the Wiz Codex instructions in `.wiz/wiz-codex.md` for this repository, subject to the global instruction hierarchy.
 Those instructions are maintained by the Wiz SessionStart hook and complement this `AGENTS.md` file.
 <!-- wiz-codex:end -->
+
+## Opt-in frame workload evidence
+
+`window.__TUIC__.frameWorkload.enable(true)` requires perfDebug and retains sensitive terminal text in bounded memory; default off. `debug action=frame_workload_dump` saves rotated instance-local captures after frontend JS responds. See docs/backend/stall-journal.md for limits, privacy and replay. The synthetic smoke fixture does not satisfy the real-stall RED.

@@ -12,6 +12,7 @@
   <a href="https://github.com/sstraus/tuicommander/releases/latest"><img src="https://img.shields.io/github/v/release/sstraus/tuicommander?style=flat-square&color=blue" alt="Release"></a>
   <a href="https://github.com/sstraus/tuicommander/releases/tag/tip"><img src="https://img.shields.io/badge/nightly-tip-orange?style=flat-square" alt="Nightly"></a>
   <a href="https://github.com/sstraus/tuicommander/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/sstraus/tuicommander/ci.yml?style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://discord.gg/4DQ7Ah6hSh"><img src="https://img.shields.io/badge/Discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord community"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/sstraus/tuicommander?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/rust-backend-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
@@ -38,9 +39,15 @@
 
 ---
 
+## Community & support
+
+Join **TUICommander & Co** using the Discord badge above for questions, discussion, and ideas. In the **TUICommander** category, use **#support** for questions and troubleshooting, **#ideas** for suggestions, and **#plugins** for plugin showcases, development help, and requests. The server is checked once a day.
+
+Report reproducible bugs in [GitHub issues](https://github.com/sstraus/tuicommander/issues), with steps to reproduce.
+
 ## The problem
 
-You're running Claude Code in one terminal, Aider in another, Codex in a third. One hit a rate limit 10 minutes ago and you didn't notice. Another is waiting for a Y/N confirmation. You switch between windows and still lose track.
+You're running Claude Code in one terminal, Gemini CLI in another, Codex in a third. One hit a rate limit 10 minutes ago and you didn't notice. Another is waiting for a Y/N confirmation. You switch between windows and still lose track.
 
 The more sessions you run, the worse it gets. The tooling doesn't understand what's happening inside the terminal.
 
@@ -64,7 +71,7 @@ Launch Claude Code on five branches at once — or mix agents. Each session runs
 
 ### Agent observability — not just terminals
 
-TUICommander auto-detects **11 AI coding agents** (Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Cursor Agent, OpenCode, Droid, Goose, Grok, pi) and understands what they're doing:
+TUICommander auto-detects **10 AI coding agents** (Claude Code, Codex CLI, Gemini CLI, Amp, Cursor Agent, OpenCode, Droid, Goose, Grok, pi) and understands what they're doing:
 
 - **Rate limit detection** — Provider-specific patterns with countdown timers per session.
 - **Question detection** — Y/N prompts, numbered options, inquirer-style menus. Tab indicator, notification sound, keyboard overlay.
@@ -263,6 +270,8 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 ## Get started
 
 **[Download the latest release](https://github.com/sstraus/tuicommander/releases/latest)** — macOS builds are signed and notarized.
+
+The macOS desktop app requires **macOS 12 Monterey or later**, with system WebKit updated to **Safari 17.4 or later** for Mermaid diagrams. Older WebKit versions are unsupported. Windows uses WebView2; Linux uses WebKitGTK.
 
 Install via terminal:
 

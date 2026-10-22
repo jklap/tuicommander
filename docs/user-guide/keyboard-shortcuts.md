@@ -52,6 +52,9 @@ AI Chat's composer handles `Ctrl+S` locally to park or restore its prompt,
 including on macOS. The same action is available from the composer button on a
 phone; it is not a configurable global shortcut.
 
+Press `Escape` in the AI Chat composer or transcript to stop a running turn
+without clearing your draft. When Find is open, Escape closes Find first.
+
 ## Terminal Operations
 
 | Shortcut | Action |
@@ -59,8 +62,8 @@ phone; it is not a configurable global shortcut.
 | `Cmd+T` | New terminal tab |
 | `Cmd+W` | Close tab (or close active pane in split mode) |
 | `Cmd+Shift+T` | Reopen last closed tab |
-| `Cmd+R` | Run saved command |
-| `Cmd+Shift+R` | Edit and run command |
+| `Cmd+Shift+R` | Run saved command |
+| `Cmd+R` | Reload active web/preview tab |
 | `Cmd+L` | Clear terminal |
 | `Cmd+Shift+L` | Refresh terminal (fix rendering glyphs) |
 | `Cmd+F` | Find in terminal / diff tab |
@@ -79,6 +82,8 @@ phone; it is not a configurable global shortcut.
 | `Cmd+Shift+Down` | Jump to next block |
 | `Cmd+Shift+B` | Toggle block-scoped search |
 
+Hands-free conversation: press `Cmd+Alt+V` (`Ctrl+Alt+V` on Windows/Linux) to start or stop listening on the active terminal. Dictation must be enabled. A custom binding or explicit unbind in Keyboard Shortcuts overrides this default.
+
 ## Tab Navigation
 
 | Shortcut | Action |
@@ -86,6 +91,8 @@ phone; it is not a configurable global shortcut.
 | `Cmd+1` through `Cmd+9` | Switch to tab by number |
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+Shift+Tab` | Previous tab |
+
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
 
 ## Zoom
 
@@ -168,7 +175,7 @@ The panel is mouse-first — branch actions (create, delete, rename, merge, reba
 | Shortcut | Action |
 |----------|--------|
 | Hold `Cmd+Ctrl` (macOS) or `Ctrl+Alt` (Win/Linux) | Show quick switcher overlay |
-| `Cmd+Ctrl+1-9` | Switch to branch by index |
+| `Cmd+Ctrl+1-9` | Switch to branch by index (in the Global Workspace: switch to tab N; only the tab hints show) |
 
 While holding the modifier, all branches show numbered badges. Press a number to switch instantly.
 
@@ -229,7 +236,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | Right-click | Sidebar branch | Branch context menu |
 | Middle-click | Tab | Close tab |
 | Drag | Tab | Reorder tabs |
-| Drag | Sidebar right edge | Resize sidebar (200-500px) |
+| Drag | Sidebar right edge | Resize sidebar (300-500px); sidebar text grows 1px at 350, 400 and 450px |
 | Click | PR badge / CI ring | Open PR detail popover |
 | Click | Status bar CWD path | Copy path to clipboard |
 | Click | Status bar panel buttons | Toggle Git/MD/FB/Ideas panels |
@@ -251,13 +258,18 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `reopen-closed-tab` | `Cmd+Shift+T` | Reopen closed tab |
 | `clear-terminal` | `Cmd+L` | Clear terminal |
 | `refresh-terminal` | `Cmd+Shift+L` | Refresh terminal (fix glyphs) |
-| `run-command` | `Cmd+R` | Run saved command |
-| `edit-command` | `Cmd+Shift+R` | Edit and run command |
+| `run-command` | `Cmd+Shift+R` | Run saved command |
+| `edit-command` | _(unbound)_ | Edit and run command |
+| `reload-tab` | `Cmd+R` | Reload the active web/preview tab |
 | `split-vertical` | `Cmd+\` | Split vertically |
 | `split-horizontal` | `Cmd+Alt+\` | Split horizontally |
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |
+
+Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on the first nine terminal tabs. Release the modifier to hide them. Any other key, mouse button, wheel event, window blur, or visibility change cancels the hints. Tab shortcuts work immediately, even without badges. The existing quick-switcher chord is unchanged.
 | `next-tab` | `Ctrl+Tab` | Next tab |
 | `focus-last-terminal` | `Cmd+Ctrl+Backspace` | Return to last terminal (toggle, across repos) |
+| `history-back` | `Cmd+Alt+ArrowLeft` | Back to the previous terminal in the activation history (last 10, across repos) |
+| `history-forward` | `Cmd+Alt+ArrowRight` | Forward to the next terminal in the activation history |
 | `jump-waiting-terminal` | `Cmd+U` | Jump to the next terminal awaiting input (cycles, across repos) |
 | `switch-tab-1..9` | `Cmd+1..9` | Switch to tab N |
 | `toggle-sidebar` | `Cmd+[` | Toggle sidebar |
@@ -296,6 +308,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `open-path` | `Cmd+Alt+O` | Open path… |
 | `open-secondary-window` | — | Open secondary window |
 | `command-overview` | — | Command overview |
+| `open-tasks` | — | Open Tasks (listed only while a work-item provider plugin is loaded) |
 | `toggle-outline` | `Cmd+Alt+L` | Toggle outline panel |
 | `toggle-compose-panel` | `Cmd+I` | Toggle compose panel |
 | `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |
@@ -307,4 +320,9 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `block-prev` | `Cmd+Shift+Up` | Previous command block |
 | `block-next` | `Cmd+Shift+Down` | Next command block |
 | `block-search-toggle` | `Cmd+Shift+B` | Search in block |
-| `toggle-hands-free` | — | Start/stop hands-free conversation with the active terminal |
+| `answers-only` | `Cmd+Alt+R` | Show every prompt of the session with its 💬 answers (turns without an answer are left out); press again to return to the live terminal |
+| `toggle-hands-free` | `Cmd+Alt+V` | Start/stop hands-free conversation with the active terminal |
+
+## Plugin action discovery
+
+A connected frontend publishes its registered plugin command IDs for the shared settings owner. Explicit keybinding-choice refresh includes those IDs and built-in actions. Unloading removes the plugin IDs from later refreshes. Before any frontend publication, plugin choices report unavailable rather than an empty successful list. Publication does not change shortcut overrides.

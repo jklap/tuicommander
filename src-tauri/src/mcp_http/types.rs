@@ -34,6 +34,9 @@ pub(super) struct VersionResponse {
 #[serde(default)]
 pub(crate) struct SessionInfo {
     pub session_id: String,
+    /// Live PTY child, not the foreground agent or one of its tool subprocesses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_pid: Option<u32>,
     pub cwd: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
@@ -107,6 +110,10 @@ pub(super) struct SetNameRequest {
 #[derive(Deserialize)]
 pub(super) struct EnqueueCommandRequest {
     pub text: String,
+    #[serde(default, rename = "expectedDraft")]
+    pub expected_draft: Option<String>,
+    #[serde(default, rename = "idempotencyKey")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +125,12 @@ pub(super) struct ResizeRequest {
 #[derive(Deserialize)]
 pub(super) struct OutputQuery {
     pub limit: Option<usize>,
+    /// Native MCP output windows, used only by format=mcp/mcp_raw.
+    pub from_line: Option<usize>,
+    pub from_byte: Option<u64>,
+    pub byte_budget: Option<u64>,
+    pub continuation: Option<String>,
+    pub since_cursor: Option<usize>,
     /// When set to "text", ANSI escape sequences are stripped from the output.
     pub format: Option<String>,
     /// Starting offset for log-mode WebSocket catch-up (skip lines already fetched via HTTP).
@@ -200,6 +213,17 @@ pub(super) struct CreateIssueFromProposalRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
     pub proposal: crate::improvement_scan::ImprovementProposal,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UpdatePrBranchRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "prNumber")]
+    pub pr_number: i64,
+    /// Head commit the user saw; GitHub refuses the update if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
 }
 
 #[derive(Deserialize)]
@@ -414,6 +438,15 @@ pub(super) struct FsWriteFileRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct FsWriteIfUnchangedRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub file: String,
+    pub expected: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsDirCreateRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
@@ -542,6 +575,10 @@ pub(super) struct RemoveOrphanRequest {
     pub worktree_path: String,
     #[serde(rename = "safeOnly", default)]
     pub safe_only: bool,
+    /// Session ids the user saw when confirming; a live session outside this
+    /// list refuses a `safeOnly` false removal.
+    #[serde(rename = "confirmedSessions", default)]
+    pub confirmed_sessions: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -562,6 +599,9 @@ pub(super) struct AnswerOrphanCleanupRequest {
 pub(super) struct ClearOrphanCleanupRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
+    /// The dialog ended in Keep; other clients must see that instead of a cleared entry.
+    #[serde(default)]
+    pub kept: bool,
 }
 
 #[derive(Deserialize)]
@@ -603,6 +643,9 @@ pub(super) struct MergePrRequest {
     /// "merge", "squash", or "rebase"
     #[serde(rename = "mergeMethod")]
     pub merge_method: String,
+    /// Head commit the user reviewed; GitHub refuses the merge if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
 }
 
 // --- Recent commits query ---
@@ -673,12 +716,6 @@ pub(super) struct GithubSetHideDraftsRequest {
 pub(super) struct GithubPollLoginRequest {
     #[serde(rename = "deviceCode")]
     pub device_code: String,
-}
-
-#[derive(Deserialize)]
-pub(super) struct GithubAddAccountRequest {
-    pub host: String,
-    pub pat: String,
 }
 
 #[derive(Deserialize)]
@@ -925,6 +962,11 @@ pub(super) struct TerminalScrollToRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct TerminalScrollToAnchorRequest {
+    pub anchor: Option<usize>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct TerminalScrollToOffsetRequest {
     pub offset: usize,
 }
@@ -943,6 +985,12 @@ pub(super) struct TerminalRowQuery {
 pub(super) struct TerminalLinesQuery {
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ChatViewQuery {
+    pub epoch: Option<u64>,
+    pub from_seq: Option<u64>,
 }
 
 #[derive(Deserialize)]

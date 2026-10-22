@@ -86,11 +86,13 @@ pub(crate) async fn create_pty(
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
             worktree: None,
+            initial_cwd: config.cwd.clone(),
             cwd: config.cwd,
             display_name: None,
             display_name_is_custom: false,
@@ -126,9 +128,12 @@ pub(crate) async fn create_pty(
         .session_maps
         .terminal_rows
         .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if config.agent_type.is_some() {
-        ss.agent_type = config.agent_type;
+        ss.seed_configured_agent(config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
             &crate::config::load_agents_config(),
             ss.agent_type.as_deref(),
@@ -252,11 +257,13 @@ pub(crate) async fn create_pty_with_worktree(
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,
             paused: paused.clone(),
             worktree: Some(worktree),
+            initial_cwd: worktree_cwd.clone(),
             cwd: worktree_cwd,
             display_name: None,
             display_name_is_custom: false,
@@ -292,9 +299,12 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         std::sync::atomic::AtomicU16::new(pty_rows),
     );
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if pty_config.agent_type.is_some() {
-        ss.agent_type = pty_config.agent_type;
+        ss.seed_configured_agent(pty_config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
             &crate::config::load_agents_config(),
             ss.agent_type.as_deref(),
@@ -499,8 +509,9 @@ pub(crate) fn resume_pty(
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     entry.lock().paused.store(false, Ordering::Relaxed);
+    drop(entry);
     #[cfg(unix)]
-    if let Err(e) = wake_session(&state, &session_id) {
+    if let Err(e) = crate::session_wake::ensure_live(&state, &session_id) {
         tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
     }
     tracing::debug!(session_id = %session_id, "PTY reader resumed (flow control)");
@@ -561,94 +572,7 @@ pub(crate) fn get_session_foreground_process(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    const SHELLS: &[&str] = &[
-        "zsh",
-        "bash",
-        "fish",
-        "sh",
-        "dash",
-        "ksh",
-        "csh",
-        "tcsh",
-        "nushell",
-        "nu",
-        "powershell",
-        "pwsh",
-        "cmd",
-    ];
-
-    let (detected, fg_is_shell, fg_name) = {
-        let entry = state.session_maps.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = process_name_from_pid(pgid as u32)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-        #[cfg(windows)]
-        {
-            let child_pid = session._child.process_id()?;
-            let leaf = deepest_descendant_pid(child_pid)?;
-            let name = process_name_from_pid(leaf)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-    };
-
-    // Fallback: unrecognised non-shell foreground + pre-set agent type → use preset.
-    // Covers custom commands (aliases, symlinks, wrappers) from run configs.
-    let effective = detected.clone().or_else(|| {
-        if fg_is_shell {
-            return None;
-        }
-        state
-            .session_maps
-            .session_states
-            .get(&session_id)
-            .and_then(|s| s.agent_type.clone())
-    });
-
-    if detected.is_none()
-        && !fg_is_shell
-        && effective.is_none()
-        && let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
-        && !entry.unknown_foreground_warned
-    {
-        entry.unknown_foreground_warned = true;
-        tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
-    }
-
-    // Mirror the detected agent type into session_states so the PTY reader's
-    // `agent_active_for_parse` check flips on and plain-prefix structured
-    // tokens (`intent:`, `action:`, `suggest:`) start being parsed. Without
-    // this sync, sessions started by running `claude` inside a plain shell
-    // (as opposed to via the /agent spawn route) never enable plain-prefix
-    // parsing, so intents never rename the tab.
-    //
-    // Sticky: only set on Some, never clear on None. Foreground-pgid sampling
-    // is inherently flaky during subprocess transitions — when claude spawns a
-    // short-lived grandchild (git, sed, rg) the pgid leader briefly points to
-    // that unrecognized binary and classify_agent returns None. Writing that
-    // None back would flip agent_active off and drop the very next
-    // `suggest:`/`intent:` token even though claude is still the live agent.
-    // Frontend useAgentPolling.ts applies the same stickiness (streak +
-    // source=idle) on its store mirror; backend must match or the parser
-    // gates off while the UI still shows the agent active. Session teardown
-    // clears session_states entirely, so no explicit reset is needed here.
-    if let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
-        && effective.is_some()
-        && entry.agent_type != effective
-    {
-        entry.agent_type = effective.clone();
-        entry.hook_instrumented = hook_instrumented_for(
-            &crate::config::load_agents_config(),
-            entry.agent_type.as_deref(),
-        );
-    }
-
-    effective
+    super::refresh_session_agent(&state, &session_id)
 }
 
 /// Get the PID of the deepest foreground process in a PTY session.
@@ -712,56 +636,6 @@ pub(crate) fn has_foreground_process(
     }
 }
 
-/// Debug: diagnose agent detection for a PTY session.
-/// Returns each step of the detection pipeline so failures can be pinpointed.
-/// Diagnostic-only command — no frontend caller; kept as a debug escape hatch
-/// for investigating agent classification mismatches in production.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) fn debug_agent_detection(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> serde_json::Value {
-    let entry = match state.session_maps.sessions.get(&session_id) {
-        Some(e) => e,
-        None => {
-            return serde_json::json!({ "error": "session not found", "session_id": session_id });
-        }
-    };
-    let session = entry.value().lock();
-
-    #[cfg(not(windows))]
-    {
-        let raw_fd = session.master.as_raw_fd();
-        let pgid = session.master.process_group_leader();
-        let name = pgid.and_then(|p| process_name_from_pid(p as u32));
-        let classified = name.as_deref().and_then(classify_agent);
-        serde_json::json!({
-            "session_id": session_id,
-            "master_raw_fd": raw_fd,
-            "process_group_leader": pgid,
-            "process_name": name,
-            "classified_agent": classified,
-            "child_pid": session._child.process_id(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        let child_pid = session._child.process_id();
-        let leaf = child_pid.and_then(deepest_descendant_pid);
-        let name = leaf.and_then(process_name_from_pid);
-        let classified = name.as_deref().and_then(classify_agent);
-        serde_json::json!({
-            "session_id": session_id,
-            "child_pid": child_pid,
-            "leaf_pid": leaf,
-            "process_name": name,
-            "classified_agent": classified,
-        })
-    }
-}
-
-/// Get orchestrator stats
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_orchestrator_stats(state: State<'_, Arc<AppState>>) -> OrchestratorStats {
@@ -811,8 +685,14 @@ pub(crate) fn enqueue_agent_command(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     text: String,
+    idempotency_key: Option<String>,
+    expected_draft: Option<String>,
 ) -> Result<EnqueuedCommand, String> {
-    enqueue_user_command(&state, &session_id, &text)
+    if let Some(draft) = expected_draft {
+        return enqueue_owned_draft(&state, &session_id, &text, &draft);
+    }
+    let session_id = crate::session_wake::ensure_live(&state, &session_id)?;
+    enqueue_user_command(&state, &session_id, &text, idempotency_key.as_deref())
 }
 
 /// Discard every command still queued for a session. Returns how many were dropped.
@@ -864,56 +744,6 @@ pub(crate) fn get_process_stats(state: State<'_, Arc<AppState>>) -> Vec<ProcessS
     collect_process_stats(&state)
 }
 
-/// Returns scrollback log lines and current screen rows for a session.
-///
-/// This is the desktop IPC equivalent of the PWA WebSocket `format=log` path.
-/// `lines` are finalized scrollback lines (each appears once, oldest first).
-/// `screen` is the current visible screen with agent chrome trimmed.
-/// Desktop IPC equivalent of PWA WebSocket format=log — no frontend caller yet.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn read_vt_log(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    offset: Option<usize>,
-    limit: Option<usize>,
-) -> Result<VtLogChunk, String> {
-    let limit = limit.unwrap_or(200);
-    // Everything that needs the lock is gathered in one pass on the pool
-    // thread; the chrome trim below works on the copies it hands back.
-    let gathered = vt_try_read(&state, session_id, move |buf| {
-        let off = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
-        let (lines, _) = buf.lines_since_owned(off, limit);
-        (
-            lines,
-            buf.screen_rows(),
-            buf.screen_log_lines(),
-            buf.total_lines(),
-            buf.oldest_offset(),
-        )
-    })
-    .await?;
-    let Some((lines, raw_rows, screen_log, total_lines, oldest)) = gathered else {
-        return Ok(VtLogChunk {
-            lines: vec![],
-            screen: vec![],
-            total_lines: 0,
-            oldest: 0,
-        });
-    };
-    // Chrome cutoff runs outside the lock — no contention with PTY reader.
-    let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
-    let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
-    let screen: Vec<crate::state::LogLine> = screen_log.into_iter().take(cutoff).collect();
-
-    Ok(VtLogChunk {
-        lines,
-        screen,
-        total_lines,
-        oldest,
-    })
-}
-
 /// Register a Tauri Channel for binary grid frame streaming on a session.
 /// The frontend calls this once per terminal; subsequent PTY output triggers
 /// `serialize_dirty_rows()` on the session's TerminalGrid and sends the result
@@ -932,6 +762,7 @@ pub(crate) fn subscribe_terminal_grid(
     session_id: String,
     channel: tauri::ipc::Channel<tauri::ipc::Response>,
     webview: tauri::Webview,
+    visible: bool,
 ) -> u64 {
     // A fresh gate, counting from zero — the frontend resets its receipt counter
     // on the same call.
@@ -944,6 +775,7 @@ pub(crate) fn subscribe_terminal_grid(
             channel,
             webview_label: webview.label().to_string(),
             epoch,
+            visible: AtomicBool::new(visible),
         },
     );
     epoch
@@ -969,9 +801,19 @@ pub(crate) fn ack_terminal_frame(
     session_id: String,
     epoch: u64,
     received: u64,
+    visible: Option<bool>,
 ) {
-    if let Some(gate) = state.grid.gates.get(&session_id) {
-        gate.ack(epoch, received);
+    if let Some(visible) = visible
+        && let Some(channel) = state.grid.channels.get(&session_id)
+        && channel.epoch == epoch
+    {
+        channel.visible.store(visible, Ordering::Relaxed);
+    }
+    if let Some(gate) = state.grid.gates.get(&session_id)
+        && gate.ack(epoch, received)
+        && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
+    {
+        dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -979,6 +821,12 @@ pub(crate) fn ack_terminal_frame(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id: String) {
+    if !grid_has_subscriber(&state, &session_id) {
+        return;
+    }
+    if let Some(gate) = state.grid.gates.get(&session_id) {
+        gate.resume_for_full_frame();
+    }
     if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
         let frame = {
             let mut vt = vt.lock();
@@ -1077,6 +925,17 @@ pub(crate) fn terminal_scroll_to_offset(
     }
 }
 
+/// Coalesced eviction-stable history scroll. None resumes following output.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_scroll_to_anchor(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    anchor: Option<usize>,
+) {
+    queue_scroll_anchor(&state, &session_id, anchor);
+}
+
 /// Fetch a range of styled rows by absolute index, to fill the frontend's
 /// client-side row cache for smooth local scroll rendering. Read-only; called in
 /// background chunks as the viewport approaches uncached rows, not per frame.
@@ -1112,20 +971,6 @@ pub(crate) fn terminal_scroll_to(state: State<'_, Arc<AppState>>, session_id: St
         };
         send_grid_frame(&state, &session_id, frame);
     }
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn terminal_get_block_rows(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    start_line: usize,
-    end_line: usize,
-) -> Result<Vec<String>, String> {
-    vt_read(&state, session_id, move |vt| {
-        vt.read_rows_in_range(start_line, end_line)
-    })
-    .await
 }
 
 #[cfg(feature = "desktop")]
@@ -1253,17 +1098,6 @@ pub(crate) async fn terminal_get_cursor_line(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) async fn terminal_hyperlink_at(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    row: usize,
-    col: usize,
-) -> Result<Option<String>, String> {
-    vt_read(&state, session_id, move |vt| vt.grid_hyperlink_at(row, col)).await
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
 pub(crate) async fn terminal_hyperlink_span(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1283,13 +1117,33 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), visible);
-    #[cfg(unix)]
-    if visible && let Err(e) = wake_session(&state, &session_id) {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
+    crate::background_mode::hidden::set_visible(&state, &session_id, visible, true);
     Ok(())
+}
+
+/// Guarded automated input: serialize readiness and draft checks with all raw input.
+#[tauri::command]
+pub(crate) async fn send_agent_input_if_empty(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    text: String,
+) -> Result<bool, String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        send_agent_input_if_empty_blocking(&state, &session_id, &text)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Retry an ego provider outage without overwriting a tracked composer draft.
+#[tauri::command]
+pub(crate) async fn force_retry_provider_recovery_command(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || force_retry_provider_recovery(&state, &session_id))
+        .await
+        .map_err(|error| error.to_string())?
 }

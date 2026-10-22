@@ -15,6 +15,9 @@ import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./PromptDrawer.module.css";
 
 export interface PromptDrawerProps {
@@ -259,7 +262,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 
 						{/* Search */}
 						<div class={s.search}>
-							<input
+							<Input
 								type="text"
 								placeholder={t("promptDrawer.searchPlaceholder", "Search prompts... (type to filter)")}
 								value={promptLibraryStore.state.searchQuery}
@@ -430,7 +433,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 										<Show when={VARIABLE_DESCRIPTIONS[varName]}>
 											<span class={s.varDesc}>{VARIABLE_DESCRIPTIONS[varName]}</span>
 										</Show>
-										<input
+										<Input
 											type="text"
 											value={variableValues()[varName] || ""}
 											onInput={(e) => setVariableValues((v) => ({ ...v, [varName]: e.currentTarget.value }))}
@@ -537,6 +540,7 @@ const CONTEXT_VARIABLES: VarDef[] = [
 	{ name: "merge_status", description: "Mergeable status", group: "GitHub" },
 	{ name: "review_decision", description: "Review decision", group: "GitHub" },
 	{ name: "pr_checks", description: "CI check summary", group: "GitHub" },
+	{ name: "pr_open_threads", description: "Open review threads (untrusted list)", group: "GitHub" },
 	// Terminal
 	{ name: "agent_type", description: "Detected agent (claude, codex...)", group: "Terminal" },
 	{ name: "cwd", description: "Terminal working directory", group: "Terminal" },
@@ -548,15 +552,7 @@ const VariableDropdown: Component<{
 }> = (props) => {
 	const [open, setOpen] = createSignal(false);
 
-	const groups = () => {
-		const map = new Map<string, VarDef[]>();
-		for (const v of CONTEXT_VARIABLES) {
-			const list = map.get(v.group) ?? [];
-			list.push(v);
-			map.set(v.group, list);
-		}
-		return map;
-	};
+	const groups = () => Map.groupBy(CONTEXT_VARIABLES, (v) => v.group);
 
 	return (
 		<div class={s.varDropdownWrap}>
@@ -620,6 +616,21 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 	const [outputTarget, setOutputTarget] = createSignal<SavedPrompt["outputTarget"]>(props.prompt?.outputTarget);
 	const [systemPrompt, setSystemPrompt] = createSignal(props.prompt?.systemPrompt ?? "");
 	const [validationError, setValidationError] = createSignal<string | null>(null);
+
+	const formSnapshot = () =>
+		JSON.stringify([
+			name(),
+			description(),
+			content(),
+			shortcut(),
+			placement(),
+			autoExecute(),
+			executionMode(),
+			outputTarget(),
+			systemPrompt(),
+		]);
+	const initialSnapshot = formSnapshot();
+	const formDirty = () => formSnapshot() !== initialSnapshot;
 
 	const isOverridden = () => {
 		const def = builtInDefault();
@@ -699,7 +710,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Name */}
 				<div class={s.editorField}>
 					<label>Name *</label>
-					<input
+					<Input
 						type="text"
 						value={name()}
 						disabled={isBuiltIn()}
@@ -715,7 +726,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Description */}
 				<div class={s.editorField}>
 					<label>Description</label>
-					<input
+					<Input
 						type="text"
 						value={description()}
 						onInput={(e) => setDescription(e.currentTarget.value)}
@@ -726,7 +737,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				{/* Content + Variable dropdown */}
 				<div class={s.editorField}>
 					<label>Content *</label>
-					<textarea
+					<Textarea
 						ref={textareaRef}
 						value={content()}
 						onInput={(e) => setContent(e.currentTarget.value)}
@@ -755,7 +766,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<div class={s.editorFieldRow}>
 					<div class={s.editorField}>
 						<label>Execution Mode</label>
-						<select
+						<Select
 							value={executionMode()}
 							onChange={(e) => {
 								const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
@@ -773,7 +784,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="shell">Shell script (direct run)</option>
 							<option value="headless">Headless (one-shot CLI)</option>
 							<option value="api">API (via ego)</option>
-						</select>
+						</Select>
 					</div>
 
 					<Show when={executionMode() === "inject"}>
@@ -783,7 +794,6 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 								<input type="checkbox" checked={autoExecute()} onChange={() => setAutoExecute(!autoExecute())} />
 								<span>Send immediately</span>
 							</label>
-							<span class={s.fieldHint}>Uncheck to review before sending</span>
 						</div>
 					</Show>
 				</div>
@@ -792,7 +802,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<Show when={executionMode() !== "inject"}>
 					<div class={s.editorField}>
 						<label>Output Target</label>
-						<select
+						<Select
 							value={outputTarget() ?? ""}
 							onChange={(e) => {
 								const val = e.currentTarget.value || undefined;
@@ -804,7 +814,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="clipboard">Clipboard</option>
 							<option value="toast">Notification</option>
 							<option value="panel">Panel</option>
-						</select>
+						</Select>
 					</div>
 				</Show>
 
@@ -812,13 +822,12 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 				<Show when={executionMode() === "api"}>
 					<div class={s.editorField}>
 						<label>System Prompt</label>
-						<textarea
+						<Textarea
 							rows={3}
 							value={systemPrompt()}
 							placeholder="Instructions for the LLM (e.g. 'You are a Git expert.')"
 							onInput={(e) => setSystemPrompt(e.currentTarget.value)}
 						/>
-						<span class={s.fieldHint}>Sent as the system message to the LLM</span>
 					</div>
 				</Show>
 
@@ -836,7 +845,9 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 						</button>
 					</Show>
 					<div style={{ flex: "1" }} />
-					<button onClick={handleSave}>Save</button>
+					<button data-ready={formDirty() ? "true" : undefined} onClick={handleSave}>
+						Save
+					</button>
 					<button onClick={props.onCancel}>Cancel</button>
 				</div>
 			</div>

@@ -1,7 +1,10 @@
 import { batch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
+import type { TaskViewPreference } from "../types/taskPreferences";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
+import { isSidebarDensityMode, nextSidebarDensityMode, type SidebarDensityMode } from "../utils/sidebarDensity";
 import { appLogger } from "./appLogger";
 
 const LEGACY_SIDEBAR_VISIBLE_KEY = "tui-commander-sidebar-visible";
@@ -24,11 +27,12 @@ function loadEditorWrapPrefs(): { text: boolean; code: boolean } {
 	return { text: true, code: false };
 }
 
-const SIDEBAR_MIN_WIDTH = 200;
-const SIDEBAR_MAX_WIDTH = 500;
-const SIDEBAR_DEFAULT_WIDTH = 300;
+export const SIDEBAR_MAX_WIDTH = 500;
+export const SIDEBAR_DEFAULT_WIDTH = 300;
+/** The default is also the floor: the sidebar never gets narrower than it opens. */
+export const SIDEBAR_MIN_WIDTH = SIDEBAR_DEFAULT_WIDTH;
 
-const SETTINGS_NAV_DEFAULT_WIDTH = 180;
+const SETTINGS_NAV_DEFAULT_WIDTH = 232;
 
 /** Debounce window for persisting UI prefs, matching settingsStore. */
 const SAVE_DEBOUNCE_MS = 500;
@@ -41,6 +45,8 @@ export type DiffViewMode = "split" | "unified" | "scroll";
 
 /** UI store state */
 interface UIStoreState {
+	tasksViewPreferences: Record<string, TaskViewPreference>;
+	tasksPreferencesRevision: number;
 	// Sidebar visibility
 	sidebarVisible: boolean;
 
@@ -57,6 +63,9 @@ interface UIStoreState {
 	// Sidebar width
 	sidebarWidth: number;
 
+	/** Sidebar row density: auto (rich for a short list or a coarse pointer), compact or rich (forced). Persisted. */
+	sidebarDensityMode: SidebarDensityMode;
+
 	// Panel visibility
 	markdownPanelVisible: boolean;
 	ideasPanelVisible: boolean;
@@ -66,6 +75,8 @@ interface UIStoreState {
 	outlinePanelVisible: boolean;
 	referencesPanelVisible: boolean;
 	aiChatPanelVisible: boolean;
+	/** Rendered width of the docked AI Chat panel; 0 when closed or detached. Not persisted. */
+	aiChatPanelMeasuredWidth: number;
 	detachedPanels: Record<string, string>;
 
 	/** Collapsed state of the GitHub panel sections, keyed by section id
@@ -119,10 +130,13 @@ function createUIStore() {
 	const uiPrefsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_ui_prefs");
 	const editorWrapPrefs = loadEditorWrapPrefs();
 	const [state, setState] = createStore<UIStoreState>({
+		tasksViewPreferences: {},
+		tasksPreferencesRevision: 0,
 		sidebarVisible: true,
 		focusMode: false,
 		repoFilterActiveOnly: false,
 		sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+		sidebarDensityMode: "auto" as SidebarDensityMode,
 		markdownPanelVisible: false,
 		ideasPanelVisible: false,
 		fileBrowserPanelVisible: false,
@@ -130,6 +144,7 @@ function createUIStore() {
 		outlinePanelVisible: false,
 		referencesPanelVisible: false,
 		aiChatPanelVisible: false,
+		aiChatPanelMeasuredWidth: 0,
 		detachedPanels: {} as Record<string, string>,
 		githubSectionCollapsed: {} as Record<string, boolean>,
 		gitPanelRequestedTab: null,
@@ -179,25 +194,99 @@ function createUIStore() {
 	type ExclusivePanel = (typeof exclusivePanelPrefs)[number]["stateKey"];
 	const exclusivePanels: ExclusivePanel[] = exclusivePanelPrefs.map((p) => p.stateKey);
 
+	type UIPrefs = {
+		sidebar_visible?: boolean;
+		sidebar_width?: number;
+		sidebar_density?: string;
+		settings_nav_width?: number;
+		settings_expert_mode?: boolean;
+		diff_view_mode?: string;
+		file_browser_view_mode?: string;
+		detached_panels?: Record<string, string>;
+		github_section_collapsed?: Record<string, boolean>;
+		tasks_view_preferences?: Record<string, string>;
+	} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>;
+
 	/** Write the current prefs to the Rust backend (fire-and-forget) */
-	function writeUIPrefs(): void {
+	function uiPrefsSnapshot() {
 		const panelVisibility: Record<string, boolean> = {};
 		for (const { stateKey, backendKey } of exclusivePanelPrefs) {
 			panelVisibility[backendKey] = state[stateKey];
 		}
-		uiPrefsWriter
-			.save({
-				sidebar_visible: state.sidebarVisible,
-				sidebar_width: state.sidebarWidth,
-				...panelVisibility,
-				settings_nav_width: state.settingsNavWidth,
-				settings_expert_mode: state.settingsExpertMode,
-				diff_view_mode: state.diffViewMode,
-				file_browser_view_mode: state.fileBrowserViewMode,
-				detached_panels: state.detachedPanels,
-				github_section_collapsed: state.githubSectionCollapsed,
-			})
-			.catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
+		return {
+			sidebar_visible: state.sidebarVisible,
+			sidebar_width: state.sidebarWidth,
+			sidebar_density: state.sidebarDensityMode,
+			...panelVisibility,
+			settings_nav_width: state.settingsNavWidth,
+			settings_expert_mode: state.settingsExpertMode,
+			diff_view_mode: state.diffViewMode,
+			file_browser_view_mode: state.fileBrowserViewMode,
+			detached_panels: state.detachedPanels,
+			github_section_collapsed: state.githubSectionCollapsed,
+			tasks_view_preferences: Object.fromEntries(
+				Object.entries(state.tasksViewPreferences).map(([key, value]) => [key, JSON.stringify(value)]),
+			),
+		};
+	}
+
+	function writeUIPrefs(): void {
+		uiPrefsWriter.save(uiPrefsSnapshot()).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
+	}
+
+	function applyPrefs(loaded: UIPrefs | null): void {
+		const taskPreferences: Record<string, TaskViewPreference> = {};
+		for (const [key, value] of Object.entries(loaded?.tasks_view_preferences ?? {})) {
+			try {
+				const parsed: unknown = JSON.parse(value);
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					taskPreferences[key] = parsed as TaskViewPreference;
+				}
+			} catch (err) {
+				appLogger.debug("store", "Failed to decode Tasks view preference", err);
+			}
+		}
+		setState("tasksViewPreferences", reconcile(taskPreferences));
+		setState("tasksPreferencesRevision", (revision) => revision + 1);
+		if (loaded) {
+			if (loaded.sidebar_visible !== undefined) {
+				setState("sidebarVisible", loaded.sidebar_visible);
+			}
+			if (loaded.sidebar_width !== undefined) {
+				setState("sidebarWidth", clampWidth(loaded.sidebar_width));
+			}
+			if (isSidebarDensityMode(loaded.sidebar_density)) {
+				setState("sidebarDensityMode", loaded.sidebar_density);
+			}
+			for (const { stateKey, backendKey } of exclusivePanelPrefs) {
+				const value = loaded[backendKey];
+				if (value !== undefined) {
+					setState(stateKey, value);
+				}
+			}
+			if (loaded.settings_nav_width !== undefined) {
+				setState("settingsNavWidth", loaded.settings_nav_width);
+			}
+			if (loaded.settings_expert_mode !== undefined) {
+				setState("settingsExpertMode", loaded.settings_expert_mode);
+			}
+			if (
+				loaded.diff_view_mode === "split" ||
+				loaded.diff_view_mode === "unified" ||
+				loaded.diff_view_mode === "scroll"
+			) {
+				setState("diffViewMode", loaded.diff_view_mode);
+			}
+			if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
+				setState("fileBrowserViewMode", loaded.file_browser_view_mode);
+			}
+			if (loaded.detached_panels && typeof loaded.detached_panels === "object") {
+				setState("detachedPanels", loaded.detached_panels);
+			}
+			if (loaded.github_section_collapsed && typeof loaded.github_section_collapsed === "object") {
+				setState("githubSectionCollapsed", loaded.github_section_collapsed);
+			}
+		}
 	}
 
 	/** Open one exclusive panel and close the others, or close all if `key` is already open (toggle). */
@@ -214,6 +303,27 @@ function createUIStore() {
 	}
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "preferences",
+				read: () => invoke<ReturnType<typeof uiPrefsSnapshot>>("load_ui_prefs"),
+				apply: (remote) => {
+					const merged = uiPrefsWriter.adopt(remote ?? {}, uiPrefsSnapshot());
+					const pendingSave = saveTimer !== null;
+					if (saveTimer) {
+						clearTimeout(saveTimer);
+						saveTimer = null;
+					}
+					applyPrefs(merged.value);
+					if (pendingSave && !merged.conflicts.length) saveUIPrefs();
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
+		setTaskViewPreference(key: string, patch: TaskViewPreference): void {
+			setState("tasksViewPreferences", key, (previous) => ({ ...previous, ...patch }));
+			saveUIPrefs();
+		},
 		/** Load UI prefs from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
@@ -231,58 +341,18 @@ function createUIStore() {
 					localStorage.removeItem(LEGACY_SIDEBAR_WIDTH_KEY);
 				}
 
-				const loaded = await invoke<
-					{
-						sidebar_visible?: boolean;
-						sidebar_width?: number;
-						settings_nav_width?: number;
-						settings_expert_mode?: boolean;
-						diff_view_mode?: string;
-						file_browser_view_mode?: string;
-						detached_panels?: Record<string, string>;
-						github_section_collapsed?: Record<string, boolean>;
-					} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>
-				>("load_ui_prefs");
+				const loaded = await invoke<UIPrefs>("load_ui_prefs");
 				uiPrefsWriter.loaded(loaded ?? {});
-				if (loaded) {
-					if (loaded.sidebar_visible !== undefined) {
-						setState("sidebarVisible", loaded.sidebar_visible);
-					}
-					if (loaded.sidebar_width !== undefined) {
-						setState("sidebarWidth", clampWidth(loaded.sidebar_width));
-					}
-					for (const { stateKey, backendKey } of exclusivePanelPrefs) {
-						const value = loaded[backendKey];
-						if (value !== undefined) {
-							setState(stateKey, value);
-						}
-					}
-					if (loaded.settings_nav_width !== undefined) {
-						setState("settingsNavWidth", loaded.settings_nav_width);
-					}
-					if (loaded.settings_expert_mode !== undefined) {
-						setState("settingsExpertMode", loaded.settings_expert_mode);
-					}
-					if (
-						loaded.diff_view_mode === "split" ||
-						loaded.diff_view_mode === "unified" ||
-						loaded.diff_view_mode === "scroll"
-					) {
-						setState("diffViewMode", loaded.diff_view_mode);
-					}
-					if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
-						setState("fileBrowserViewMode", loaded.file_browser_view_mode);
-					}
-					if (loaded.detached_panels && typeof loaded.detached_panels === "object") {
-						setState("detachedPanels", loaded.detached_panels);
-					}
-					if (loaded.github_section_collapsed && typeof loaded.github_section_collapsed === "object") {
-						setState("githubSectionCollapsed", loaded.github_section_collapsed);
-					}
-				}
+				applyPrefs(loaded);
 			} catch (err) {
 				appLogger.debug("store", "Failed to hydrate UI prefs", err);
 			}
+		},
+
+		// Sidebar density
+		cycleSidebarDensityMode(): void {
+			setState("sidebarDensityMode", nextSidebarDensityMode);
+			saveUIPrefs();
 		},
 
 		// Diff view mode
@@ -394,6 +464,10 @@ function createUIStore() {
 
 		toggleAiChatPanel(): void {
 			setExclusivePanel("aiChatPanelVisible", !state.aiChatPanelVisible);
+		},
+
+		setAiChatPanelMeasuredWidth(width: number): void {
+			setState("aiChatPanelMeasuredWidth", width);
 		},
 
 		setAiChatPanelVisible(visible: boolean): void {

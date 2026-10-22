@@ -87,8 +87,8 @@ echo ""
 
 # Interactive approval. Only prompt on a real terminal: `read` returns non-zero on
 # EOF, which `set -e` turns into a silent abort *after* the notes were generated but
-# *before* they are merged into $OUTPUT — and `make bump` chains with `;`, so it still
-# printed "Done" while release-notes.json kept the previous version.
+# *before* they are merged into $OUTPUT. The old `make bump` recipe swallowed this
+# failure and printed "Done" while release-notes.json kept the previous version.
 choice=""
 if [ -t 0 ]; then
   read -rp "Accept these notes? [Y]es / [e]dit / [r]egenerate / [q]uit: " choice

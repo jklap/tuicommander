@@ -6,12 +6,14 @@ import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../stores/mdTabs";
-import { repositoriesStore } from "../../stores/repositories";
+import { locateFile, repositoriesStore } from "../../stores/repositories";
+import { isTauri } from "../../transport";
 import { IFRAME_EXTERNAL_LINK_SCRIPT } from "../../utils/iframeExternalLinks";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SCROLLBAR_STYLE, IFRAME_SEARCH_BRIDGE_SCRIPT } from "../../utils/iframeSearch";
 import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
+import { browserLocalImageUrl, rewriteLocalImages } from "../../utils/repoImageUrl";
 import { buildSearchPattern, type SearchOptions } from "../shared/DomSearchEngine";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
@@ -133,9 +135,9 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 
 	// Expose openSearch (global find shortcut) and reload (Cmd+R) so the global
 	// handlers can drive this tab when the wrapper — not the iframe — holds focus.
-	// reload is what lets Cmd+R refresh a web/preview tab instead of opening the
-	// Run Command dialog (cross-origin URL iframes can't receive the in-iframe
-	// reload-request, so the parent must trigger it).
+	// reload is what lets Cmd+R (reload-tab) refresh a web/preview tab
+	// (cross-origin URL iframes can't receive the in-iframe reload-request,
+	// so the parent must trigger it).
 	createEffect(() => {
 		mdTabsStore.setHandle(props.tab.id, {
 			openSearch: () => openSearchBar(),
@@ -167,6 +169,7 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 
 	/** Asset URL for binary files (PDF, images, video, audio), cache-busted via repo revision */
 	const assetUrl = () => {
+		if (!isTauri()) return browserLocalImageUrl(absolutePath(props.tab)) ?? undefined;
 		const rev = props.tab.repoPath ? repositoriesStore.getRevision(props.tab.repoPath) : 0;
 		return `${convertFileSrc(absolutePath(props.tab))}?v=${rev}`;
 	};
@@ -193,6 +196,12 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 			return;
 		}
 
+		if (!isTauri() && !locateFile(absolutePath(props.tab)).fsRoot) {
+			setContent("");
+			setLoading(false);
+			setError("Preview unavailable: outside open repositories.");
+			return;
+		}
 		if (!content()) setLoading(true);
 		setError(null);
 
@@ -202,7 +211,8 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 				if (k === "html") {
 					const absPath = absolutePath(props.tab);
 					const dirPath = absPath.substring(0, absPath.lastIndexOf("/") + 1);
-					const baseTag = `<base href="${convertFileSrc(dirPath)}">`;
+					const baseTag = isTauri() ? `<base href="${convertFileSrc(dirPath)}">` : "";
+					if (!isTauri()) fileContent = rewriteLocalImages(fileContent, dirPath);
 					fileContent = fileContent.includes("<head")
 						? fileContent.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`)
 						: `${baseTag}${fileContent}`;
@@ -297,7 +307,16 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 					</Match>
 					<Match when={kind() === "image"}>
 						<div class={s.mediaContainer}>
-							<img class={s.image} src={assetUrl()} alt={props.tab.fileName} />
+							<Show
+								when={assetUrl()}
+								fallback={
+									<span role="img" aria-label="Image unavailable">
+										Image unavailable: outside open repositories.
+									</span>
+								}
+							>
+								{(src) => <img class={s.image} src={src()} alt={props.tab.fileName} />}
+							</Show>
 						</div>
 					</Match>
 					<Match when={kind() === "video"}>

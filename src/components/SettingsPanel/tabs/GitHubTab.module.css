@@ -10,7 +10,7 @@
 /* The tab renders into `.section` from Settings.module.css, which is a plain
    block with no gap: every top-level card here stacks flush against the next,
    so each one owns its own leading space. Without this the "Token provided
-   via gh CLI" hint sits on the buttons and the STATUS heading sits on them
+   via environment variable" hint sits on the buttons and the STATUS heading sits on them
    from below.
    The three gaps are deliberately UNEQUAL. Elsewhere in Settings a `.hint` is a
    caption hugging its control (4px above, nothing below), so giving the token
@@ -74,22 +74,9 @@
 
 /* Repository binding dropdown — matches the standard `.group select` styling
    from Settings.module.css so it aligns with the other dropdowns in the layout. */
-.bindSelect {
-  width: 100%;
-  height: 32px;
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  box-sizing: border-box;
-}
+.bindSelect { width: 100%; }
 
-.bindSelect:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+
 
 /* ── Device Flow code display ── */
 .codeCard {
@@ -231,7 +218,6 @@
   font-weight: 600;
   color: var(--fg-secondary);
   margin: 0;
-  text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
@@ -281,3 +267,6 @@
   color: var(--fg-muted);
   margin-top: 4px;
 }
+
+/* Keep account actions at the shared secondary-button height on narrow screens. */
+.actions .btn { min-height: 36px; padding: 6px 14px; line-height: 20px; }

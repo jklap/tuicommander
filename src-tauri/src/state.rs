@@ -12,8 +12,6 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub(crate) use tuic_terminal::vt_log::{ChangedRow, LogLine, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
-#[cfg(test)]
-pub(crate) use tuic_terminal::vt_log::{LogColor, LogSpan, mark_agent_chrome};
 
 /// A submission waiting for the agent's next safe idle window.
 ///
@@ -41,7 +39,12 @@ pub(crate) enum PendingInjection {
     InitialPrompt { id: u64, text: String },
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
-    UserCommand { id: u64, text: String },
+    UserCommand {
+        id: u64,
+        text: String,
+        queued_at: std::time::Instant,
+        overdue_reported: bool,
+    },
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
@@ -70,7 +73,28 @@ impl PendingInjection {
         Self::UserCommand {
             id: next_injection_id(),
             text: text.into(),
+            queued_at: std::time::Instant::now(),
+            overdue_reported: false,
         }
+    }
+
+    /// Claim diagnostic ownership, never delivery ownership. Requeue keeps this metadata.
+    pub(crate) fn claim_overdue_bg_wake(&mut self, now: std::time::Instant) -> Option<u64> {
+        let Self::UserCommand {
+            text,
+            queued_at,
+            overdue_reported,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let age = now.saturating_duration_since(*queued_at);
+        if *overdue_reported || !text.starts_with("BG DONE exit=") || age.as_secs() < 60 {
+            return None;
+        }
+        *overdue_reported = true;
+        Some(age.as_secs())
     }
 
     pub(crate) fn id(&self) -> u64 {
@@ -134,6 +158,10 @@ impl PendingInitialPrompt {
 /// cannot spell a field differently.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct WorktreeCreatedPayload {
+    /// Live PTY resolved from the authenticated MCP caller, never request arguments.
+    pub(crate) creator_session: Option<String>,
+    /// An explicit spawn keeps the creator in its existing workspace.
+    pub(crate) spawn_session: bool,
     pub(crate) repo_path: String,
     pub(crate) workspace_id: String,
     pub(crate) branch: String,
@@ -161,6 +189,17 @@ pub(crate) struct WorktreeRemovedPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", content = "payload")]
 pub enum AppEvent {
+    #[serde(rename = "work-item-provider-request")]
+    WorkItemProviderRequest {
+        request_id: String,
+        request: crate::work_items::provider_bridge::ProviderRequest,
+    },
+    #[serde(rename = "close-dialog")]
+    CloseDialog { payload: serde_json::Value },
+    #[serde(rename = "background-mode-changed")]
+    BackgroundModeChanged { payload: serde_json::Value },
+    #[serde(rename = "automation-run-changed")]
+    AutomationRunChanged { payload: serde_json::Value },
     #[serde(rename = "head-changed")]
     HeadChanged { repo_path: String, branch: String },
     #[serde(rename = "repo-changed")]
@@ -182,6 +221,7 @@ pub enum AppEvent {
     #[serde(rename = "session-created")]
     SessionCreated {
         session_id: String,
+        tuic_session: Option<String>,
         cwd: Option<String>,
         agent_type: Option<String>,
         display_name: Option<String>,
@@ -222,12 +262,21 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
+    /// Terminal title set (or reset to empty) through OSC 0/2.
+    #[serde(rename = "pty-title")]
+    PtyTitle { session_id: String, title: String },
+    #[serde(rename = "pty-bell")]
+    PtyBell { session_id: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
     /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
     #[serde(rename = "pty-activity")]
     PtyActivity { session_id: String },
+    ShellAbandoned {
+        session_id: String,
+        since_ms: Option<u64>,
+    },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -245,7 +294,17 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
+    /// A durable Rust suspend record was saved; clients preserve the tab before EOF.
+    #[serde(rename = "session-suspended")]
+    SessionSuspended {
+        record: Box<crate::suspended_sessions::SuspendedSession>,
+    },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
+    /// The chat view of a Claude terminal has new entries. Wake only: the entries
+    /// stay behind `chat_view_snapshot`, so a client that missed this event reads
+    /// the same truth as one that did not.
+    #[serde(rename = "chat-view-changed")]
+    ChatViewChanged { session_id: String, seq: u64 },
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
         session_id: String,
@@ -278,6 +337,9 @@ pub enum AppEvent {
         message: Option<String>,
         level: String,
         sound: Option<String>,
+        /// `normal` (bell only) or `urgent` (bell plus a transient card), the
+        /// same names `agent action=send` uses.
+        urgency: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         origin_repo_path: Option<String>,
         /// The TUIC session that raised the toast, when the caller is bound to
@@ -330,12 +392,19 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "settings-changed")]
+    SettingsChanged(crate::settings::changes::SettingsChanged),
+    #[serde(rename = "open-markdown-tabs-changed")]
+    OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
     /// A worktree was created via MCP — frontend may offer to switch to it
     #[serde(rename = "worktree-created")]
     WorktreeCreated(WorktreeCreatedPayload),
+    /// Caller-only placement; the directory already exists.
+    #[serde(rename = "session-worktree-declared")]
+    SessionWorktreeDeclared(WorktreeCreatedPayload),
     /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
     /// drop its sidebar row and close any terminal still living in it.
     #[serde(rename = "worktree-removed")]
@@ -397,6 +466,11 @@ pub enum AppEvent {
     /// backed by a new row reaches this bus.
     #[serde(rename = "progress-recorded")]
     ProgressRecorded {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "workflow-run-changed")]
+    WorkflowRunChanged {
         repo_path: String,
         payload: serde_json::Value,
     },
@@ -467,12 +541,14 @@ pub enum AppEvent {
     /// A Whisper model download moved. `payload` is the body the desktop
     /// `dictation-download-progress` emit carries, built once so the two
     /// transports cannot describe the same download differently.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "dictation-download-progress")]
     DictationDownloadProgress { payload: serde_json::Value },
     /// A speech asset download moved — the runtime library or one language
     /// bundle. Keyed by asset inside the payload, because a user can start two
     /// downloads at once and one shared percent would show each of them the
     /// other's.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-download-progress")]
     SpeechDownloadProgress { payload: serde_json::Value },
     /// A spoken reply changed state: queued, rendering, speaking, finished,
@@ -488,6 +564,7 @@ pub enum AppEvent {
     /// interesting ones (`finished`, `interrupted`) happen on the render thread
     /// long after `speak` returned, and a consumer that had to discover them
     /// would be polling.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
 }
@@ -515,6 +592,9 @@ impl AppEvent {
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
+            | AppEvent::ShellAbandoned { session_id, .. }
+            | AppEvent::PtyTitle { session_id, .. }
+            | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
@@ -545,6 +625,11 @@ fn is_zero(v: &u32) -> bool {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_recovery: Option<crate::output_parser::ProviderRecovery>,
+    /// Validated native hook identity; never a discovery heuristic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_binding: Option<crate::codex_binding::CodexBinding>,
     /// True when a Question parsed event is pending (no subsequent user-input or pty-exit)
     pub awaiting_input: bool,
     /// The question text, if awaiting input
@@ -579,6 +664,9 @@ pub(crate) struct SessionState {
     /// are excluded by the PTY process-tree classifier.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background_work: bool,
+    /// Last I/O time of a freshly verified abandoned shell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abandoned_since_ms: Option<u64>,
     /// Turn whose confirmed-ready observation is waiting for a process snapshot
     /// newer than `background_probe_after_generation`.
     #[serde(skip)]
@@ -599,6 +687,28 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Run-config identity is armed before first observation; discovered identity
+    /// is revoked when a shell returns to the foreground.
+    #[serde(skip)]
+    pub(crate) agent_type_from_run_config: bool,
+    /// A preset is armed during shell startup only. Once its agent has been
+    /// observed, shell foreground means it has exited and cannot receive input.
+    #[serde(skip)]
+    pub(crate) agent_foreground_observed: bool,
+    /// Telegram opt-in lifetime, retired synchronously on observed agent exit.
+    #[serde(skip)]
+    pub(crate) telegram_registration_lifetime: Option<Arc<()>>,
+    /// Accepted OS foreground snapshot order; late completion cannot overwrite
+    /// a newer observation from another timer/IPC/HTTP caller.
+    #[serde(skip)]
+    pub(crate) foreground_probe_generation: u64,
+    #[serde(skip)]
+    pub(crate) spawn_root_role: SpawnRootRole,
+    /// A direct agent child owns foreground, or root observation is unavailable.
+    #[serde(skip)]
+    pub(crate) foreground_input_blocked: bool,
+    #[serde(skip)]
+    pub(crate) foreground_probe_result: Option<String>,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -637,6 +747,12 @@ pub(crate) struct SessionState {
     /// were parsed so the async accumulator cannot restore prior-turn completion.
     #[serde(skip)]
     pub(crate) turn_epoch: u64,
+    /// One draft may interrupt this turn until the next native input write.
+    #[serde(skip)]
+    pub(crate) turn_interrupt: Option<Arc<()>>,
+    /// Native input retired this epoch; late drafts cannot rearm it.
+    #[serde(skip)]
+    pub(crate) turn_interrupt_retired_epoch: Option<u64>,
     /// Slash command menu items (from slash-menu parsed events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slash_menu_items: Option<Vec<crate::output_parser::SlashMenuItem>>,
@@ -650,6 +766,15 @@ pub(crate) struct SessionState {
     /// Epoch ms of last push notification sent for this session (rate limiting)
     #[serde(skip)]
     pub last_push_ms: Option<u64>,
+}
+
+/// Immutable spawn metadata; unknown mirrors cannot authorize local injection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SpawnRootRole {
+    #[default]
+    Unknown,
+    Shell,
+    DirectProgram,
 }
 
 impl SessionState {
@@ -739,7 +864,7 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
             }
             || match prompt.amend_key.as_deref() {
                 Some("amend") => data == "\t",
-                Some("alt+down") => data == "\x1b[1;3B",
+                Some("shift+right") => data == "\x1b[1;2C",
                 _ => false,
             };
         if !resolves {
@@ -764,10 +889,21 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
 }
 
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
+impl SessionState {
+    /// Seed configured identity synchronously, before readers/events can use it.
+    pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
+        self.agent_type_from_run_config = agent_type.is_some();
+        self.agent_foreground_observed = false;
+        self.codex_binding = None;
+        self.agent_type = agent_type;
+    }
+}
+
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
-        self.awaiting_input == other.awaiting_input
+        self.provider_recovery == other.provider_recovery
+            && self.awaiting_input == other.awaiting_input
             && self.question_text == other.question_text
             && self.question_confident == other.question_confident
             && self.rate_limited == other.rate_limited
@@ -776,7 +912,9 @@ impl PartialEq for SessionState {
             && self.shell_state == other.shell_state
             && self.agent_state == other.agent_state
             && self.background_work == other.background_work
+            && self.abandoned_since_ms == other.abandoned_since_ms
             && self.agent_type == other.agent_type
+            && self.codex_binding == other.codex_binding
             && self.last_error == other.last_error
             && self.agent_intent == other.agent_intent
             && self.current_task == other.current_task
@@ -1082,6 +1220,9 @@ pub struct OutputRingBuffer {
     write_pos: usize,
     /// Total bytes ever written (monotonic). Consumers use this to detect missed data.
     pub total_written: u64,
+    /// Caller-computed secrets of the whole ring, valid while `total_written`
+    /// is unchanged.
+    secret_cache: Option<(u64, Vec<String>)>,
 }
 
 impl OutputRingBuffer {
@@ -1091,7 +1232,21 @@ impl OutputRingBuffer {
             capacity,
             write_pos: 0,
             total_written: 0,
+            secret_cache: None,
         }
+    }
+
+    /// `compute()` for the ring's current content, recomputed only after a
+    /// write: polling agents read far more often than the ring changes.
+    pub fn cached_secrets(&mut self, compute: impl FnOnce() -> Vec<String>) -> Vec<String> {
+        if let Some((written, secrets)) = &self.secret_cache
+            && *written == self.total_written
+        {
+            return secrets.clone();
+        }
+        let secrets = compute();
+        self.secret_cache = Some((self.total_written, secrets.clone()));
+        secrets
     }
 
     /// Bytes this ring holds. The buffer is allocated full at construction, so
@@ -1335,6 +1490,7 @@ pub use tuic_git::worktree::WorktreeInfo;
 pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub struct PtySession {
+    pub(crate) launch_receipt: Option<crate::prompt_receipt::PromptReceipt>,
     /// Kept outside the session mutex so terminal-generated replies can wait
     /// for an in-flight user write without blocking the reader thread.
     pub writer: SharedPtyWriter,
@@ -1342,6 +1498,8 @@ pub struct PtySession {
     pub(crate) _child: Box<dyn portable_pty::Child + Send + Sync>,
     pub(crate) paused: Arc<AtomicBool>,
     pub worktree: Option<WorktreeInfo>,
+    /// Immutable launch directory used for repository ownership, independent of OSC 7.
+    pub(crate) initial_cwd: Option<String>,
     pub cwd: Option<String>,
     /// Display name set by the desktop UI, agent launch, or intent title.
     pub display_name: Option<String>,
@@ -1401,6 +1559,7 @@ impl SessionMetrics {
 /// Stored per session_id so tool handlers can check client identity at call time.
 #[derive(Debug, Clone)]
 pub struct McpSessionMeta {
+    pub(crate) prompt_instructions: Option<crate::prompt_receipt::PromptReceipt>,
     /// Last time the session was used (any request); reaper checks this.
     pub last_activity: Instant,
     /// Whether the client identified as Claude Code (or tuic-bridge) at initialize time
@@ -1493,7 +1652,12 @@ struct UrgentNotice {
     first_through: u64,
     through: u64,
     written: bool,
+    reserved_at: std::time::Instant,
 }
+
+// Two 6s confirmation windows and split writes fit inside this lease. A stalled
+// writer must not suppress later notices forever; the mailbox remains durable.
+const URGENT_NOTICE_LEASE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -1558,6 +1722,8 @@ pub(crate) struct AgentDeliveryGate {
     orchestrator_wake_attempt: u64,
     orchestrator_wake_attempts_in_group: u8,
     inbox_revision: u64,
+    eviction_watermark: u64,
+    acknowledged_eviction_watermark: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
 
@@ -1575,6 +1741,8 @@ impl Default for AgentDeliveryGate {
             orchestrator_wake_attempt: 0,
             orchestrator_wake_attempts_in_group: 0,
             inbox_revision: 0,
+            eviction_watermark: 0,
+            acknowledged_eviction_watermark: 0,
             inbox_events,
         }
     }
@@ -1626,6 +1794,25 @@ pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 /// Message-id prefix marking auto-generated lifecycle/system notifications.
 pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
 
+/// Move one retained message to the end of the logical stream, stamped after
+/// both the newest entry and `floor` (a read position it must land beyond).
+/// False when the inbox no longer holds it.
+fn requeue_beyond(inbox: &mut VecDeque<AgentMessage>, message_id: &str, floor: u64) -> bool {
+    let Some(index) = inbox.iter().position(|message| message.id == message_id) else {
+        return false;
+    };
+    let Some(mut message) = inbox.remove(index) else {
+        return false;
+    };
+    let after_newest = inbox.back().map_or(0, |m| m.timestamp.saturating_add(1));
+    message.timestamp = message
+        .timestamp
+        .max(after_newest)
+        .max(floor.saturating_add(1));
+    inbox.push_back(message);
+    true
+}
+
 fn lifecycle_notice_kind(message: &AgentMessage) -> Option<String> {
     if !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) || message.from_name != "tuic" {
         return None;
@@ -1654,10 +1841,15 @@ pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 /// Every field is constructible without arguments, so the group carries its own
 /// `Default` and `AppState::new` names it once instead of seven times.
 pub(crate) struct GitHubState {
+    pub(crate) login_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) login_commit: tokio::sync::Mutex<()>,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
     pub(crate) token_source: parking_lot::RwLock<crate::github_auth::TokenSource>,
+    /// Explicit runtime disconnect; read/write while holding the token lock.
+    /// Prevents lazy resolution from restoring credentials.
+    pub(crate) disconnected: std::sync::atomic::AtomicBool,
     /// Circuit breaker for GitHub API calls
     pub(crate) circuit_breaker: crate::github::GitHubCircuitBreaker,
     /// Background GitHub poller task handle
@@ -1677,8 +1869,11 @@ pub(crate) struct GitHubState {
 impl Default for GitHubState {
     fn default() -> Self {
         Self {
+            login_epoch: std::sync::atomic::AtomicU64::new(0),
+            login_commit: tokio::sync::Mutex::new(()),
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
+            disconnected: std::sync::atomic::AtomicBool::new(false),
             circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
             poller: parking_lot::Mutex::new(None),
             viewer_login: parking_lot::RwLock::new(None),
@@ -1692,6 +1887,8 @@ impl Default for GitHubState {
 /// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
 /// upstream proxy registry, OAuth flows, and the tool-search index they feed.
 pub struct McpState {
+    pub(crate) call_audit: parking_lot::Mutex<crate::mcp_http::mcp_call_audit::Audit>,
+    pub(crate) response_pages: parking_lot::Mutex<crate::mcp_http::response_pages::ResponsePages>,
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub sessions: DashMap<String, McpSessionMeta>,
     /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
@@ -1722,6 +1919,8 @@ pub struct McpState {
 impl Default for McpState {
     fn default() -> Self {
         Self {
+            call_audit: parking_lot::Mutex::default(),
+            response_pages: parking_lot::Mutex::default(),
             sessions: DashMap::new(),
             upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
@@ -1741,6 +1940,7 @@ pub(crate) struct DesktopGridChannel {
     pub(crate) channel: tauri::ipc::Channel<tauri::ipc::Response>,
     pub(crate) webview_label: String,
     pub(crate) epoch: u64,
+    pub(crate) visible: AtomicBool,
 }
 
 /// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
@@ -1774,36 +1974,19 @@ pub(crate) struct GridState {
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    /// Bounded input wake hint; owned and removed by the reader/ticker lifecycle.
+    pub(crate) input_frame_priority:
+        DashMap<String, Arc<crate::pty::frame_priority::InputFramePriority>>,
     /// Hint: true while a DEC 2026 synchronized update is open on this session.
     /// Written by the PTY reader after each `process()`, read by the frame ticker
     /// so an idle tick only takes the vt lock for sessions that can actually have
     /// a stalled update to flush.
     pub(crate) sync_update_active: DashMap<String, Arc<AtomicBool>>,
-    /// Pending coalesced scroll target (absolute display offset, -1 = none).
+    /// Pending coalesced scroll: >=0 offset, -1 none, <=-2 all-time anchor (-2 - row).
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
-}
-
-/// What a terminal session has learnt about its own commands (#678-9a75).
-///
-/// This is all that is left of the embedded agent subsystem after the engine was
-/// deleted (#784-0aec): no loop, no sandbox, no watcher, no scheduler. The two
-/// fields below are written by `pty.rs` from OSC 133 boundaries and read back by
-/// the same file to explain a failed command, so they outlived the LLM that used
-/// to consume them as well.
-///
-/// `Default` is derived: both fields start empty.
-#[derive(Default)]
-pub(crate) struct AiAgentState {
-    /// Per-session command outcome + error/fix knowledge store.
-    /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
-    pub(crate) session_knowledge:
-        DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
-    /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
-    /// by the background knowledge-persist task.
-    pub(crate) knowledge_dirty: DashMap<String, ()>,
 }
 
 /// The per-session side tables of [`AppState`] (#678-9a75).
@@ -1813,6 +1996,8 @@ pub(crate) struct AiAgentState {
 #[derive(Default)]
 pub struct SessionMaps {
     pub sessions: DashMap<String, Mutex<PtySession>>,
+    /// Session-scoped directory provisioned at launch; absent for legacy agents.
+    pub(crate) attachment_launch_dirs: DashMap<String, PathBuf>,
     /// Ring buffers for MCP output access (one per session)
     pub output_buffers: DashMap<String, Mutex<OutputRingBuffer>>,
     /// Per-session kitty keyboard protocol state (session_id → state).
@@ -1821,6 +2006,8 @@ pub struct SessionMaps {
     /// Per-session input line buffers for reconstructing user input from PTY writes.
     /// Separate DashMap (like kitty_states) to avoid writer lock contention.
     pub(crate) input_buffers: DashMap<String, Mutex<crate::input_line_buffer::InputLineBuffer>>,
+    /// Serializes guarded automated submissions with raw input and its bookkeeping.
+    pub(crate) input_transactions: DashMap<String, Arc<parking_lot::ReentrantMutex<()>>>,
     /// Last relevant user prompt per session (>= 10 words).
     /// Updated on each qualifying user input line, read by the Activity Dashboard.
     pub(crate) last_prompts: DashMap<String, String>,
@@ -1915,9 +2102,9 @@ pub struct SessionMaps {
     /// frontend on tab focus changes. Read by the watcher engine to evaluate
     /// the Unseen trigger (fires only when the terminal tab is not visible).
     pub(crate) session_visibility: DashMap<String, bool>,
-    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    /// Sessions currently in standby (SIGSTOP'd). session_id → exact stopped pgid.
     #[cfg(unix)]
-    pub(crate) standby_sessions: DashMap<String, u64>,
+    pub(crate) standby_sessions: DashMap<String, i32>,
     /// Per-session marker tallies, so "the agents are ignoring the markers" can be
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
@@ -1926,8 +2113,14 @@ pub struct SessionMaps {
 
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
+    pub(crate) telegram_recent: Arc<parking_lot::Mutex<crate::telegram::recent::Recent>>,
+    pub(crate) workflow_runtime: crate::workflows::WorkflowRuntime,
+    pub(crate) automation_runtime: crate::automations::runtime::AutomationRuntime,
+    pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
+    pub(crate) open_markdown_tabs:
+        parking_lot::RwLock<Vec<crate::open_markdown_tabs::DesktopMarkdownTab>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
@@ -1936,6 +2129,8 @@ pub struct AppState {
     pub mcp: McpState,
     /// WebSocket clients per PTY session for streaming output
     pub ws_clients: DashMap<String, Vec<WsClientTx>>,
+    pub(crate) webview_unloaded: AtomicBool,
+    pub(crate) background_visibility: Mutex<crate::background_mode::hidden::Visibility>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
@@ -1970,6 +2165,9 @@ pub struct AppState {
     /// so each refresh parses only what Claude appended to a subagent
     /// transcript since the last one. Stays empty until Flow is first shown.
     pub(crate) subagent_map_cache: parking_lot::Mutex<crate::subagent_map::MapCache>,
+    /// Per-terminal chat view tails, created on first read and dropped when no
+    /// client has read for a while.
+    pub(crate) chat_views: crate::chat_view::ChatViews,
     /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
     pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
     /// Shared async HTTP client for GitHub API requests.
@@ -2022,6 +2220,7 @@ pub struct AppState {
     /// NOT desktop-gated: `/claude/usage/timeline` is mounted unconditionally in
     /// `build_router`, so `tuic-remote` needs this field to compile at all.
     pub(crate) claude_usage_cache: Mutex<crate::claude_usage::SessionStatsCache>,
+    pub(crate) claude_usage_scan: Mutex<crate::claude_usage::UsageScan>,
     /// Centralized application log ring buffer (1000 entries).
     /// Frontend pushes via push_log, reads via get_logs.
     /// Wrapped in Arc so the tracing subscriber layer can share the same buffer.
@@ -2069,6 +2268,8 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
+    pub(crate) plugin_http_requests: crate::plugin_http::HttpRequests,
+    pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
     /// and matches them here, so the WebView main thread only hears about the
@@ -2086,6 +2287,10 @@ pub struct AppState {
     pub peer_agents: DashMap<String, PeerAgent>,
     /// Explicit opt-out for managed children; removed with the PTY.
     pub(crate) keep_open_sessions: DashSet<String>,
+    /// Managed children whose last mail to their parent starts with BLOCKED and
+    /// that nothing has mailed since. Kept outside the bounded inboxes so
+    /// overflow cannot drop the hold; removed by the idle sweep with the PTY.
+    pub(crate) blocked_children: DashSet<String>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
     /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
     /// notices coalesce; other messages evict FIFO at capacity.
@@ -2101,16 +2306,20 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
+    pub(crate) mail_subscriptions: crate::mail_subscriptions::MailSubscriptions,
     /// Server notices, initial prompts and Compose commands waiting for a
     /// recipient's next safe idle window. Entries share one typed FIFO so
     /// delivery order is global. Peer `send` payloads are never in here — see
     /// `PendingInjection`. The inbox is the authoritative copy of every message.
     pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
+    /// Last 128 accepted queue keys per PTY, including entries already drained.
+    pub(crate) recent_queue_keys: DashMap<String, VecDeque<String>>,
     /// Initial prompts awaiting successful PTY submission. Successful delivery
     /// removes the marker; the delivery watchdog notifies the parent once and
     /// leaves the prompt in place so a child that was blocked on a startup
     /// dialog still receives it when it becomes ready.
     pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
+    pub(crate) launch_transaction_lock: tokio::sync::Mutex<()>,
     /// Claude MCP children allowed to answer their one startup trust dialog.
     pub(crate) managed_trust_dialogs: DashSet<String>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
@@ -2147,9 +2356,6 @@ pub struct AppState {
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
-    /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
-    /// engine, the cron scheduler and the suggestion triggers.
-    pub(crate) ai: AiAgentState,
     /// SSH tunnel manager — owns running tunnel supervisors.
     /// No outer Mutex needed: `TunnelManager` uses `DashMap` for interior mutability
     /// and all its methods take `&self`. Wrapping in `Mutex` would prevent holding
@@ -2163,6 +2369,8 @@ pub struct AppState {
     /// Sessions running on connected remote machines, mirrored from their own
     /// `GET /sessions` and `/events` so they raise the same badges as local ones.
     pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
+    /// Duplex, authenticated agent mail links through this desktop hub.
+    pub(crate) remote_mail: crate::mcp_http::remote_peer::RemoteMail,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2170,7 +2378,14 @@ pub struct AppState {
     pub(crate) connections_lock: tokio::sync::Mutex<()>,
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
+    pub(crate) work_item_requests:
+        DashMap<String, crate::work_items::provider_bridge::PendingProviderRequest>,
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
+    /// Serialize durable suspend/resume transitions and retain frontend-discovered metadata.
+    pub(crate) suspend_metadata: DashMap<String, serde_json::Value>,
+    pub(crate) suspend_lock: Mutex<()>,
+    /// Identities retained while a durable tab has no live PTY.
+    pub(crate) hibernated_peers: dashmap::DashSet<String>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -2178,6 +2393,9 @@ pub struct AppState {
     /// the same request and the first answer wins, because a remote human must be
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
+    pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
+    pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
+    pub(crate) plugin_keybinding_actions: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -2189,6 +2407,17 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub(crate) fn input_transaction(
+        &self,
+        session_id: &str,
+    ) -> Arc<parking_lot::ReentrantMutex<()>> {
+        self.session_maps
+            .input_transactions
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(parking_lot::ReentrantMutex::new(())))
+            .clone()
+    }
+
     /// Clone a session's independently serialized PTY writer.
     ///
     /// The session mutex is held only long enough to clone the handle. Callers
@@ -2208,6 +2437,9 @@ impl AppState {
             .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
         let mut writer = writer.lock();
+        if parts.iter().any(|part| !part.is_empty()) {
+            self.retire_turn_interrupt(session_id);
+        }
         for part in parts {
             writer
                 .write_all(part)
@@ -2216,6 +2448,14 @@ impl AppState {
         writer
             .flush()
             .map_err(|error| format!("Flush failed: {error}"))
+    }
+
+    /// Called only under the PTY writer lock, before any user input escapes.
+    pub(crate) fn retire_turn_interrupt(&self, session_id: &str) {
+        if let Some(mut session) = self.session_maps.session_states.get_mut(session_id) {
+            session.turn_interrupt = None;
+            session.turn_interrupt_retired_epoch = Some(session.turn_epoch);
+        }
     }
 
     /// Emit a PTY-scoped lifecycle event to
@@ -2236,13 +2476,34 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        self.session_maps.session_state_events.send(event.clone());
+        // Titles are presentation only; do not grow the lossless state lane
+        // for an agent that animates its OSC title.
+        if !matches!(&event, AppEvent::PtyTitle { .. }) {
+            self.session_maps.session_state_events.send(event.clone());
+        }
         if let Some(sid) = event.pty_session_id()
             && let Some(tx) = self.session_maps.pty_event_channels.get(sid)
         {
             let _ = tx.send(event.clone());
         }
         let _ = self.event_bus.send(event);
+    }
+
+    /// Tell every UI a terminal's chat view has entries past `seq`. Bus only
+    /// for non-desktop clients, plus the window event: there is no bus->window
+    /// forwarder, so the producer dual-emits.
+    pub(crate) fn notify_chat_view_changed(&self, session_id: &str, seq: u64) {
+        let _ = self.event_bus.send(AppEvent::ChatViewChanged {
+            session_id: session_id.to_string(),
+            seq,
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "chat-view-changed",
+                serde_json::json!({ "session_id": session_id, "seq": seq }),
+            );
+        }
     }
 
     /// Rename a tab from the backend and tell every UI. Only for renames that
@@ -2273,6 +2534,19 @@ impl AppState {
             );
         }
         true
+    }
+
+    pub(crate) fn notify_session_suspended(
+        &self,
+        record: &crate::suspended_sessions::SuspendedSession,
+    ) {
+        self.emit_pty_event(AppEvent::SessionSuspended {
+            record: Box::new(record.clone()),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit("session-suspended", serde_json::json!({"record": record}));
+        }
     }
 
     /// Set or clear the orchestrator-owned description shown above a PTY.
@@ -2341,7 +2615,45 @@ impl AppState {
     /// Buffer a message into `recipient`'s bounded inbox. Replace an older
     /// lifecycle notice for the same child and kind, except question waits;
     /// otherwise evict FIFO at capacity.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+    /// Mail from its parent ends a child's BLOCKED hold; the child's own BLOCKED mail to
+    /// its parent starts one. Lifecycle notices are TUIC's, not either party's.
+    fn track_blocked_hold(&self, recipient: &str, msg: &AgentMessage) {
+        if msg.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) {
+            return;
+        }
+        if self
+            .session_maps
+            .session_parent
+            .get(recipient)
+            .is_some_and(|parent| parent.value() == &msg.from_tuic_session)
+        {
+            self.blocked_children.remove(recipient);
+        }
+        let to_parent = self
+            .session_maps
+            .session_parent
+            .get(&msg.from_tuic_session)
+            .is_some_and(|parent| parent.value() == recipient);
+        if !to_parent {
+            return;
+        }
+        if msg.content.trim_start().starts_with("BLOCKED") {
+            self.blocked_children.insert(msg.from_tuic_session.clone());
+        } else {
+            self.blocked_children.remove(&msg.from_tuic_session);
+        }
+    }
+
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
+        self.track_blocked_hold(recipient, &msg);
+        let timestamp = self.store_agent_inbox(recipient, msg);
+        crate::mcp_http::remote_peer::notice_stored(self, recipient);
+        timestamp
+    }
+
+    /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
+    /// was already seen once (identity handoff).
+    pub(crate) fn store_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())
@@ -2382,11 +2694,14 @@ impl AppState {
                 })
             });
             let stored_timestamp = msg.timestamp;
+            self.mail_subscriptions
+                .append(&self.data_dir, recipient, &msg);
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
         if let Some((evicted_id, evicted_through, missed)) = evicted {
             if missed {
+                gate.eviction_watermark = gate.eviction_watermark.saturating_add(1);
                 *self
                     .agent_inbox_evictions
                     .entry(recipient.to_string())
@@ -2400,6 +2715,31 @@ impl AppState {
         let revision = gate.inbox_revision;
         gate.inbox_events.send_replace(revision);
         stored_timestamp
+    }
+
+    pub(crate) fn add_inbox_evictions(&self, recipient: &str, count: u64) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.eviction_watermark = gate.eviction_watermark.saturating_add(count);
+        let mut pending = self
+            .agent_inbox_evictions
+            .entry(recipient.to_string())
+            .or_default();
+        *pending = pending.saturating_add(count);
+    }
+
+    pub(crate) fn notify_mail_subscription_change(&self, recipient: &str) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+        let revision = gate.inbox_revision;
+        gate.inbox_events.send_replace(revision);
     }
 
     /// Hear every change to one peer's inbox without waiting on it.
@@ -2493,6 +2833,7 @@ impl AppState {
                 .map(|message| message.timestamp)
                 .max()
                 .unwrap_or(since);
+            self.requeue_unread_terminal_mail(&mut gate, tuic_session, since, read_through);
             gate.urgent_notices
                 .retain(|_, notice| notice.through > read_through);
             gate.orchestrator_observed_through =
@@ -2516,6 +2857,42 @@ impl AppState {
         finish
     }
 
+    /// A wait that returns mail up to `read_through` moves the implicit cursor
+    /// there. Mail the terminal owns (a payload-free wake the agent has not acted
+    /// on) sits in `(since, read_through)` unreturned, and the cursor would skip it
+    /// for good. Put it behind the new cursor and drop the terminal ownership, so
+    /// the next wait returns it once; its id stays stable (#1818-3fe7).
+    fn requeue_unread_terminal_mail(
+        &self,
+        gate: &mut AgentDeliveryGate,
+        tuic_session: &str,
+        since: u64,
+        read_through: u64,
+    ) {
+        let Some(mut inbox) = self.agent_inbox.get_mut(tuic_session) else {
+            return;
+        };
+        let skipped: Vec<String> = inbox
+            .iter()
+            .filter(|message| message.timestamp > since && message.timestamp < read_through)
+            .filter(|message| {
+                matches!(
+                    gate.owners.get(&message.id),
+                    Some(
+                        AgentDeliveryOwner::TerminalPending
+                            | AgentDeliveryOwner::TerminalDispatched
+                    )
+                )
+            })
+            .map(|message| message.id.clone())
+            .collect();
+        for id in skipped {
+            if requeue_beyond(&mut inbox, &id, read_through) {
+                gate.owners.remove(&id);
+            }
+        }
+    }
+
     /// Reserve one unread urgent notice per sender and recipient. This shares
     /// the inbox delivery gate so reads and concurrent sends agree on the
     /// covered logical cursor.
@@ -2537,6 +2914,11 @@ impl AppState {
         {
             return UrgentNoticeReservation::AlreadyRead;
         }
+        if gate.urgent_notices.get(sender).is_some_and(|notice| {
+            !notice.written && notice.reserved_at.elapsed() >= URGENT_NOTICE_LEASE
+        }) {
+            gate.urgent_notices.remove(sender);
+        }
         match gate.urgent_notices.get_mut(sender) {
             Some(notice) => {
                 notice.through = notice.through.max(through);
@@ -2553,6 +2935,7 @@ impl AppState {
                         first_through: through,
                         through,
                         written: false,
+                        reserved_at: std::time::Instant::now(),
                     },
                 );
                 UrgentNoticeReservation::Reserved
@@ -2861,6 +3244,18 @@ impl AppState {
         since: u64,
         limit: usize,
     ) -> (Vec<AgentMessage>, bool, u64) {
+        let (messages, has_more, missed_count, _) =
+            self.read_agent_inbox(tuic_session, since, limit, true);
+        (messages, has_more, missed_count)
+    }
+
+    pub(crate) fn read_agent_inbox(
+        &self,
+        tuic_session: &str,
+        since: u64,
+        limit: usize,
+        acknowledge: bool,
+    ) -> (Vec<AgentMessage>, bool, u64, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -2882,30 +3277,132 @@ impl AppState {
         if has_more {
             messages.pop();
         }
+        if !acknowledge {
+            let missed_count = self
+                .agent_inbox_evictions
+                .get(tuic_session)
+                .map(|n| *n)
+                .unwrap_or(0);
+            return (messages, has_more, missed_count, gate.eviction_watermark);
+        }
         let missed_count = self
             .agent_inbox_evictions
             .remove(tuic_session)
             .map(|(_, count)| count)
             .unwrap_or(0);
+        gate.acknowledged_eviction_watermark = gate.eviction_watermark;
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
             .max()
             .unwrap_or(since);
+        let message_ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
+        self.acknowledge_agent_snapshot_locked(
+            tuic_session,
+            read_through,
+            &message_ids,
+            true,
+            &mut gate,
+        );
+        (messages, has_more, missed_count, gate.eviction_watermark)
+    }
+
+    /// Durable ACK and live delivery observation share the recipient gate used by
+    /// insertions and snapshot ACKs. Independent subscriptions never advance the
+    /// legacy read cursor or acknowledge its separate loss watermark.
+    pub(crate) fn apply_mail_subscription_action(
+        &self,
+        peer: &str,
+        args: &serde_json::Value,
+    ) -> serde_json::Value {
+        let entry = self
+            .active_agent_waiters
+            .entry(peer.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        let (reply, observed) =
+            self.mail_subscriptions
+                .action_with_observation(&self.data_dir, peer, args);
+        if !observed.is_empty() {
+            self.acknowledge_agent_snapshot_locked(peer, 0, &observed, false, &mut gate);
+        }
+        reply
+    }
+
+    /// A byte-paged read acknowledges only the immutable snapshot, never newer mail.
+    pub(crate) fn acknowledge_agent_snapshot(
+        &self,
+        tuic_session: &str,
+        cursor: u64,
+        message_ids: &[String],
+        eviction_watermark: u64,
+    ) {
+        let entry = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        // Overlapping snapshots may acknowledge the same historical losses. Only
+        // the newly covered watermark range may clear the live pending counter.
+        let newly_acknowledged =
+            eviction_watermark.saturating_sub(gate.acknowledged_eviction_watermark);
+        if let Some(mut count) = self.agent_inbox_evictions.get_mut(tuic_session) {
+            *count = count.saturating_sub(newly_acknowledged);
+        }
+        gate.acknowledged_eviction_watermark =
+            gate.acknowledged_eviction_watermark.max(eviction_watermark);
+        self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, true, &mut gate);
+    }
+
+    fn acknowledge_agent_snapshot_locked(
+        &self,
+        tuic_session: &str,
+        mut read_through: u64,
+        message_ids: &[String],
+        advance_legacy_cursor: bool,
+        gate: &mut AgentDeliveryGate,
+    ) {
         // Publish the read position while holding the delivery gate. A sender
         // cannot see a full inbox between this observation and cursor advancement.
-        let mut cursor = self
-            .agent_read_cursor
-            .entry(tuic_session.to_string())
-            .or_insert(0);
-        if read_through > *cursor {
-            *cursor = read_through;
+        if advance_legacy_cursor {
+            let mut cursor = self
+                .agent_read_cursor
+                .entry(tuic_session.to_string())
+                .or_insert(0);
+            if read_through > *cursor {
+                *cursor = read_through;
+            }
         }
         // Reading is delivery, even when a terminal wake was queued first or a
         // sender has buffered mail but has not yet assigned its wake owner.
-        for message in &messages {
-            gate.owners
-                .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
+        for id in message_ids {
+            if advance_legacy_cursor
+                || self
+                    .agent_inbox
+                    .get(tuic_session)
+                    .is_some_and(|inbox| inbox.iter().any(|message| message.id == *id))
+            {
+                gate.owners
+                    .insert(id.clone(), AgentDeliveryOwner::WaiterObserved);
+            }
+        }
+        if !advance_legacy_cursor {
+            // Filtered ACKs prove delivery only for their IDs. Advance the wake
+            // observation through the contiguous observed prefix, not past gaps.
+            read_through = self
+                .agent_inbox
+                .get(tuic_session)
+                .and_then(|inbox| {
+                    inbox
+                        .iter()
+                        .take_while(|message| {
+                            gate.owners.get(&message.id)
+                                == Some(&AgentDeliveryOwner::WaiterObserved)
+                        })
+                        .last()
+                        .map(|message| message.timestamp)
+                })
+                .unwrap_or(0);
         }
         gate.urgent_notices
             .retain(|_, notice| notice.through > read_through);
@@ -2923,14 +3420,14 @@ impl AppState {
             });
         }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_pending_through
                 .is_some_and(|pending| read_through >= pending)
         {
             gate.orchestrator_wake_pending_through = None;
         }
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_needed_through
                 .is_some_and(|needed| read_through >= needed)
@@ -2938,7 +3435,6 @@ impl AppState {
             gate.orchestrator_wake_needed_through = None;
         }
         gate.reset_orchestrator_wake_budget_if_observed();
-        (messages, has_more, missed_count)
     }
 
     /// Record one marker emission or one submitted turn for `session_id`.
@@ -3091,7 +3587,7 @@ impl AppState {
     /// agent that spends a long turn thinking, without calling a TUIC tool, had
     /// its address deleted out from under it while it was still running.
     ///
-    /// Two things keep an identity addressable:
+    /// Three things keep an identity addressable:
     ///
     /// - it owns a live PTY. The agent is sitting right there mid-turn and will
     ///   call `agent action=send` when the turn ends.
@@ -3099,10 +3595,12 @@ impl AppState {
     ///   child's handoff permanently: re-registering a headerless caller mints a
     ///   fresh UUID, and nothing tells the child what the new one is.
     ///
-    /// Both conditions are bounded by live sessions, so retention cannot grow
-    /// without bound — a reaped identity with neither is genuinely unreachable.
+    /// - a durable suspended tab retains it until resume or explicit forget.
+    ///
+    /// Retention is bounded by live sessions and retained tabs.
     pub(crate) fn peer_identity_is_reapable(&self, peer_id: &str) -> bool {
-        self.live_pty_for_peer(peer_id).is_none()
+        !self.hibernated_peers.contains(peer_id)
+            && self.live_pty_for_peer(peer_id).is_none()
             && !self
                 .session_maps
                 .session_parent
@@ -3177,20 +3675,9 @@ impl AppState {
                 let requeued = self
                     .agent_inbox
                     .get_mut(tuic_session)
-                    .and_then(|mut inbox| {
-                        let index = inbox.iter().position(|message| message.id == message_id)?;
-                        let mut message = inbox.remove(index)?;
-                        let after_newest = inbox.back().map(|m| m.timestamp.saturating_add(1));
-                        let after_cursor = cursor.map(|c| c.saturating_add(1));
-                        message.timestamp = [Some(message.timestamp), after_newest, after_cursor]
-                            .into_iter()
-                            .flatten()
-                            .max()
-                            .unwrap_or(message.timestamp);
-                        inbox.push_back(message);
-                        Some(())
-                    })
-                    .is_some();
+                    .is_some_and(|mut inbox| {
+                        requeue_beyond(&mut inbox, message_id, cursor.unwrap_or(0))
+                    });
                 gate.owners.remove(message_id);
                 if requeued {
                     gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
@@ -3232,12 +3719,13 @@ impl AppState {
             .expect("monitoring_git_sem is never closed")
     }
 
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         worktrees_dir: PathBuf,
         config: crate::config::AppConfig,
         log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
     ) -> Self {
+        crate::attachments::cleanup_orphans(&data_dir);
         let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
         let audit_path = data_dir.join("tunnel_audit.db");
@@ -3249,12 +3737,19 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
+            telegram_recent: Default::default(),
+            workflow_runtime: Default::default(),
+            automation_runtime: Default::default(),
+            secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
+            open_markdown_tabs: Default::default(),
             data_dir,
             worktrees_dir,
             metrics: SessionMetrics::new(),
             mcp: McpState::default(),
             ws_clients: DashMap::new(),
+            webview_unloaded: AtomicBool::new(false),
+            background_visibility: Mutex::new(Default::default()),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
             repo_watchers: DashMap::new(),
@@ -3265,6 +3760,7 @@ impl AppState {
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             subagent_map_cache: parking_lot::Mutex::new(Default::default()),
+            chat_views: Default::default(),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: build_http_client(),
             github: GitHubState::default(),
@@ -3282,6 +3778,7 @@ impl AppState {
             ansi_colors: parking_lot::RwLock::new(None),
             grid: GridState::default(),
             claude_usage_cache: parking_lot::Mutex::new(crate::claude_usage::load_cache_from_disk()),
+            claude_usage_scan: Default::default(),
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             remote_survive_secs: None,
@@ -3296,19 +3793,24 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
+            plugin_http_requests: Default::default(),
+            plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
             keep_open_sessions: DashSet::new(),
+            blocked_children: DashSet::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            mail_subscriptions: Default::default(),
             pending_injections: DashMap::new(),
+            recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
+            launch_transaction_lock: tokio::sync::Mutex::new(()),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
-            ai: AiAgentState::default(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
             tailscale_state: parking_lot::RwLock::new(
@@ -3322,10 +3824,18 @@ impl AppState {
             tunnel_manager,
             remote: Default::default(),
             remote_sessions: Default::default(),
+            remote_mail: Default::default(),
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
+            work_item_requests: DashMap::new(),
             screenshot_responses: DashMap::new(),
+            suspend_metadata: DashMap::new(),
+            suspend_lock: Mutex::new(()),
+            hibernated_peers: dashmap::DashSet::new(),
+            settings_policy: Arc::new(crate::settings::policy::Policy::default()),
+            settings_api: tokio::sync::OnceCell::new(),
+            plugin_keybinding_actions: Default::default(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -3337,6 +3847,9 @@ impl AppState {
     /// Wire event bus and MCP registry after construction.
     /// Must be called after wrapping in `Arc`.
     pub fn wire_event_bus(self: &Arc<Self>) {
+        let settings_publisher = crate::settings::changes::Publisher::new(self);
+        *self.mcp.upstream_registry.settings_publisher.write() = settings_publisher.clone();
+        *self.mcp.oauth_flow_manager.settings_publisher.write() = settings_publisher;
         self.mcp
             .upstream_registry
             .set_event_bus(self.event_bus.clone());
@@ -3541,50 +4054,72 @@ impl AppState {
         &self,
         reference: &str,
     ) -> Result<Option<String>, String> {
+        if reference.is_empty() {
+            return Ok(None);
+        }
         if self.peer_agents.contains_key(reference) {
             return Ok(Some(reference.to_string()));
         }
-        let Some(session_id) = self.resolve_session_ref_checked(reference)? else {
-            return Ok(None);
-        };
-        Ok(self
-            .peer_agents
-            .iter()
-            .find(|entry| {
+        // Terminal addresses win over the register name: a peer must not be able
+        // to capture another terminal's alias, PTY key or display name by
+        // registering it as its name.
+        if let Some(session_id) = self.resolve_session_ref_checked(reference)?
+            && let Some(peer) = self.peer_agents.iter().find(|entry| {
                 self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str())
             })
-            .map(|entry| entry.key().clone()))
+        {
+            return Ok(Some(peer.key().clone()));
+        }
+        self.resolve_peer_name(reference)
     }
 
-    /// This session's knowledge record, read off disk when it is not resident.
-    ///
-    /// The startup load is capped at `MAX_RESIDENT_SESSIONS`, so a session with
-    /// a file on disk is not necessarily in memory. Starting a blank record for
-    /// it is how resuming an older session erased its own history: the next
-    /// flush persists what is in memory, over a file nothing had read.
-    pub(crate) fn knowledge_entry(
-        &self,
-        session_id: &str,
-    ) -> dashmap::mapref::one::RefMut<'_, String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>
-    {
-        self.ai
-            .session_knowledge
-            .entry(session_id.to_string())
-            .or_insert_with(|| {
-                Mutex::new(crate::ai_agent::knowledge::load_or_start_fresh(session_id))
-            })
+    /// The register `name` list_peers prints, as an address. Live peers (a live
+    /// PTY or a known MCP session) shadow dead ones, so a restart that reuses
+    /// the default name is not made ambiguous by its dead predecessor; with no
+    /// live peer the dead ones still answer. Identities of one PTY are one
+    /// owner. Two owners with one name are refused with the candidates.
+    fn resolve_peer_name(&self, name: &str) -> Result<Option<String>, String> {
+        let mut live = std::collections::BTreeSet::new();
+        let mut dead = std::collections::BTreeSet::new();
+        for entry in self.peer_agents.iter().filter(|e| e.value().name == name) {
+            let key = entry.key();
+            if self.live_pty_for_peer(key).is_some() {
+                live.extend(self.peer_identity_for_live_pty(key));
+            } else if self
+                .mcp
+                .sessions
+                .contains_key(&entry.value().mcp_session_id)
+            {
+                live.insert(key.clone());
+            } else {
+                dead.insert(key.clone());
+            }
+        }
+        let owners: Vec<String> = if live.is_empty() { dead } else { live }
+            .into_iter()
+            .collect();
+        match owners.as_slice() {
+            [] => Ok(None),
+            [owner] => Ok(Some(owner.clone())),
+            _ => Err(format!(
+                "Peer name '{name}' is ambiguous; matches {}",
+                owners.join(", ")
+            )),
+        }
     }
 
-    /// Record a command outcome into this session's knowledge store and mark it
-    /// dirty for the background persister. Creates the entry on first use.
-    pub(crate) fn record_outcome(
-        &self,
-        session_id: &str,
-        outcome: crate::ai_agent::knowledge::CommandOutcome,
-    ) -> u64 {
-        let id = self.knowledge_entry(session_id).lock().record(outcome);
-        self.ai.knowledge_dirty.insert(session_id.to_string(), ());
-        id
+    /// A managed PTY has one mailbox even if two bridges assert different UUIDs
+    /// for it (for example, a persisted tab UUID and the PTY key). Choose the
+    /// first registered peer so the mailbox address stays stable on reconnect.
+    /// Callers that create a binding hold PEER_IDENTITY_BIND_LOCK while using it.
+    pub(crate) fn peer_identity_for_live_pty(&self, asserted: &str) -> Option<String> {
+        let pty = self.live_pty_for_peer(asserted)?;
+        self.peer_agents
+            .iter()
+            .filter(|peer| self.live_pty_for_peer(peer.key()).as_deref() == Some(pty.as_str()))
+            .map(|peer| (peer.registered_at, peer.key().clone()))
+            .min()
+            .map(|(_, identity)| identity)
     }
 }
 
@@ -3750,14 +4285,26 @@ pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
         .build()
 }
 
+/// A full review-thread walk of one PR, valid for the PR state it was taken at.
+#[derive(Clone)]
+pub(crate) struct SettledReviewThreads {
+    pub(crate) updated_at: String,
+    pub(crate) head_ref_oid: String,
+    pub(crate) unresolved: u32,
+    pub(crate) complete: bool,
+    /// The walk failed: the entry only stops a re-walk on every poll, it carries no count.
+    pub(crate) failed: bool,
+    pub(crate) walked_at: Instant,
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
     pub(crate) merged_branches: GitCache<Vec<String>>,
+    pub(crate) repo_diff_stats: GitCache<crate::git::RepoDiffStats>,
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
-    pub(crate) git_panel_context: GitCache<crate::git::GitPanelContext>,
     pub(crate) worktree_paths:
         GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
     /// Repos that returned null from GitHub GraphQL (not found / no access).
@@ -3765,6 +4312,10 @@ pub(crate) struct GitCacheState {
     /// Excluded from batch queries until the cooldown expires (1 hour).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
+    /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
+    /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
+    pub(crate) settled_review_threads: DashMap<String, SettledReviewThreads>,
     /// Count of entries evicted by TTL expiry (watcher-miss observability).
     /// Shared across all git caches; surfaced in the cpu_watchdog snapshot.
     pub(crate) ttl_fallbacks: Arc<AtomicU64>,
@@ -3776,12 +4327,13 @@ impl GitCacheState {
         Self {
             repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            repo_diff_stats: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
-            git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
     }
@@ -3794,10 +4346,10 @@ impl GitCacheState {
     pub(crate) fn clear_all(&self) {
         self.repo_info.invalidate_all();
         self.merged_branches.invalidate_all();
+        self.repo_diff_stats.invalidate_all();
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
-        self.git_panel_context.invalidate_all();
         self.worktree_paths.invalidate_all();
     }
 
@@ -3805,12 +4357,12 @@ impl GitCacheState {
     pub(crate) fn invalidate_repo(&self, path: &str) {
         self.repo_info.invalidate(path);
         self.merged_branches.invalidate(path);
+        self.repo_diff_stats.invalidate(path);
         self.branches_detail.invalidate(path);
         // github_status (remote PR/CI data) is NOT invalidated here — local git
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
         // handle remote refreshes on their own cadence.
         self.git_status.invalidate(path);
-        self.git_panel_context.invalidate(path);
         self.worktree_paths.invalidate(path);
     }
 }
@@ -3946,11 +4498,18 @@ impl AppState {
     }
 
     pub(crate) fn clear_caches(&self) {
+        crate::monitoring_status::CACHE.clear();
         self.git_cache.clear_all();
     }
 
     /// Invalidate caches for a specific repo path.
     pub(crate) fn invalidate_repo_caches(&self, path: &str) {
+        crate::monitoring_status::CACHE.invalidate_checkout(std::path::Path::new(path));
+        self.invalidate_repo_caches_from_watch(path);
+    }
+
+    /// Raw watcher callbacks already invalidate only the checkout that changed.
+    pub(crate) fn invalidate_repo_caches_from_watch(&self, path: &str) {
         self.git_cache.invalidate_repo(path);
         crate::prompt::invalidate_repo_vars(path);
     }
@@ -3972,11 +4531,31 @@ impl AppState {
     /// post-removal worktree state.
     pub(crate) fn notify_worktree_removed(&self, payload: WorktreeRemovedPayload) {
         self.invalidate_repo_caches(&payload.repo_path);
+        match crate::config::retract_removed_workspace(&payload.repo_path, &payload.workspace_id) {
+            Ok(true) => self.notify_repositories_changed(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(source = "config", %error, "Failed to retract removed workspace restore records")
+            }
+        }
+        crate::workitem_links::drop_link_of_removed_worktree(&payload.repo_path, &payload.branch);
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit("worktree-removed", &payload);
         }
         let _ = self.event_bus.send(AppEvent::WorktreeRemoved(payload));
+    }
+
+    /// Announce persisted caller placement over both transports.
+    pub(crate) fn notify_session_worktree_declared(&self, payload: WorktreeCreatedPayload) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            use tauri::Emitter;
+            let _ = app.emit("session-worktree-declared", &payload);
+        }
+        let _ = self
+            .event_bus
+            .send(AppEvent::SessionWorktreeDeclared(payload));
     }
 
     /// Announce a newly created workspace, so the frontend can offer to switch
@@ -4008,6 +4587,23 @@ impl AppState {
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit("repositories-changed", serde_json::json!({}));
+        }
+    }
+
+    /// Dual-emit the same value-free payload; there is no bus-to-window forwarder.
+    pub(crate) fn publish_settings_changed(
+        &self,
+        notice: crate::settings::changes::SettingsChanged,
+    ) {
+        if matches!(notice.section.as_str(), "voice" | "telegram") {
+            let _ = self.mcp.tools_changed.send(());
+        }
+        let _ = self
+            .event_bus
+            .send(AppEvent::SettingsChanged(notice.clone()));
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit("settings-changed", &notice);
         }
     }
 
@@ -4043,6 +4639,7 @@ impl AppState {
             .session_states
             .get(session_id)
             .map(|s| s.clone())?;
+        crate::codex_binding::validate_snapshot(self, session_id, &mut state);
         state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
         state.shell_state = self
             .session_maps
@@ -4052,31 +4649,48 @@ impl AppState {
                 crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
                     .map(str::to_string)
             });
-        let completion_declared = state.suggested_actions.is_some()
+        let completion_settled = state.suggested_actions.is_some()
             || self
                 .session_maps
                 .silence_states
                 .get(session_id)
                 .is_some_and(|silence| {
-                    silence
-                        .lock()
-                        .completion_declared_for_epoch(state.turn_epoch)
+                    let silence = silence.lock();
+                    if state.agent_type.as_deref() == Some("claude")
+                        && state.shell_state.as_deref() != Some("idle")
+                    {
+                        silence.completion_settled_for_epoch(state.turn_epoch)
+                    } else {
+                        silence.completion_declared_for_epoch(state.turn_epoch)
+                    }
                 });
-        let background_work = state.has_pending_background_probe() || state.background_work;
+        // Ego reports turn boundaries through OSC 7770. Descendants (including
+        // pending background jobs) describe process ownership, not an active turn.
+        // Keep that metadata for suspend/standby safety, but never promote a
+        // confirmed idle ego turn back to working because of those processes.
+        let ego_turn_idle = state.agent_type.as_deref() == Some("ego")
+            && state.shell_state.as_deref() == Some("idle");
+        let background_work =
+            !ego_turn_idle && (state.has_pending_background_probe() || state.background_work);
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize
-        // the terminal state once the agent has explicitly ended the turn.
-        if completion_declared && !background_work {
+        // the terminal state once the agent has settled its explicit end-of-turn marker.
+        // Claude can retain that marker while blocking Stop hooks still run.
+        if completion_settled && !background_work {
             state.shell_state = Some("idle".to_string());
         }
         state.agent_state = if state.agent_type.is_none() {
             None
+        } else if state.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
         } else if background_work {
             Some("working".to_string())
-        } else if completion_declared {
+        } else if completion_settled {
             Some("completed".to_string())
         } else if state.shell_state.as_deref() == Some("busy") {
             Some("working".to_string())
@@ -4085,6 +4699,11 @@ impl AppState {
         } else {
             Some("starting".to_string())
         };
+        if state.agent_type.is_some()
+            || crate::idle_close::shell_last_io_ms(self, session_id) != state.abandoned_since_ms
+        {
+            state.abandoned_since_ms = None;
+        }
         Some(state)
     }
 
@@ -4147,6 +4766,23 @@ impl AppState {
                             ) {
                                 Self::send_mobile_push_url(&state, url, &body);
                             }
+                        } else if notice.kind == crate::acp::AcpNoticeKind::Card {
+                            let repo = state
+                                .acp
+                                .snapshot(notice.connection_id)
+                                .ok()
+                                .filter(|snapshot| snapshot.generation == notice.generation)
+                                .and_then(|snapshot| {
+                                    snapshot.attachments.into_iter().find(|attachment| {
+                                        Some(&attachment.session_id) == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|attachment| attachment.cwd.to_str().map(str::to_owned));
+                            if let Some((url, body)) = repo.as_deref().and_then(|repo| {
+                                Self::mobile_push_for_acp_session(&state, &notice, repo)
+                            }) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
                         }
                     }
                     // A notice carries nothing that cannot be re-read: a client
@@ -4174,6 +4810,15 @@ impl AppState {
             return None;
         }
         let (_, repo) = pending?;
+        Self::mobile_push_for_acp_session(state, notice, repo)
+    }
+
+    /// Questions and ego cards spend the same conversation budget.
+    fn mobile_push_for_acp_session(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        repo: &str,
+    ) -> Option<(String, String)> {
         let session_id = notice.session_id.as_ref()?;
         let ready = {
             let config = state.config.read();
@@ -4205,7 +4850,12 @@ impl AppState {
             .finish();
         Some((
             format!("/mobile?{query}"),
-            "AI Chat: response needed".to_string(),
+            if notice.kind == crate::acp::AcpNoticeKind::Card {
+                "AI Chat: new notice"
+            } else {
+                "AI Chat: response needed"
+            }
+            .to_string(),
         ))
     }
 
@@ -4275,6 +4925,10 @@ impl AppState {
         let Some(session_id) = event.pty_session_id() else {
             return;
         };
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            crate::background_mode::tray::desktop::schedule_sync(app);
+        }
         let Some(current) = state.session_state_with_shell(session_id) else {
             // The row is gone (`SessionClosed`). Drop the baseline too: a reused
             // id must not be deduped against the state of a dead session.
@@ -4301,9 +4955,29 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers, deep-linking a session.
-    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    /// Send a push with a readable label while retaining the PTY navigation id.
+    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
+        let identity = state.session_maps.sessions.get(session_id).map(|session| {
+            let session = session.lock();
+            (
+                session.display_name.clone(),
+                session.initial_cwd.clone().or_else(|| session.cwd.clone()),
+            )
+        });
+        let agent_type = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|session| session.agent_type.clone());
+        let (name, cwd) = identity.unwrap_or_default();
+        let (body, url) = crate::push::session_push_payload(
+            session_id,
+            name.as_deref(),
+            agent_type.as_deref(),
+            cwd.as_deref(),
+            prompt,
+        );
+        Self::send_mobile_push_url(state, url, &body);
     }
 
     /// Send a push notification to all mobile subscribers at an arbitrary deep link.
@@ -4358,16 +5032,27 @@ impl AppState {
                     .entry(session_id.clone())
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
-                        session.agent_type = agent_type.clone();
+                        // Creation may be applied after foreground discovery.
+                        // Never re-arm a preset whose agent was already seen.
+                        if session.agent_type.is_none() && !session.agent_foreground_observed {
+                            session.seed_configured_agent(agent_type.clone());
+                        }
                     })
-                    .or_insert_with(|| SessionState {
-                        last_activity_ms: now_ms,
-                        agent_type: agent_type.clone(),
-                        ..Default::default()
+                    .or_insert_with(|| {
+                        let mut session = SessionState { last_activity_ms: now_ms, ..Default::default() };
+                        session.seed_configured_agent(agent_type.clone());
+                        session
                     });
             }
+            AppEvent::ShellAbandoned { session_id, since_ms } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.abandoned_since_ms = *since_ms;
+                }
+            }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            AppEvent::ChatViewChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
+            AppEvent::SessionSuspended { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
@@ -4379,7 +5064,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } | AppEvent::PtyBell { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
@@ -4397,6 +5082,7 @@ impl AppState {
                 // Wait metadata for a session that just parked, routed to the
                 // spawning orchestrator's inbox outside the lock below.
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
+                let mut recovery_notice = None;
 
                 // Ranked awaiting evidence (#744-138c): resolved through the
                 // session's SilenceState BEFORE the session_states entry is
@@ -4425,7 +5111,16 @@ impl AppState {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
                     let (rank, source) = if new_confident {
-                        (crate::pty::EvidenceRank::Protocol, "question-confident")
+                        // Kept apart so `progress-superseded` can tell a
+                        // blocked report from a dialog it must never clear.
+                        let source = if parsed.get("source").and_then(|v| v.as_str())
+                            == Some("progress-blocked")
+                        {
+                            "progress-blocked"
+                        } else {
+                            "question-confident"
+                        };
+                        (crate::pty::EvidenceRank::Protocol, source)
                     } else {
                         (crate::pty::EvidenceRank::Screen, "question-heuristic")
                     };
@@ -4461,6 +5156,15 @@ impl AppState {
                         .is_some_and(|sl| {
                             sl.lock().awaiting_rank() == Some(crate::pty::EvidenceRank::Protocol)
                         });
+                // A later progress entry from the same PTY retracts only the
+                // badge a `progress blocked` raised; a dialog, a choice prompt
+                // or any other confident question records another source.
+                let awaiting_from_progress = event_type == "progress-superseded"
+                    && state
+                        .session_maps
+                        .silence_states
+                        .get(session_id)
+                        .is_some_and(|sl| sl.lock().awaiting_source() == Some("progress-blocked"));
                 // Applied to the session's SilenceState AFTER `s` (below) is
                 // dropped, for the same lock-order reason.
                 let mut awaiting_evidence_op: Option<AwaitingEvidenceOp> = None;
@@ -4474,6 +5178,20 @@ impl AppState {
                     });
                 s.last_activity_ms = now_ms;
                 match event_type {
+                    "provider-recovery" => {
+                        let recovery = parsed.get("recovery").filter(|v| !v.is_null())
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        if s.provider_recovery != recovery {
+                            if s.provider_recovery.is_none() || recovery.is_none() {
+                                recovery_notice = Some(serde_json::json!({
+                                    "type": "state_change", "session_id": session_id,
+                                    "state": if recovery.is_some() { "recovering" } else { "recovery-ended" },
+                                    "provider_recovery": recovery,
+                                }));
+                            }
+                            s.provider_recovery = recovery;
+                        }
+                    }
                     "question" if epoch_matches => {
                         let new_confident = parsed
                             .get("confident")
@@ -4546,6 +5264,12 @@ impl AppState {
                             s.choice_prompt = None;
                             awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         }
+                    }
+                    "progress-superseded" if awaiting_from_progress => {
+                        s.awaiting_input = false;
+                        s.question_text = None;
+                        s.question_confident = false;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                     }
                     "user-input" => {
                         // User responded — agent will start working
@@ -4726,6 +5450,9 @@ impl AppState {
                 // Route the parked prompt to the spawning orchestrator, outside the
                 // session_states entry lock: delivery reaches into the PARENT's
                 // SilenceState and re-entering this shard would deadlock.
+                if let Some(notice) = recovery_notice {
+                    crate::pty::push_state_change_to_parent(state, session_id, notice);
+                }
                 if let Some((prompt, confident, source)) = parked_wait {
                     crate::pty::push_state_change_to_parent(
                         state,
@@ -4743,20 +5470,14 @@ impl AppState {
 
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(&sid)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| sid.clone());
-                    let body = if prompt.is_empty() {
-                        format!("{session_name}: awaiting input")
-                    } else {
-                        format!("{session_name}: {prompt}")
-                    };
-                    Self::send_mobile_push(state, &sid, &body);
+                    Self::send_mobile_push(state, &sid, &prompt);
                 }
             }
             AppEvent::PtyExit { session_id } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.provider_recovery = None;
+                }
+                crate::codex_binding::revoke(state, session_id);
                 let push_ready = {
                     let config = state.config.read();
                     config.services.push.enabled
@@ -4796,20 +5517,12 @@ impl AppState {
                     }
                 }
                 if should_push {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(session_id)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| session_id.clone());
-                    Self::send_mobile_push(
-                        state,
-                        session_id,
-                        &format!("{session_name}: completed"),
-                    );
+                    Self::send_mobile_push(state, session_id, "completed");
                 }
             }
             // Global events don't affect per-session state
-            AppEvent::HeadChanged { .. }
+            AppEvent::WorkItemProviderRequest { .. }
+            | AppEvent::HeadChanged { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }
@@ -4817,8 +5530,11 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::OpenMarkdownTabsChanged
+            | AppEvent::SettingsChanged(_)
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
+            | AppEvent::SessionWorktreeDeclared { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }
             | AppEvent::PeerRegistered { .. }
@@ -4831,6 +5547,10 @@ impl AppState {
             | AppEvent::DesignModeChanged { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
+            | AppEvent::WorkflowRunChanged { .. }
+            | AppEvent::AutomationRunChanged { .. }
+            | AppEvent::CloseDialog { .. }
+            | AppEvent::BackgroundModeChanged { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the
@@ -4845,11 +5565,12 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. }
+            | AppEvent::RemoteMirrored { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
-            | AppEvent::DictationDownloadProgress { .. }
+            #[cfg(feature = "dictation")]
+            AppEvent::DictationDownloadProgress { .. }
             | AppEvent::SpeechDownloadProgress { .. }
             | AppEvent::SpeechUtterance { .. } => {}
         }
@@ -4928,6 +5649,11 @@ pub(crate) struct AgentConfig {
 pub(crate) mod tests_support {
     use super::*;
 
+    /// Replay the production accumulator synchronously, without scheduling races.
+    pub(crate) fn apply_replay_event(state: &Arc<AppState>, event: &AppEvent) {
+        AppState::apply_event_to_session_state(state, event);
+    }
+
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.
@@ -4949,11 +5675,13 @@ pub(crate) mod tests_support {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: None,
                 cwd: None,
                 display_name: None,
                 display_name_is_custom: false,
@@ -5029,6 +5757,8 @@ mod worktree_event_payloads {
 
     fn created() -> WorktreeCreatedPayload {
         WorktreeCreatedPayload {
+            creator_session: Some("creator-pty".into()),
+            spawn_session: false,
             repo_path: "/repo".to_string(),
             workspace_id: "feature/x".to_string(),
             branch: "feature/x".to_string(),
@@ -5057,6 +5787,8 @@ mod worktree_event_payloads {
                 "workspace_id": "feature/x",
                 "branch": "feature/x",
                 "worktree_path": "/repo__wt/feature-x",
+                "creator_session": "creator-pty",
+                "spawn_session": false,
                 "kind": "worktree",
             })
         );
@@ -5436,9 +6168,11 @@ mod tests {
         );
         state.push_agent_inbox(recipient, make_msg("waiter-observed"));
         let lease = state.begin_agent_wait(recipient);
-        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 1), 1);
+        // The read position is already past the terminal mail (timestamp 1): a wait
+        // that would skip it unread requeues it instead (#1818-3fe7).
         assert_eq!(
-            state.finish_agent_wait(recipient, lease, 0, true).messages[0].id,
+            state.finish_agent_wait(recipient, lease, 1, true).messages[0].id,
             "waiter-observed"
         );
         for index in 0..(AGENT_INBOX_CAPACITY - 2) {
@@ -5507,6 +6241,44 @@ mod tests {
         );
         assert!(!state.agent_inbox_evictions.contains_key("peer"));
         assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    /// Catches: a lost urgent-notice writer suppresses every later urgent notice forever.
+    #[test]
+    fn urgent_notice_in_flight_expires_without_settling_its_replacement() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "urgent-expiry";
+        let first = state.push_agent_inbox(recipient, make_msg("first"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first),
+            UrgentNoticeReservation::Reserved
+        );
+        let second = state.push_agent_inbox(recipient, make_msg("second"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second),
+            UrgentNoticeReservation::InFlight
+        );
+        // The lease is 30s, longer than both 6s submission confirmation windows.
+        // Use the public clock here so the regression also runs on pre-fix code.
+        std::thread::sleep(Duration::from_secs(31));
+        let third = state.push_agent_inbox(recipient, make_msg("third"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third),
+            UrgentNoticeReservation::Reserved,
+            "an abandoned writer must not suppress future urgent notices"
+        );
+        state.finish_urgent_notice(recipient, "sender", first, true);
+        let fourth = state.push_agent_inbox(recipient, make_msg("fourth"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::InFlight,
+            "a late old writer must not mark the replacement as written"
+        );
+        state.finish_urgent_notice(recipient, "sender", third, true);
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::Written
+        );
     }
 
     #[test]
@@ -5590,7 +6362,7 @@ mod tests {
         );
         drop(inbox);
         let finish = state.finish_agent_wait(recipient, lease, 0, false);
-        assert!(finish.terminal_handoff.is_empty());
+        assert_eq!(finish.terminal_handoff, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -6185,18 +6957,18 @@ mod tests {
         let finish = state.finish_agent_wait(recipient, lease, 0, true);
         assert_eq!(finish.fresh_count, 1);
         assert_eq!(finish.messages, vec![make_msg("during-wait")]);
-        assert!(finish.terminal_handoff.is_empty());
+        assert_eq!(finish.terminal_handoff, [] as [std::string::String; 0]);
         assert_eq!(
             state.agent_delivery_owner(recipient, "during-wait"),
             Some(AgentDeliveryOwner::WaiterObserved)
         );
 
         let lease = state.begin_agent_wait(recipient);
-        assert!(
+        assert_eq!(
             state
                 .finish_agent_wait(recipient, lease, 1, false)
-                .terminal_handoff
-                .is_empty()
+                .terminal_handoff,
+            [] as [std::string::String; 0]
         );
         state.push_agent_inbox(
             recipient,
@@ -6509,6 +7281,37 @@ mod tests {
                 .is_empty(),
             "releasing the same lease twice must not duplicate terminal handoff"
         );
+    }
+
+    /// Catches: title animation re-stamps semantic activity or enters the lossless state queue.
+    #[test]
+    fn remote_title_keeps_semantic_activity_and_state_queue_unchanged() {
+        let state = Arc::new(tests_support::make_test_app_state());
+        state.session_maps.session_states.insert(
+            "title-session".into(),
+            SessionState {
+                last_activity_ms: 123,
+                agent_state: Some("idle".into()),
+                ..Default::default()
+            },
+        );
+        let event = AppEvent::PtyTitle {
+            session_id: "title-session".into(),
+            title: "Claude Code".into(),
+        };
+        let mut bus = state.event_bus.subscribe();
+        let before = state.session_maps.session_state_events.depth();
+        state.emit_pty_event(event.clone());
+        assert!(matches!(bus.try_recv().unwrap(), AppEvent::PtyTitle { .. }));
+        assert_eq!(state.session_maps.session_state_events.depth(), before);
+        AppState::apply_event_to_session_state(&state, &event);
+        let session = state
+            .session_maps
+            .session_states
+            .get("title-session")
+            .unwrap();
+        assert_eq!(session.last_activity_ms, 123);
+        assert_eq!(session.agent_state.as_deref(), Some("idle"));
     }
 
     // ── emit_pty_event: per-session channel + global-bus parity (story 140) ──
@@ -7075,18 +7878,218 @@ mod tests {
         assert_eq!(state.resolve_peer_ref_checked("never-seen").unwrap(), None);
     }
 
+    /// list_peers prints the register `name`; a name that cannot be sent to is a
+    /// trap. Catches: name resolving to nothing, or silently picking one of two
+    /// peers that share it.
+    #[test]
+    fn resolve_peer_ref_checked_accepts_the_register_name_and_refuses_duplicates() {
+        let state = tests_support::make_test_app_state();
+        for (key, name) in [("peer-a", "alpha"), ("peer-b", "twin"), ("peer-c", "twin")] {
+            state.peer_agents.insert(
+                key.to_string(),
+                PeerAgent {
+                    tuic_session: key.to_string(),
+                    mcp_session_id: format!("mcp-{key}"),
+                    name: name.to_string(),
+                    project: None,
+                    registered_at: 0,
+                },
+            );
+        }
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("alpha").unwrap(),
+            Some("peer-a".to_string())
+        );
+        let error = state
+            .resolve_peer_ref_checked("twin")
+            .expect_err("a shared name must not pick a peer");
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(
+            error.contains("peer-b") && error.contains("peer-c"),
+            "{error}"
+        );
+    }
+
+    #[cfg(test)]
+    fn insert_named_peer(state: &AppState, key: &str, name: &str, registered_at: u64) {
+        state.peer_agents.insert(
+            key.to_string(),
+            PeerAgent {
+                tuic_session: key.to_string(),
+                mcp_session_id: format!("mcp-{key}"),
+                name: name.to_string(),
+                project: None,
+                registered_at,
+            },
+        );
+    }
+
+    /// Critic 1372. Catches: a peer that registers the name `tu-1` captures mail
+    /// meant for the terminal whose alias is `tu-1` (name checked before alias,
+    /// silently, with no ambiguity error).
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_peer_name_equal_to_another_terminals_alias_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-owner");
+        state.bind_live_pty("owner-uuid", "pty-owner");
+        let alias = state.assign_term_alias("pty-owner", None);
+        insert_named_peer(&state, "owner-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", &alias, 2);
+
+        let resolved = state.resolve_peer_ref_checked(&alias);
+
+        assert_ne!(
+            resolved,
+            Ok(Some("squatter-uuid".to_string())),
+            "alias '{alias}' of the owner's terminal was captured by a peer that merely registered that name"
+        );
+    }
+
+    /// Critic 1372. Catches: a peer named like another terminal's PTY key captures
+    /// mail addressed to that PTY key.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_peer_name_equal_to_another_terminals_pty_key_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-owner");
+        state.bind_live_pty("owner-uuid", "pty-owner");
+        insert_named_peer(&state, "owner-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", "pty-owner", 2);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked("pty-owner"),
+            Ok(Some("squatter-uuid".to_string())),
+            "PTY key of the owner's terminal was captured by a peer that merely registered that name"
+        );
+    }
+
+    /// Critic 1372. Catches: an exact peer key losing to a name, i.e. a peer named
+    /// with another peer's full UUID redirecting UUID-addressed mail.
+    #[test]
+    fn critic_1372_exact_peer_key_beats_a_name_equal_to_it() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "uuid-real", "real", 1);
+        insert_named_peer(&state, "uuid-squat", "uuid-real", 2);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("uuid-real"),
+            Ok(Some("uuid-real".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: the name branch matching an empty reference against a
+    /// peer registered with an empty name (workflow wake path passes whatever
+    /// string the run log holds).
+    #[test]
+    fn critic_1372_empty_reference_never_matches_an_empty_peer_name() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "peer-empty", "", 1);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked(""),
+            Ok(Some("peer-empty".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: names compared case-insensitively or trimmed, which
+    /// would merge `Coordinator` and `coordinator` into one ambiguous address, or
+    /// route to the wrong one.
+    #[test]
+    fn critic_1372_name_match_is_exact_not_case_folded() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "peer-upper", "Coordinator", 1);
+        insert_named_peer(&state, "peer-lower", "coordinator", 2);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("coordinator"),
+            Ok(Some("peer-lower".to_string()))
+        );
+        assert_eq!(
+            state.resolve_peer_ref_checked("Coordinator"),
+            Ok(Some("peer-upper".to_string()))
+        );
+        assert_eq!(state.resolve_peer_ref_checked("coordinator "), Ok(None));
+    }
+
+    /// Critic 1372. Catches: two identities of one live terminal (persisted tab
+    /// UUID + PTY key, 1246-46e3) sharing a register name being reported as an
+    /// ambiguous address although both files lead to the same mailbox owner.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_two_identities_of_one_terminal_with_one_name_are_not_ambiguous() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-shared");
+        state.bind_live_pty("tab-uuid", "pty-shared");
+        insert_named_peer(&state, "tab-uuid", "coordinator", 1);
+        insert_named_peer(&state, "pty-shared", "coordinator", 2);
+
+        let resolved = state.resolve_peer_ref_checked("coordinator");
+
+        assert!(
+            resolved.is_ok(),
+            "same terminal, same name: not ambiguous, got {resolved:?}"
+        );
+    }
+
+    /// Critic 1372. Catches: a dead peer (its terminal and MCP session gone, entry
+    /// not yet reaped) making the live peer's name ambiguous after a restart that
+    /// reuses the name.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_stale_peer_with_the_same_name_does_not_make_the_live_one_ambiguous() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-live");
+        state.bind_live_pty("live-uuid", "pty-live");
+        insert_named_peer(&state, "live-uuid", "coordinator", 2);
+        // Dead: no live PTY, MCP session unknown to the state.
+        insert_named_peer(&state, "dead-uuid", "coordinator", 1);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("coordinator"),
+            Ok(Some("live-uuid".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: the ambiguity error leaking when a name matches a
+    /// single peer but the same string is also a unique session display name of a
+    /// different terminal (name silently wins, display name unreachable).
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_name_equal_to_another_terminals_display_name_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-display");
+        state.bind_live_pty("display-uuid", "pty-display");
+        state
+            .session_maps
+            .sessions
+            .get("pty-display")
+            .unwrap()
+            .lock()
+            .set_display_name(Some("build".to_string()), true);
+        insert_named_peer(&state, "display-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", "build", 2);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked("build"),
+            Ok(Some("squatter-uuid".to_string())),
+            "display name of another terminal captured by a registered name"
+        );
+    }
+
     #[test]
     fn test_utf8_buffer_ascii() {
         let mut buf = Utf8ReadBuffer::new();
         assert_eq!(buf.push(b"hello world"), "hello world");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
     fn test_utf8_buffer_complete_multibyte() {
         let mut buf = Utf8ReadBuffer::new();
         assert_eq!(buf.push("€100".as_bytes()), "€100");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -7098,7 +8101,7 @@ mod tests {
 
         let result2 = buf.push(&[0x82, 0xAC]);
         assert_eq!(result2, "€");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -7114,7 +8117,7 @@ mod tests {
 
         let result2 = buf.push(&bytes[2..]);
         assert_eq!(result2, "🦀");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -7130,7 +8133,7 @@ mod tests {
         chunk2.extend_from_slice(b" world");
         let result2 = buf.push(&chunk2);
         assert_eq!(result2, "€ world");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -7182,7 +8185,7 @@ mod tests {
         let out = buf.push(&binary);
         assert_eq!(out.chars().count(), 64 * 1024);
         assert!(out.chars().all(|c| c == '\u{FFFD}'));
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     /// `len()` must track what `read_last` would actually return, which stops
@@ -7239,7 +8242,7 @@ mod tests {
     fn test_ring_buffer_empty() {
         let rb = OutputRingBuffer::new(16);
         let (data, total) = rb.read_last(16);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
         assert_eq!(total, 0);
     }
 
@@ -7349,7 +8352,7 @@ mod tests {
         let mut rb = OutputRingBuffer::new(16);
         rb.write(b"abc");
         let (data, _) = rb.read_since(3);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
     }
 
     #[test]
@@ -7357,7 +8360,7 @@ mod tests {
         let mut rb = OutputRingBuffer::new(16);
         rb.write(b"abc");
         let (data, total) = rb.read_since(999);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
         assert_eq!(total, 3);
     }
 
@@ -7749,7 +8752,7 @@ mod tests {
     fn test_strip_kitty_plain_text_passthrough() {
         let (out, actions) = strip_kitty_sequences("hello world");
         assert_eq!(out, "hello world");
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7803,7 +8806,7 @@ mod tests {
         let input = "\x1b[<0;35;16M";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7812,7 +8815,7 @@ mod tests {
         let input = "\x1b[?1049h";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7821,7 +8824,7 @@ mod tests {
         let input = "\x1b[31mRed\x1b[0m";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7830,7 +8833,7 @@ mod tests {
         let input = "\x1b[31m\x1b[0mhello";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7847,7 +8850,7 @@ mod tests {
         let (out, actions) = strip_kitty_sequences(input);
         // The ESC is emitted, then [>u follows as normal text
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7856,7 +8859,7 @@ mod tests {
         let input = "╭──────╮\n│ hello │\n╰──────╯";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -7889,7 +8892,7 @@ mod tests {
         use std::borrow::Cow;
         let input = "hello world";
         let (out, actions) = strip_kitty_sequences(input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
         assert!(
             matches!(out, Cow::Borrowed(_)),
             "fast path should return Cow::Borrowed"
@@ -7902,12 +8905,48 @@ mod tests {
         use std::borrow::Cow;
         let input = "before\x1b[>1uafter";
         let (out, actions) = strip_kitty_sequences(input);
-        assert!(!actions.is_empty());
+        assert_ne!(actions, [] as [crate::state::KittyAction; 0]);
         assert!(
             matches!(out, Cow::Owned(_)),
             "slow path should return Cow::Owned"
         );
         assert_eq!(&*out, "beforeafter");
+    }
+
+    /// Catches: recovery entry/exit being invisible to the parent, or duplicate snapshots flooding it.
+    #[test]
+    fn provider_recovery_accumulates_and_notifies_parent_on_edges() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_parent
+            .insert("s1".into(), "recovery-parent".into());
+        state
+            .agent_inbox
+            .entry("recovery-parent".into())
+            .or_default();
+        let event = make_parsed(
+            "provider-recovery",
+            serde_json::json!({"recovery": {
+                "phase": "waiting", "next_attempt_ms": 1792100000000_u64, "attempt": 3
+            }}),
+        );
+        let snapshot = apply(&state, &event);
+        assert_eq!(snapshot.provider_recovery.as_ref().unwrap().attempt, 3);
+        assert!(!snapshot.awaiting_input);
+        apply(&state, &event);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["state"], "recovering");
+        assert_eq!(notices[0]["provider_recovery"]["attempt"], 3);
+        let cleared = apply(
+            &state,
+            &make_parsed("provider-recovery", serde_json::json!({"recovery": null})),
+        );
+        assert!(cleared.provider_recovery.is_none());
+        assert_ne!(snapshot, cleared);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.last().unwrap()["state"], "recovery-ended");
     }
 
     // Helpers for session-state accumulator tests
@@ -7949,6 +8988,326 @@ mod tests {
             .silence_states
             .insert("s1".to_string(), Arc::new(parking_lot::Mutex::new(silence)));
         s
+    }
+
+    fn session_created(session_id: &str, agent_type: &str) -> AppEvent {
+        AppEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            tuic_session: None,
+            cwd: None,
+            agent_type: Some(agent_type.to_string()),
+            display_name: None,
+            parent_session: None,
+        }
+    }
+
+    /// Catches: a delayed creation event re-arms a preset after the agent was
+    /// observed and exited, reopening unattended input into the returned shell.
+    #[test]
+    fn delayed_session_created_cannot_rearm_an_observed_agent_after_exit() {
+        let state = Arc::new(make_test_app_state());
+        let mut session = SessionState::default();
+        session.seed_configured_agent(Some("claude".into()));
+        session.agent_foreground_observed = true;
+        session.agent_type = None;
+        session.agent_type_from_run_config = false;
+        state
+            .session_maps
+            .session_states
+            .insert("late-created".into(), session);
+        AppState::apply_event_to_session_state(&state, &session_created("late-created", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("late-created")
+            .unwrap();
+        assert_eq!(row.agent_type, None);
+        assert!(!row.agent_type_from_run_config);
+        assert!(row.agent_foreground_observed);
+    }
+
+    /// Catches: SessionCreated building the row without `last_activity_ms` or
+    /// `agent_type` (new-entry path), or not refreshing them on a row that a
+    /// PtyParsed event created first (existing-entry path).
+    #[test]
+    fn session_created_stamps_activity_time_and_agent_type_on_new_and_existing_rows() {
+        let state = Arc::new(make_test_app_state());
+
+        AppState::apply_event_to_session_state(&state, &session_created("fresh", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("fresh")
+            .unwrap()
+            .clone();
+        assert!(row.last_activity_ms > 0, "new row lost its activity time");
+        assert_eq!(row.agent_type.as_deref(), Some("claude"));
+
+        state
+            .session_maps
+            .session_states
+            .insert("existing".to_string(), SessionState::default());
+        AppState::apply_event_to_session_state(&state, &session_created("existing", "codex"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("existing")
+            .unwrap()
+            .clone();
+        assert!(
+            row.last_activity_ms > 0,
+            "existing row kept a zero activity time"
+        );
+        assert_eq!(row.agent_type.as_deref(), Some("codex"));
+    }
+
+    /// Catches: `event_type == "question" && epoch_matches` turned into `||`, so a
+    /// question from a previous turn still records awaiting evidence on the
+    /// session's SilenceState even though its own state update is rejected.
+    #[test]
+    fn stale_epoch_question_records_no_awaiting_evidence() {
+        let state = fresh_state();
+        let stale = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "old?", "_turn_epoch": 99 }),
+        );
+        let row = apply(&state, &stale);
+        assert!(!row.awaiting_input, "a stale question parked the session");
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None,
+            "a stale question recorded awaiting evidence"
+        );
+
+        let current = make_parsed("question", serde_json::json!({ "prompt_text": "now?" }));
+        assert!(apply(&state, &current).awaiting_input);
+        assert!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank()
+                .is_some(),
+            "a current question must record awaiting evidence"
+        );
+    }
+
+    // Catches: admitting a current non-question as awaiting evidence when && becomes ||.
+    #[test]
+    fn current_non_question_does_not_record_awaiting_evidence() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "intent",
+                serde_json::json!({"text": "Working", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!state.session_state_with_shell("s1").unwrap().awaiting_input);
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None
+        );
+    }
+
+    // Catches: a same-epoch clear for another question retracts the current approval.
+    #[test]
+    fn protocol_clear_for_another_question_preserves_the_current_approval() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({"prompt_text": "Approve deploy?", "confident": true, "_turn_epoch": 0}),
+            ),
+        );
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve delete?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(row.awaiting_input);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve deploy?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!row.awaiting_input);
+        assert_eq!(row.question_text, None);
+    }
+
+    /// Catches: deleting a parsed-state arm silently drops usage, errors, menu
+    /// entries or subtask counts from the snapshot consumed by clients.
+    #[test]
+    fn parsed_agent_details_reach_the_client_snapshot_and_can_be_replaced() {
+        let state = fresh_state();
+        for (kind, payload) in [
+            ("usage-limit", serde_json::json!({ "percentage": 81 })),
+            (
+                "api-error",
+                serde_json::json!({ "matched_text": "authentication failed" }),
+            ),
+            (
+                "slash-menu",
+                serde_json::json!({ "items": [{
+                "command": "/help", "description": "Show commands", "highlighted": true
+            }] }),
+            ),
+            ("active-subtasks", serde_json::json!({ "count": 3 })),
+        ] {
+            apply(&state, &make_parsed(kind, payload));
+        }
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(81));
+        assert_eq!(
+            snapshot.last_error.as_deref(),
+            Some("authentication failed")
+        );
+        assert_eq!(
+            snapshot.slash_menu_items,
+            Some(vec![crate::output_parser::SlashMenuItem {
+                command: "/help".into(),
+                description: "Show commands".into(),
+                highlighted: true,
+            }])
+        );
+        assert_eq!(snapshot.active_sub_tasks, 3);
+
+        apply(
+            &state,
+            &make_parsed("usage-limit", serde_json::json!({ "percentage": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("slash-menu", serde_json::json!({ "items": [] })),
+        );
+        apply(
+            &state,
+            &make_parsed("active-subtasks", serde_json::json!({ "count": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("status-line", serde_json::json!({ "task_name": "Working" })),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(0));
+        assert_eq!(snapshot.last_error, None);
+        assert_eq!(snapshot.slash_menu_items, Some(vec![]));
+        assert_eq!(snapshot.active_sub_tasks, 0);
+    }
+
+    /// Catches: an inverted or removed epoch guard retracts the current prompt
+    /// on a stale clear, or an always-false guard prevents its real answer.
+    #[test]
+    fn question_clear_preserves_current_prompt_until_matching_epoch_arrives() {
+        for (clear_kind, confident) in [
+            ("question-cleared", false),
+            ("protocol-question-cleared", true),
+        ] {
+            let state = fresh_state();
+            state
+                .session_maps
+                .session_states
+                .get_mut("s1")
+                .unwrap()
+                .turn_epoch = 2;
+            apply(
+                &state,
+                &make_parsed(
+                    "question",
+                    serde_json::json!({
+                        "prompt_text": "Proceed with the current operation?",
+                        "confident": confident,
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let before = state.session_state_with_shell("s1").unwrap();
+            assert!(before.awaiting_input);
+            let rank = state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank();
+            assert!(rank.is_some());
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 1,
+                    }),
+                ),
+            );
+            let stale = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                stale.awaiting_input,
+                "{clear_kind} cleared a newer question"
+            );
+            assert_eq!(
+                stale.question_text.as_deref(),
+                Some("Proceed with the current operation?")
+            );
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                rank
+            );
+
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let answered = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                !answered.awaiting_input,
+                "{clear_kind} ignored the current answer"
+            );
+            assert_eq!(answered.question_text, None);
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                None
+            );
+        }
     }
 
     #[test]
@@ -8024,6 +9383,38 @@ mod tests {
             )),
             "repository paths must stay inside the deep-link query value"
         );
+        let mut card = notice.clone();
+        card.kind = crate::acp::AcpNoticeKind::Card;
+        card.request_id = None;
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "a card must not bypass the question's 30-second conversation budget"
+        );
+        card.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "card-only",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            Some((
+                "/mobile?repo=%2Frepo&session=card-only".to_string(),
+                "AI Chat: new notice".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "repeated cards must not flood the phone"
+        );
+        let first_card = state
+            .acp_push_last_ms
+            .get("card-only")
+            .unwrap()
+            .value()
+            .unwrap();
+        *state.acp_push_last_ms.get_mut("card-only").unwrap() =
+            Some(first_card.saturating_sub(31_000));
+        assert!(AppState::mobile_push_for_acp_session(&state, &card, "/repo").is_some());
         let key = "conversation-1";
         let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
         *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));
@@ -8167,7 +9558,7 @@ mod tests {
             config.services.push.vapid_private_key = private;
             config.services.push.vapid_public_key = public;
         }
-        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        let client_key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
         state.push_store.upsert(crate::push::PushSubscription {
             endpoint,
             keys: crate::push::PushSubscriptionKeys {
@@ -8200,6 +9591,9 @@ mod tests {
             )
             .unwrap();
         }
+        // The nextest `fixture-bins-unix`/`-windows` setup scripts
+        // (`.config/nextest.toml`) build this [[bin]] once before the run
+        // starts; `cargo nextest run --lib` never builds it on its own.
         let executable = std::env::current_exe()
             .unwrap()
             .parent()
@@ -8755,7 +10149,7 @@ mod tests {
             without_phone.last_push_ms.is_none(),
             "completion without a subscriber must leave the push budget available"
         );
-        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        let client_key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
         state.push_store.upsert(crate::push::PushSubscription {
             endpoint,
             keys: crate::push::PushSubscriptionKeys {
@@ -9343,40 +10737,42 @@ mod tests {
 
     #[test]
     fn test_codex_choice_prompt_uses_its_own_exit_keys() {
-        let state = fresh_state();
-        apply(
-            &state,
-            &make_parsed(
-                "choice-prompt",
-                serde_json::json!({
-                    "title": "Boss, scegli rosso o blu?",
-                    "options": [{"key": "2", "label": "Blu", "highlighted": false, "destructive": false}],
-                    "dismiss_key": "ctrl+]",
-                    "amend_key": "alt+down"
-                }),
-            ),
-        );
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_some()
-        );
-        assert!(resolve_choice_prompt_input(&state, "s1", "\x1d"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_none()
-        );
+        for exit_key in ["\x1d", "\x1b[1;2C"] {
+            let state = fresh_state();
+            apply(
+                &state,
+                &make_parsed(
+                    "choice-prompt",
+                    serde_json::json!({
+                        "title": "Pick a color.",
+                        "options": [{"key": "2", "label": "Blue", "highlighted": false, "destructive": false}],
+                        "dismiss_key": "ctrl+]",
+                        "amend_key": "shift+right"
+                    }),
+                ),
+            );
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_some()
+            );
+            assert!(resolve_choice_prompt_input(&state, "s1", exit_key));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -9522,6 +10918,63 @@ mod tests {
     }
 
     #[test]
+    fn ego_idle_turn_is_not_latched_working_by_background_processes_2018() {
+        // Live fb2bdba2: ego-idle-background-2018.raw records state=idle and
+        // the ready composer; its shared snapshot still had background_work=true.
+        for pending_probe in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = !pending_probe;
+                if pending_probe {
+                    session.background_probe_turn_epoch = Some(session.turn_epoch);
+                }
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+            );
+
+            let snapshot = state.session_state_with_shell("s1").unwrap();
+            assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+            assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+            // Background ownership still protects suspend/standby safety.
+            assert_eq!(snapshot.background_work, !pending_probe);
+            assert_eq!(snapshot.has_pending_background_probe(), pending_probe);
+        }
+    }
+
+    #[test]
+    fn ego_background_does_not_hide_active_turn_or_question_2018() {
+        for awaiting in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = true;
+                session.awaiting_input = awaiting;
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+            );
+            assert_eq!(
+                state
+                    .session_state_with_shell("s1")
+                    .unwrap()
+                    .agent_state
+                    .as_deref(),
+                Some(if awaiting {
+                    "awaiting_input"
+                } else {
+                    "working"
+                }),
+            );
+        }
+    }
+
+    #[test]
     fn test_completion_does_not_override_confirmed_or_pending_background_work() {
         for pending_probe in [false, true] {
             let state = fresh_state();
@@ -9580,583 +11033,11 @@ mod tests {
         assert_eq!(s2.current_task.as_deref(), Some("Reading files"));
     }
 
-    // --- VtLogBuffer tests ---
-
-    fn make_vt_log() -> VtLogBuffer {
-        VtLogBuffer::new(24, 80, 1000)
-    }
+    // Real PTY tests keep the private drain_pty harness here.
 
     /// Helper: extract plain text from log lines for easy assertion.
     fn log_texts(buf: &VtLogBuffer) -> Vec<String> {
         buf.lines().iter().map(|ll| ll.text()).collect()
-    }
-
-    /// Emit lines one at a time and verify they appear in the log after scrolling off.
-    /// NOTE: process() is called per-line to match production behavior (PTY reader calls
-    /// process() on each small chunk; a single bulk process() call cannot detect scroll).
-    #[test]
-    fn test_vt_log_line_oriented_output() {
-        let mut buf = make_vt_log();
-        // Feed lines one at a time so the diff algorithm can detect scroll
-        for i in 0..30 {
-            buf.process(format!("line {i}\r\n").as_bytes());
-        }
-        let texts = log_texts(&buf);
-        // Lines 0..6 scrolled off (30 total - 24 visible = 6)
-        assert!(!texts.is_empty(), "should have finalized some lines");
-        assert!(
-            texts[0].starts_with("line "),
-            "line content preserved: {:?}",
-            texts[0]
-        );
-    }
-
-    /// The reader publishes sync state and the frame ticker flushes a stalled
-    /// update through `VtLogBuffer` — both go through these delegations, so a
-    /// missing one silently reinstates the wedged-terminal bug.
-    #[test]
-    fn test_vt_log_sync_update_flush_delegation() {
-        let mut buf = make_vt_log();
-        buf.process(b"\x1b[?2026h");
-        assert!(
-            buf.is_sync_update_active(),
-            "reader observes the open update"
-        );
-        buf.process(b"STALLED\r\n");
-        assert!(
-            !buf.flush_sync_timeout_if_needed(),
-            "ticker does not flush before the deadline"
-        );
-
-        std::thread::sleep(std::time::Duration::from_millis(170));
-
-        assert!(
-            buf.flush_sync_timeout_if_needed(),
-            "ticker flushes the expired update with no further PTY bytes"
-        );
-        assert!(!buf.is_sync_update_active(), "hint clears after the flush");
-        assert!(
-            buf.screen_rows_ref()
-                .is_some_and(|rows| rows.iter().any(|r| r.contains("STALLED"))),
-            "flushed content reaches the cached screen rows"
-        );
-    }
-
-    /// Teardown must drain a buffered update rather than drop it.
-    #[test]
-    fn test_vt_log_force_stop_sync_on_shutdown() {
-        let mut buf = make_vt_log();
-        buf.process(b"\x1b[?2026h");
-        buf.process(b"ATEXIT\r\n");
-        assert!(
-            buf.force_stop_sync_if_buffered(),
-            "shutdown drains the buffer"
-        );
-        assert!(
-            buf.screen_rows_ref()
-                .is_some_and(|rows| rows.iter().any(|r| r.contains("ATEXIT"))),
-            "content survives teardown"
-        );
-    }
-
-    /// In-place rewrite via \r should resolve to the final content on screen.
-    #[test]
-    fn test_vt_log_in_place_rewrite() {
-        let mut buf = make_vt_log();
-        // Write "aaaa\r" followed by "bbbb" — vt100 resolves this to "bbbb" on the line
-        buf.process(b"aaaa\rbbbb\r\n");
-        // The current screen should show "bbbb" not "aaaa"
-        let rows = buf.screen_rows();
-        let first_nonempty = rows
-            .iter()
-            .find(|r| !r.is_empty())
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        assert_eq!(
-            first_nonempty, "bbbb",
-            "in-place rewrite resolved to final content"
-        );
-    }
-
-    /// Rows scrolled off the top go into the log.
-    /// NOTE: per-line process() calls to match production behavior.
-    #[test]
-    fn test_vt_log_scroll_emits_scrolled_off_rows() {
-        let mut buf = make_vt_log();
-        // Feed exactly 25 lines one at a time — the first one scrolls off
-        for i in 0..25 {
-            buf.process(format!("row{i}\r\n").as_bytes());
-        }
-        let texts = log_texts(&buf);
-        assert!(
-            !texts.is_empty(),
-            "at least one line should have scrolled off"
-        );
-        assert_eq!(
-            texts[0], "row0",
-            "first scrolled-off row is row0, got: {:?}",
-            texts[0]
-        );
-    }
-
-    /// Alternate screen suppresses log extraction.
-    #[test]
-    fn test_vt_log_alternate_screen_suppresses_extraction() {
-        let mut buf = make_vt_log();
-        // Enter alternate screen (smcup), write some content, exit (rmcup)
-        // smcup: ESC[?1049h
-        buf.process(b"\x1b[?1049h");
-        // Write 30 lines in alternate screen
-        let mut content = String::new();
-        for i in 0..30 {
-            content.push_str(&format!("alt-line {i}\r\n"));
-        }
-        buf.process(content.as_bytes());
-        // No lines should be in the log while alternate screen is active
-        assert!(
-            buf.lines().is_empty(),
-            "alternate screen content should not be logged"
-        );
-    }
-
-    /// After alternate screen exits, extraction resumes.
-    #[test]
-    fn test_vt_log_alternate_screen_exit_resumes_extraction() {
-        let mut buf = make_vt_log();
-        // Enter alternate screen
-        buf.process(b"\x1b[?1049h");
-        // Write in alternate screen (per-line)
-        for i in 0..30 {
-            buf.process(format!("alt {i}\r\n").as_bytes());
-        }
-        // Exit alternate screen (rmcup)
-        buf.process(b"\x1b[?1049l");
-        // Now write regular output that will scroll (per-line)
-        for i in 0..30 {
-            buf.process(format!("main {i}\r\n").as_bytes());
-        }
-        // Main screen output should appear in the log
-        let texts = log_texts(&buf);
-        assert!(
-            !texts.is_empty(),
-            "main screen lines should appear in log after alt exit"
-        );
-        assert!(
-            texts.iter().any(|l| l.starts_with("main")),
-            "main lines present in log"
-        );
-    }
-
-    /// `grok --no-alt-screen` (and any inline TUI) enables mouse reporting on the
-    /// primary buffer and then scrolls its own viewport (`CSI S` / line dump).
-    /// Those rows must not enter the durable log — same contract as alt-screen.
-    #[test]
-    fn test_vt_log_primary_mouse_mode_suppresses_extraction() {
-        let mut buf = make_vt_log();
-        // Combined DECSET the way grok actually emits it (not `?1000h` alone).
-        buf.process(b"\x1b[?1000;1002;1003;1006h");
-        for i in 0..30 {
-            buf.process(format!("grok-frame {i}\r\n").as_bytes());
-        }
-        assert!(
-            buf.lines().is_empty(),
-            "mouse-mode primary TUI must not be logged, got: {:?}",
-            log_texts(&buf)
-        );
-        assert!(
-            buf.grid_history_size() > 0,
-            "grid scrollback must still accumulate so the scrollbar works"
-        );
-    }
-
-    /// Turning mouse reporting off resumes durable-log capture. Leftover TUI
-    /// rows still on the primary viewport may scroll into the log afterwards
-    /// (that is the point of `--no-alt-screen`); what must not happen is a
-    /// one-shot flush of the history that accumulated *while* mouse mode was on.
-    #[test]
-    fn test_vt_log_primary_mouse_mode_exit_resumes_capture() {
-        let mut buf = make_vt_log();
-        buf.process(b"\x1b[?1000h");
-        for i in 0..30 {
-            buf.process(format!("tui {i}\r\n").as_bytes());
-        }
-        let history_while_tui = buf.grid_history_size();
-        assert!(history_while_tui > 0, "TUI must have created grid history");
-        buf.process(b"\x1b[?1000l");
-        assert!(
-            buf.lines().is_empty(),
-            "disabling mouse mode must not flush TUI history, got: {:?}",
-            log_texts(&buf)
-        );
-        for i in 0..30 {
-            buf.process(format!("shell {i}\r\n").as_bytes());
-        }
-        let texts = log_texts(&buf);
-        assert!(
-            texts.iter().any(|l| l.starts_with("shell")),
-            "shell lines must appear after mouse mode ends, got: {texts:?}"
-        );
-    }
-
-    /// A resize while an alternate-screen app owns a large history must not move
-    /// the primary screen's log cursor into that unrelated coordinate space.
-    ///
-    /// This models `gh run watch`: every refresh homes, erases, and prints a frame
-    /// taller than the viewport. After leaving the app, ordinary shell output must
-    /// be captured immediately instead of being suppressed until primary history
-    /// catches up with the much larger alternate history.
-    #[test]
-    fn test_vt_log_alt_resize_keeps_primary_capture_cursor() {
-        let mut buf = VtLogBuffer::new(4, 80, 1000);
-
-        for i in 0..8 {
-            buf.process(format!("before-watch-{i}\r\n").as_bytes());
-        }
-        let before_watch_total = buf.total_lines();
-        assert!(
-            before_watch_total > 0,
-            "sanity: primary output reached the log"
-        );
-
-        buf.process(b"\x1b[?1049h");
-        for refresh in 0..4 {
-            buf.process(b"\x1b[0;0H\x1b[J");
-            buf.process(
-                format!("Refreshing run status every 3 seconds [{refresh}]\r\n").as_bytes(),
-            );
-            for job in 0..12 {
-                buf.process(format!("  job-{job:02}: running\r\n").as_bytes());
-            }
-        }
-        assert!(
-            buf.grid_history_size() > 20,
-            "sanity: the synthetic watch built substantial alternate history"
-        );
-
-        // Real panel/layout changes resize the PTY while the watch is still active.
-        buf.resize(5, 72);
-        buf.process(b"\x1b[?1049l");
-
-        for i in 0..10 {
-            buf.process(format!("after-watch-{i}\r\n").as_bytes());
-        }
-
-        let texts = log_texts(&buf);
-        assert!(
-            texts.iter().any(|line| line == "after-watch-0"),
-            "primary capture must resume immediately after alt exit; log tail: {:?}",
-            texts.iter().rev().take(12).collect::<Vec<_>>()
-        );
-        assert!(
-            !texts
-                .iter()
-                .any(|line| line.contains("Refreshing run status") || line.contains("job-")),
-            "alternate-screen rows must remain excluded from the durable log"
-        );
-    }
-
-    /// resize() updates parser dimensions.
-    #[test]
-    fn test_vt_log_resize() {
-        let mut buf = make_vt_log();
-        // Resize to a smaller terminal
-        buf.resize(10, 40);
-        // Should not panic and screen size should be updated
-        let rows = buf.screen_rows();
-        // After resize, screen_rows returns 10 rows (all empty after resize)
-        assert_eq!(rows.len(), 10, "resize to 10 rows");
-    }
-
-    /// Empty/whitespace-only rows are not added to the log.
-    #[test]
-    fn test_vt_log_trims_whitespace_only_rows() {
-        let mut buf = make_vt_log();
-        // Fill with content including empty lines
-        let mut input = String::new();
-        for i in 0..25 {
-            if i == 5 {
-                input.push_str("\r\n"); // empty line
-            } else {
-                input.push_str(&format!("content {i}\r\n"));
-            }
-        }
-        buf.process(input.as_bytes());
-        let texts = log_texts(&buf);
-        // None of the logged lines should be empty
-        for line in &texts {
-            assert!(
-                !line.is_empty(),
-                "logged line should not be empty: {line:?}"
-            );
-        }
-    }
-
-    /// Log capacity is bounded: old lines are dropped when capacity is exceeded.
-    #[test]
-    fn test_vt_log_bounded_capacity() {
-        let mut buf = VtLogBuffer::new(24, 80, 10); // tiny capacity
-        // Produce many more than 10 lines
-        let mut input = String::new();
-        for i in 0..200 {
-            input.push_str(&format!("line {i:04}\r\n"));
-        }
-        buf.process(input.as_bytes());
-        assert!(
-            buf.lines().len() <= 10,
-            "log should be capped at capacity=10, got {}",
-            buf.lines().len()
-        );
-    }
-
-    /// lines_since_owned returns lines after offset and correct new offset.
-    #[test]
-    fn test_vt_log_lines_since_owned() {
-        let mut buf = VtLogBuffer::new(24, 80, 1000);
-        // Feed lines one at a time to trigger scroll detection
-        for i in 0..30 {
-            buf.process(format!("line {i}\r\n").as_bytes());
-        }
-        let total = buf.total_lines();
-        assert!(total > 0, "should have some finalized lines");
-        // First fetch: all lines
-        let (batch1, off1) = buf.lines_since_owned(0, usize::MAX);
-        assert_eq!(batch1.len(), total);
-        assert_eq!(off1, total);
-        // Second fetch: nothing new
-        let (batch2, off2) = buf.lines_since_owned(off1, usize::MAX);
-        assert!(batch2.is_empty());
-        assert_eq!(off2, total);
-    }
-
-    /// grid_get_lines uses ABSOLUTE row coords (0 = oldest scrollback line), not
-    /// viewport-relative. Regression: it previously called get_row_text, which
-    /// returned visible screen rows whenever scrollback was non-empty — so reading
-    /// abs 0 gave the top of the screen instead of the oldest history line.
-    #[test]
-    fn test_grid_get_lines_absolute_coords_with_scrollback() {
-        let mut buf = VtLogBuffer::new(3, 80, 1000); // 3 visible rows → forces scrollback
-        for i in 0..9 {
-            buf.process(format!("line {i}\r\n").as_bytes());
-        }
-        buf.process(b"line 9"); // no trailing newline → bottom visible row is "line 9"
-
-        // NOTE: pass a large `end` so grid_get_lines clamps to the GRID's total
-        // (history + visible screen). Do NOT use buf.total_lines() here — that is
-        // VtLogBuffer::total_pushed (finalized log lines only, excludes the live
-        // visible screen) and is a different quantity than grid.total_lines().
-        let lines = buf.grid_get_lines(0, usize::MAX);
-        // Absolute row 0 is the OLDEST line; the bottom of the visible screen is the
-        // NEWEST. The old viewport-relative get_row_text path returned the top VISIBLE
-        // row (≈ "line 7") for index 0 and dropped the real history entirely.
-        assert_eq!(lines.first().map(String::as_str), Some("line 0"));
-        assert_eq!(lines.last().map(String::as_str), Some("line 9"));
-        assert_eq!(buf.grid_get_lines(0, 1), vec!["line 0".to_string()]);
-        // Rows come back contiguous oldest→newest — history AND visible screen,
-        // no gaps and no out-of-range empties.
-        for w in lines.windows(2) {
-            let a: usize = w[0].trim_start_matches("line ").parse().expect("line N");
-            let b: usize = w[1].trim_start_matches("line ").parse().expect("line N");
-            assert_eq!(b, a + 1, "rows must be contiguous ascending: {a} -> {b}");
-        }
-    }
-
-    /// lines_since_owned returns correct results after buffer rotation
-    /// (oldest lines evicted by pop_front).
-    #[test]
-    fn test_vt_log_lines_since_owned_after_rotation() {
-        let mut buf = VtLogBuffer::new(24, 80, 10); // capacity = 10
-        // Feed 40 lines one-at-a-time so scroll detection works
-        for i in 0..40 {
-            buf.process(format!("rot-{i}\r\n").as_bytes());
-        }
-        // Buffer should be at capacity
-        assert!(buf.lines().len() <= 10, "should be capped at 10");
-        let total = buf.total_lines();
-        // Fetch all — should return only the retained lines
-        let (batch, off) = buf.lines_since_owned(0, usize::MAX);
-        assert_eq!(batch.len(), buf.lines().len());
-        assert_eq!(off, total);
-        // The retained lines should be the newest ones
-        for line in &batch {
-            assert!(
-                line.text().starts_with("rot-"),
-                "unexpected line: {:?}",
-                line.text()
-            );
-        }
-        // Fetch with an offset past the end — empty
-        let (empty, off2) = buf.lines_since_owned(off, usize::MAX);
-        assert!(empty.is_empty());
-        assert_eq!(off2, off);
-    }
-
-    #[test]
-    fn test_vt_log_lines_since_owned_evicted_offset_clamped() {
-        let mut buf = VtLogBuffer::new(24, 80, 10);
-        for i in 0..40 {
-            buf.process(format!("rot-{i}\r\n").as_bytes());
-        }
-        let oldest = buf.oldest_offset();
-        assert!(oldest > 0, "some lines must have been evicted");
-        // Request from an offset in the evicted range — should clamp to oldest
-        let evicted_offset = oldest.saturating_sub(5);
-        let (batch, off) = buf.lines_since_owned(evicted_offset, usize::MAX);
-        assert_eq!(batch.len(), buf.lines().len());
-        assert_eq!(off, buf.total_lines());
-        for line in &batch {
-            assert!(
-                line.text().starts_with("rot-"),
-                "unexpected line: {:?}",
-                line.text()
-            );
-        }
-    }
-
-    /// Feed data in small incremental chunks (simulating real PTY reads that
-    /// may split mid-line) and verify lines are still extracted.
-    ///
-    /// Misaligned chunks (7-byte boundaries) may produce partial rows that
-    /// break overlap detection between consecutive process() calls. The
-    /// conservative approach captures fewer lines than a "dump everything"
-    /// fallback but avoids false duplicate log entries.
-    #[test]
-    fn test_vt_log_incremental_chunked_feed() {
-        let mut buf = VtLogBuffer::new(24, 80, 1000);
-        // Build 30 lines of output
-        use std::fmt::Write as _;
-        let full_output: String = (0..30).fold(String::new(), |mut acc, i| {
-            let _ = write!(acc, "chunk-{i}\r\n");
-            acc
-        });
-        let bytes = full_output.as_bytes();
-        // Feed in small chunks of 7 bytes (deliberately misaligned with lines)
-        for chunk in bytes.chunks(7) {
-            buf.process(chunk);
-        }
-        let lines = log_texts(&buf);
-        let matching: Vec<&String> = lines.iter().filter(|l| l.starts_with("chunk-")).collect();
-        // Misaligned chunking limits overlap detection — we capture some lines
-        // but not all. The key property: no duplicate entries.
-        assert!(
-            !matching.is_empty(),
-            "chunked feed should capture at least some lines: {:?}",
-            lines,
-        );
-    }
-
-    /// Scroll regions (DECSTBM): scrolling within a restricted region does
-    /// NOT produce overlap with the full-screen prev/curr comparison, so the
-    /// conservative detector does not extract these lines. This is acceptable:
-    /// scroll regions are rare in mobile-targeted sessions, and screen rows
-    /// always show the current content accurately.
-    #[test]
-    fn test_vt_log_scroll_region_decstbm() {
-        let mut buf = VtLogBuffer::new(10, 80, 1000); // small 10-row screen
-        // Fill the screen first so we have a baseline for diff detection
-        for i in 0..10 {
-            buf.process(format!("init-{i}\r\n").as_bytes());
-        }
-        let before = buf.total_lines();
-        // Set scroll region to rows 3-8 (1-indexed): ESC[3;8r
-        // Then move cursor into the region and write lines to force scrolling
-        // within the region only.
-        buf.process(b"\x1b[3;8r"); // DECSTBM: set scroll region rows 3-8
-        buf.process(b"\x1b[3;1H"); // CUP: move cursor to row 3, col 1
-        for i in 0..20 {
-            buf.process(format!("region-{i}\r\n").as_bytes());
-        }
-        buf.process(b"\x1b[r"); // Reset scroll region to full screen
-        let after = buf.total_lines();
-        // Scroll-region scrolling changes rows within the region but doesn't
-        // produce a full-screen overlap pattern, so no new log lines are
-        // expected with the conservative detector.
-        assert_eq!(
-            after, before,
-            "scroll region scroll does not produce overlap-based log lines"
-        );
-    }
-
-    /// Cursor movement (CUU) that overwrites existing rows should NOT
-    /// produce the overwritten content as new log output.
-    #[test]
-    fn test_vt_log_cursor_movement_no_overwrite_in_log() {
-        let mut buf = VtLogBuffer::new(10, 80, 1000);
-        // Write 5 lines
-        for i in 0..5 {
-            buf.process(format!("orig-{i}\r\n").as_bytes());
-        }
-        // Move cursor up 3 rows (CUU) and overwrite with "REPLACED"
-        buf.process(b"\x1b[3A"); // CUU 3: move up 3
-        buf.process(b"REPLACED\r\n"); // overwrite current line
-        let lines = log_texts(&buf);
-        // "REPLACED" should NOT appear in the log — it was written via cursor
-        // movement within the viewport, not as new scrolled-off output.
-        // (The diff detector may emit the displaced orig-N lines, but the
-        // replacement text itself should stay on-screen, not in the log.)
-        let replaced_in_log = lines.iter().any(|l| l.contains("REPLACED"));
-        assert!(
-            !replaced_in_log,
-            "cursor-overwritten text should not appear in log: {lines:?}"
-        );
-    }
-
-    /// SGR attributes (colors, bold, etc.) should not leak into extracted text.
-    #[test]
-    fn test_vt_log_sgr_produces_clean_text() {
-        let mut buf = VtLogBuffer::new(24, 80, 1000);
-        // Write 30 lines with SGR color codes (enough to cause scrolling)
-        for i in 0..30 {
-            // ESC[31m = red, ESC[1m = bold, ESC[0m = reset
-            buf.process(format!("\x1b[1;31mcolor-{i}\x1b[0m\r\n").as_bytes());
-        }
-        let lines = log_texts(&buf);
-        let color_lines: Vec<&String> = lines.iter().filter(|l| l.contains("color-")).collect();
-        assert!(
-            color_lines.len() >= 5,
-            "should capture color-N lines, got {}: {:?}",
-            color_lines.len(),
-            lines,
-        );
-        // No line should contain raw ESC characters — vt100 parser strips them
-        for line in &lines {
-            assert!(
-                !line.contains('\x1b'),
-                "log line should not contain ESC sequences: {line:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_vt_log_screen_with_chrome_trim() {
-        let mut buf = VtLogBuffer::new(24, 80, 1000);
-        // Write content lines + agent chrome (separator + prompt + status bar)
-        for i in 0..5 {
-            buf.process(format!("content line {i}\r\n").as_bytes());
-        }
-        // Simulate Claude Code chrome at bottom
-        buf.process(b"\x1b[20;1H");
-        buf.process("────────────────────────────────────────\r\n".as_bytes());
-        buf.process("❯ \r\n".as_bytes());
-        buf.process("────────────────────────────────────────\r\n".as_bytes());
-        buf.process("  [Opus 4.6 | Max] tuicommander git:(main)\r\n".as_bytes());
-
-        let raw_rows = buf.screen_rows();
-        let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
-        let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
-        let screen: Vec<LogLine> = buf.screen_log_lines().into_iter().take(cutoff).collect();
-
-        let screen_text: Vec<String> = screen.iter().map(|l| l.text()).collect();
-        assert!(
-            !screen_text
-                .iter()
-                .any(|t| t.contains("❯") || t.contains("Opus 4.6")),
-            "chrome should be trimmed, got: {screen_text:?}"
-        );
-        // Content lines should still be present
-        assert!(
-            screen_text.iter().any(|t| t.contains("content line")),
-            "content should be preserved, got: {screen_text:?}"
-        );
     }
 
     /// Integration test: spawn a real PTY process, feed its output through
@@ -10373,763 +11254,6 @@ mod tests {
         );
     }
 
-    // --- ChangedRow / process() return value tests ---
-
-    /// process() returns the rows that changed on the normal screen.
-    #[test]
-    fn test_vt_log_changed_rows_basic() {
-        let mut buf = make_vt_log();
-        let changed = buf.process(b"hello world");
-        assert!(
-            changed.iter().any(|r| r.text == "hello world"),
-            "expected 'hello world' in changed rows, got: {:?}",
-            changed,
-        );
-    }
-
-    /// CR-based overwrite: process() returns the final overwritten row text.
-    #[test]
-    fn test_vt_log_changed_rows_overwrite() {
-        let mut buf = make_vt_log();
-        // "aaaa\r" moves cursor to column 0; "bbbb" overwrites — vt100 renders "bbbb"
-        let changed = buf.process(b"aaaa\rbbbb");
-        assert!(
-            changed.iter().any(|r| r.text.contains("bbbb")),
-            "expected 'bbbb' after CR overwrite, got: {:?}",
-            changed,
-        );
-        assert!(
-            !changed.iter().any(|r| r.text == "aaaa"),
-            "should not see raw 'aaaa' (overwritten), got: {:?}",
-            changed,
-        );
-    }
-
-    /// Alternate screen: changed rows are reported even when alternate screen is active.
-    #[test]
-    fn test_vt_log_changed_rows_alternate_screen() {
-        let mut buf = make_vt_log();
-        buf.process(b"\x1b[?1049h");
-        let changed = buf.process(b"status: running");
-        assert!(
-            changed.iter().any(|r| r.text.contains("status: running")),
-            "changed rows must be reported during alternate screen, got: {:?}",
-            changed,
-        );
-        assert_eq!(
-            buf.total_lines(),
-            0,
-            "log must remain empty during alternate screen"
-        );
-    }
-
-    /// Cursor movement: changed rows reflect the final rendered state.
-    #[test]
-    fn test_vt_log_changed_rows_cursor_movement() {
-        let mut buf = make_vt_log();
-        buf.process(b"line0\r\nline1\r\nline2");
-        // Move cursor up 1 row (CUU 1) and overwrite line1
-        let changed = buf.process(b"\x1b[1Aupdated");
-        assert!(
-            changed.iter().any(|r| r.text.contains("updated")),
-            "expected 'updated' in changed rows after CUU overwrite, got: {:?}",
-            changed,
-        );
-    }
-
-    /// No change: a second process() with no new data returns empty Vec.
-    #[test]
-    fn test_vt_log_changed_rows_empty_on_no_change() {
-        let mut buf = make_vt_log();
-        buf.process(b"hello");
-        let changed = buf.process(b"");
-        assert!(
-            changed.is_empty(),
-            "expected no changed rows when no data written, got: {:?}",
-            changed,
-        );
-    }
-
-    /// resize() clears prev_rows so the next process() reports all non-empty rows.
-    #[test]
-    fn test_vt_log_changed_rows_resize_clears_prev() {
-        let mut buf = make_vt_log();
-        buf.process(b"hello");
-        buf.process(b""); // stabilise prev_rows
-        buf.resize(24, 80);
-        let changed = buf.process(b"");
-        assert!(
-            changed.iter().any(|r| r.text.contains("hello")),
-            "expected 'hello' after resize clears prev, got: {:?}",
-            changed,
-        );
-    }
-
-    /// Screen switch resets prev_rows so first frame reports all non-empty rows.
-    #[test]
-    fn test_vt_log_changed_rows_screen_switch_resets_prev() {
-        let mut buf = make_vt_log();
-        buf.process(b"normal line");
-        buf.process(b""); // stabilise
-        buf.process(b"\x1b[?1049h"); // enter alternate
-        buf.process(b"alt content");
-        // Exit alternate — should reset prev for normal screen
-        let changed = buf.process(b"\x1b[?1049l");
-        assert!(
-            changed.iter().any(|r| r.text.contains("normal line")),
-            "expected 'normal line' after screen switch resets prev, got: {:?}",
-            changed,
-        );
-    }
-
-    // --- mark_agent_chrome tests ---
-
-    /// Helper: create plain LogLine vec from string slices for testing.
-    fn make_log_lines(items: &[&str]) -> Vec<LogLine> {
-        items
-            .iter()
-            .map(|s| LogLine {
-                spans: if s.is_empty() {
-                    vec![]
-                } else {
-                    vec![LogSpan {
-                        text: s.to_string(),
-                        fg: None,
-                        bg: None,
-                        bold: false,
-                        italic: false,
-                        underline: false,
-                    }]
-                },
-                cols: 0,
-                chrome: false,
-            })
-            .collect()
-    }
-
-    /// Helper: mark a batch and return the texts readers would see.
-    fn visible_texts(items: &[&str]) -> Vec<String> {
-        let mut lines = make_log_lines(items);
-        mark_agent_chrome(&mut lines);
-        lines
-            .iter()
-            .filter(|l| !l.chrome)
-            .map(|l| l.text())
-            .collect()
-    }
-
-    // find_scrollback_chrome_cutoff tests live in chrome.rs (canonical location)
-
-    /// Large batch with an Ink prompt → prompt and everything below marked chrome.
-    #[test]
-    fn test_mark_agent_chrome_large_batch_ink_prompt() {
-        let mut items: Vec<&str> = vec!["real content"; 18];
-        items.push("❯"); // index 18
-        items.push(""); // index 19
-        items.push("Model: x"); // index 20
-        let visible = visible_texts(&items);
-        assert_eq!(visible.len(), 18, "lines before prompt stay visible");
-        assert!(visible.iter().all(|t| t == "real content"));
-    }
-
-    /// Regression: agents echo the submitted user message on a prompt row. That
-    /// row is the conversation, and marking it chrome deleted both the message
-    /// and the reply that followed it in the same batch.
-    #[test]
-    fn test_mark_agent_chrome_keeps_echoed_user_message() {
-        let visible = visible_texts(&[
-            "❯ rename non funziona nel filebrowser",
-            "  intent: investigating FileBrowser rename bug",
-            "• Ho trovato il punto: la closure leggeva previousFocus azzerato.",
-        ]);
-        assert_eq!(visible.len(), 3, "user message and reply must survive");
-    }
-
-    /// A bare `> ` row is still a prompt (Gemini/generic).
-    #[test]
-    fn test_mark_agent_chrome_bare_gt_prompt() {
-        let mut items: Vec<&str> = vec!["output"; 17];
-        items.push("> "); // index 17 — bare prompt, no input typed
-        items.push("chrome"); // index 18
-        assert_eq!(visible_texts(&items).len(), 17);
-    }
-
-    /// Small batch with a prompt in the scan window → still marked.
-    #[test]
-    fn test_mark_agent_chrome_small_batch_with_prompt() {
-        let visible = visible_texts(&["line 1", "❯", "chrome"]);
-        assert_eq!(visible, vec!["line 1"]);
-    }
-
-    /// Separator lines immediately above a prompt are part of the prompt box.
-    #[test]
-    fn test_mark_agent_chrome_separator_above_prompt() {
-        let visible = visible_texts(&[
-            "real output",
-            "more output",
-            "────────────────────", // separator above prompt
-            "❯ ",                   // bare prompt
-            "────────────────────", // separator below
-            "[Opus 4.6 | Max]",
-            "Context ███░░░",
-        ]);
-        assert_eq!(visible, vec!["real output", "more output"]);
-    }
-
-    /// Empty lines above a prompt are part of the prompt box.
-    #[test]
-    fn test_mark_agent_chrome_empty_lines_above_prompt() {
-        let visible = visible_texts(&["real output", "", "", "❯", "Model: x"]);
-        assert_eq!(visible, vec!["real output"]);
-    }
-
-    // is_separator_line tests live in chrome.rs (canonical location)
-
-    /// Batch with no prompt → nothing marked, regardless of size.
-    #[test]
-    fn test_mark_agent_chrome_no_prompt_any_size_passthrough() {
-        let mut lines = make_log_lines(&["a", "b", "c"]);
-        let before = lines.clone();
-        mark_agent_chrome(&mut lines);
-        assert_eq!(lines, before);
-    }
-
-    /// Large batch without any prompt → nothing marked.
-    #[test]
-    fn test_mark_agent_chrome_large_batch_no_prompt_passthrough() {
-        let items: Vec<&str> = vec!["output line"; 20];
-        let mut lines = make_log_lines(&items);
-        let before = lines.clone();
-        mark_agent_chrome(&mut lines);
-        assert_eq!(lines, before);
-    }
-
-    /// Empty batch → no panic.
-    #[test]
-    fn test_mark_agent_chrome_empty_batch() {
-        let mut lines: Vec<LogLine> = Vec::new();
-        mark_agent_chrome(&mut lines);
-        assert!(lines.is_empty());
-    }
-
-    /// Regression: a markdown blockquote is prose, not a prompt. Everything after
-    /// it used to be deleted from history, so paragraphs arrived mid-sentence.
-    #[test]
-    fn test_mark_agent_chrome_markdown_quote_is_not_a_prompt() {
-        let visible = visible_texts(&[
-            "Here is what the docs say:",
-            "> quoted guidance from the manual",
-            "verificabile; non è un force-push e non sovrascrive alcun branch",
-            "esistente.",
-        ]);
-        assert_eq!(visible.len(), 4, "quoted prose must not truncate the batch");
-    }
-
-    /// Regression: a separator alone is not chrome. Tables, progress bars and
-    /// Codex's `└ ────` dividers all carry box-drawing runs mid-output.
-    #[test]
-    fn test_mark_agent_chrome_standalone_separator_is_not_a_prompt() {
-        let visible = visible_texts(&[
-            "• Ran cargo nextest run",
-            "  └ ──────────────────────",
-            "    Summary [ 12.4s ] 91 tests run",
-            "    all passed",
-        ]);
-        assert_eq!(visible.len(), 4, "a divider must not truncate the batch");
-    }
-
-    /// Regression: markdown table rules are box-drawing runs. They anchored the
-    /// cut and swallowed the rest of the table plus whatever followed it.
-    #[test]
-    fn test_mark_agent_chrome_markdown_table_survives() {
-        let visible = visible_texts(&[
-            "  │ Livello                                   │ Esito                 │",
-            "  ├───────────────────────────────────────────┼───────────────────────┤",
-            "  │ fs.rs:1239 rename_path + route /fs/rename │ ✅ rinomina realmente │",
-            "  └───────────────────────────────────────────┴───────────────────────┘",
-            "Conclusione: il rename funziona lato backend.",
-        ]);
-        assert_eq!(visible.len(), 5, "table and trailing prose must survive");
-    }
-
-    /// Chrome is hidden from readers but never dropped from the buffer, so a
-    /// misclassification costs visibility, not history.
-    #[test]
-    fn test_mark_agent_chrome_keeps_lines_in_the_batch() {
-        let mut lines = make_log_lines(&["real output", "❯ ", "Context ███░░░"]);
-        mark_agent_chrome(&mut lines);
-        assert_eq!(lines.len(), 3, "no line is discarded");
-        assert!(!lines[0].chrome);
-        assert!(lines[1].chrome && lines[2].chrome);
-    }
-
-    /// End-to-end through the buffer: chrome occupies offset slots but is not
-    /// returned, and real content after a false-positive anchor survives.
-    #[test]
-    fn test_lines_since_owned_filters_chrome_without_losing_content() {
-        let mut buf = VtLogBuffer::new(3, 80, 1000);
-        // 3-row screen: everything but the last 3 rows scrolls into history, so the
-        // trailing padding lines push the content under test off the screen.
-        buf.process(b"alpha\r\n> quoted prose\r\nbravo\r\ncharlie\r\npad1\r\npad2\r\npad3\r\n");
-        let (lines, total) = buf.lines_since_owned(0, usize::MAX);
-        let texts: Vec<String> = lines.iter().map(|l| l.text()).collect();
-        for expected in ["alpha", "> quoted prose", "bravo", "charlie"] {
-            assert!(
-                texts.iter().any(|t| t.trim() == expected),
-                "{expected:?} missing from {texts:?}"
-            );
-        }
-        assert!(total >= texts.len(), "offset space includes chrome slots");
-    }
-
-    /// Replays the live reproduction that exposed the bug: numbered content with
-    /// chrome-shaped anchors (`> `, `────`, `›`, `❯`) landing near batch ends.
-    /// Against the old truncating capture this lost 6 of 100 lines.
-    #[test]
-    fn test_scrollback_survives_chrome_shaped_anchors_in_content() {
-        let anchors = [
-            "> markdown quote anchor",
-            "──────────────────────",
-            "› codex prompt anchor",
-            "❯ ink prompt anchor",
-        ];
-        let mut stream = Vec::new();
-        let mut n = 1;
-        for anchor in anchors {
-            for _ in 0..20 {
-                stream.extend_from_slice(format!("LINE-{n:03} normal content row\r\n").as_bytes());
-                n += 1;
-            }
-            stream.extend_from_slice(anchor.as_bytes());
-            stream.extend_from_slice(b"\r\n");
-            for _ in 0..5 {
-                stream.extend_from_slice(format!("LINE-{n:03} normal content row\r\n").as_bytes());
-                n += 1;
-            }
-        }
-        // Push the tail off the screen so every numbered row reaches history.
-        for _ in 0..30 {
-            stream.extend_from_slice(b"pad\r\n");
-        }
-
-        let mut buf = VtLogBuffer::new(24, 80, 10_000);
-        // Feed in 512-byte chunks: batch boundaries are what put an anchor inside
-        // the scan window, which is exactly how the live session tripped this.
-        for chunk in stream.chunks(512) {
-            buf.process(chunk);
-        }
-
-        let (lines, _) = buf.lines_since_owned(0, usize::MAX);
-        let seen: Vec<String> = lines.iter().map(|l| l.text().trim().to_string()).collect();
-        let missing: Vec<usize> = (1..=100)
-            .filter(|i| {
-                let needle = format!("LINE-{i:03}");
-                !seen.iter().any(|t| t.starts_with(&needle))
-            })
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "content lines lost from history: {missing:?}"
-        );
-    }
-
-    // --- LogLine / extract_log_line tests ---
-
-    /// Helper: create a TerminalGrid, feed data, and extract LogLine for row 0.
-    fn extract_line_from(data: &[u8]) -> LogLine {
-        use alacritty_terminal::index::Line;
-        let mut grid = crate::terminal_grid::TerminalGrid::new(4, 80, 0);
-        let _ = grid.process(data);
-        grid.extract_log_line(Line(0))
-    }
-
-    /// Plain text produces a single span with no color attributes.
-    #[test]
-    fn test_extract_log_line_plain_text_single_span() {
-        let line = extract_line_from(b"Hello world");
-        assert_eq!(line.spans.len(), 1, "plain text = single span");
-        assert_eq!(line.spans[0].text, "Hello world");
-        assert_eq!(line.spans[0].fg, None);
-        assert_eq!(line.spans[0].bg, None);
-        assert!(!line.spans[0].bold);
-        assert!(!line.spans[0].italic);
-        assert!(!line.spans[0].underline);
-    }
-
-    /// Colored text (ANSI escape for red) produces a span with fg color.
-    #[test]
-    fn test_extract_log_line_colored_text() {
-        // ESC[31m = red foreground, ESC[0m = reset
-        let line = extract_line_from(b"\x1b[31mERROR\x1b[0m ok");
-        assert!(
-            line.spans.len() >= 2,
-            "should have at least 2 spans: {:?}",
-            line.spans
-        );
-        // First span: "ERROR" with red fg
-        assert_eq!(line.spans[0].text, "ERROR");
-        assert_eq!(line.spans[0].fg, Some(LogColor::Idx(1))); // ANSI red = idx 1
-        // Second span: " ok" with default color
-        assert_eq!(line.spans[1].text, " ok");
-        assert_eq!(line.spans[1].fg, None);
-    }
-
-    #[test]
-    fn log_color_maps_named_ansi_palette_exhaustively() {
-        use alacritty_terminal::vte::ansi::{Color, NamedColor};
-
-        let defaults = [
-            NamedColor::Foreground,
-            NamedColor::Background,
-            NamedColor::Cursor,
-            NamedColor::BrightForeground,
-            NamedColor::DimForeground,
-        ];
-        for named in defaults {
-            assert_eq!(LogColor::from_ansi_color(Color::Named(named)), None);
-        }
-
-        let palette = [
-            (NamedColor::Black, 0),
-            (NamedColor::Red, 1),
-            (NamedColor::Green, 2),
-            (NamedColor::Yellow, 3),
-            (NamedColor::Blue, 4),
-            (NamedColor::Magenta, 5),
-            (NamedColor::Cyan, 6),
-            (NamedColor::White, 7),
-            (NamedColor::BrightBlack, 8),
-            (NamedColor::BrightRed, 9),
-            (NamedColor::BrightGreen, 10),
-            (NamedColor::BrightYellow, 11),
-            (NamedColor::BrightBlue, 12),
-            (NamedColor::BrightMagenta, 13),
-            (NamedColor::BrightCyan, 14),
-            (NamedColor::BrightWhite, 15),
-            (NamedColor::DimBlack, 0),
-            (NamedColor::DimRed, 1),
-            (NamedColor::DimGreen, 2),
-            (NamedColor::DimYellow, 3),
-            (NamedColor::DimBlue, 4),
-            (NamedColor::DimMagenta, 5),
-            (NamedColor::DimCyan, 6),
-            (NamedColor::DimWhite, 7),
-        ];
-        for (named, index) in palette {
-            assert_eq!(
-                LogColor::from_ansi_color(Color::Named(named)),
-                Some(LogColor::Idx(index)),
-                "unexpected mapping for {named:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn log_color_preserves_indexed_and_rgb_values() {
-        use alacritty_terminal::vte::ansi::{Color, Rgb};
-
-        assert_eq!(
-            LogColor::from_ansi_color(Color::Indexed(231)),
-            Some(LogColor::Idx(231))
-        );
-        assert_eq!(
-            LogColor::from_ansi_color(Color::Spec(Rgb {
-                r: 12,
-                g: 34,
-                b: 56,
-            })),
-            Some(LogColor::Rgb(12, 34, 56))
-        );
-    }
-
-    /// Multi-span line with bold + color changes.
-    #[test]
-    fn test_extract_log_line_multi_span_bold_color() {
-        // Bold green then normal
-        let line = extract_line_from(b"\x1b[1;32m+added\x1b[0m context");
-        assert!(line.spans.len() >= 2, "multi-span: {:?}", line.spans);
-        assert_eq!(line.spans[0].text, "+added");
-        assert!(line.spans[0].bold);
-        assert_eq!(line.spans[0].fg, Some(LogColor::Idx(2))); // green = idx 2
-        // Rest is plain
-        let last = line.spans.last().unwrap();
-        assert_eq!(last.text, " context");
-        assert!(!last.bold);
-        assert_eq!(last.fg, None);
-    }
-
-    /// Trailing whitespace spans are trimmed.
-    #[test]
-    fn test_extract_log_line_trims_trailing_whitespace() {
-        let line = extract_line_from(b"text");
-        // Should not have trailing spaces filling to column 80
-        let total_len: usize = line.spans.iter().map(|s| s.text.len()).sum();
-        assert_eq!(total_len, 4, "no trailing whitespace: {:?}", line.spans);
-    }
-
-    /// Empty row produces an empty spans vec.
-    #[test]
-    fn test_extract_log_line_empty_row() {
-        let line = extract_line_from(b"");
-        assert!(
-            line.spans.is_empty(),
-            "empty row = empty spans: {:?}",
-            line.spans
-        );
-    }
-
-    /// LogLine.text() concatenates all span texts.
-    #[test]
-    fn test_log_line_text_method() {
-        let line = LogLine {
-            spans: vec![
-                LogSpan {
-                    text: "hello".into(),
-                    fg: Some(LogColor::Idx(1)),
-                    bg: None,
-                    bold: true,
-                    italic: false,
-                    underline: false,
-                },
-                LogSpan {
-                    text: " world".into(),
-                    fg: None,
-                    bg: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                },
-            ],
-            cols: 0,
-            chrome: false,
-        };
-        assert_eq!(line.text(), "hello world");
-    }
-
-    /// Colored lines scrolled off are preserved as LogLine with attributes.
-    #[test]
-    fn test_vt_log_colored_lines_preserved_in_log() {
-        let mut buf = VtLogBuffer::new(4, 80, 100); // small 4-row screen
-        // Feed colored lines that will scroll off
-        for i in 0..6 {
-            buf.process(format!("\x1b[31mred-{i}\x1b[0m\r\n").as_bytes());
-        }
-        let log = buf.lines();
-        assert!(!log.is_empty(), "should have scrolled-off lines");
-        // At least one line should have a colored span
-        let has_color = log.iter().any(|ll| ll.spans.iter().any(|s| s.fg.is_some()));
-        assert!(
-            has_color,
-            "scrolled-off lines should preserve color: {:?}",
-            log
-        );
-    }
-
-    /// Serialize LogLine to JSON matches expected format.
-    #[test]
-    fn test_log_line_serialization() {
-        let line = LogLine {
-            spans: vec![
-                LogSpan {
-                    text: "hello".into(),
-                    fg: Some(LogColor::Idx(1)),
-                    bg: None,
-                    bold: true,
-                    italic: false,
-                    underline: false,
-                },
-                LogSpan {
-                    text: " world".into(),
-                    fg: None,
-                    bg: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                },
-            ],
-            cols: 0,
-            chrome: false,
-        };
-        let json = serde_json::to_value(&line).unwrap();
-        let spans = json["spans"].as_array().unwrap();
-        assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0]["text"], "hello");
-        assert_eq!(spans[0]["fg"], serde_json::json!({"idx": 1}));
-        assert!(spans[0]["bold"].as_bool().unwrap());
-        // Second span has no color fields (skipped by serde)
-        assert_eq!(spans[1]["text"], " world");
-        assert!(spans[1].get("fg").is_none() || spans[1]["fg"].is_null());
-        assert!(spans[1].get("bold").is_none() || !spans[1]["bold"].as_bool().unwrap_or(true));
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_no_match() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "normal output".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert_eq!(line.spans[0].text, "normal output");
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_plain_intent() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "intent: reading the config file".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(
-            line.spans.is_empty(),
-            "plain-prefix intent should be stripped entirely"
-        );
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_plain_suggest() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "suggest: Run tests | Check logs | Push".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(
-            line.spans.is_empty(),
-            "plain-prefix suggest should be stripped entirely"
-        );
-    }
-
-    /// The drift this closed: the local copy of the grammar knew only the two
-    /// Ink bullets, so every Codex-decorated token TUIC parsed was shown to the
-    /// user anyway. One grammar, in `output_parser`, now serves both.
-    #[test]
-    fn test_strip_structural_tokens_knows_the_codex_bullets() {
-        for text in [
-            "\u{2022} suggest: Run tests | Check logs | Push",
-            "\u{25E6} intent: ricostruisco il modello",
-        ] {
-            let mut line = LogLine {
-                spans: vec![LogSpan {
-                    text: text.into(),
-                    ..Default::default()
-                }],
-                cols: 0,
-                chrome: false,
-            };
-            line.strip_structural_tokens();
-            assert!(
-                line.spans.is_empty(),
-                "a Codex-bulleted token must be stripped too: {text:?}"
-            );
-        }
-    }
-
-    /// The ack is the agent's own greeting and the user is meant to read it;
-    /// only the marker riding behind it is a wire token.
-    #[test]
-    fn test_strip_structural_tokens_keeps_the_ack_sentence() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "\u{2022} TUICommander v1.7.7 is connected. intent: fixing the parser (Fix)"
-                    .into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_mid_line_not_stripped() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "The intent: of this code is clear".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert_eq!(line.spans[0].text, "The intent: of this code is clear");
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_indented_suggest() {
-        // Ink indents continuation lines — suggest: with leading whitespace must be stripped
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "  suggest: Run tests | Check logs | Push".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(line.spans.is_empty(), "indented suggest should be stripped");
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_indented_intent() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "  intent: reading the config file".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(line.spans.is_empty(), "indented intent should be stripped");
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_bullet_suggest() {
-        // Ink bullet prefix: ● suggest: ...
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "● suggest: A | B | C".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(
-            line.spans.is_empty(),
-            "bullet-prefixed suggest should be stripped"
-        );
-    }
-
-    #[test]
-    fn test_strip_structural_tokens_bullet_intent() {
-        let mut line = LogLine {
-            spans: vec![LogSpan {
-                text: "⏺ intent: doing something (Task)".into(),
-                ..Default::default()
-            }],
-            cols: 0,
-            chrome: false,
-        };
-        line.strip_structural_tokens();
-        assert!(
-            line.spans.is_empty(),
-            "bullet-prefixed intent should be stripped"
-        );
-    }
-
     #[test]
     fn test_rate_limit_ignored_without_agent_activity() {
         let state = fresh_state();
@@ -11226,32 +11350,6 @@ mod tests {
             !ss.rate_limited,
             "rate limit should expire with default timeout"
         );
-    }
-
-    // ── VtLogBuffer alt-screen ──────────────────────────────────
-
-    #[test]
-    fn vt_log_buffer_is_alternate_screen_tracks_state() {
-        let mut vt = VtLogBuffer::new(24, 80, 1000);
-        assert!(!vt.is_alternate_screen());
-        vt.process(b"\x1b[?1049h");
-        assert!(vt.is_alternate_screen());
-        vt.process(b"\x1b[?1049l");
-        assert!(!vt.is_alternate_screen());
-    }
-
-    #[test]
-    fn vt_log_buffer_exit_alt_screen_only_when_active() {
-        let mut vt = VtLogBuffer::new(24, 80, 1000);
-
-        // Not in alt screen — should be no-op
-        assert!(!vt.is_alternate_screen());
-
-        // Enter alt screen, then exit via the recovery sequences
-        vt.process(b"\x1b[?1049h");
-        assert!(vt.is_alternate_screen());
-        vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
-        assert!(!vt.is_alternate_screen());
     }
 }
 

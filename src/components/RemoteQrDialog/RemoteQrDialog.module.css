@@ -20,6 +20,7 @@
 	align-items: center;
 	justify-content: center;
 	width: fit-content;
+	max-width: 100%;
 	margin: 0 auto;
 	padding: 16px;
 	background: #ffffff;
@@ -29,7 +30,7 @@
 .qr {
 	display: block;
 	width: 320px;
-	height: 320px;
+	height: auto;
 	max-width: 100%;
 	image-rendering: pixelated;
 }
@@ -56,16 +57,7 @@
 	color: var(--fg-muted);
 }
 
-.ipRow select {
-	flex: 1;
-	min-width: 0;
-	padding: 6px 8px;
-	background: var(--bg-tertiary);
-	color: var(--fg-primary);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	font-size: var(--font-sm);
-}
+.ipRow select { flex: 1; min-width: 0; }
 
 .url {
 	display: block;
@@ -87,3 +79,8 @@
 	color: var(--fg-primary);
 	border-color: var(--accent);
 }
+
+.discoveryFailure { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.discoveryFailure p { margin: 0; color: var(--error); overflow-wrap: anywhere; }
+.discoveryFailure .retryActions { padding: 0; border: 0; background: transparent; }
+.retryActions button { flex: none; }

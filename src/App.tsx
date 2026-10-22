@@ -2,19 +2,24 @@ import { type Component, createSignal, lazy, Show, Suspense } from "solid-js";
 import { ApplicationOverlays } from "./components/ApplicationOverlays/ApplicationOverlays";
 import { BranchSwitcher } from "./components/BranchSwitcher/BranchSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
+import { urlPasteActions } from "./components/CommandPalette/urlPaste";
 import { createContextMenu } from "./components/ContextMenu";
 import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { PromptDrawer } from "./components/PromptDrawer";
+import { PromptInspector } from "./components/PromptInspector/PromptInspector";
 import { PromptOverlay } from "./components/PromptOverlay";
 import type { SettingsContext } from "./components/SettingsPanel";
+import { SETTINGS_SECTION_EGO } from "./components/SettingsPanel/sections";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
 import { TerminalArea } from "./components/TerminalArea";
 import { Toolbar } from "./components/Toolbar";
+import { useOpenMarkdownPublication } from "./hooks/useOpenMarkdownPublication";
 import { executeCleanup } from "./hooks/usePostMergeCleanup";
 import { editorTabsStore } from "./stores/editorTabs";
+import { getAppTheme } from "./themes";
 
 const ActivityDashboard = lazy(() =>
 	import("./components/ActivityDashboard").then((m) => ({ default: m.ActivityDashboard })),
@@ -23,13 +28,14 @@ const ActivityDashboard = lazy(() =>
 const TunnelsPanel = lazy(() => import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })));
 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DictationToast } from "./components/DictationToast/DictationToast";
 import { ErrorLogPanel } from "./components/ErrorLogPanel";
 import { McpPopup } from "./components/McpPopup/McpPopup";
 import { MobileViewBanner } from "./components/MobileViewBanner";
 import { ToastContainer } from "./components/ToastContainer/ToastContainer";
 import { type WorktreeActions, WorktreeManager } from "./components/WorktreeManager";
+import { createBackgroundGitRunner } from "./hooks/git/createBackgroundGitRunner";
+import { getWorkItemLinkPort, startWork } from "./hooks/git/startWork";
 import { useActiveTerminalSync } from "./hooks/useActiveTerminalSync";
 import { useAgentDetection } from "./hooks/useAgentDetection";
 import { useAgentPolling } from "./hooks/useAgentPolling";
@@ -67,6 +73,7 @@ import { useTerminalReattachBridge } from "./hooks/useTerminalReattachBridge";
 import { useTerminalShellExit } from "./hooks/useTerminalShellExit";
 import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useWorktreeSwitchPrompt } from "./hooks/useWorktreeSwitchPrompt";
+import { t } from "./i18n";
 import { invoke, listen } from "./invoke";
 import { activityPanelAdapter } from "./panelAdapters/activity";
 import { aiChatPanelAdapter } from "./panelAdapters/aiChat";
@@ -111,7 +118,7 @@ import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
 import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
-import { getShellFamily, sendCommand } from "./utils/sendCommand";
+import { quickSwitcherHints } from "./utils/quickSwitcherHints";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
 const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
@@ -201,10 +208,10 @@ const App: Component = () => {
 	const [helpPanelVisible, setHelpPanelVisible] = createSignal(false);
 
 	// Quit confirmation state (Story 057)
-	const [quitDialogVisible, setQuitDialogVisible] = createSignal(false);
 
 	// Quick switcher state
 	const [quickSwitcherVisible, setQuickSwitcherVisible] = createSignal(false);
+	const [tabHintsVisible, setTabHintsVisible] = createSignal(false);
 
 	// Rename branch dialog state
 	const [renameBranchDialogVisible, setRenameBranchDialogVisible] = createSignal(false);
@@ -223,12 +230,17 @@ const App: Component = () => {
 	const [repoPathPromptVisible, setRepoPathPromptVisible] = createSignal(false);
 	let repoPathPromptResolve: ((value: string | null) => void) | null = null;
 
-	/** Show an in-app text-input dialog for repo path (browser mode only) */
-	const promptRepoPath = (): Promise<string | null> =>
-		new Promise((resolve) => {
+	/** Browse the serving machine for a repo path (browser mode only) */
+	const promptRepoPath = (): Promise<string | null> => {
+		const { promise, resolve, reject } = Promise.withResolvers<string | null>();
+		try {
 			repoPathPromptResolve = resolve;
 			setRepoPathPromptVisible(true);
-		});
+		} catch (error) {
+			reject(error);
+		}
+		return promise;
+	};
 	const resolveRepoPathPrompt = (value: string | null) => {
 		setRepoPathPromptVisible(false);
 		repoPathPromptResolve?.(value);
@@ -240,11 +252,16 @@ const App: Component = () => {
 	let remotePickerResolve: ((value: string | null) => void) | null = null;
 
 	/** Open the remote browser and resolve with the absolute path picked on that machine. */
-	const pickRemoteRepoPath = (connectionId: string): Promise<string | null> =>
-		new Promise((resolve) => {
+	const pickRemoteRepoPath = (connectionId: string): Promise<string | null> => {
+		const { promise, resolve, reject } = Promise.withResolvers<string | null>();
+		try {
 			remotePickerResolve = resolve;
 			setRemotePickerConnectionId(connectionId);
-		});
+		} catch (error) {
+			reject(error);
+		}
+		return promise;
+	};
 	const resolveRemotePicker = (value: string | null) => {
 		setRemotePickerConnectionId(null);
 		remotePickerResolve?.(value);
@@ -255,11 +272,16 @@ const App: Component = () => {
 	// and folders into the file browser.
 	const [openPathPromptVisible, setOpenPathPromptVisible] = createSignal(false);
 	let openPathPromptResolve: ((value: string | null) => void) | null = null;
-	const promptOpenPath = (): Promise<string | null> =>
-		new Promise((resolve) => {
+	const promptOpenPath = (): Promise<string | null> => {
+		const { promise, resolve, reject } = Promise.withResolvers<string | null>();
+		try {
 			openPathPromptResolve = resolve;
 			setOpenPathPromptVisible(true);
-		});
+		} catch (error) {
+			reject(error);
+		}
+		return promise;
+	};
 	const resolveOpenPathPrompt = (value: string | null) => {
 		setOpenPathPromptVisible(false);
 		openPathPromptResolve?.(value);
@@ -437,20 +459,20 @@ const App: Component = () => {
 	usePluginRuntime();
 	useSystemLifecycle();
 
-	const detachedPanelBridge = useDetachedPanelBridge();
+	const detachedPanelBridge = useDetachedPanelBridge(() => openSettings("general", SETTINGS_SECTION_EGO));
 
 	// Notification sounds are now played natively via Rust (rodio) —
 	// no Web Audio warmup needed.
 
 	useAppBootstrap({
 		pty,
-		setQuitDialogVisible,
 		setStatusInfo,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,
+		resumeAgentTabsAfterUpdate: gitOps.resumeAgentTabsAfterUpdate,
 		setWhatsNewVersion,
 		openSettings,
 		openRepoPath: gitOps.addRepoByPath,
@@ -460,37 +482,15 @@ const App: Component = () => {
 	useAppearanceSync();
 
 	useActiveTerminalSync();
+	useOpenMarkdownPublication();
 
 	useTerminalShellExit(terminalLifecycle.closeTerminal);
 
 	useTerminalCompletionNotifications({ navigateToTerminal });
 
-	// Force quit - close all sessions and exit (Story 057)
-	const forceQuit = async () => {
-		setQuitDialogVisible(false);
-
-		// Destroy window after a short timeout regardless of PTY cleanup
-		const destroyTimer = isTauri() ? setTimeout(() => getCurrentWindow().destroy(), 500) : null;
-
-		try {
-			const sessionIds = terminalsStore
-				.getIds()
-				.map((id) => terminalsStore.get(id)?.sessionId)
-				.filter((sid): sid is string => sid != null);
-			await Promise.all(
-				sessionIds.map((sid) =>
-					pty.close(sid).catch((err) => appLogger.warn("app", `Failed to close PTY ${sid} on quit`, err)),
-				),
-			);
-		} catch (e) {
-			appLogger.warn("app", "forceQuit: unexpected error", { error: String(e) });
-		}
-
-		if (destroyTimer !== null) clearTimeout(destroyTimer);
-		if (isTauri()) getCurrentWindow().destroy();
-	};
-
+	const [promptInspectorSessionId, setPromptInspectorSessionId] = createSignal<string | null>(null);
 	const terminalContextMenus = useTerminalContextMenus({
+		openPromptInspector: setPromptInspectorSessionId,
 		agentDetection,
 		gitOps,
 		splitPanes,
@@ -527,123 +527,7 @@ const App: Component = () => {
 
 	useFileOpenBridge();
 
-	/** Patterns in stderr that indicate the command needs interactive terminal input */
-	const NEEDS_TERMINAL_PATTERNS = [
-		/terminal prompts disabled/i, // GIT_TERMINAL_PROMPT=0 rejection
-		/could not read Username/i, // HTTP credential prompt blocked
-		/could not read Password/i,
-		/Permission denied.*publickey/i, // SSH auth failed (askpass cancelled/missing)
-		/Host key verification failed/i,
-		/Please make sure you have the correct access rights/i,
-	];
-
-	/** Fall back to running a git command in the active terminal */
-	const fallbackToTerminal = async (repoPath: string, args: string[]) => {
-		const active = terminalsStore.getActive();
-		const sessionId = active?.sessionId;
-		if (!sessionId) return;
-		const cmd = `cd ${JSON.stringify(repoPath)} && git ${args.join(" ")}`;
-		// Route through sendCommand (never raw text+\r) so the Enter registers
-		// even when the active terminal is an Ink-based agent in raw mode.
-		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
-		const shellFamily = await getShellFamily(sessionId);
-		try {
-			await sendCommand(
-				(data) => invoke("write_pty", { sessionId, data }),
-				cmd,
-				agentType,
-				shellFamily,
-				true,
-				sessionId,
-			);
-			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
-		} catch (err) {
-			appLogger.error(
-				"network",
-				`git fallback to terminal failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	};
-
-	/** Run a git command in the background via Rust, with task tracking and notifications.
-	 *  Falls back to terminal if the command needs interactive authentication. */
-	const handleBackgroundGit = async (repoPath: string, op: string, args: string[]) => {
-		// Prevent duplicate runs of the same op
-		if (runningGitOps().has(op)) return;
-		setRunningGitOps((prev) => new Set([...prev, op]));
-
-		const taskId = tasksStore.create({
-			name: `git ${op}`,
-			description: `Running git ${args.join(" ")} in ${repoPath}`,
-			agentType: "git",
-		});
-		tasksStore.start(taskId, `git-${op}-${Date.now()}`);
-		setStatusInfo(`Running git ${op}...`);
-
-		try {
-			const result = await invoke("run_git_command", { path: repoPath, args });
-			const { success, stdout, stderr } = result as {
-				success: boolean;
-				stdout: string;
-				stderr: string;
-				exit_code: number;
-			};
-
-			if (success) {
-				tasksStore.complete(taskId, 0);
-				repositoriesStore.bumpRevision(repoPath);
-				// Show meaningful output: prefer stderr (git progress goes there), fall back to stdout
-				const output = (stderr.trim() || stdout.trim()).split("\n").pop()?.trim();
-				const summary = output ? `git ${op}: ${output}` : `git ${op} completed`;
-				setStatusInfo(summary);
-				appLogger.info("app", `[Notify] completion — git ${op} succeeded`);
-				notificationsStore.playCompletion();
-				activityStore.addItem({
-					id: `git-${op}-${Date.now()}`,
-					pluginId: "core",
-					sectionId: "git-ops",
-					title: `git ${op}`,
-					subtitle: output || "completed",
-					icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.78 5.97l-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 1 1 1.06-1.06L6.75 8.88l3.97-3.97a.75.75 0 1 1 1.06 1.06z"/></svg>',
-					severity: "success",
-					repoPath,
-					dismissible: true,
-				});
-			} else if (NEEDS_TERMINAL_PATTERNS.some((p) => p.test(stderr))) {
-				// Auth or interactive prompt needed — cancel background task, run in terminal
-				tasksStore.cancel(taskId);
-				void fallbackToTerminal(repoPath, args);
-			} else {
-				const errMsg = stderr.trim() || `git ${op} failed`;
-				tasksStore.fail(taskId, errMsg);
-				setStatusInfo(`git ${op} failed: ${errMsg}`);
-				appLogger.info("app", `[Notify] error — git ${op} failed: ${errMsg}`);
-				notificationsStore.playError();
-				activityStore.addItem({
-					id: `git-${op}-${Date.now()}`,
-					pluginId: "core",
-					sectionId: "git-ops",
-					title: `git ${op} failed`,
-					subtitle: errMsg,
-					icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="#f85149"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.36 10.3a.75.75 0 0 1-1.06 1.06L8 9.06l-2.3 2.3a.75.75 0 0 1-1.06-1.06L6.94 8 4.64 5.7a.75.75 0 0 1 1.06-1.06L8 6.94l2.3-2.3a.75.75 0 0 1 1.06 1.06L9.06 8l2.3 2.3z"/></svg>',
-					severity: "error",
-					repoPath,
-					dismissible: true,
-				});
-			}
-		} catch (err) {
-			tasksStore.fail(taskId, String(err));
-			setStatusInfo(`git ${op} error: ${err}`);
-			appLogger.info("app", `[Notify] error — git ${op} exception: ${err}`);
-			notificationsStore.playError();
-		} finally {
-			setRunningGitOps((prev) => {
-				const next = new Set(prev);
-				next.delete(op);
-				return next;
-			});
-		}
-	};
+	const handleBackgroundGit = createBackgroundGitRunner({ setStatusInfo, runningGitOps, setRunningGitOps });
 
 	/** Detach a terminal tab to a floating OS window */
 	const handleDetachTab = async (tabId: string) => {
@@ -668,6 +552,7 @@ const App: Component = () => {
 			height: 600,
 			center: true,
 			decorations: true,
+			backgroundColor: getAppTheme(settingsStore.state.theme).bgPrimary,
 		});
 
 		floatingWin.once("tauri://destroyed", () => {
@@ -741,7 +626,7 @@ const App: Component = () => {
 
 	useTerminalReattachBridge({ reattach: reattachFallback, setStatusInfo });
 
-	useQuickSwitcherVisibility(setQuickSwitcherVisible);
+	useQuickSwitcherVisibility(setQuickSwitcherVisible, setTabHintsVisible);
 	const shortcutHandlers = useAppShortcutHandlers({
 		terminalLifecycle,
 		gitOps,
@@ -773,15 +658,7 @@ const App: Component = () => {
 			void gitOps.handleRemoveWorkspace(repoPath, workspaceId);
 		},
 		onMergeAndArchive: (repoPath, workspaceId) => {
-			const repoState = repositoriesStore.get(repoPath);
-			const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
-			if (!mainBranch) {
-				setStatusInfo("Cannot merge: no main branch found");
-				return;
-			}
-			const effective = repoSettingsStore.getEffective(repoPath);
-			const afterMerge = effective?.afterMerge ?? "archive";
-			void gitOps.handleMergeAndArchive(repoPath, workspaceId, mainBranch, afterMerge);
+			void gitOps.handleMergeAndArchiveIntoMain(repoPath, workspaceId);
 		},
 	};
 
@@ -792,6 +669,23 @@ const App: Component = () => {
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
 	});
 
+	const paletteUrlActions = (text: string, signal: AbortSignal) =>
+		urlPasteActions(
+			text,
+			{
+				activeRepoPath: () => repositoriesStore.state.activeRepoPath,
+				links: getWorkItemLinkPort,
+				workspaceIdOnBranch: (repoPath, branch) => repositoriesStore.workspaceIdOnBranch(repoPath, branch),
+				openWorkspace: (repoPath, workspaceId) => {
+					repositoriesStore.setActive(repoPath);
+					void gitOps.handleBranchSelect(repoPath, workspaceId);
+				},
+				startWork,
+				notify: setStatusInfo,
+			},
+			signal,
+		);
+
 	useShortcutRegistration(shortcutHandlers);
 
 	useNativeMenuBridge({
@@ -800,9 +694,7 @@ const App: Component = () => {
 		gitOps,
 		splitPanes,
 		closeActiveTabOrPane,
-		forceQuit,
 		setSettingsPanelVisible,
-		setQuitDialogVisible,
 		setRunCommandDialogVisible,
 		setTaskQueueVisible,
 		setShowProcessManager,
@@ -862,13 +754,30 @@ const App: Component = () => {
 				// "Manage Smart Prompts..." link.
 				onOpenSettings={() => openSettings("smart-prompts")}
 				onShowWhatsNew={(v) => setWhatsNewVersion(v)}
+				onRestartNow={async () => {
+					const count = updaterStore.busyCount();
+					const ok =
+						count === 0 ||
+						(await dialogs.confirm({
+							title: t("updater.restartNow.title", "Restart to finish the update?"),
+							message: t(
+								"updater.restartNow.message",
+								"{count} busy or waiting session(s) will be interrupted by the restart.",
+								{
+									count: String(count),
+								},
+							),
+							okLabel: t("updater.restartNow.confirm", "Restart now"),
+						}));
+					if (ok) await updaterStore.restartNow();
+				}}
 			/>
 
 			{/* Body: sidebar + main content side by side */}
 			<div id="app-body">
 				{/* Sidebar - always mounted, hidden via CSS */}
 				<Sidebar
-					quickSwitcherActive={quickSwitcherVisible()}
+					quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).sidebar}
 					onBranchSelect={gitOps.handleBranchSelect}
 					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
 					onRemoveBranch={gitOps.handleRemoveWorkspace}
@@ -883,17 +792,7 @@ const App: Component = () => {
 					onAddWorktree={gitOps.handleAddWorktree}
 					onCreateWorktreeFromBranch={gitOps.handleCreateWorktreeFromBranch}
 					onMergeAndArchive={(repoPath, branchName) => {
-						const repoState = repositoriesStore.get(repoPath);
-						const mainBranch = repoState
-							? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName
-							: undefined;
-						if (!mainBranch) {
-							setStatusInfo("Cannot merge: no main branch found");
-							return;
-						}
-						const effective = repoSettingsStore.getEffective(repoPath);
-						const afterMerge = effective?.afterMerge ?? "archive";
-						gitOps.handleMergeAndArchive(repoPath, branchName, mainBranch, afterMerge);
+						void gitOps.handleMergeAndArchiveIntoMain(repoPath, branchName);
 					}}
 					creatingWorktreeRepos={gitOps.creatingWorktreeRepos()}
 					removingBranches={gitOps.removingBranches()}
@@ -908,6 +807,7 @@ const App: Component = () => {
 					}
 					onRemoveRepo={gitOps.handleRemoveRepo}
 					onOpenSettings={() => openSettings()}
+					onOpenRemoteMachines={() => openSettings("remote-machines")}
 					onOpenHelp={() => setHelpPanelVisible(true)}
 					buildAgentMenuItems={terminalContextMenus.buildSidebarAgentMenuItems}
 					onRefreshBranchStats={gitOps.refreshAllBranchStats}
@@ -927,7 +827,8 @@ const App: Component = () => {
 					{/* Tab bar */}
 					<div id="tab-bar">
 						<TabBar
-							quickSwitcherActive={quickSwitcherVisible()}
+							tabHintsActive={tabHintsVisible()}
+							quickSwitcherActive={quickSwitcherHints(quickSwitcherVisible(), globalWorkspaceStore.isActive()).tabBar}
 							onTabSelect={terminalLifecycle.handleTerminalSelect}
 							onTabClose={terminalLifecycle.closeTerminal}
 							onCloseOthers={terminalLifecycle.closeOtherTabs}
@@ -966,6 +867,7 @@ const App: Component = () => {
 					>
 						{/* Side panels (right panes inside #terminal-container) */}
 						<PanelOrchestrator
+							onOpenSettings={openSettings}
 							repoPath={gitOps.currentRepoPath() || null}
 							fsRoot={gitOps.activeWorktreePath() || null}
 							onFileOpen={(fsRoot, filePath, line) => {
@@ -1024,7 +926,7 @@ const App: Component = () => {
 			<PromptDrawer />
 
 			{/* Browser mode uses the same palette with its HTTP-safe action subset. */}
-			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />
+			<CommandPalette actions={actionEntries()} browserMode={!isTauri()} urlActions={paletteUrlActions} />
 
 			{/* Quick branch switcher */}
 			<BranchSwitcher
@@ -1044,6 +946,7 @@ const App: Component = () => {
 				onCheckoutRemote={gitOps.handleCheckoutRemoteBranch}
 			/>
 
+			<PromptInspector sessionId={promptInspectorSessionId()} onClose={() => setPromptInspectorSessionId(null)} />
 			{/* Activity dashboard — unmount when closed to release memos/subscriptions */}
 			<Show when={!uiStore.isDetached("activity") && activityDashboardStore.state.isOpen}>
 				<Suspense>
@@ -1145,9 +1048,6 @@ const App: Component = () => {
 					onExecute: handleWorktreeCleanupExecute,
 					onSkip: handleWorktreeCleanupSkip,
 				}}
-				quitVisible={quitDialogVisible}
-				setQuitVisible={setQuitDialogVisible}
-				forceQuit={forceQuit}
 			/>
 		</div>
 	);

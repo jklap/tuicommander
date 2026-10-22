@@ -7,10 +7,12 @@
 
 import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
+import { automationsUi } from "../stores/automations";
 import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
+import { terminalsStore } from "../stores/terminals";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
@@ -20,6 +22,8 @@ export interface ActionEntry {
 	id: string; // ActionName for static entries, or dynamic IDs like "switch-repo:/path"
 	label: string;
 	category: string;
+	/** Extra search terms; never displayed as the action label. */
+	keywords?: string;
 	keybinding: string;
 	execute: () => void;
 }
@@ -40,9 +44,12 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"find-in-terminal": { label: "Find in content", category: "Terminal" },
 	"run-command": { label: "Run saved command", category: "Terminal" },
 	"edit-command": { label: "Edit saved command", category: "Terminal" },
+	"reload-tab": { label: "Reload active tab", category: "Terminal" },
 	"prev-tab": { label: "Previous tab", category: "Terminal" },
 	"next-tab": { label: "Next tab", category: "Terminal" },
 	"focus-last-terminal": { label: "Return to last terminal", category: "Navigation" },
+	"history-back": { label: "Back to previous terminal in history", category: "Navigation" },
+	"history-forward": { label: "Forward to next terminal in history", category: "Navigation" },
 	"jump-waiting-terminal": { label: "Jump to waiting terminal", category: "Navigation" },
 
 	"zoom-in": { label: "Zoom in", category: "Zoom" },
@@ -93,6 +100,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"open-path": { label: "Open path…", category: "File" },
 	"open-secondary-window": { label: "Open secondary window", category: "Navigation" },
 	"command-overview": { label: "Command overview", category: "Panels" },
+	"open-tasks": { label: "Open Tasks", category: "Panels" },
 	"detach-activity-dashboard": { label: "Open Activity Dashboard in separate window", category: "Navigation" },
 	"toggle-tunnels": { label: "SSH Tunnels", category: "Panels" },
 	"process-manager": { label: "Process Manager", category: "Navigation" },
@@ -102,6 +110,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"block-next": { label: "Next command block", category: "Terminal" },
 	"block-fold-toggle": { label: "Toggle block fold", category: "Terminal" },
 	"block-search-toggle": { label: "Search in block", category: "Terminal" },
+	"answers-only": { label: "Toggle answers-only view", category: "Terminal" },
 	"toggle-compose-panel": { label: "Toggle compose panel", category: "Panels" },
 	// Label is replaced per build by what the toggle will do — see getActionEntries.
 	"toggle-hands-free": { label: "Start hands-free conversation", category: "Dictation" },
@@ -114,7 +123,16 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
  * since those aren't useful in a palette.
  */
 export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
-	const entries: ActionEntry[] = [];
+	const entries: ActionEntry[] = [
+		{
+			id: "automations",
+			label: "Automations",
+			category: "Navigation",
+			keywords: "scheduler schedule",
+			keybinding: "",
+			execute: automationsUi.open,
+		},
+	];
 
 	const handlerMap: Partial<Record<ActionName, () => void>> = {
 		"new-terminal": handlers.createNewTerminal,
@@ -125,9 +143,14 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"find-in-terminal": handlers.findInTerminal,
 		"run-command": () => handlers.handleRunCommand(false),
 		"edit-command": () => handlers.handleRunCommand(true),
+		"reload-tab": () => {
+			handlers.reloadActiveTab();
+		},
 		"prev-tab": () => handlers.navigateTab("prev"),
 		"next-tab": () => handlers.navigateTab("next"),
 		"focus-last-terminal": handlers.focusLastTerminal,
+		"history-back": handlers.historyBack,
+		"history-forward": handlers.historyForward,
 		"jump-waiting-terminal": handlers.jumpWaitingTerminal,
 		"zoom-in": handlers.zoomIn,
 		"zoom-out": handlers.zoomOut,
@@ -171,6 +194,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"open-folder": handlers.openFolder,
 		"open-path": handlers.openPath,
 		"command-overview": handlers.toggleCommandOverview,
+		"open-tasks": handlers.openTasks,
 		"detach-activity-dashboard": handlers.detachActivityDashboard,
 		"toggle-tunnels": () => tunnelPanelStore.toggle(),
 		"process-manager": handlers.toggleProcessManager,
@@ -180,6 +204,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"block-next": handlers.blockNext,
 		"block-fold-toggle": handlers.blockFoldToggle,
 		"block-search-toggle": handlers.blockSearchToggle,
+		"answers-only": () => terminalsStore.toggleAnswersOnly(),
 		"toggle-compose-panel": handlers.toggleComposePanel,
 		"toggle-hands-free": () => void toggleHandsFreeConversation(),
 	};

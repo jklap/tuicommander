@@ -40,7 +40,8 @@ export interface AppConfig {
 	theme: string;
 	mcp_server_enabled: boolean;
 	services: ServicesConfig;
-	disabled_native_tools: string[];
+	mcp_capabilities: { denied: string[]; migration_unknown_tools: string[] };
+	settings_mcp_enabled: boolean;
 	collapse_tools: boolean;
 }
 
@@ -53,7 +54,23 @@ export async function saveConfigField(updater: (config: AppConfig) => void): Pro
 	}
 }
 
+export interface NativeMcpTool {
+	name: string;
+	summary: string;
+	description: string;
+}
+
+export interface McpCapability {
+	name: string;
+	title: string;
+	description: string;
+	optional: boolean;
+}
+
 export interface McpStatus {
+	native_capabilities: McpCapability[];
+	/** Unfiltered native registry, including tools disabled in config. */
+	native_tools: NativeMcpTool[];
 	enabled: boolean;
 	running: boolean;
 	remote_port: number | null;

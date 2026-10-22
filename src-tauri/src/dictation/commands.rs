@@ -103,6 +103,8 @@ pub struct DictationStatus {
     pub processing: bool,
     /// Normalized 0.0–1.0 microphone level while recording.
     pub audio_level: f32,
+    /// Another instance holds dictation for this config directory.
+    pub owned_elsewhere: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +146,16 @@ fn empty_final_response(
     })
 }
 
+/// The utterance boundaries both voice modes use. Frame activity follows the
+/// Settings > Voice floor, so a quiet microphone tuned there opens utterances
+/// in push-to-talk and hands-free alike.
+fn segmenter_config(gates: transcribe::VoiceGates) -> continuous::SegmenterConfig {
+    continuous::SegmenterConfig {
+        activity_rms: gates.rms_threshold,
+        ..continuous::SegmenterConfig::default()
+    }
+}
+
 /// Run the final push-to-talk pass after capture has assembled the recording.
 fn transcribe_final_ptt_audio(
     transcriber: &dyn transcribe::Transcriber,
@@ -151,10 +163,7 @@ fn transcribe_final_ptt_audio(
     language: Option<&str>,
     gates: transcribe::VoiceGates,
 ) -> Result<transcribe::TranscribeResult, String> {
-    let activity = continuous::SegmenterConfig {
-        activity_rms: gates.rms_threshold,
-        ..continuous::SegmenterConfig::default()
-    };
+    let activity = segmenter_config(gates);
     if !continuous::has_sustained_speech(audio, activity) {
         return Ok(transcribe::TranscribeResult {
             text: String::new(),
@@ -229,6 +238,10 @@ fn invalidate_model_snapshot() {
 pub fn get_dictation_status(
     dictation: State<'_, DictationState>,
 ) -> Result<DictationStatus, String> {
+    Ok(dictation_status(&dictation))
+}
+
+fn dictation_status(dictation: &DictationState) -> DictationStatus {
     let snapshot = model_snapshot();
     let has_transcriber = dictation.transcriber_arc.lock().is_some();
 
@@ -252,14 +265,15 @@ pub fn get_dictation_status(
         .as_ref()
         .map(audio::AudioCapture::level);
 
-    Ok(DictationStatus {
+    DictationStatus {
         model_status: model_status.to_string(),
         model_name: snapshot.model.name().to_string(),
         model_size_mb: snapshot.size_mb,
         recording: dictation.recording.load(Ordering::Acquire),
         processing: dictation.processing.load(Ordering::Acquire),
         audio_level: capture_level(push_to_talk_level, hands_free_level),
-    })
+        owned_elsewhere: !dictation.is_owner(),
+    }
 }
 
 /// The microphone level to show: push-to-talk's capture when it is open,
@@ -611,6 +625,14 @@ pub fn get_speech_voices(language: String) -> Result<Vec<speech::library::VoiceC
     Ok(speech::library::available_voices(asset))
 }
 
+/// The Microsoft Edge voices that speak a language (`language` is its Whisper
+/// code), from the service's own list. Needs the network the first time and
+/// says so when it is missing; what the voice picker lists under the Edge engine.
+#[tauri::command]
+pub async fn get_edge_voices(language: String) -> Result<Vec<speech::edge::EdgeVoice>, String> {
+    super::edge_voices::voices_for_language(&language).await
+}
+
 /// Import a voice file the user chose into a language (`language` is its
 /// Whisper code). The file travels as base64 so the payload is the same JSON
 /// over IPC and over HTTP. See [`speech::library::import_speech_voice`] for
@@ -649,22 +671,108 @@ pub fn delete_speech_voice(language: String, name: String) -> Result<String, Str
 // Spoken replies (817-f67c)
 // ---------------------------------------------------------------------------
 
+/// The engine that speaks replies. Edge is the default; Pocket TTS and the
+/// external command live in the Expert section of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechEngine {
+    Edge,
+    Pocket,
+    External,
+}
+
+/// What a configuration written before `speech_engine` existed meant, and
+/// what a fresh one means.
+///
+/// A configured command or a chosen Pocket voice is a choice, and so is a
+/// Pocket runtime on disk: nobody downloads 100+ MB they do not intend to use.
+/// Those keep their engine; everyone else gets Edge. Only read while
+/// `speech_engine` is unset, and the settings panel writes it as soon as the
+/// user picks one, so installing Pocket later never flips a fresh install.
+fn legacy_speech_engine(config: &DictationConfig, pocket_installed: bool) -> SpeechEngine {
+    if !config.speech_command.is_empty() {
+        SpeechEngine::External
+    } else if !config.speech_voice.is_empty() || pocket_installed {
+        SpeechEngine::Pocket
+    } else {
+        SpeechEngine::Edge
+    }
+}
+
+fn speech_engine(config: &DictationConfig) -> SpeechEngine {
+    match config.speech_engine.as_str() {
+        "pocket" => SpeechEngine::Pocket,
+        "external" => SpeechEngine::External,
+        _ => SpeechEngine::Edge,
+    }
+}
+
+/// `config` with `speech_engine` filled in, so every reader — the engine
+/// choice here and the settings panel — sees one answer.
+fn with_resolved_engine(mut config: DictationConfig) -> DictationConfig {
+    if !matches!(
+        config.speech_engine.as_str(),
+        "edge" | "pocket" | "external"
+    ) {
+        let pocket_installed =
+            speech::assets::status(speech::assets::runtime()) != speech::assets::Status::Absent;
+        config.speech_engine = match legacy_speech_engine(&config, pocket_installed) {
+            SpeechEngine::Edge => "edge",
+            SpeechEngine::Pocket => "pocket",
+            SpeechEngine::External => "external",
+        }
+        .to_string();
+    }
+    config
+}
+
 /// The engine and voice a reply would be spoken with, or why there is none.
 ///
 /// Every `Err` here is a setup problem stated in the user's terms, because
 /// every one of them reaches a model as "unavailable, and here is why" rather
 /// than as a failure it should retry.
+fn speech_service(config: &DictationConfig) -> &'static str {
+    match speech_engine(config) {
+        SpeechEngine::Edge => "Microsoft Edge",
+        SpeechEngine::Pocket => "Pocket TTS",
+        SpeechEngine::External => "External speech engine",
+    }
+}
+
 fn open_voice(
     config: &DictationConfig,
     library: &speech::library::SpeechLibrary,
     language: &str,
 ) -> Result<(Arc<dyn speech::Speech>, String), String> {
-    if !config.speech_command.is_empty() {
-        // The user's own engine. It names its own voices inside its template,
-        // so there is nothing here to choose between and the voice is empty.
-        let engine = speech::external::ExternalSpeech::new(config.speech_command.clone())
-            .map_err(|error| error.to_string())?;
-        return Ok((Arc::new(engine), String::new()));
+    let (engine, voice) = build_voice(config, library, language)?;
+    Ok((
+        Arc::new(speech::rejection::GuardedSpeech::new(
+            engine,
+            library.rejections.clone(),
+            speech_service(config),
+            None,
+        )),
+        voice,
+    ))
+}
+
+fn build_voice(
+    config: &DictationConfig,
+    library: &speech::library::SpeechLibrary,
+    language: &str,
+) -> Result<(Arc<dyn speech::Speech>, String), String> {
+    match speech_engine(config) {
+        SpeechEngine::External => {
+            // The user's own engine. It names its own voices inside its template,
+            // so there is nothing here to choose between and the voice is empty.
+            let engine = speech::external::ExternalSpeech::new(config.speech_command.clone())
+                .map_err(|error| error.to_string())?;
+            return Ok((Arc::new(engine), String::new()));
+        }
+        SpeechEngine::Edge => {
+            let voice = speech::edge::choose_voice(language, &config.speech_edge_voice)?;
+            return Ok((Arc::new(speech::edge::EdgeSpeech::new()), voice));
+        }
+        SpeechEngine::Pocket => {}
     }
 
     let asset = speech::assets::for_language_code(language).ok_or_else(|| {
@@ -703,15 +811,9 @@ fn open_voice(
 /// untouched configuration says and what every configuration said before the
 /// setting existed.
 ///
-/// A named voice must be one the language holds — the one it ships, a
-/// catalogue voice that is downloaded, or a file the user imported
-/// ([`speech::library::installed_voices`]). Anything else is an error rather
-/// than a silent fall back to the first one. The ways to get here are a voice
-/// that was deleted, a download that is not there yet, and a language the user
-/// changed underneath the setting; all are cases where speaking in a voice
-/// nobody chose is worse than saying why nothing was spoken, and the message
-/// reaches the user through the hands-free status rather than being buried in
-/// a log.
+/// Keep installed choices, and recover a missing catalogue download with the
+/// same language's installed default. The picker retains the configured choice
+/// and offers its download. Unknown names still report an error.
 fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<String, String> {
     if configured.is_empty() {
         return asset
@@ -727,7 +829,13 @@ fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<Strin
     let language = asset.language().unwrap_or_default();
     if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
     {
-        // The catalogue has it, so the fix is one download away.
+        // A missing optional voice must not disable a ready language. Never
+        // borrow a same-named voice from another language's catalogue.
+        if speech::assets::status(asset) == speech::assets::Status::Ready
+            && let Some(default) = asset.voices().first()
+        {
+            return Ok((*default).to_string());
+        }
         return Err(format!(
             "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
             asset.display_name
@@ -774,7 +882,7 @@ fn conversation_language(config: &DictationConfig, dictation: &DictationState) -
 /// there is nothing for us to choose and nothing that a change of detected
 /// language invalidates.
 fn speech_language(config: &DictationConfig, dictation: &DictationState) -> Result<String, String> {
-    if !config.speech_command.is_empty() {
+    if speech_engine(config) == SpeechEngine::External {
         return Ok(String::new());
     }
     conversation_language(config, dictation).ok_or_else(|| {
@@ -782,6 +890,17 @@ fn speech_language(config: &DictationConfig, dictation: &DictationState) -> Resu
          speak in"
             .to_string()
     })
+}
+
+/// The persisted preference and service health are enforced before queueing.
+fn replies_available(config: &DictationConfig, dictation: &DictationState) -> Result<(), String> {
+    if !config.hands_free_spoken_replies {
+        return Err("Spoken replies are off; reply in text".into());
+    }
+    if let Some(reason) = dictation.speech.rejections.reason(speech_service(config)) {
+        return Err(reason);
+    }
+    Ok(())
 }
 
 /// Build the reply queue for a conversation that is being armed.
@@ -798,9 +917,17 @@ pub(crate) fn open_speaker(
     generation: u64,
 ) -> Result<speaker::Armed, String> {
     let config = get_dictation_config();
+    replies_available(&config, dictation)?;
     let language = speech_language(&config, dictation)?;
     let owner = conversation_owner(dictation);
-    open_speaker_for(dictation, generation, &config, &language, owner.as_deref())
+    open_speaker_for(
+        dictation,
+        generation,
+        &config,
+        &language,
+        owner.as_deref(),
+        generation,
+    )
 }
 
 /// Who armed the conversation, if one is armed.
@@ -852,8 +979,10 @@ fn open_speaker_for(
     config: &DictationConfig,
     language: &str,
     owner: Option<&str>,
+    conversation_generation: u64,
 ) -> Result<speaker::Armed, String> {
-    let (engine, voice) = open_voice(config, &dictation.speech, language)?;
+    let (engine, voice) = build_voice(config, &dictation.speech, language)?;
+    let engine = guard_replies(config, dictation, engine, conversation_generation);
     let device = open_reply_output(dictation, owner)?;
     // Wrapped so the canceller learns what is being played. Without this the
     // microphone hears the reply and the VAD opens a turn on the application's
@@ -877,6 +1006,24 @@ fn open_speaker_for(
     })
 }
 
+fn guard_replies(
+    config: &DictationConfig,
+    dictation: &DictationState,
+    engine: Arc<dyn speech::Speech>,
+    conversation_generation: u64,
+) -> Arc<dyn speech::Speech> {
+    let mode = dictation.hands_free.clone();
+    Arc::new(speech::rejection::GuardedSpeech::new(
+        engine,
+        dictation.speech.rejections.clone(),
+        speech_service(config),
+        Some(Arc::new(move |reason| {
+            mode.lock()
+                .note_speech_outage(conversation_generation, reason);
+        })),
+    ))
+}
+
 /// Barge-in, pointed at the slot rather than at one queue.
 ///
 /// The capture loop is started once, when the conversation is armed, and under
@@ -884,20 +1031,86 @@ fn open_speaker_for(
 /// speaks. Holding the slot means the loop interrupts whatever is speaking on
 /// the tick the user talks over it, including a voice built minutes later and a
 /// voice rebuilt because the language changed.
-struct ArmedSpeaker(Arc<parking_lot::Mutex<Option<speaker::Armed>>>);
+struct ArmedSpeaker {
+    slot: Arc<parking_lot::Mutex<Option<speaker::Armed>>>,
+    /// The command waiting for the slot, latest first: only the net state of a
+    /// pause, a resume and a hush matters, and the order they are applied in
+    /// is the order they were given.
+    pending: Arc<parking_lot::Mutex<Option<SpeakerCommand>>>,
+}
+
+#[derive(Clone, Copy)]
+enum SpeakerCommand {
+    Pause,
+    Resume,
+    Hush,
+}
+
+impl ArmedSpeaker {
+    fn new(slot: Arc<parking_lot::Mutex<Option<speaker::Armed>>>) -> Self {
+        Self {
+            slot,
+            pending: Arc::new(parking_lot::Mutex::new(None)),
+        }
+    }
+
+    /// Run `command` against whatever is speaking, without ever making the
+    /// capture loop wait for the slot.
+    ///
+    /// The only writer is a rebuild in `speak`, which holds the slot while it
+    /// loads a voice and opens a device. A command that meets it is not
+    /// dropped — the verdict on a pause arrives after the pause, and a lost
+    /// one leaves the reply paused — and it does not block: it is recorded and
+    /// a thread applies it when the slot frees.
+    fn send(&self, command: SpeakerCommand) {
+        *self.pending.lock() = Some(command);
+        if let Some(slot) = self.slot.try_lock() {
+            apply_pending(&slot, &self.pending);
+            return;
+        }
+        let slot = Arc::clone(&self.slot);
+        let pending = Arc::clone(&self.pending);
+        std::thread::spawn(move || apply_pending(&slot.lock(), &pending));
+    }
+}
+
+/// A command still waiting for the slot belongs to the arm that issued it. The
+/// thread that will apply it holds only the shared state, not the port, so the
+/// port going away is the signal to forget it: otherwise it lands on the voice
+/// of the next arm.
+impl Drop for ArmedSpeaker {
+    fn drop(&mut self) {
+        *self.pending.lock() = None;
+    }
+}
+
+fn apply_pending(
+    slot: &Option<speaker::Armed>,
+    pending: &parking_lot::Mutex<Option<SpeakerCommand>>,
+) {
+    let command = pending.lock().take();
+    if let (Some(command), Some(armed)) = (command, slot.as_ref()) {
+        match command {
+            SpeakerCommand::Pause => armed.speaker.pause(),
+            SpeakerCommand::Resume => armed.speaker.resume(),
+            SpeakerCommand::Hush => {
+                armed.speaker.hush();
+            }
+        }
+    }
+}
 
 impl continuous::Interruptible for ArmedSpeaker {
+    fn pause(&self) {
+        self.send(SpeakerCommand::Pause);
+    }
+
+    fn resume(&self) {
+        self.send(SpeakerCommand::Resume);
+    }
+
     fn hush(&self) {
-        // `try_lock`, because this runs on the capture loop and anything it
-        // waits for delays the next chunk of the user's own voice. The only
-        // writer is a rebuild in `speak`, which has already hushed the queue it
-        // is replacing and has not started the new one — so a missed lock here
-        // is a tick with nothing to interrupt, not a missed interruption.
-        if let Some(slot) = self.0.try_lock()
-            && let Some(armed) = slot.as_ref()
-        {
-            armed.speaker.hush();
-        }
+        self.send(SpeakerCommand::Hush);
     }
 }
 
@@ -977,6 +1190,10 @@ pub struct SpeechStatus {
     pub queued: usize,
     pub rendering: bool,
     pub speaking: bool,
+    /// The user holds the reply where it is. `speaking` is false meanwhile.
+    /// The capture loop's own short hold for a verdict on a voice is not
+    /// reported here: the pill must keep offering Pause for it.
+    pub paused: bool,
     /// The last synthesis or device failure, cleared by the next reply that
     /// works.
     pub last_error: Option<String>,
@@ -1058,11 +1275,13 @@ pub(crate) fn speak(
     // and the rebuild below is handed the answers. The two locks are always
     // taken in this order.
     let config = get_dictation_config();
+    replies_available(&config, dictation)?;
     let language = speech_language(&config, dictation)?;
     let armed_at = dictation.hands_free.lock().generation();
     let owner = conversation_owner(dictation);
 
     let mut slot = dictation.speaker.lock();
+    replies_available(&get_dictation_config(), dictation)?;
     // The queue is per language, so a conversation that changed language needs
     // a new one. `hush` on the way out is what makes the change invalidate the
     // replies written for the old language: it opens a new turn, and `say`
@@ -1081,6 +1300,7 @@ pub(crate) fn speak(
             &config,
             &language,
             owner.as_deref(),
+            armed_at,
         )?);
     }
     // A voice preview gives way to the conversation instead of playing under
@@ -1089,7 +1309,14 @@ pub(crate) fn speak(
     if let Some(preview) = dictation.preview.lock().take() {
         preview.stop();
     }
-    let armed = slot.as_ref().expect("a queue was just built or kept");
+    let armed = slot.as_mut().expect("a queue was just built or kept");
+    if speech_engine(&config) == SpeechEngine::Pocket {
+        // Downloads can change the selected voice's readiness without changing
+        // the configuration or the language model held by this queue.
+        let asset = speech::assets::for_language_code(&language)
+            .ok_or_else(|| format!("No speech bundle ships for language \"{language}\""))?;
+        armed.voice = choose_voice(asset, &config.speech_voice)?;
+    }
     // The speaker's own counter, not the caller's guess: it is what `say`
     // compares against, and reading it here makes an interruption landing in
     // between refuse the reply rather than race it.
@@ -1124,6 +1351,33 @@ pub(crate) fn stop_speaking(
     caller.may_drive(&session_id)?;
     if let Some(armed) = dictation.speaker.lock().as_ref() {
         armed.speaker.hush();
+    }
+    Ok(speech_status(dictation, None))
+}
+
+/// Hold the reply being spoken where it is, until [`resume_speaking`]. Nothing
+/// playing is not an error: the status says it is not paused.
+pub(crate) fn pause_speaking(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+) -> Result<SpeechStatus, String> {
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+    if let Some(armed) = dictation.speaker.lock().as_ref() {
+        armed.speaker.pause_by_user();
+    }
+    Ok(speech_status(dictation, None))
+}
+
+/// Let a reply the user held go on from where it stopped.
+pub(crate) fn resume_speaking(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+) -> Result<SpeechStatus, String> {
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+    if let Some(armed) = dictation.speaker.lock().as_ref() {
+        armed.speaker.resume_by_user();
     }
     Ok(speech_status(dictation, None))
 }
@@ -1168,7 +1422,8 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
     // take the two locks in the opposite order to `speak`.
     let language = conversation_language(&config, dictation).unwrap_or_default();
     let openable = session_id.as_ref().map(|_| {
-        speech_language(&config, dictation)
+        replies_available(&config, dictation)
+            .and_then(|()| speech_language(&config, dictation))
             .and_then(|language| open_voice(&config, &dictation.speech, &language).map(|_| ()))
     });
     let armed_at = dictation.hands_free.lock().generation();
@@ -1193,6 +1448,7 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
             queued: 0,
             rendering: false,
             speaking: false,
+            paused: false,
             last_error: None,
             utterance: None,
         };
@@ -1213,9 +1469,10 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
             },
         }
     });
+    let unavailable_reason = replies_available(&config, dictation).err();
     SpeechStatus {
-        available: true,
-        unavailable_reason: String::new(),
+        available: unavailable_reason.is_none(),
+        unavailable_reason: unavailable_reason.unwrap_or_default(),
         session_id,
         language,
         turn: status.generation,
@@ -1223,6 +1480,7 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
         queued: status.queued,
         rendering: status.rendering,
         speaking: status.speaking,
+        paused: status.paused,
         last_error: status.last_error,
         utterance: asked_about,
     }
@@ -1247,6 +1505,18 @@ pub fn speak_reply(
 #[tauri::command]
 pub fn stop_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
     stop_speaking(&dictation, Caller::Owner)
+}
+
+/// Hold the reply being spoken where it is.
+#[tauri::command]
+pub fn pause_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
+    pause_speaking(&dictation, Caller::Owner)
+}
+
+/// Continue a reply the user held.
+#[tauri::command]
+pub fn resume_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
+    resume_speaking(&dictation, Caller::Owner)
 }
 
 /// Whether anything can be spoken, and what became of a reply already sent.
@@ -1291,16 +1561,7 @@ pub(crate) fn preview_voice(
     text: &str,
 ) -> Result<(), String> {
     let text = preview_text(text)?;
-    // Named first, so an unknown voice is reported as such rather than as a
-    // missing download of the language.
-    choose_voice(voice_language(language)?, voice)?;
-    let config = DictationConfig {
-        // The bundled engine and the voice asked for, in a copy of the
-        // configuration only: previewing a voice does not select it.
-        speech_command: Vec::new(),
-        speech_voice: voice.to_string(),
-        ..get_dictation_config()
-    };
+    let config = preview_config(get_dictation_config(), language, voice)?;
     let (engine, voice) = open_voice(&config, &dictation.speech, language)?;
     let device = open_reply_output(dictation, None)?;
     play_preview(
@@ -1311,6 +1572,36 @@ pub(crate) fn preview_voice(
         text,
         config.loudness(),
     )
+}
+
+/// The voice asked for, in a copy of the configuration only: previewing a
+/// voice does not select it.
+fn preview_config(
+    current: DictationConfig,
+    language: &str,
+    voice: &str,
+) -> Result<DictationConfig, String> {
+    match speech_engine(&current) {
+        // The same resolution a reply makes (`open_voice`): a stored voice that
+        // does not speak the language previews as the language default, which
+        // is also what the picker shows for it.
+        SpeechEngine::Edge => Ok(DictationConfig {
+            speech_edge_voice: voice.to_string(),
+            ..current
+        }),
+        SpeechEngine::Pocket => {
+            // Named first, so an unknown voice is reported as such rather than
+            // as a missing download of the language.
+            choose_voice(voice_language(language)?, voice)?;
+            Ok(DictationConfig {
+                speech_voice: voice.to_string(),
+                ..current
+            })
+        }
+        SpeechEngine::External => {
+            Err("An external command names its own voices; there is nothing to preview".to_string())
+        }
+    }
 }
 
 fn preview_text(text: &str) -> Result<&str, String> {
@@ -1434,8 +1725,12 @@ fn ensure_transcriber(
             None => tracing::info!(source = "dictation", "{loading}"),
         }
         let t = transcribe::WhisperTranscriber::load(&model::model_path(whisper_model))?;
-        *transcriber_arc_lock = Some(Arc::new(t));
-        *active_model_lock = Some(whisper_model.name().to_string());
+        dictation.install_transcriber_locked(
+            &mut transcriber_arc_lock,
+            &mut active_model_lock,
+            Arc::new(t),
+            whisper_model.name(),
+        );
         let loaded = format!("Model loaded (backend: {})", transcribe::backend_label());
         match app {
             Some(app) => app_logger::log_via_handle(app, "info", "dictation", &loaded),
@@ -1454,6 +1749,7 @@ pub fn start_dictation(
     dictation: State<'_, DictationState>,
     source: Option<String>,
 ) -> Result<(), String> {
+    dictation.ensure_owner()?;
     let from_fn = source.as_deref() == Some("fn");
     if from_fn && !dictation.fn_down.load(Ordering::Acquire) {
         return Err("Fn was released before recording started".to_string());
@@ -1680,6 +1976,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
     ) = prepare.unwrap(); // always Some — the None path returns Err above
 
     let app_clone = app.clone();
+    let hands_free = app.state::<DictationState>().hands_free.clone();
 
     // Run session join + whisper inference off the IPC thread
     let result = tokio::task::spawn_blocking(move || {
@@ -1753,6 +2050,11 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             let lang_ref = lang_owned.as_deref();
             match transcribe_final_ptt_audio(transcriber.as_ref(), &all_audio, lang_ref, gates) {
                 Ok(result) if result.skip_reason.is_none() => {
+                    // A replies-only conversation hears no speech of its own, so
+                    // what the user dictates is what tells it the language.
+                    hands_free
+                        .lock()
+                        .note_push_to_talk_language(result.language.as_deref());
                     final_text = result.text;
                 }
                 Ok(result) => {
@@ -1860,15 +2162,41 @@ pub fn get_correction_map(dictation: State<'_, DictationState>) -> HashMap<Strin
 pub fn set_correction_map(
     dictation: State<'_, DictationState>,
     map: HashMap<String, String>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    let mut corrections = dictation.corrections.lock();
-    corrections.set_replacements(map);
-    corrections.save_to_file(&corrections::TextCorrector::default_path())
+    save_correction_map(&dictation.corrections, map)?;
+    crate::settings::api::publish_change(&state, "corrections", true);
+    Ok(())
 }
 
+/// Persist through the same TextCorrector owner lock before adopting live state.
+pub(crate) fn save_correction_map(
+    live: &parking_lot::Mutex<corrections::TextCorrector>,
+    map: HashMap<String, String>,
+) -> Result<(), String> {
+    let mut live = live.lock();
+    let next = corrections::TextCorrector::from_map(map);
+    next.validate()?;
+    corrections::TextCorrector::update_file(
+        &corrections::TextCorrector::default_path(),
+        |latest| {
+            *latest = next.clone();
+            Ok(((), true))
+        },
+    )?;
+    *live = next;
+    Ok(())
+}
+
+/// Shared by the IPC command and `GET /dictation/devices`.
 #[tauri::command]
-pub fn list_audio_devices() -> Vec<audio::AudioDevice> {
-    audio::list_input_devices()
+pub async fn list_audio_devices() -> Result<Vec<audio::AudioDevice>, String> {
+    crate::audio_enumeration::run_bounded(
+        "listing audio input devices",
+        crate::audio_enumeration::ENUMERATION_TIMEOUT,
+        audio::list_input_devices,
+    )
+    .await?
 }
 
 /// Shell integration: inject text into active terminal.
@@ -1908,6 +2236,10 @@ pub(crate) const MAX_BINDING_LEN: usize = 256;
 #[serde(rename_all = "camelCase")]
 pub struct HandsFreeStatus {
     pub armed: bool,
+    /// Speech is captured. False is a replies-only conversation: the binding
+    /// and the reply queue exist, the microphone is never opened, and input
+    /// stays push-to-talk.
+    pub listening: bool,
     /// See `continuous::Phase::as_wire`.
     pub phase: String,
     /// The bound delivery target. Unchanged by focus for as long as it is set.
@@ -1949,6 +2281,7 @@ pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
     let mode = dictation.hands_free.lock();
     HandsFreeStatus {
         armed: mode.binding().is_some(),
+        listening: mode.listening(),
         phase: mode.phase().as_wire().to_string(),
         session_id: mode.binding().map(|binding| binding.session_id.clone()),
         owner: mode.binding().map(|binding| binding.owner.clone()),
@@ -2049,6 +2382,34 @@ pub(crate) fn transcribe_utterance(
     })
 }
 
+/// The endpoint of a replies-only conversation: it captures nothing and only
+/// reports whether its owner is still there, so the runtime keeps doing what
+/// it does for every conversation — closing it when the target session or the
+/// owner goes away, and writing the entry and exit hints.
+struct MutedVoiceEndpoint {
+    connected: Box<dyn Fn() -> bool + Send>,
+    /// Audio a browser client may still send is discarded rather than left to
+    /// pile up in the link.
+    discard: Option<Box<dyn Fn() + Send>>,
+}
+
+impl continuous::VoiceEndpoint for MutedVoiceEndpoint {
+    fn drain(&mut self) -> Result<Vec<f32>, String> {
+        if let Some(discard) = &self.discard {
+            discard();
+        }
+        Ok(Vec::new())
+    }
+
+    fn connected(&self) -> bool {
+        (self.connected)()
+    }
+
+    fn transcribe(&self, _audio: &[f32]) -> Result<continuous::Transcript, String> {
+        Ok(continuous::Transcript::default())
+    }
+}
+
 /// Open the capture endpoint the named owner is entitled to.
 ///
 /// The owner decides which device is opened, and there is deliberately no
@@ -2059,6 +2420,9 @@ fn open_endpoint(
     owner: &str,
 ) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
     let config = get_dictation_config();
+    if !config.hands_free_listening {
+        return open_muted_endpoint(dictation, owner);
+    }
     let language = (config.language != "auto").then(|| config.language.clone());
     let gates = config.gates();
     if owner != DESKTOP_OWNER {
@@ -2105,6 +2469,31 @@ fn open_endpoint(
         transcriber,
         language,
         gates,
+    }))
+}
+
+/// The replies-only endpoint. The model and the microphone are never touched,
+/// but a browser owner must still have its socket: that is where the replies go.
+fn open_muted_endpoint(
+    dictation: &DictationState,
+    owner: &str,
+) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
+    if owner != DESKTOP_OWNER {
+        let link = dictation
+            .browser_endpoints
+            .get(owner)
+            .ok_or_else(|| format!("No client is connected for audio owner '{owner}'"))?;
+        let alive = Arc::clone(&link);
+        return Ok(Box::new(MutedVoiceEndpoint {
+            connected: Box::new(move || alive.connected()),
+            discard: Some(Box::new(move || drop(link.drain_capture()))),
+        }));
+    }
+    let alive = dictation.hands_free_owner_alive.clone();
+    alive.store(true, Ordering::Release);
+    Ok(Box::new(MutedVoiceEndpoint {
+        connected: Box::new(move || alive.load(Ordering::Acquire)),
+        discard: None,
     }))
 }
 
@@ -2163,18 +2552,26 @@ pub(crate) fn arm_hands_free(
 /// The seam exists so a test can drive the whole armed path — bind, capture,
 /// segment, transcribe, hold back, write — without a microphone or a
 /// multi-gigabyte model, against a real session and the real sink.
+type OpenVoiceEndpoint<'a> =
+    dyn Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> + 'a;
+
 pub(crate) fn arm_hands_free_with(
     state: &Arc<crate::state::AppState>,
     dictation: &DictationState,
     session_id: &str,
     owner: &str,
-    open_endpoint: &dyn Fn(
-        &DictationState,
-        &str,
-    ) -> Result<Box<dyn continuous::VoiceEndpoint>, String>,
+    open_endpoint: &OpenVoiceEndpoint<'_>,
 ) -> Result<HandsFreeStatus, String> {
+    dictation.ensure_owner()?;
     check_binding_field(session_id, "Session id")?;
     check_binding_field(owner, "Audio owner")?;
+    let settings = get_dictation_config();
+    if !settings.hands_free_listening && !settings.hands_free_spoken_replies {
+        return Err(
+            "Hands-free listening and spoken replies are both off; turn one on to start a conversation"
+                .to_string(),
+        );
+    }
     if !crate::pty::session_accepts_voice(state, session_id) {
         return Err("Session cannot accept hands-free input".to_string());
     }
@@ -2203,6 +2600,10 @@ pub(crate) fn arm_hands_free_with(
         release_desktop_endpoint(dictation);
         return Err(error);
     }
+    dictation
+        .hands_free
+        .lock()
+        .set_listening(settings.hands_free_listening);
 
     // Tell the model the conversation opened, if the user asked us to. Before
     // the runtime starts, so no spoken turn can go first: a model that reads
@@ -2219,7 +2620,11 @@ pub(crate) fn arm_hands_free_with(
         && let Some(Err(error)) = continuous::deliver_entry_hint(
             &mut dictation.hands_free.lock(),
             &super::adapters::PtyVoiceSink(state.as_ref()),
-            &continuous::entry_hint_text(&config.hands_free_start_notice),
+            &continuous::entry_hint_for(
+                &config.hands_free_start_notice,
+                settings.hands_free_listening,
+                config.hands_free_spoken_replies,
+            ),
             Some(&config.language),
         )
     {
@@ -2257,22 +2662,20 @@ pub(crate) fn arm_hands_free_with(
     // Auto conversation — and barge-in would stay dead for the whole session
     // even once a later reply opened a voice.
     let interruptible: Option<Arc<dyn continuous::Interruptible>> =
-        Some(Arc::new(ArmedSpeaker(Arc::clone(&dictation.speaker))));
+        Some(Arc::new(ArmedSpeaker::new(Arc::clone(&dictation.speaker))));
 
-    // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
-    // Hold-back is read from user config just above; pre-roll, trailing
-    // silence, minimum speech and the utterance cap are not reachable from
-    // `DictationConfig`, so `SegmenterConfig` is parameterised without being
-    // tunable by anyone but a recompile. Left as-is because no measurement has
-    // yet shown a default that needs moving, and a knob nobody has asked for is
-    // a knob that has to be documented, persisted and migrated. Wire it when
-    // Step 8 (#818-2a29) gives Dictation settings a place to put it, or sooner
-    // if trailing silence proves wrong for a real speaker.
+    // Frame activity follows the Settings > Voice floor (1164-ee4b: the compiled
+    // 0.01 sat 10x above push-to-talk's 0.001, and ordinary speech at a normal
+    // distance measures 0.1-1% RMS, so only a close mouth opened an utterance).
+    // Pre-roll, trailing silence, minimum speech and the utterance cap are not
+    // reachable from `DictationConfig`; no measurement has shown a default that
+    // needs moving, and a knob nobody asked for must be documented, persisted
+    // and migrated. Wire them when Step 8 (#818-2a29) gives Settings a place.
     *dictation.hands_free_runtime.lock() = Some(continuous::spawn_runtime(
         Arc::new(super::adapters::PtyVoicePort(state.clone())),
         dictation.hands_free.clone(),
         endpoint,
-        continuous::SegmenterConfig::default(),
+        segmenter_config(config.gates()),
         dictation.echo.clone(),
         interruptible,
     ));
@@ -2370,8 +2773,8 @@ fn partial_dictation_config_keeps_valid_fields() {
     assert_eq!(loaded.hotkey, "F8");
     assert_eq!(loaded.language, "it");
     assert_eq!(
-        loaded.speech_volume_db,
-        DictationConfig::default().speech_volume_db
+        loaded.speech_volume_db.to_bits(),
+        DictationConfig::default().speech_volume_db.to_bits()
     );
     assert!(loaded.recovered_from_corruption);
 }
@@ -2453,6 +2856,18 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             defaults.hands_free_start_notice,
             &mut recovered,
         ),
+        hands_free_listening: recovered_field(
+            &object,
+            "hands_free_listening",
+            defaults.hands_free_listening,
+            &mut recovered,
+        ),
+        hands_free_spoken_replies: recovered_field(
+            &object,
+            "hands_free_spoken_replies",
+            defaults.hands_free_spoken_replies,
+            &mut recovered,
+        ),
         hands_free_earcons: recovered_field(
             &object,
             "hands_free_earcons",
@@ -2471,6 +2886,18 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             defaults.speech_voice,
             &mut recovered,
         ),
+        speech_engine: recovered_field(
+            &object,
+            "speech_engine",
+            defaults.speech_engine,
+            &mut recovered,
+        ),
+        speech_edge_voice: recovered_field(
+            &object,
+            "speech_edge_voice",
+            defaults.speech_edge_voice,
+            &mut recovered,
+        ),
         speech_volume_db: recovered_field(
             &object,
             "speech_volume_db",
@@ -2481,6 +2908,12 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             &object,
             "speech_levelling",
             defaults.speech_levelling,
+            &mut recovered,
+        ),
+        model_idle_unload_minutes: recovered_field(
+            &object,
+            "model_idle_unload_minutes",
+            defaults.model_idle_unload_minutes,
             &mut recovered,
         ),
         recovered_from_corruption: recovered,
@@ -2494,7 +2927,7 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
     config
 }
 
-const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
+pub(crate) const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
 
 /// The built-in hands-free start notice, sent while
 /// [`DictationConfig::hands_free_start_notice`] is empty.
@@ -2505,6 +2938,10 @@ pub fn get_hands_free_default_notice() -> String {
 
 #[tauri::command]
 pub fn get_dictation_config() -> DictationConfig {
+    with_resolved_engine(read_dictation_config())
+}
+
+fn read_dictation_config() -> DictationConfig {
     let path = crate::config::config_dir().join(DICTATION_CONFIG_FILE);
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
@@ -2536,8 +2973,11 @@ pub fn set_dictation_config(
     base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    save_dictation_config(base, config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))?;
+    crate::settings::api::publish_change(&state, "voice", true);
+    Ok(())
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.
@@ -2568,23 +3008,43 @@ pub(crate) fn save_dictation_config(
         file.save_delta_strict(&base, &config)?;
     }
     let config = get_dictation_config();
-    // The configured model is part of the cached status snapshot.
-    invalidate_model_snapshot();
-    // A voice belongs to a language and to an engine. Change either and every
-    // reply already queued for the old one is wrong — a sentence half spoken
-    // in Italian does not become English by finishing it. Dropping the queue
-    // stops the device and cancels what is in flight; the next reply opens a
-    // voice for the language now configured.
-    //
-    // Only on those three fields. Every other setting here is a threshold or a
-    // hotkey, and cutting a reply off mid-word because somebody moved a slider
-    // would be a worse bug than the one this prevents.
+    // A voice belongs to a language and to an engine: see `refresh_voice_runtime`.
     let voice_changed = previous.language != config.language
+        || previous.speech_engine != config.speech_engine
         || previous.speech_command != config.speech_command
-        || previous.speech_voice != config.speech_voice;
-    if let Some(dictation) = dictation {
-        let mut slot = dictation.speaker.lock();
-        if voice_changed {
+        || previous.speech_voice != config.speech_voice
+        || previous.speech_edge_voice != config.speech_edge_voice;
+    refresh_voice_runtime(
+        voice_changed,
+        &config,
+        dictation.map(|dictation| &*dictation.speaker),
+    );
+    Ok(())
+}
+
+/// What a saved dictation config means for the voice that is running now. Shared by every
+/// writer of `dictation-config.json`, so none can leave the old voice speaking.
+///
+/// The configured model is part of the cached status snapshot, so it is always dropped.
+///
+/// A voice belongs to a language and to an engine. Change either and every
+/// reply already queued for the old one is wrong — a sentence half spoken
+/// in Italian does not become English by finishing it. Dropping the queue
+/// stops the device and cancels what is in flight; the next reply opens a
+/// voice for the language now configured.
+///
+/// Only on those voice fields (`voice_changed`). Every other setting here is a threshold or a
+/// hotkey, and cutting a reply off mid-word because somebody moved a slider
+/// would be a worse bug than the one this prevents.
+pub(crate) fn refresh_voice_runtime(
+    voice_changed: bool,
+    config: &DictationConfig,
+    speaker: Option<&parking_lot::Mutex<Option<speaker::Armed>>>,
+) {
+    invalidate_model_snapshot();
+    if let Some(slot) = speaker {
+        let mut slot = slot.lock();
+        if voice_changed || !config.hands_free_spoken_replies {
             *slot = None;
         } else if let Some(armed) = slot.as_ref() {
             // A level, not a voice: the queue keeps speaking and the next
@@ -2592,7 +3052,6 @@ pub(crate) fn save_dictation_config(
             armed.speaker.set_loudness(config.loudness());
         }
     }
-    Ok(())
 }
 
 /// Check microphone permission status (macOS TCC).
@@ -2663,7 +3122,7 @@ mod tests {
             transcribe::VoiceGates::default(),
         )
         .unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -2715,7 +3174,7 @@ mod tests {
         };
         let result =
             transcribe_final_ptt_audio(&PhraseTranscriber, &audio, Some("en"), gates).unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -2735,7 +3194,7 @@ mod tests {
             transcribe::VoiceGates::default(),
         )
         .unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -2771,7 +3230,7 @@ mod tests {
             serde_json::to_value(&response).unwrap()["skip_reason"],
             "audio too quiet (RMS 0.0005 < 0.0010)"
         );
-        assert_eq!(response.duration_s, 1.25);
+        assert_eq!(response.duration_s.to_bits(), 1.25_f64.to_bits());
     }
 
     #[test]
@@ -2787,11 +3246,13 @@ mod tests {
     /// After its one phrase it keeps handing back room silence, exactly as a
     /// live capture device does — a device that stops delivering samples is a
     /// failure, and this fake must not fake one.
+    #[cfg(unix)]
     struct ScriptedEndpoint {
         phrase: parking_lot::Mutex<Option<Vec<f32>>>,
         transcript: String,
     }
 
+    #[cfg(unix)]
     impl continuous::VoiceEndpoint for ScriptedEndpoint {
         fn drain(&mut self) -> Result<Vec<f32>, String> {
             Ok(self
@@ -2818,6 +3279,7 @@ mod tests {
     ///
     /// The notices are about the *mode*, so a test for them must not have to
     /// stage a spoken turn to see one.
+    #[cfg(unix)]
     fn silent_endpoint()
     -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
         |_dictation, _owner| {
@@ -2832,6 +3294,7 @@ mod tests {
     ///
     /// The composer flushes on its own schedule, so the alternative is a fixed
     /// sleep — a guess about scheduling rather than a deadline.
+    #[cfg(unix)]
     fn wait_for_typed(bytes: &Arc<std::sync::Mutex<Vec<u8>>>, needle: &str) -> String {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
@@ -2848,6 +3311,7 @@ mod tests {
     /// Whether `needle` is typed into the recorded terminal inside `window`.
     /// Used for the assertion that it is not; the caller measures the window
     /// rather than guessing it.
+    #[cfg(unix)]
     fn typed_within(
         bytes: &Arc<std::sync::Mutex<Vec<u8>>>,
         needle: &str,
@@ -2864,6 +3328,7 @@ mod tests {
     }
 
     /// A spoken phrase: 600ms of tone, then long enough a pause to close it.
+    #[cfg(unix)]
     fn spoken_phrase() -> Vec<f32> {
         let sample_rate = continuous::SAMPLE_RATE as f32;
         let speech = (0..(sample_rate as usize * 600 / 1000))
@@ -2873,6 +3338,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     fn scripted_endpoint(
         transcript: &'static str,
     ) -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
@@ -3120,6 +3586,153 @@ mod tests {
             "speech without the activation phrase must not reach the model"
         );
         disarm_hands_free(&state, &dictation);
+    }
+
+    /// Bug caught: a second desktop instance on the same config directory arms
+    /// hands-free and opens the microphone the owner is using. `start_dictation`
+    /// runs the same `ensure_owner` as its first statement.
+    #[test]
+    fn a_non_owner_instance_refuses_to_arm_and_never_opens_the_microphone() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _held_by_the_other_instance =
+            crate::dictation::ownership::Ownership::acquire(dir.path());
+        let dictation = DictationState::new();
+        dictation.claim_ownership(dir.path());
+        assert!(!dictation.is_owner());
+        let opened = std::sync::atomic::AtomicBool::new(false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = arm_hands_free_with(&state, &dictation, "s", "desktop", &|_, _| {
+            opened.store(true, Ordering::SeqCst);
+            Err("endpoint opened".to_string())
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            crate::dictation::ownership::OWNED_ELSEWHERE
+        );
+        assert!(!opened.load(Ordering::SeqCst), "the microphone was opened");
+    }
+
+    /// Bug caught: with listening and spoken replies both off, arming still
+    /// opens the microphone for a conversation that can neither hear nor speak.
+    #[test]
+    fn arming_with_listening_and_replies_both_off_is_refused_before_any_endpoint_opens() {
+        let _config = config_of_this_test(DictationConfig {
+            hands_free_listening: false,
+            hands_free_spoken_replies: false,
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+        let opened = std::sync::atomic::AtomicBool::new(false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-none", crate::pty::SHELL_BUSY);
+        let result = arm_hands_free_with(&state, &dictation, "voice-none", "desktop", &|_, _| {
+            opened.store(true, Ordering::SeqCst);
+            Err("endpoint opened".to_string())
+        });
+        assert!(result.unwrap_err().contains("both off"));
+        assert!(!opened.load(Ordering::SeqCst));
+        assert!(!hands_free_status(&dictation).armed);
+    }
+
+    /// Bug caught: a replies-only conversation is not a conversation — speech
+    /// is refused as "not armed", or the status still claims it listens.
+    #[cfg(unix)]
+    #[test]
+    fn a_replies_only_conversation_binds_the_session_without_listening() {
+        let _config = config_of_this_test(DictationConfig {
+            hands_free_listening: false,
+            hands_free_spoken_replies: true,
+            hands_free_notify_model: false,
+            ..Default::default()
+        });
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-ro", crate::pty::SHELL_BUSY);
+        let _typed = crate::test_support::insert_recording_session(&state, "voice-ro");
+        let dictation = DictationState::new();
+        let status = arm_hands_free_with(&state, &dictation, "voice-ro", "desktop", &open_endpoint)
+            .expect("arm");
+        assert!(status.armed);
+        assert!(!status.listening, "replies-only must not report listening");
+        assert!(
+            dictation.hands_free_audio.lock().is_none(),
+            "no microphone is opened"
+        );
+        assert_eq!(bound_session(&dictation).as_deref(), Ok("voice-ro"));
+        assert!(disarm_hands_free(&state, &dictation).was_armed);
+    }
+
+    /// Bug caught: a replies-only browser conversation arms for a client with
+    /// no socket, so every reply fails later instead of arming being refused.
+    #[test]
+    fn a_muted_browser_endpoint_needs_its_socket_and_drops_stray_capture() {
+        let dictation = DictationState::new();
+        assert!(open_muted_endpoint(&dictation, "browser-9").is_err());
+        let link = dictation.browser_endpoints.connect("browser-9");
+        let mut endpoint = open_muted_endpoint(&dictation, "browser-9").expect("endpoint");
+        assert!(endpoint.connected());
+        assert_eq!(endpoint.drain().unwrap(), [] as [f32; 0]);
+        drop(link);
+    }
+
+    /// Bug caught: a replies-only conversation hears no audio by design, so the
+    /// runtime's starvation rule disarms it five seconds after arming with
+    /// "The capture device delivered no audio" — the mode never lasts.
+    #[test]
+    fn a_replies_only_conversation_outlives_the_capture_starvation_timeout() {
+        struct AcceptingTarget;
+        impl continuous::TargetProbe for AcceptingTarget {
+            fn accepts(&self, _session_id: &str) -> bool {
+                true
+            }
+        }
+        struct UnusedSink;
+        impl continuous::VoiceSink for UnusedSink {
+            fn write(&self, _: &str, _: &str) -> Result<continuous::VoiceWrite, String> {
+                panic!("a replies-only conversation delivers no transcript")
+            }
+        }
+        let dictation = DictationState::new();
+        let mut endpoint = open_muted_endpoint(&dictation, DESKTOP_OWNER).expect("endpoint");
+        let mut hands_free = continuous::HandsFree::new(1_000);
+        hands_free.arm("target", DESKTOP_OWNER, true).expect("arm");
+        hands_free.set_listening(false);
+        let mode = parking_lot::Mutex::new(hands_free);
+        let echo = Arc::new(parking_lot::Mutex::new(echo::EchoGuard::new(Box::new(
+            echo::PassThrough,
+        ))));
+        let mut capture = continuous::Capture::new(
+            continuous::SegmenterConfig::default(),
+            continuous::DEVICE_SILENCE_TIMEOUT_MS,
+            0,
+            echo,
+            None,
+        );
+        let late = continuous::DEVICE_SILENCE_TIMEOUT_MS + 1_000;
+        let outcome = continuous::tick(
+            &mut capture,
+            &mode,
+            endpoint.as_mut(),
+            &AcceptingTarget,
+            &UnusedSink,
+            late,
+        );
+        assert!(
+            matches!(outcome, continuous::Tick::Running { .. }),
+            "replies-only conversation was disarmed after {late} ms without audio: {outcome:?}"
+        );
+    }
+
+    /// Bug caught: the status of a non-owner reports a plain "ready", so the UI
+    /// never says another instance owns dictation.
+    #[test]
+    fn status_reports_owned_elsewhere_for_a_non_owner() {
+        let (dir, _config) = config_of_this_test(DictationConfig::default());
+        let _held_by_the_other_instance =
+            crate::dictation::ownership::Ownership::acquire(dir.path());
+        let dictation = DictationState::new();
+        assert!(!dictation_status(&dictation).owned_elsewhere);
+        dictation.claim_ownership(dir.path());
+        assert!(dictation_status(&dictation).owned_elsewhere);
     }
 
     /// The whole feature, once, against a real session: arm binds, the status
@@ -3411,7 +4024,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
     }
 
     #[test]
@@ -3450,8 +4063,10 @@ mod tests {
         let mut desired = base.clone();
         desired.model = "small".to_string();
 
-        let mut concurrent = DictationConfig::default();
-        concurrent.language = "fr".to_string();
+        let concurrent = DictationConfig {
+            language: "fr".to_string(),
+            ..DictationConfig::default()
+        };
         std::fs::write(&path, serde_json::to_string(&concurrent).unwrap()).unwrap();
         save_dictation_config(base, desired, None).unwrap();
 
@@ -3481,7 +4096,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
         assert_eq!(saved.hotkey, "F5");
     }
 
@@ -3580,6 +4195,26 @@ mod tests {
         assert_eq!(config.speech_levelling, fresh.speech_levelling);
     }
 
+    #[test]
+    fn a_fresh_config_frees_the_model_after_twenty_idle_minutes() {
+        assert_eq!(DictationConfig::default().model_idle_unload_minutes, 20);
+        let stored = serde_json::json!({"enabled": true, "hotkey": "F5"});
+        assert_eq!(
+            dictation_config_from_value(stored).model_idle_unload_minutes,
+            20,
+            "a config written before the knob existed takes the default"
+        );
+    }
+
+    #[test]
+    fn an_explicit_zero_keeps_the_model_loaded_and_survives_a_read() {
+        let stored = serde_json::json!({"model_idle_unload_minutes": 0});
+        assert_eq!(
+            dictation_config_from_value(stored).model_idle_unload_minutes,
+            0
+        );
+    }
+
     /// A hand-edited config can carry any number; the stage only accepts the
     /// documented -30..-12 dB, or the final clamp would distort every reply.
     #[test]
@@ -3594,7 +4229,11 @@ mod tests {
                 speech_volume_db: stored,
                 ..DictationConfig::default()
             };
-            assert_eq!(config.loudness().volume_db, expected, "stored {stored}");
+            assert_eq!(
+                config.loudness().volume_db.to_bits(),
+                f32::to_bits(expected),
+                "stored {stored}"
+            );
         }
     }
 
@@ -3614,6 +4253,100 @@ mod tests {
         let gates = config.gates();
         assert_eq!(gates.rms_threshold, 0.004);
         assert_eq!(gates.no_speech_threshold, 0.35);
+    }
+
+    /// Voiced-speech stand-in: a 120 Hz harmonic stack under a 4 Hz syllable
+    /// envelope, scaled to the requested whole-signal RMS. Synthetic: the
+    /// repository holds no recorded speech to feed instead.
+    fn speech_at(rms: f32, seconds: usize) -> Vec<f32> {
+        let rate = 16_000.0_f32;
+        let mut samples: Vec<f32> = (0..16_000 * seconds)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let envelope = 0.5 + 0.5 * (2.0 * std::f32::consts::PI * 4.0 * t).sin();
+                let voice: f32 = (1..=8)
+                    .map(|h| (2.0 * std::f32::consts::PI * 120.0 * h as f32 * t).sin() / h as f32)
+                    .sum();
+                envelope * voice
+            })
+            .collect();
+        let level = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        for s in &mut samples {
+            *s *= rms / level;
+        }
+        samples
+    }
+
+    /// Does one second of speech at `rms`, then two seconds of quiet, close an
+    /// utterance in a segmenter built from `config`?
+    fn opens_an_utterance(config: continuous::SegmenterConfig, rms: f32) -> bool {
+        let mut audio = speech_at(rms, 1);
+        audio.extend(std::iter::repeat_n(0.0, 32_000));
+        !continuous::Segmenter::new(config).push(&audio).is_empty()
+    }
+
+    /// Catches: hands-free ignoring the Settings > Voice floor and running on a
+    /// compiled 0.01, so a voice at a normal distance (0.1-1% RMS) never opens
+    /// an utterance while push-to-talk, on the 0.001 floor, transcribes it.
+    #[test]
+    fn hands_free_hears_the_levels_push_to_talk_hears() {
+        let gates = DictationConfig::default().gates();
+        for rms in [0.002, 0.004, 0.008] {
+            let audio = speech_at(rms, 1);
+            assert!(
+                continuous::has_sustained_speech(&audio, segmenter_config(gates)),
+                "push-to-talk must hear speech at RMS {rms}"
+            );
+            assert!(
+                opens_an_utterance(segmenter_config(gates), rms),
+                "hands-free must hear speech at RMS {rms}"
+            );
+        }
+        // The compiled default is what hands-free used to run on.
+        assert!(!opens_an_utterance(
+            continuous::SegmenterConfig::default(),
+            0.004
+        ));
+    }
+
+    /// Catches: the configured floor not reaching hands-free (raising it in
+    /// Settings to reject a noisy room would do nothing there).
+    #[test]
+    fn a_raised_floor_silences_quiet_speech_in_hands_free() {
+        let gates = DictationConfig {
+            rms_threshold: 0.02,
+            ..Default::default()
+        }
+        .gates();
+        assert!(!opens_an_utterance(segmenter_config(gates), 0.004));
+    }
+
+    /// Catches: echo cancellation ducking the near end while nothing plays,
+    /// which would make hands-free quieter than push-to-talk. Prints the level
+    /// at each stage so the measurement can be read with `--no-capture`.
+    #[test]
+    fn the_echo_canceller_leaves_the_voice_level_alone_when_nothing_plays() {
+        use crate::dictation::echo::{Canceller, FRAME_SAMPLES, webrtc::WebRtc};
+        let rms_of = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        for rms in [0.002_f32, 0.005, 0.01, 0.05] {
+            let input = speech_at(rms, 4);
+            let mut canceller = WebRtc::new().expect("the bundled APM starts");
+            let silence = vec![0.0_f32; FRAME_SAMPLES];
+            let mut output = input.clone();
+            for frame in output.as_chunks_mut::<FRAME_SAMPLES>().0 {
+                canceller.cancel(&silence, frame);
+            }
+            // Skip the first second: the filter may still be settling.
+            let (before, after) = (rms_of(&input[16_000..]), rms_of(&output[16_000..]));
+            eprintln!(
+                "aec3 silent far end: in {before:.5} out {after:.5} ratio {:.3}",
+                after / before
+            );
+            assert!(
+                after / before > 0.9,
+                "AEC3 ducked the voice at RMS {rms}: {before} -> {after}"
+            );
+        }
     }
 
     #[test]
@@ -3810,6 +4543,7 @@ mod tests {
     ) {
         let config = config_of_this_test(DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -3831,6 +4565,155 @@ mod tests {
             language: "it".to_string(),
         });
         (dictation, gate, config)
+    }
+
+    #[test]
+    fn spoken_replies_off_refuses_existing_queue_without_synthesis() {
+        // catches: a UI-only mute still lets the model invoke the engine.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountingSpeech(Arc<AtomicUsize>);
+        impl speech::Speech for CountingSpeech {
+            fn synthesize(
+                &self,
+                _: &str,
+                _: &str,
+                _: &speech::SpeechCancel,
+            ) -> Result<speech::SpeechAudio, speech::SpeechError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(speech::SpeechError::Failed("unexpected synthesis".into()))
+            }
+        }
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let calls = Arc::new(AtomicUsize::new(0));
+        dictation.speaker.lock().as_mut().unwrap().speaker = Arc::new(speaker::Speaker::new(
+            Arc::new(CountingSpeech(calls.clone())),
+            Arc::new(QuietOutput),
+            1,
+        ));
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                hands_free_spoken_replies: false,
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        let status = speech_status_for(&dictation, Caller::Model("session-a"), None).unwrap();
+        assert!(!status.available);
+        assert!(status.unavailable_reason.contains("Spoken replies are off"));
+        assert!(
+            speak(&dictation, Caller::Model("session-a"), "hello", None)
+                .unwrap_err()
+                .contains("Spoken replies are off")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(
+            dictation.speaker.lock().is_none(),
+            "mute cancels the old queue"
+        );
+        assert!(
+            !get_dictation_config().hands_free_spoken_replies,
+            "persisted off"
+        );
+        assert!(
+            DictationConfig::default().hands_free_spoken_replies,
+            "default on"
+        );
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                hands_free_spoken_replies: true,
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        assert!(get_dictation_config().hands_free_spoken_replies);
+    }
+
+    #[test]
+    fn queued_auth_rejection_notifies_bound_conversation_once_and_refuses_retry() {
+        // catches: a queued HTTP 403 fails silently and the model keeps calling speech.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Rejecting(Arc<AtomicUsize>, Arc<parking_lot::Mutex<()>>);
+        impl speech::Speech for Rejecting {
+            fn synthesize(
+                &self,
+                _: &str,
+                _: &str,
+                _: &speech::SpeechCancel,
+            ) -> Result<speech::SpeechAudio, speech::SpeechError> {
+                let _guard = self.1.lock();
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(speech::SpeechError::Rejected { status: 403 })
+            }
+        }
+        #[derive(Default)]
+        struct Notices(parking_lot::Mutex<Vec<(String, String)>>);
+        impl continuous::VoiceSink for Notices {
+            fn write(&self, session: &str, text: &str) -> Result<continuous::VoiceWrite, String> {
+                self.0.lock().push((session.into(), text.into()));
+                Ok(continuous::VoiceWrite::Written)
+            }
+        }
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                speech_engine: "edge".into(),
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(parking_lot::Mutex::new(()));
+        let held = release.lock();
+        let generation = dictation.hands_free.lock().generation();
+        let engine = guard_replies(
+            &get_dictation_config(),
+            &dictation,
+            Arc::new(Rejecting(calls.clone(), release.clone())),
+            generation,
+        );
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                engine,
+                Arc::new(QuietOutput),
+                generation,
+            )),
+            voice: "edge-test".into(),
+            language: "it".into(),
+        });
+        let queued = speak(&dictation, Caller::Model("session-a"), "hello", None).unwrap();
+        assert!(matches!(queued.state.as_str(), "queued" | "rendering"));
+        drop(held);
+        wait_for_utterance(&dictation, &queued.utterance_id, "failed");
+        let status = speech_status_for(&dictation, Caller::Model("session-a"), None).unwrap();
+        assert!(!status.available);
+        assert!(status.unavailable_reason.contains("HTTP 403"));
+        assert!(status.unavailable_reason.contains("Microsoft Edge"));
+        let sink = Notices::default();
+        assert_eq!(
+            continuous::deliver_speech_outage(&mut dictation.hands_free.lock(), &sink),
+            Some(Ok(continuous::VoiceWrite::Written))
+        );
+        assert!(
+            continuous::deliver_speech_outage(&mut dictation.hands_free.lock(), &sink).is_none()
+        );
+        assert_eq!(
+            sink.0.lock().as_slice(),
+            &[("session-a".into(), status.unavailable_reason.clone())]
+        );
+        assert_eq!(
+            speak(&dictation, Caller::Model("session-a"), "retry", None).unwrap_err(),
+            status.unavailable_reason
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     /// Poll until `id` reaches a state the test is waiting for, or say what it
@@ -4160,9 +5043,12 @@ mod tests {
     /// A hands-free conversation must not read as a silent microphone.
     #[test]
     fn the_level_falls_back_to_the_hands_free_capture() {
-        assert_eq!(capture_level(None, Some(0.4)), 0.4);
-        assert_eq!(capture_level(Some(0.2), Some(0.4)), 0.2);
-        assert_eq!(capture_level(None, None), 0.0);
+        assert_eq!(capture_level(None, Some(0.4)).to_bits(), 0.4_f32.to_bits());
+        assert_eq!(
+            capture_level(Some(0.2), Some(0.4)).to_bits(),
+            0.2_f32.to_bits()
+        );
+        assert_eq!(capture_level(None, None).to_bits(), 0.0_f32.to_bits());
     }
 
     /// The frontend keys its bar on `asset` and ends it on `done`; a progress
@@ -4185,6 +5071,7 @@ mod tests {
     fn under_auto_there_is_no_language_and_so_no_voice_until_somebody_speaks() {
         let _config = config_of_this_test(DictationConfig {
             language: "auto".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -4241,6 +5128,7 @@ mod tests {
     fn a_language_no_bundle_speaks_is_named_rather_than_replaced() {
         let _config = config_of_this_test(DictationConfig {
             language: "ko".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -4277,6 +5165,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "en".to_string(),
+                speech_engine: "pocket".to_string(),
                 ..Default::default()
             },
             Some(&dictation),
@@ -4369,10 +5258,9 @@ mod tests {
     #[test]
     fn get_speech_voices_offers_nothing_until_the_language_is_downloaded() {
         let (_root, _guard) = speech_root();
-        assert!(
-            get_speech_voices("it".into())
-                .expect("Italian ships")
-                .is_empty()
+        assert_eq!(
+            get_speech_voices("it".into()).expect("Italian ships"),
+            [] as [tuic_dictation::speech::library::VoiceChoice; 0]
         );
     }
 
@@ -4399,6 +5287,102 @@ mod tests {
         let error = choose_voice(italian, "jean").expect_err("not downloaded");
         assert!(error.contains("jean"), "{error}");
         assert!(error.to_lowercase().contains("download"), "{error}");
+    }
+
+    #[test]
+    fn missing_catalogue_voice_uses_only_the_installed_language_default_1954() {
+        // Catches: a missing bill_boerst refusing speech despite an installed
+        // Italian default, or borrowing the English voice with the same name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english_voice = speech::assets::find("voice-english-bill_boerst").unwrap();
+        install_asset(english_voice);
+        assert!(choose_voice(italian, "bill_boerst").is_err());
+        install_asset(italian);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "giovanni");
+        assert!(choose_voice(italian, "nessuno").is_err());
+        let italian_voice = speech::assets::find("voice-italian-bill_boerst").unwrap();
+        install_asset(italian_voice);
+        assert_eq!(choose_voice(italian, "bill_boerst").unwrap(), "bill_boerst");
+    }
+
+    #[test]
+    fn italian_missing_voice_never_opens_english_or_external_fallback_1954() {
+        // Catches: missing Pocket voice switching engines to Edge or an OS
+        // command, or resolving the English asset with the same voice name.
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").unwrap();
+        let english = speech::assets::for_language_code("en").unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(english);
+        install_asset(speech::assets::find("voice-english-bill_boerst").unwrap());
+        let config = DictationConfig {
+            language: "it".into(),
+            speech_engine: "pocket".into(),
+            speech_voice: "bill_boerst".into(),
+            // A stale external command is not a fallback for Pocket.
+            speech_command: vec!["say".into()],
+            ..Default::default()
+        };
+        let library = speech::library::SpeechLibrary::new();
+        assert!(build_voice(&config, &library, "it").is_err());
+        install_asset(italian);
+        let (engine, voice) = build_voice(&config, &library, "it").unwrap();
+        assert_eq!(voice, "giovanni");
+        let expected: Arc<dyn speech::Speech> = library.engine("italian");
+        assert!(Arc::ptr_eq(&engine, &expected), "only Italian Pocket opens");
+        let english_engine: Arc<dyn speech::Speech> = library.engine("english");
+        assert!(!Arc::ptr_eq(&engine, &english_engine));
+    }
+
+    #[test]
+    fn downloading_the_selected_voice_replaces_the_cached_fallback_for_the_next_reply() {
+        // Catches: downloading the selected voice leaves hands-free on giovanni
+        // indefinitely even though Listen now resolves bill_boerst.
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let base = get_dictation_config();
+        save_dictation_config(
+            base.clone(),
+            DictationConfig {
+                speech_voice: "bill_boerst".into(),
+                ..base
+            },
+            Some(&dictation),
+        )
+        .unwrap();
+        install_asset(speech::assets::runtime());
+        install_asset(speech::assets::for_language_code("it").unwrap());
+        // The production resolver establishes the queue's initial voice. Only
+        // synthesis and the audio device are substituted; no model is executed.
+        let (_, voice) = build_voice(&get_dictation_config(), &dictation.speech, "it").unwrap();
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech {
+                    gate: Arc::clone(&gate),
+                }),
+                Arc::new(QuietOutput),
+                generation,
+            )),
+            voice,
+            language: "it".into(),
+        });
+        let held = gate.lock();
+        let first = speak(&dictation, Caller::Owner, "prima", None).unwrap();
+        assert_eq!(speech_status(&dictation, None).voice, "giovanni");
+        drop(held);
+        wait_for_utterance(&dictation, &first.utterance_id, "finished");
+
+        // This is the same on-disk result as a completed catalogue download.
+        install_asset(speech::assets::find("voice-italian-bill_boerst").unwrap());
+        let held = gate.lock();
+        speak(&dictation, Caller::Owner, "dopo", None).unwrap();
+        assert_eq!(
+            speech_status(&dictation, None).voice,
+            "bill_boerst",
+            "the next reply must use the selected voice once its download is ready"
+        );
+        drop(held);
     }
 
     #[test]
@@ -4512,6 +5496,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
+                speech_engine: "pocket".to_string(),
                 speech_voice: "giovanni".to_string(),
                 ..Default::default()
             },
@@ -4537,6 +5522,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
+                speech_engine: "pocket".to_string(),
                 rms_threshold: 0.05,
                 ..Default::default()
             },
@@ -4545,13 +5531,12 @@ mod tests {
         .expect("config save");
 
         assert!(dictation.speaker.lock().is_some());
-        assert_eq!(
-            speech_status(&dictation, Some(&accepted.utterance_id))
+        assert!(
+            !speech_status(&dictation, Some(&accepted.utterance_id))
                 .utterance
                 .expect("asked")
                 .state
                 .is_empty(),
-            false,
             "the reply in flight still has a fate to report"
         );
     }
@@ -4611,6 +5596,7 @@ mod tests {
 
         let config = DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             speech_volume_db: -24.0,
             speech_levelling: 0.2,
             ..Default::default()
@@ -4656,7 +5642,7 @@ mod tests {
     #[test]
     fn barge_in_interrupts_the_voice_that_is_open_at_the_time() {
         let (dictation, _gate, _config) = armed_with_a_voice("session-a");
-        let port = ArmedSpeaker(Arc::clone(&dictation.speaker));
+        let port = ArmedSpeaker::new(Arc::clone(&dictation.speaker));
         let before = speech_status(&dictation, None).turn;
 
         continuous::Interruptible::hush(&port);
@@ -4672,6 +5658,145 @@ mod tests {
         // never opened a voice.
         *dictation.speaker.lock() = None;
         continuous::Interruptible::hush(&port);
+    }
+
+    #[derive(Default)]
+    struct PausableOutput(std::sync::atomic::AtomicBool);
+
+    impl speaker::Output for PausableOutput {
+        fn play(&self, _audio: &speech::SpeechAudio) -> Result<(), String> {
+            Ok(())
+        }
+        fn stop(&self) {
+            // The real device un-pauses on stop, so the next reply is heard.
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn pause(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn resume(&self) {
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn is_speaking(&self) -> bool {
+            false
+        }
+    }
+
+    /// An armed voice whose output records whether it is paused, and the port
+    /// the capture loop uses to reach it.
+    fn a_voice_behind_the_port() -> (DictationState, Arc<PausableOutput>, Arc<ArmedSpeaker>) {
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let output = Arc::new(PausableOutput::default());
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech { gate }),
+                Arc::clone(&output) as Arc<dyn speaker::Output>,
+                generation,
+            )),
+            voice: "giovanni".to_string(),
+            language: "it".to_string(),
+        });
+        let port = Arc::new(ArmedSpeaker::new(Arc::clone(&dictation.speaker)));
+        (dictation, output, port)
+    }
+
+    /// Issue `command` while a rebuild holds the slot: the call must return
+    /// without waiting for it, and the command must still land once it frees.
+    fn command_while_the_slot_is_busy(
+        dictation: &DictationState,
+        port: &Arc<ArmedSpeaker>,
+        command: fn(&ArmedSpeaker),
+    ) {
+        let busy = dictation.speaker.lock();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let contender = {
+            let port = Arc::clone(port);
+            std::thread::spawn(move || {
+                command(&port);
+                let _ = done_tx.send(());
+            })
+        };
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the capture loop waited for a rebuild");
+        drop(busy);
+        contender.join().expect("the contender panicked");
+    }
+
+    /// Applied from another thread once the slot frees.
+    fn eventually(condition: impl Fn() -> bool) -> bool {
+        for _ in 0..200 {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        condition()
+    }
+
+    /// The verdict arrives after the pause, so a `hush` that misses the slot
+    /// lock (`speak` holds it while it rebuilds the voice) is no longer "a tick
+    /// with nothing to interrupt": nothing resumes the reply afterwards, and
+    /// the next one is queued into a silent device. Catches: `hush` giving up
+    /// on a contended slot while the output is paused.
+    #[test]
+    fn a_hush_that_meets_a_busy_slot_does_not_leave_the_reply_paused() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        continuous::Interruptible::pause(&*port);
+        assert!(output.0.load(std::sync::atomic::Ordering::SeqCst));
+
+        command_while_the_slot_is_busy(&dictation, &port, |port| {
+            continuous::Interruptible::hush(port)
+        });
+
+        assert!(
+            eventually(|| !output.0.load(std::sync::atomic::Ordering::SeqCst)),
+            "the verdict came while the slot was busy and the reply stayed paused"
+        );
+    }
+
+    /// The same for a reply that was not for us: the resume that meets a busy
+    /// slot must not be lost either. Catches: `resume` dropped on a contended
+    /// slot.
+    #[test]
+    fn a_resume_that_meets_a_busy_slot_does_not_leave_the_reply_paused() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        continuous::Interruptible::pause(&*port);
+        assert!(output.0.load(std::sync::atomic::Ordering::SeqCst));
+
+        command_while_the_slot_is_busy(&dictation, &port, |port| {
+            continuous::Interruptible::resume(port)
+        });
+
+        assert!(
+            eventually(|| !output.0.load(std::sync::atomic::Ordering::SeqCst)),
+            "the resume came while the slot was busy and the reply stayed paused"
+        );
+    }
+
+    /// The command waiting for a busy slot belongs to the arm that gave it.
+    /// Catches: a pending `Pause` surviving a disarm and holding the first
+    /// reply of the next conversation.
+    #[test]
+    fn a_pause_waiting_for_the_slot_is_dropped_when_the_arm_ends() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        let busy = dictation.speaker.lock();
+        continuous::Interruptible::pause(&*port);
+        // The applier thread holds a clone of `pending` until it has run, so
+        // the count says when it is done: no sleeping on a thread that may not
+        // have been scheduled yet.
+        let pending = Arc::clone(&port.pending);
+        drop(port);
+        drop(busy);
+        assert!(
+            eventually(|| Arc::strong_count(&pending) == 1),
+            "the applier thread never finished"
+        );
+        assert!(
+            !output.0.load(std::sync::atomic::Ordering::SeqCst),
+            "a pause from the previous arm held the new voice"
+        );
     }
 
     /// Disarming takes the voice away before the engine goes, so a reply
@@ -5156,6 +6281,7 @@ mod tests {
     fn previewing_an_unknown_voice_names_it_and_selects_nothing() {
         let _config = config_of_this_test(DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -5169,5 +6295,232 @@ mod tests {
             "a preview selected the voice"
         );
         assert!(preview_voice(&dictation, "xx", "", "ciao").is_err());
+    }
+
+    // --- Edge as the default engine (1357-7d37) -----------------------------
+
+    fn engine_of_file(content: &str) -> String {
+        let (dir, guard) = speech_root();
+        std::fs::write(dir.path().join(DICTATION_CONFIG_FILE), content).unwrap();
+        let engine = get_dictation_config().speech_engine;
+        drop(guard);
+        engine
+    }
+
+    #[test]
+    fn a_fresh_install_speaks_with_edge() {
+        // Catches: the default staying Pocket, which needs a 100+ MB download
+        // before the first word.
+        {
+            // The override lock is not reentrant: this scope ends before the next.
+            let (_dir, _guard) = speech_root();
+            assert_eq!(get_dictation_config().speech_engine, "edge");
+        }
+        assert_eq!(engine_of_file("{}"), "edge");
+    }
+
+    #[test]
+    fn an_existing_pocket_user_keeps_pocket_without_touching_the_settings() {
+        // Catches: the upgrade silently switching someone who chose Pocket to a
+        // cloud engine. Evidence of the choice: a voice, or the runtime on disk.
+        assert_eq!(engine_of_file(r#"{"speech_voice":"giovanni"}"#), "pocket");
+        let (_dir, _guard) = speech_root();
+        install_asset(speech::assets::runtime());
+        assert_eq!(get_dictation_config().speech_engine, "pocket");
+    }
+
+    #[test]
+    fn an_existing_external_command_keeps_the_external_engine() {
+        assert_eq!(
+            engine_of_file(r#"{"speech_command":["piper","--output_file","{out}"]}"#),
+            "external"
+        );
+    }
+
+    #[test]
+    fn an_explicit_engine_beats_what_the_installation_holds() {
+        // Catches: the legacy rule overriding a choice made in the Expert
+        // section (a fresh user who downloaded Pocket and stayed on Edge).
+        assert_eq!(
+            engine_of_file(r#"{"speech_engine":"edge","speech_voice":"giovanni"}"#),
+            "edge"
+        );
+        let (_dir, _guard) = speech_root();
+        install_asset(speech::assets::runtime());
+        save_dictation_config(
+            get_dictation_config(),
+            DictationConfig {
+                speech_engine: "edge".to_string(),
+                ..get_dictation_config()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(get_dictation_config().speech_engine, "edge");
+    }
+
+    #[test]
+    fn edge_opens_a_voice_without_any_download() {
+        // Catches: Edge still gated on Pocket assets ("is not downloaded").
+        let (_dir, _guard) = speech_root();
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        };
+
+        let (_engine, voice) = open_voice(&config, &library, "it").expect("edge opens");
+
+        assert_eq!(voice, "it-IT-IsabellaNeural");
+    }
+
+    #[test]
+    fn switching_engine_or_edge_voice_takes_the_voice_away_from_queued_replies() {
+        // Catches: a reply queued for Pocket finishing in the Edge voice (or
+        // the reverse) after the setting moved.
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+
+        save_dictation_config(
+            get_dictation_config(),
+            DictationConfig {
+                language: "it".to_string(),
+                speech_engine: "edge".to_string(),
+                ..Default::default()
+            },
+            Some(&dictation),
+        )
+        .expect("config save");
+
+        assert!(dictation.speaker.lock().is_none());
+    }
+
+    #[test]
+    fn listen_speaks_a_voice_of_another_language_as_the_language_default_like_a_reply() {
+        // Catches: Listen refusing a stored voice that the picker shows as the
+        // default and that replies silently replace with the default.
+        let (_dir, _guard) = speech_root();
+        let library = speech::library::SpeechLibrary::new();
+        let current = DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        };
+
+        let config =
+            preview_config(current, "it", "en-US-AriaNeural").expect("the preview is not refused");
+        let (_engine, voice) = open_voice(&config, &library, "it").expect("edge opens");
+
+        assert_eq!(voice, "it-IT-IsabellaNeural");
+    }
+}
+
+/// Adversarial cases from the critic of 1357-7d37 (round 1).
+#[cfg(test)]
+mod critic_round1 {
+    use super::*;
+
+    #[test]
+    fn a_command_beats_a_voice_and_an_installed_runtime_when_the_engine_is_unset() {
+        // Catches: the legacy rule putting an external-command user on Pocket
+        // because they also once chose a voice or downloaded the runtime.
+        let config = DictationConfig {
+            speech_command: vec!["piper".to_string()],
+            speech_voice: "giovanni".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(legacy_speech_engine(&config, true), SpeechEngine::External);
+    }
+
+    #[test]
+    fn nothing_chosen_and_nothing_installed_is_edge() {
+        // Catches: an empty-string voice or empty command counting as a choice.
+        let config = DictationConfig {
+            speech_command: Vec::new(),
+            speech_voice: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(legacy_speech_engine(&config, false), SpeechEngine::Edge);
+    }
+
+    #[test]
+    fn an_unknown_engine_value_resolves_like_an_unset_one_for_the_whole_config() {
+        // Catches: a hand-edited "Edge"/"pocket " silently ignoring the command
+        // the user also configured (resolver and reader disagreeing).
+        for value in ["EDGE", "pocket ", "garbage"] {
+            let config = DictationConfig {
+                speech_engine: value.to_string(),
+                speech_command: vec!["piper".to_string()],
+                ..Default::default()
+            };
+            let resolved = with_resolved_engine(config);
+            assert_eq!(resolved.speech_engine, "external", "{value:?}");
+            assert_eq!(speech_engine(&resolved), SpeechEngine::External);
+        }
+    }
+
+    #[test]
+    fn the_external_engine_with_no_command_is_a_setup_error_not_silence() {
+        // Catches: Expert → External with an empty command speaking nothing and
+        // reporting nothing (or falling through to Edge).
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "external".to_string(),
+            speech_command: Vec::new(),
+            ..Default::default()
+        };
+        assert!(open_voice(&config, &library, "it").is_err());
+    }
+
+    #[test]
+    fn an_edge_voice_that_is_not_a_plain_name_is_not_opened_for_a_reply() {
+        // Catches: a hand-edited speech_edge_voice reaching the SSML attribute
+        // (the adapter refuses it, but open_voice must hand it over unchanged,
+        // not repair it into something else).
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "edge".to_string(),
+            speech_edge_voice: "it-IT-A' x='y".to_string(),
+            ..Default::default()
+        };
+        let (engine, voice) = open_voice(&config, &library, "it").expect("opens");
+        let result = engine.synthesize("ciao", &voice, &speech::SpeechCancel::new());
+        assert!(
+            matches!(result, Err(speech::SpeechError::UnknownVoice(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn listen_resolves_a_voice_exactly_as_a_reply_does() {
+        // Catches: Listen and replies diverging again: a hostile or foreign
+        // stored voice must preview as the language default, a multilingual one
+        // must be kept.
+        let library = speech::library::SpeechLibrary::new();
+        let edge = || DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        };
+        for (asked, expected) in [
+            ("evil'><x", "it-IT-IsabellaNeural"),
+            ("en-US-AriaNeural", "it-IT-IsabellaNeural"),
+            ("", "it-IT-IsabellaNeural"),
+            ("en-US-AvaMultilingualNeural", "en-US-AvaMultilingualNeural"),
+        ] {
+            let config = preview_config(edge(), "it", asked).expect("not refused");
+            assert_eq!(config.speech_edge_voice, asked);
+            let (_engine, voice) = open_voice(&config, &library, "it").expect("opens");
+            assert_eq!(voice, expected, "{asked:?}");
+        }
+    }
+
+    #[test]
+    fn listen_has_nothing_to_preview_under_an_external_command() {
+        // Catches: Listen running the user's command with a made-up voice.
+        let config = DictationConfig {
+            speech_engine: "external".to_string(),
+            speech_command: vec!["piper".to_string()],
+            ..Default::default()
+        };
+        assert!(preview_config(config, "it", "x").is_err());
     }
 }

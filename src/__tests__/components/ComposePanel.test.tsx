@@ -3,7 +3,14 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
+import { captureDictationTarget } from "../../hooks/dictationTarget";
 import type { QueuedCommand } from "../../hooks/usePty";
+import { invoke } from "../../invoke";
+import { terminalsStore } from "../../stores/terminals";
+
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue(undefined),
+}));
 
 afterEach(async () => {
 	cleanup();
@@ -61,6 +68,40 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 }
 
 describe("ComposePanel", () => {
+	// Catches: the mounted Compose editor is undiscoverable from transcript/BODY focus.
+	it("delivers Chat dictation into the mounted editor and publishes the changed draft", async () => {
+		const id = terminalsStore.add({
+			sessionId: "compose-dictation",
+			fontSize: 14,
+			name: "Chat",
+			cwd: null,
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(id);
+		terminalsStore.setViewMode(id, "chat");
+		const onTextChange = vi.fn();
+		const { container } = renderPanel({ pinned: () => true, initialText: () => "before THIS after", onTextChange });
+		container.dataset.terminalId = id;
+		try {
+			await waitFor(() => expect(editorText(container)).toBe("before THIS after"));
+			const dom = container.querySelector<HTMLElement>(".cm-editor");
+			const view = dom && EditorView.findFromDOM(dom);
+			if (!view) throw new Error("Compose editor not mounted");
+			(document.activeElement as HTMLElement | null)?.blur();
+			expect(view.hasFocus).toBe(false);
+			view.dispatch({ selection: { anchor: 7, head: 11 } });
+			const target = captureDictationTarget();
+			const write = vi.fn();
+			await target.deliver("spoken words", write, true);
+			expect(editorText(container)).toBe("before spoken words after");
+			expect(onTextChange).toHaveBeenLastCalledWith("before spoken words after");
+			expect(view.state.selection.main.anchor).toBe(19);
+			expect(write).not.toHaveBeenCalled();
+		} finally {
+			terminalsStore.remove(id);
+		}
+	});
+
 	it("Ctrl+Enter sends now, Shift+Ctrl+Enter queues instead", async () => {
 		const { container, props } = renderPanel();
 		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
@@ -294,5 +335,92 @@ describe("ComposePanel", () => {
 			setRequest(1);
 			await waitFor(() => expect(document.activeElement).toBe(content));
 		});
+	});
+
+	function pasteEvent(items: { type: string; file: File | null }[], text = ""): Event {
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: {
+				items: items.map((i) => ({ type: i.type, getAsFile: () => i.file })),
+				getData: (type: string) => (type === "text/plain" ? text : ""),
+			},
+		});
+		return event;
+	}
+
+	// Catches: Compose ignoring clipboard images (story 1350-a1e6) — the paste fell
+	// through to CodeMirror's text paste and the image was lost.
+	it("saves a pasted image and inserts its [image: path] reference", async () => {
+		vi.mocked(invoke).mockResolvedValueOnce("/data/note-images/n1/pic.png");
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		typeIntoEditor(container, "look at ");
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent([{ type: "image/png", file: new File(["x"], "pic.png", { type: "image/png" }) }]);
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		await waitFor(() => expect(editorText(container)).toContain("[image: /data/note-images/n1/pic.png]"));
+		expect(invoke).toHaveBeenCalledWith(
+			"save_note_image",
+			expect.objectContaining({ extension: "png", dataBase64: btoa("x") }),
+		);
+	});
+
+	// Catches: the image handler swallowing every paste, breaking plain text paste.
+	it("leaves a text-only paste to the editor", async () => {
+		vi.mocked(invoke).mockClear();
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent([{ type: "text/plain", file: null }], "plain words");
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true); // CodeMirror's own text paste claims it
+		expect(editorText(container)).toBe("plain words");
+		expect(invoke).not.toHaveBeenCalled();
+	});
+
+	// Catches: a spreadsheet cell copy (text/plain + rendered image) attaching a picture instead of pasting the text.
+	it("pastes the text and saves no image when the clipboard carries text/plain with an image", async () => {
+		vi.mocked(invoke).mockClear();
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		content.dispatchEvent(
+			pasteEvent(
+				[
+					{ type: "image/png", file: new File(["x"], "cell.png", { type: "image/png" }) },
+					{ type: "text/plain", file: null },
+				],
+				"A1\tB1",
+			),
+		);
+
+		expect(invoke).not.toHaveBeenCalled();
+		expect(editorText(container)).toBe("A1\tB1");
+	});
+
+	// Catches: a Finder image-file copy (file name as text/plain + image/png) pasting the file name instead of the image.
+	it("attaches the image when text/plain is only the image's file name", async () => {
+		vi.mocked(invoke).mockResolvedValueOnce("/data/note-images/n1/shot.png");
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent(
+			[
+				{ type: "text/plain", file: null },
+				{ type: "image/png", file: new File(["x"], "shot.png", { type: "image/png" }) },
+			],
+			"shot.png",
+		);
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		await waitFor(() => expect(editorText(container)).toBe("[image: /data/note-images/n1/shot.png]"));
 	});
 });

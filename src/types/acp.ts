@@ -108,6 +108,7 @@ export interface AcpCapabilitySnapshot {
 	list: boolean;
 	resume: boolean;
 	fork: boolean;
+	forkAtMessage?: boolean;
 	delete: boolean;
 	close: boolean;
 	additionalDirectories: boolean;
@@ -122,8 +123,19 @@ export interface AcpCapabilitySnapshot {
 	clientBooleanConfig: boolean;
 	/** Present only when ego advertised `_ego/pause` and `_ego/resume` as one pair. */
 	egoHoldVersion: number | null;
+	egoSteerVersion?: number | null;
 	/** Present only when ego advertised `_ego/compact`. */
 	egoCompactVersion: number | null;
+}
+
+/** ego's answer to `_ego/compact`: the compacted continuation is a new session. */
+export interface EgoCompactResponse {
+	sourceSessionId: AcpSessionId;
+	targetSessionId: AcpSessionId;
+	publication:
+		| { kind: "not_published"; diagnostic: string }
+		| { kind: "published_durably"; diagnostic: string | null }
+		| { kind: "published_durability_uncertain"; diagnostic: string };
 }
 
 export interface AcpTurnSnapshot {
@@ -150,6 +162,8 @@ export interface AcpAttachmentSnapshot {
 	cwd: string;
 	additionalDirectories: string[];
 	configOptions: AcpSessionConfigOption[];
+	/** Authoritative ego clamp notices returned when a repo selects a profile. */
+	profileWarnings?: string[];
 	usage: AcpUsageSnapshot | null;
 	activeTurn: AcpTurnSnapshot | null;
 	queuedPrompts: AcpQueuedPrompt[];
@@ -356,7 +370,7 @@ export type AcpStreamFrame =
 	| ({ kind: "gap" } & AcpClientError)
 	| { kind: "end" };
 
-export type AcpNoticeKind = "ready" | "settled" | "interaction_pending" | "interaction_settled";
+export type AcpNoticeKind = "ready" | "settled" | "interaction_pending" | "interaction_settled" | "card";
 
 /**
  * A wake signal, carrying no ordered payload of its own.

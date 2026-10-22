@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
+import { getDeclaredTerminalWorkspace } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { pathStartsWith } from "../../utils/pathUtils";
 
@@ -31,12 +32,13 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentRepoPath = repositoriesStore.getRepoPathForTerminal(terminalId);
 		const currentWorkspaceId = repositoriesStore.findOwnerForTerminal(terminalId)?.workspaceId ?? null;
 
-		let target = findWorkspaceForCwd(newCwd);
+		// A declaration changes display placement without moving the process.
+		let target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
 		if (!target && currentRepoPath) {
 			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(newCwd, repoPath));
 			if (insideKnownRepo) {
 				await deps.refreshBranches();
-				target = findWorkspaceForCwd(newCwd);
+				target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
 			}
 		}
 
@@ -116,7 +118,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 	const moveTerminalToWorktree = async (terminalId: string, worktreePath: string): Promise<void> => {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal?.sessionId) return;
-		const escapedPath = `'${worktreePath.replace(/'/g, "'\\''")}'`;
+		const escapedPath = `'${worktreePath.replaceAll("'", "'\\''")}'`;
 		await deps.writePty(terminal.sessionId, `cd ${escapedPath}\n`);
 		appLogger.info("terminal", `[MoveToWorktree] ${terminalId} → cd ${worktreePath}`);
 	};

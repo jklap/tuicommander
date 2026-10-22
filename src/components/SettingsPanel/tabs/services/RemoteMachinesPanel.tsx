@@ -1,14 +1,22 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { settingOptions } from "../../../../services/settingsCatalogue";
 import { appLogger } from "../../../../stores/appLogger";
 import {
 	type ConnectionState,
 	type DeployMode,
+	type DiscoveredSshHost,
+	type DiscoveredSshHosts,
 	type RemoteConnection,
 	type RemoteTransport,
 	remoteConnectionsStore,
+	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
+import { ContextualHelp } from "../../ContextualHelp";
 import s from "../../Settings.module.css";
+import { SectionCard, SettingRow } from "../../SettingsPrimitives";
 
 // ---------------------------------------------------------------------------
 // Remote Machines panel
@@ -78,6 +86,27 @@ export function emptyRemoteForm() {
 	};
 }
 
+/** Probe state of a discovered host, matched by resolved target and port (never by display name). */
+export function discoveredHostAuth(host: DiscoveredSshHost, statuses: SshHostStatus[]): SshHostStatus["auth"] | null {
+	return statuses.find((st) => st.target === host.target && st.port === host.port)?.auth ?? null;
+}
+
+/** Replace the status of the same target and port, or append it. */
+export function withStatus(statuses: SshHostStatus[], status: SshHostStatus): SshHostStatus[] {
+	return [...statuses.filter((st) => !(st.target === status.target && st.port === status.port)), status];
+}
+
+/** Add-form state prefilled from a discovered host. */
+export function formFromDiscoveredHost(host: DiscoveredSshHost) {
+	return {
+		...emptyRemoteForm(),
+		name: host.host,
+		sshHost: host.host,
+		sshPort: host.port ?? 22,
+		sshUser: host.user ?? "",
+	};
+}
+
 export const RemoteMachinesPanel: Component = () => {
 	const [showAdd, setShowAdd] = createSignal(false);
 	const [form, setForm] = createSignal(emptyRemoteForm());
@@ -88,11 +117,22 @@ export const RemoteMachinesPanel: Component = () => {
 	const [passwordStored, setPasswordStored] = createSignal(false);
 	const [sshHosts, setSshHosts] = createSignal<SshHostStatus[]>([]);
 	const [probingHosts, setProbingHosts] = createSignal(false);
+	const [discovered, setDiscovered] = createSignal<DiscoveredSshHosts>({ hosts: [], hashed_count: 0 });
+	const [agentInfo, setAgentInfo] = createSignal<SshAgentInfo | null>(null);
 	const [serviceBusyId, setServiceBusyId] = createSignal<string | null>(null);
 	const [updateErrors, setUpdateErrors] = createSignal<Record<string, string>>({});
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
+		// Reads ~/.ssh/config and known_hosts and asks ssh-add; no host is contacted.
+		remoteConnectionsStore
+			.discoverSshHosts()
+			.then(setDiscovered)
+			.catch((e) => appLogger.error("settings", "Failed to discover SSH hosts", { error: String(e) }));
+		remoteConnectionsStore
+			.sshAgentInfo()
+			.then(setAgentInfo)
+			.catch((e) => appLogger.error("settings", "Failed to list SSH agent keys", { error: String(e) }));
 	});
 
 	function connectionList(): ConnectionState[] {
@@ -219,6 +259,22 @@ export const RemoteMachinesPanel: Component = () => {
 		}
 	}
 
+	async function saveResolvedAddress(connState: ConnectionState) {
+		if (connState.connection.transport.type !== "Direct" || !connState.baseUrl) return;
+		setSaving(true);
+		setError("");
+		try {
+			await remoteConnectionsStore.addConnection({
+				...connState.connection,
+				transport: { type: "Direct", url: connState.baseUrl },
+			});
+		} catch (error) {
+			setError(String(error));
+		} finally {
+			setSaving(false);
+		}
+	}
+
 	async function probeHosts() {
 		setProbingHosts(true);
 		setError("");
@@ -228,6 +284,16 @@ export const RemoteMachinesPanel: Component = () => {
 			setError(String(e));
 		} finally {
 			setProbingHosts(false);
+		}
+	}
+
+	async function probeOneHost(host: DiscoveredSshHost) {
+		setError("");
+		try {
+			const status = await remoteConnectionsStore.probeSshHost(host);
+			setSshHosts((current) => withStatus(current, status));
+		} catch (e) {
+			setError(String(e));
 		}
 	}
 
@@ -297,152 +363,255 @@ export const RemoteMachinesPanel: Component = () => {
 	}) {
 		return (
 			<>
-				<select
-					class={s.input}
-					value={props.formData.transportType}
-					onChange={(e) =>
-						props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
-					}
-				>
-					<option value="Ssh">SSH</option>
-					<option value="Direct">Direct</option>
-				</select>
-				<Show when={props.formData.transportType === "Ssh"}>
-					<input
-						type="text"
-						class={s.input}
-						list={props.hostListId}
-						placeholder="Host (e.g. 192.168.1.100)"
-						value={props.formData.sshHost}
-						onInput={(e) => props.setFormData((f) => ({ ...f, sshHost: e.currentTarget.value }))}
-					/>
-					<datalist id={props.hostListId}>
-						<For each={props.sshHosts}>
-							{(host) => <option value={host.host} label={`${host.host} — ${host.auth.replaceAll("_", " ")}`} />}
-						</For>
-					</datalist>
-					<button class={s.textBtn} type="button" onClick={props.onProbeHosts} disabled={props.probingHosts}>
-						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M7.5 1a6.5 6.5 0 1 0 4.05 11.58l2.44 2.43 1.02-1.02-2.43-2.44A6.5 6.5 0 0 0 7.5 1m0 1.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10" />
-						</svg>
-						{props.probingHosts ? " Probing..." : " Probe SSH hosts"}
-					</button>
-					<div style={{ display: "flex", gap: "8px" }}>
-						<div style={{ flex: 1 }}>
-							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Port</label>
-							<input
-								type="number"
-								class={s.input}
-								value={props.formData.sshPort}
-								min={1}
-								max={65535}
-								onInput={(e) =>
-									props.setFormData((f) => ({ ...f, sshPort: parseInt(e.currentTarget.value, 10) || 22 }))
-								}
+				<SectionCard title="Name and transport">
+					<SettingRow label="Name">
+						{(id, descriptionId) => (
+							<Input
+								data-setting-id="connections.connections.{id}.name"
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.formData.name}
+								placeholder="Name (e.g. dev-server, staging)"
+								onInput={(e) => props.setFormData((f) => ({ ...f, name: e.currentTarget.value }))}
 							/>
-						</div>
-						<div style={{ flex: 2 }}>
-							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>User</label>
+						)}
+					</SettingRow>
+					<SettingRow label="Transport">
+						{(id, descriptionId) => (
+							<Select
+								data-setting-id="connections.connections.{id}.transport.type"
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.input}
+								value={props.formData.transportType}
+								onChange={(e) =>
+									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
+								}
+							>
+								<For
+									each={settingOptions("connections.connections.{id}.transport.type", { Ssh: "SSH", Direct: "Direct" })}
+								>
+									{(option) => <option value={option.value}>{option.label}</option>}
+								</For>
+							</Select>
+						)}
+					</SettingRow>
+					<Show when={props.formData.transportType === "Ssh"}>
+						<SettingRow label="Host">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_host"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									list={props.hostListId}
+									placeholder="Host (e.g. 192.168.1.100)"
+									value={props.formData.sshHost}
+									onInput={(e) => props.setFormData((f) => ({ ...f, sshHost: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<datalist id={props.hostListId}>
+							<For each={props.sshHosts}>
+								{(host) => <option value={host.host} label={`${host.host} — ${host.auth.replaceAll("_", " ")}`} />}
+							</For>
+						</datalist>
+						<button
+							data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
+							class={s.textBtn}
+							style={{ "margin-top": "12px", "margin-bottom": "12px" }}
+							type="button"
+							onClick={props.onProbeHosts}
+							disabled={props.probingHosts}
+						>
+							<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M7.5 1a6.5 6.5 0 1 0 4.05 11.58l2.44 2.43 1.02-1.02-2.43-2.44A6.5 6.5 0 0 0 7.5 1m0 1.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10" />
+							</svg>
+							{props.probingHosts ? " Probing..." : " Probe SSH hosts"}
+						</button>
+
+						<SettingRow label="Port">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_port"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="number"
+									class={s.input}
+									value={props.formData.sshPort}
+									min={1}
+									max={65535}
+									onInput={(e) =>
+										props.setFormData((f) => ({ ...f, sshPort: parseInt(e.currentTarget.value, 10) || 22 }))
+									}
+								/>
+							)}
+						</SettingRow>
+
+						<SettingRow label="User">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_user"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="SSH user"
+									value={props.formData.sshUser}
+									onInput={(e) => props.setFormData((f) => ({ ...f, sshUser: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+
+						<SettingRow label="Identity file">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.identity_file"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="Identity file (optional, e.g. ~/.ssh/id_rsa)"
+									value={props.formData.identityFile}
+									onInput={(e) => props.setFormData((f) => ({ ...f, identityFile: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<SettingRow label="Remote daemon port">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.remote_daemon_port"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="number"
+									class={s.input}
+									value={props.formData.remoteDaemonPort}
+									min={1}
+									max={65535}
+									onInput={(e) =>
+										props.setFormData((f) => ({
+											...f,
+											remoteDaemonPort: parseInt(e.currentTarget.value, 10) || 9876,
+										}))
+									}
+								/>
+							)}
+						</SettingRow>
+					</Show>
+					<Show when={props.formData.transportType === "Direct"}>
+						<SettingRow label="URL">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.transport.url"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="URL (e.g. http://192.168.1.100:9876)"
+									value={props.formData.directUrl}
+									onInput={(e) => props.setFormData((f) => ({ ...f, directUrl: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+					</Show>
+				</SectionCard>
+				<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
+					<Show when={props.formData.transportType === "Ssh"}>
+						<SettingRow label="Deployment">
+							{(id, descriptionId) => (
+								<>
+									<Select
+										data-setting-id="connections.connections.{id}.deploy"
+										class={s.input}
+										id={id}
+										aria-describedby={descriptionId()}
+										value={props.formData.deploy}
+										onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
+									>
+										<For
+											each={settingOptions("connections.connections.{id}.deploy", {
+												never: "Never deploy",
+												on_connect: "Deploy on connect",
+												installed: "Installed service",
+											})}
+										>
+											{(option) => <option value={option.value}>{option.label}</option>}
+										</For>
+									</Select>
+								</>
+							)}
+						</SettingRow>
+						<SettingRow label="Keep ephemeral daemon alive (minutes)">
+							{(id, descriptionId) => (
+								<>
+									<Input
+										data-setting-id="connections.connections.{id}.survive_secs"
+										type="number"
+										class={s.input}
+										min={1}
+										id={id}
+										aria-describedby={descriptionId()}
+										value={props.formData.surviveMinutes}
+										onInput={(e) =>
+											props.setFormData((f) => ({
+												...f,
+												surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
+											}))
+										}
+									/>
+								</>
+							)}
+						</SettingRow>
+					</Show>
+					<SettingRow label="Auto-update remote daemons">
+						{(id, descriptionId) => (
 							<input
+								data-setting-id="connections.connections.{id}.auto_update"
+								id={id}
+								aria-describedby={descriptionId()}
+								class={s.rowSwitch}
+								type="checkbox"
+								checked={props.formData.autoUpdate}
+								onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
+							/>
+						)}
+					</SettingRow>
+					<SettingRow label="Auth username">
+						{(id, descriptionId) => (
+							<Input
+								data-setting-id="connections.connections.{id}.auth_username"
+								id={id}
+								aria-describedby={descriptionId()}
 								type="text"
 								class={s.input}
-								placeholder="SSH user"
-								value={props.formData.sshUser}
-								onInput={(e) => props.setFormData((f) => ({ ...f, sshUser: e.currentTarget.value }))}
+								placeholder="Auth username (for TUIC API authentication)"
+								value={props.formData.authUsername}
+								onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
 							/>
-						</div>
-					</div>
-					<input
-						type="text"
-						class={s.input}
-						placeholder="Identity file (optional, e.g. ~/.ssh/id_rsa)"
-						value={props.formData.identityFile}
-						onInput={(e) => props.setFormData((f) => ({ ...f, identityFile: e.currentTarget.value }))}
-					/>
-					<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-						<label style={{ "font-size": "12px", color: "var(--text-dimmed)", "white-space": "nowrap" }}>
-							Remote daemon port
-						</label>
-						<input
-							type="number"
-							class={s.input}
-							value={props.formData.remoteDaemonPort}
-							min={1}
-							max={65535}
-							style={{ width: "90px" }}
-							onInput={(e) =>
-								props.setFormData((f) => ({ ...f, remoteDaemonPort: parseInt(e.currentTarget.value, 10) || 9876 }))
-							}
-						/>
-					</div>
-				</Show>
-				<Show when={props.formData.transportType === "Direct"}>
-					<input
-						type="text"
-						class={s.input}
-						placeholder="URL (e.g. http://192.168.1.100:9876)"
-						value={props.formData.directUrl}
-						onInput={(e) => props.setFormData((f) => ({ ...f, directUrl: e.currentTarget.value }))}
-					/>
-				</Show>
-				<Show when={props.formData.transportType === "Ssh"}>
-					<label style={{ display: "grid", gap: "4px" }}>
-						<span>Deployment</span>
-						<select
-							class={s.input}
-							value={props.formData.deploy}
-							onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
-						>
-							<option value="never">Never deploy</option>
-							<option value="on_connect">Deploy on connect</option>
-							<option value="installed">Installed service</option>
-						</select>
-					</label>
-					<label style={{ display: "grid", gap: "4px" }}>
-						<span>Keep ephemeral daemon alive (minutes)</span>
-						<input
-							type="number"
-							class={s.input}
-							min={1}
-							value={props.formData.surviveMinutes}
-							onInput={(e) =>
-								props.setFormData((f) => ({
-									...f,
-									surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
-								}))
-							}
-						/>
-					</label>
-				</Show>
-				<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-					Auto-update remote daemons
-					<input
-						type="checkbox"
-						style={{ order: -1 }}
-						checked={props.formData.autoUpdate}
-						onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
-					/>
-				</label>
-				<input
-					type="text"
-					class={s.input}
-					placeholder="Auth username (for TUIC API authentication)"
-					value={props.formData.authUsername}
-					onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
-				/>
-				<input
-					type="password"
-					class={s.input}
-					autocomplete="off"
-					placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
-					value={props.formData.authPassword}
-					onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
-				/>
-				<p class={s.hint} style={{ margin: 0 }}>
-					The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
-					session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection without
-					one reaches only <code>/health</code>.
-				</p>
+						)}
+					</SettingRow>
+					<SettingRow label="Auth password">
+						{(id, descriptionId) => (
+							<Input
+								data-setting-id="connections.{id}.credential"
+								id={id}
+								aria-describedby={descriptionId()}
+								type="password"
+								class={s.input}
+								autocomplete="off"
+								placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
+								value={props.formData.authPassword}
+								onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
+							/>
+						)}
+					</SettingRow>
+					<p class={s.hint} style={{ margin: 0 }}>
+						The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
+						session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection
+						without one reaches only <code>/health</code>.
+					</p>
+				</SectionCard>
 			</>
 		);
 	}
@@ -450,12 +619,9 @@ export const RemoteMachinesPanel: Component = () => {
 	return (
 		<div>
 			<div class={s.group}>
-				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<p class={s.hint} style={{ margin: 0 }}>
-						Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel
-						automatically.
-					</p>
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "flex-end" }}>
 					<button
+						data-non-setting="Open, prefill, cancel or close the connection editor"
 						class={s.copyBtn}
 						onClick={() => {
 							setShowAdd((v) => !v);
@@ -469,6 +635,85 @@ export const RemoteMachinesPanel: Component = () => {
 				</div>
 			</div>
 
+			{/* Discovered SSH hosts */}
+			<div class={s.group}>
+				<Show when={agentInfo()}>
+					{(info) => (
+						<p
+							class={s.hint}
+							style={{ margin: "0 0 6px", color: info().keys.length === 0 ? "var(--warning)" : undefined }}
+							role={info().keys.length === 0 ? "alert" : undefined}
+						>
+							{info().keys.length === 0
+								? "No SSH agent identities loaded: key-based connections will fail authentication. Add a key with ssh-add."
+								: `SSH agent keys loaded (${info().keys.length}): ${info()
+										.keys.map((k) => k.comment || k.fingerprint)
+										.join(", ")}`}
+						</p>
+					)}
+				</Show>
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+					<span style={{ "font-weight": 500, "font-size": "13px" }}>
+						Discovered SSH hosts ({discovered().hosts.length})
+					</span>
+					<button
+						data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
+						class={s.textBtn}
+						type="button"
+						onClick={probeHosts}
+						disabled={probingHosts()}
+					>
+						{probingHosts() ? "Probing..." : "Probe config hosts"}
+					</button>
+				</div>
+				<Show when={discovered().hashed_count > 0}>
+					<p class={s.hint} style={{ margin: "4px 0 0" }}>
+						{discovered().hashed_count} known_hosts entries are hashed and cannot be listed.
+					</p>
+				</Show>
+				<div style={{ "max-height": "220px", "overflow-y": "auto", "margin-top": "6px" }}>
+					<For each={discovered().hosts}>
+						{(host) => {
+							const auth = () => discoveredHostAuth(host, sshHosts());
+							return (
+								<div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
+									<button
+										data-non-setting="Open, prefill, cancel or close the connection editor"
+										type="button"
+										class={s.textBtn}
+										title="Prefill the Add form with this host"
+										style={{ display: "flex", flex: 1, "justify-content": "space-between", gap: "8px" }}
+										onClick={() => {
+											setForm(formFromDiscoveredHost(host));
+											setShowAdd(true);
+											setError("");
+										}}
+									>
+										<span style={{ "font-family": "monospace", "font-size": "11px" }}>
+											{host.user ? `${host.user}@` : ""}
+											{host.host}
+											{host.port ? `:${host.port}` : ""}
+										</span>
+										<span style={{ "font-size": "11px", color: "var(--text-dimmed)" }}>
+											{auth() ? auth()?.replaceAll("_", " ") : host.source === "config" ? "ssh config" : "known_hosts"}
+										</span>
+									</button>
+									<button
+										data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
+										type="button"
+										class={s.textBtn}
+										title="Contact this host once to check authentication"
+										onClick={() => probeOneHost(host)}
+									>
+										Probe
+									</button>
+								</div>
+							);
+						}}
+					</For>
+				</div>
+			</div>
+
 			{/* Add form */}
 			<Show when={showAdd()}>
 				<div
@@ -476,13 +721,6 @@ export const RemoteMachinesPanel: Component = () => {
 					style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
 				>
 					<div style={{ display: "grid", gap: "8px" }}>
-						<input
-							type="text"
-							class={s.input}
-							placeholder="Name (e.g. dev-server, staging)"
-							value={form().name}
-							onInput={(e) => setForm((f) => ({ ...f, name: e.currentTarget.value }))}
-						/>
 						<TransportFields
 							formData={form()}
 							setFormData={setForm}
@@ -492,10 +730,16 @@ export const RemoteMachinesPanel: Component = () => {
 							onProbeHosts={probeHosts}
 						/>
 						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-							<button class={s.textBtn} onClick={addConnection} disabled={saving()}>
+							<button
+								data-non-setting="Create, update or remove a stable connection through the existing owner"
+								class={s.textBtn}
+								onClick={addConnection}
+								disabled={saving()}
+							>
 								{saving() ? "Saving..." : "Save"}
 							</button>
 							<button
+								data-non-setting="Open, prefill, cancel or close the connection editor"
 								class={s.textBtn}
 								onClick={() => {
 									setShowAdd(false);
@@ -515,10 +759,11 @@ export const RemoteMachinesPanel: Component = () => {
 				</div>
 			</Show>
 
+			<h3>Your machines</h3>
 			{/* Empty state */}
 			<Show when={connectionList().length === 0 && !showAdd()}>
 				<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-					No remote machines configured. Click <strong>+</strong> to add one.
+					No remote machines configured.
 				</p>
 			</Show>
 
@@ -589,9 +834,41 @@ export const RemoteMachinesPanel: Component = () => {
 									>
 										{transportSummary(conn().transport)}
 									</div>
-									<Show when={connState.error}>
+									<Show
+										when={
+											connState.status === "connected" &&
+											conn().transport.type === "Direct" &&
+											connState.baseUrl &&
+											connState.baseUrl !== (conn().transport as { url: string }).url.replace(/\/$/, "")
+										}
+									>
+										<div class={s.hint}>
+											Connected through {connState.baseUrl}
+											<button
+												data-non-setting="Create, update or remove a stable connection through the existing owner"
+												class={s.textBtn}
+												disabled={saving()}
+												onClick={() => saveResolvedAddress(connState)}
+											>
+												Save resolved address
+											</button>
+										</div>
+									</Show>
+									<Show
+										when={(connState.status === "error" || connState.status === "unauthenticated") && connState.error}
+									>
 										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--error)" }}>
 											{connState.error}
+										</div>
+									</Show>
+									<Show
+										when={
+											connState.retryAfterSecs !== undefined &&
+											(connState.status === "error" || connState.status === "disconnected")
+										}
+									>
+										<div class={s.hint} role="status">
+											Retry delay: {connState.retryAfterSecs}s
 										</div>
 									</Show>
 									<Show when={connState.updateNotice}>
@@ -608,6 +885,7 @@ export const RemoteMachinesPanel: Component = () => {
 								{/* Connect / Disconnect */}
 								<Show when={connState.status === "connected"}>
 									<button
+										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id || connState.updateInProgress}
 										onClick={() => updateRemote(connState)}
@@ -616,6 +894,7 @@ export const RemoteMachinesPanel: Component = () => {
 									</button>
 								</Show>
 								<button
+									data-non-setting="Connect or disconnect the current runtime without changing its configuration"
 									class={s.textBtn}
 									onClick={() => {
 										// "unauthenticated" still holds a tunnel and a baseUrl, so it
@@ -631,6 +910,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</button>
 								<Show when={conn().transport.type === "Ssh"}>
 									<button
+										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id}
 										onClick={() => toggleInstalled(conn())}
@@ -648,6 +928,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</Show>
 								{/* Edit */}
 								<button
+									data-non-setting="Open, prefill, cancel or close the connection editor"
 									class={s.copyBtn}
 									style={{ "flex-shrink": 0 }}
 									title="Edit"
@@ -659,6 +940,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</button>
 								{/* Delete */}
 								<button
+									data-non-setting="Create, update or remove a stable connection through the existing owner"
 									class={s.copyBtn}
 									title="Remove"
 									onClick={() => removeConnection(conn().id, conn().name)}
@@ -691,10 +973,16 @@ export const RemoteMachinesPanel: Component = () => {
 											onProbeHosts={probeHosts}
 										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button class={s.textBtn} onClick={() => saveEdit(connState)} disabled={saving()}>
+											<button
+												data-non-setting="Create, update or remove a stable connection through the existing owner"
+												class={s.textBtn}
+												onClick={() => saveEdit(connState)}
+												disabled={saving()}
+											>
 												{saving() ? "Saving..." : "Save"}
 											</button>
 											<button
+												data-non-setting="Open, prefill, cancel or close the connection editor"
 												class={s.textBtn}
 												onClick={() => {
 													setEditingId(null);

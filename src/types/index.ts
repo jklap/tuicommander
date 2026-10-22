@@ -150,6 +150,10 @@ export interface BranchPrStatus {
 	merge_commit_allowed: boolean;
 	squash_merge_allowed: boolean;
 	rebase_merge_allowed: boolean;
+	/** Unresolved review threads (first 50 per PR). Counts only; the bot/human split is fetched on demand. */
+	unresolved_threads: number;
+	/** More than 50 threads exist: `unresolved_threads` is a lower bound, 0 does not mean none open. */
+	unresolved_threads_truncated: boolean;
 }
 
 /** A single match from cross-terminal buffer search */
@@ -184,6 +188,10 @@ export interface SessionState {
 
 /** Saved terminal for session restore */
 export interface SavedTerminal {
+	/** Presentation identity for reconnecting pane layouts after WebView recreation. */
+	frontendId?: string;
+	/** Live backend PTY at snapshot time, used only for same-process reconnect. */
+	sessionId?: string | null;
 	name: string;
 	cwd: string | null;
 	fontSize: number;
@@ -202,6 +210,8 @@ export interface SavedTerminal {
 	agentIntent?: string | null;
 	/** Last user prompt seen before the snapshot, truncated at persist time */
 	lastPrompt?: string | null;
+	/** Ended on purpose (Suspend): restored without a PTY, resumed by the user */
+	suspended?: boolean;
 }
 
 /** GitHub Issue from GraphQL API */

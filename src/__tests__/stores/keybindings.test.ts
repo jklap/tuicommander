@@ -60,8 +60,22 @@ describe("keybindingDefaults", () => {
 			}
 		});
 
-		it("leaves the hands-free toggle unbound: it is a Command Palette action", () => {
-			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("");
+		it("binds answers-only to Cmd+Alt+R", () => {
+			expect(DEFAULT_BINDINGS["answers-only"]).toBe("Cmd+Alt+R");
+		});
+
+		it("binds run-command to Cmd+Shift+R so Cmd+R stays a reload", () => {
+			expect(DEFAULT_BINDINGS["run-command"]).toBe("Cmd+Shift+R");
+			expect(DEFAULT_BINDINGS["reload-tab"]).toBe("Cmd+R");
+		});
+
+		it("leaves edit-command unbound: Cmd+Alt+R belongs to answers-only", () => {
+			expect(DEFAULT_BINDINGS["edit-command"]).toBe("");
+		});
+
+		it("binds the hands-free toggle to Cmd+Alt+V", () => {
+			// TEST-CHANGE: Boss approved the formerly unbound action default on 2026-10-16.
+			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("Cmd+Alt+V");
 		});
 
 		it("has no duplicate key combos", () => {

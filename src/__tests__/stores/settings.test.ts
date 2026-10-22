@@ -27,6 +27,22 @@ describe("settingsStore", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: mobile config failures emit desktop-only restart advice instead of remaining retryable.
+	it("can retry a quiet failed hydration without emitting restart advice", async () => {
+		const { toastsStore } = await import("../../stores/toasts");
+		const { appLogger } = await import("../../stores/appLogger");
+		const log = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		const toast = vi.spyOn(toastsStore, "add");
+		mockInvoke.mockRejectedValueOnce(new TypeError("Load failed"));
+		expect(await store.hydrate({ notifyOnError: false })).toBe(false);
+		expect(toast).not.toHaveBeenCalled();
+		mockInvoke.mockResolvedValueOnce({ ego_executable: "ego" });
+		expect(await store.hydrate({ notifyOnError: false })).toBe(true);
+		expect(store.state.egoExecutable).toBe("ego");
+		log.mockRestore();
+		toast.mockRestore();
+	});
+
 	/** Hydrate the store so save() is unlocked — pre-hydrate saves are refused
 	 *  to avoid clobbering config.json with defaults. */
 	async function hydrateStore(): Promise<void> {
@@ -45,6 +61,89 @@ describe("settingsStore", () => {
 	function saveConfigCalls(): unknown[][] {
 		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
 	}
+
+	// Catches: saving the tray preference overwrites another background setting.
+	it("persists the tray preference while retaining background fields", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { tray_icon: "always", hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.trayIcon).toBe("always");
+		mockInvoke.mockImplementation(async (command) =>
+			command === "load_config"
+				? { background: { tray_icon: "always", hide_dock_icon: false, webview_unload_minutes: 25 } }
+				: undefined,
+		);
+		store.setTrayIcon("never");
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: expect.objectContaining({
+					background: { tray_icon: "never", hide_dock_icon: false, webview_unload_minutes: 25 },
+				}),
+			}),
+		);
+	});
+
+	// Catches: new expert resource fields disappearing at the store/save boundary.
+	it("hydrates_and_saves_resource_limits_without_overwriting_a_remote_background_leaf", async () => {
+		mockInvoke.mockResolvedValueOnce({
+			index_memory_budget_mb: 128,
+			attachment_max_bytes: 2048,
+			background: { webview_unload_minutes: 15, tray_icon: "always" },
+		});
+		await store.hydrate();
+		expect(store.state.indexMemoryBudgetMb).toBe(128);
+		expect(store.state.attachmentMaxBytes).toBe(2048);
+		expect(store.state.webviewUnloadMinutes).toBe(15);
+		mockInvoke.mockImplementation(async (command) =>
+			command === "load_config"
+				? { background: { webview_unload_minutes: 15, tray_icon: "never", hide_dock_icon: false } }
+				: undefined,
+		);
+		store.setIndexMemoryBudgetMb(0);
+		store.setAttachmentMaxBytes(4096);
+		store.setWebviewUnloadMinutes(0);
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: expect.objectContaining({
+					index_memory_budget_mb: 0,
+					attachment_max_bytes: 4096,
+					background: { webview_unload_minutes: 0, tray_icon: "never", hide_dock_icon: false },
+				}),
+			}),
+		);
+	});
+
+	// Catches: NaN/fractional/negative inputs entering a whole-number resource setting.
+	it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects invalid resource limit %s",
+		(value) => {
+			const before = [
+				store.state.indexMemoryBudgetMb,
+				store.state.attachmentMaxBytes,
+				store.state.webviewUnloadMinutes,
+			];
+			store.setIndexMemoryBudgetMb(value);
+			store.setAttachmentMaxBytes(value);
+			store.setWebviewUnloadMinutes(value);
+			expect([
+				store.state.indexMemoryBudgetMb,
+				store.state.attachmentMaxBytes,
+				store.state.webviewUnloadMinutes,
+			]).toEqual(before);
+		},
+	);
+
+	// Catches: hydration silently turns a persisted beta channel back into stable.
+	it.each(["beta", "stable", "nightly"])("keeps the saved %s update channel", async (channel) => {
+		mockInvoke.mockResolvedValueOnce({ update_channel: channel });
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+			expect(store.state.updateChannel).toBe(channel);
+		});
+	});
 
 	describe("ego ACP profile", () => {
 		it("persists a selected profile and allows clearing it", async () => {
@@ -77,6 +176,39 @@ describe("settingsStore", () => {
 				await hydrateStore();
 				expect(store.setEgoProfile("a".repeat(64))).toBe(true);
 				expect(store.state.egoProfile).toBe("a".repeat(64));
+			});
+		});
+	});
+
+	describe("AI Chat workspace", () => {
+		it("persists an absolute path and allows clearing it", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setAiChatWorkspace("/srv/chat")).toBe(true);
+				expect(store.state.aiChatWorkspace).toBe("/srv/chat");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect((saveConfigCalls()[0][1] as { config: { ai_chat_workspace: string } }).config.ai_chat_workspace).toBe(
+					"/srv/chat",
+				);
+				expect(store.setAiChatWorkspace("")).toBe(true);
+				expect(store.state.aiChatWorkspace).toBe("");
+			});
+		});
+
+		it.each(["relative/dir", "~/chat", "chat", "./chat"])("refuses %j and keeps the saved path", async (path) => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setAiChatWorkspace("/srv/chat");
+				expect(store.setAiChatWorkspace(path)).toBe(false);
+				expect(store.state.aiChatWorkspace).toBe("/srv/chat");
+			});
+		});
+
+		it.each(["C:\\chat", "C:/chat", "\\\\host\\share"])("accepts the Windows absolute path %j", async (path) => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setAiChatWorkspace(path)).toBe(true);
 			});
 		});
 	});
@@ -181,6 +313,24 @@ describe("settingsStore", () => {
 				await vi.runAllTimersAsync();
 				expect(saveConfigCalls()).toHaveLength(0);
 			});
+		});
+	});
+
+	// Catches: the UI dropping the close choice when saving or hydrating config.
+	it("persists and hydrates the main-window close preference", async () => {
+		await testInScopeAsync(async () => {
+			await hydrateStore();
+			expect(store.state.closeBehavior).toBe("ask");
+			store.setCloseBehavior("background");
+			vi.advanceTimersByTime(600);
+			await vi.runAllTimersAsync();
+			expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+				base: expect.anything(),
+				config: expect.objectContaining({ close_behavior: "background" }),
+			});
+			mockInvoke.mockResolvedValueOnce({ close_behavior: "quit" });
+			await store.hydrate();
+			expect(store.state.closeBehavior).toBe("quit");
 		});
 	});
 
@@ -653,7 +803,8 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideDrafts updates state", () => {
+		it("setPrHideDrafts updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideDrafts(true);
 				expect(store.state.prHideDrafts).toBe(true);
@@ -675,14 +826,16 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideConflicting updates state", () => {
+		it("setPrHideConflicting updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideConflicting(true);
 				expect(store.state.prHideConflicting).toBe(true);
 			});
 		});
 
-		it("setPrHideCiFailing updates state", () => {
+		it("setPrHideCiFailing updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideCiFailing(true);
 				expect(store.state.prHideCiFailing).toBe(true);
@@ -757,6 +910,25 @@ describe("settingsStore", () => {
 				await store.hydrate();
 				expect(store.state.customLaunchers).toEqual([launcher]);
 			});
+		});
+	});
+	// Catches: saving General settings drops a future background key or ignores the Dock preference.
+	it("hydrates and persists the Dock preference while preserving other background settings", async () => {
+		mockInvoke.mockResolvedValueOnce({ background: { hide_dock_icon: false } });
+		await store.hydrate();
+		expect(store.state.hideDockIcon).toBe(false);
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "load_config" ? { background: { hide_dock_icon: false, webview_unload_minutes: 25 } } : undefined,
+			),
+		);
+		store.setHideDockIcon(true);
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+			base: { background: { hide_dock_icon: false, webview_unload_minutes: 25 } },
+			config: expect.objectContaining({
+				background: { hide_dock_icon: true, webview_unload_minutes: 25 },
+			}),
 		});
 	});
 });

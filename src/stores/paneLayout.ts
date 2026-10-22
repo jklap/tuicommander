@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
@@ -268,7 +269,7 @@ function firstLeaf(node: PaneNode): string {
 /** Get the last (rightmost/bottommost) leaf ID in a subtree */
 function lastLeaf(node: PaneNode): string {
 	if (node.type === "leaf") return node.id;
-	return lastLeaf(node.children[node.children.length - 1]);
+	return lastLeaf(node.children.at(-1)!);
 }
 
 // ---- Store ----
@@ -300,7 +301,7 @@ function createPaneLayoutStore() {
 	// Debounced persistence — serializes tree+groups directly (no `this` needed)
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-	function writeLayout(): void {
+	function layoutSnapshot(): PaneLayoutState {
 		const groups: Record<string, PaneGroup> = {};
 		for (const key of Object.keys(state.groups)) {
 			const g = state.groups[key];
@@ -315,19 +316,43 @@ function createPaneLayoutStore() {
 			groups,
 			activeGroupId: state.activeGroupId,
 		};
-		layoutWriter.save(snapshot).catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
+		return snapshot;
+	}
+
+	function writeLayout(): Promise<void> {
+		return layoutWriter.save(layoutSnapshot());
 	}
 
 	function scheduleSave(): void {
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			saveTimer = null;
-			writeLayout();
+			writeLayout().catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 		}, 500);
 	}
 
 	const result = {
 		state,
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "pane_layout",
+				read: () => invoke<PaneLayoutState>("load_pane_layout"),
+				apply: (remote) => {
+					const merged = layoutWriter.adopt(
+						remote ?? { root: null, groups: {}, activeGroupId: null },
+						layoutSnapshot(),
+					);
+					const pendingSave = saveTimer !== null;
+					if (saveTimer) {
+						clearTimeout(saveTimer);
+						saveTimer = null;
+					}
+					result.restore(merged.value);
+					if (pendingSave && !merged.conflicts.length) scheduleSave();
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 
 		/** Read the tree root. Call treeRevision() first to subscribe to changes. */
 		getRoot(): PaneNode | null {
@@ -452,7 +477,7 @@ function createPaneLayoutStore() {
 					if (!group) return;
 					group.tabs = group.tabs.filter((t) => t.id !== tabId);
 					if (group.activeTabId === tabId) {
-						group.activeTabId = group.tabs.length > 0 ? group.tabs[group.tabs.length - 1].id : null;
+						group.activeTabId = group.tabs.length > 0 ? group.tabs.at(-1)!.id : null;
 					}
 				}),
 			);
@@ -472,7 +497,7 @@ function createPaneLayoutStore() {
 					const from = s.groups[fromGroupId];
 					from.tabs = from.tabs.filter((t) => t.id !== tabId);
 					if (from.activeTabId === tabId) {
-						from.activeTabId = from.tabs.length > 0 ? from.tabs[from.tabs.length - 1].id : null;
+						from.activeTabId = from.tabs.length > 0 ? from.tabs.at(-1)!.id : null;
 					}
 					const to = s.groups[toGroupId];
 					if (!to.tabs.some((t) => t.id === tab.id && t.type === tab.type)) {
@@ -659,12 +684,18 @@ function createPaneLayoutStore() {
 
 	return {
 		...result,
+		/** Snapshot acknowledgement must wait for the latest layout write, including queued saves. */
+		async saveForBackground(): Promise<void> {
+			if (saveTimer) clearTimeout(saveTimer);
+			saveTimer = null;
+			await writeLayout();
+		},
 		/** Write a pending debounced save now — the app is going away. */
 		flushSave(): void {
 			if (!saveTimer) return;
 			clearTimeout(saveTimer);
 			saveTimer = null;
-			writeLayout();
+			writeLayout().catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 		},
 		_testCancelPendingSave(): void {
 			if (saveTimer) {

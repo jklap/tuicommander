@@ -3,11 +3,25 @@ import type { AgentType } from "../../agents";
 
 export interface AgentIconProps {
 	agent: AgentType;
+	/** Model provider metadata; it does not change the session identity icon. */
+	provider?: string | null;
 	size?: number;
 }
 
+interface IconPath {
+	viewBox: string;
+	d: string;
+	evenodd?: boolean;
+}
+
 /** SVG path data for agents with official brand icons */
-const AGENT_PATHS: Partial<Record<AgentType, { viewBox: string; d: string }>> = {
+const AGENT_PATHS: Partial<Record<AgentType, IconPath>> = {
+	// ego: ring around an epsilon.
+	ego: {
+		viewBox: "0 0 24 24",
+		evenodd: true,
+		d: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zM15 8.5H11a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h4V14h-3.5a.5.5 0 0 1-.5-.5v-.75h3.5v-1.5H11v-.75a.5.5 0 0 1 .5-.5H15z",
+	},
 	// Claude sparkle/asterisk (source: simpleicons.org)
 	claude: {
 		viewBox: "0 0 24 24",
@@ -45,17 +59,22 @@ const AGENT_PATHS: Partial<Record<AgentType, { viewBox: string; d: string }>> = 
 	},
 };
 
+/** Session identity determines the icon, never the model provider. */
+export function resolveAgentIcon(agent: AgentType, _provider?: string | null): IconPath | undefined {
+	return AGENT_PATHS[agent];
+}
+
 /** Returns an inline SVG string for the given agent, or null if no icon exists. */
-export function getAgentIconSvg(agent: AgentType, size = 14): string | null {
-	const icon = AGENT_PATHS[agent];
+export function getAgentIconSvg(agent: AgentType, size = 14, provider?: string | null): string | null {
+	const icon = resolveAgentIcon(agent, provider);
 	if (!icon) return null;
-	return `<svg viewBox="${icon.viewBox}" width="${size}" height="${size}" fill="currentColor" style="vertical-align:middle;flex-shrink:0"><path d="${icon.d}"/></svg>`;
+	return `<svg viewBox="${icon.viewBox}" width="${size}" height="${size}" fill="currentColor" style="vertical-align:middle;flex-shrink:0"><path${icon.evenodd ? ' fill-rule="evenodd"' : ""} d="${icon.d}"/></svg>`;
 }
 
 /** Renders the brand icon for a given AI agent. Falls back to a capital letter when no SVG exists. */
 export const AgentIcon: Component<AgentIconProps> = (props): JSX.Element => {
 	const size = () => props.size ?? 14;
-	const icon = () => AGENT_PATHS[props.agent];
+	const icon = () => resolveAgentIcon(props.agent, props.provider);
 
 	return (
 		<Show when={icon()} fallback={<span style={{ "font-weight": "700" }}>{props.agent[0].toUpperCase()}</span>}>
@@ -67,7 +86,7 @@ export const AgentIcon: Component<AgentIconProps> = (props): JSX.Element => {
 					fill="currentColor"
 					style={{ "vertical-align": "middle", "flex-shrink": "0" }}
 				>
-					<path d={svg().d} />
+					<path fill-rule={svg().evenodd ? "evenodd" : undefined} d={svg().d} />
 				</svg>
 			)}
 		</Show>

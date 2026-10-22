@@ -120,6 +120,44 @@ describe("MarkdownTab agent review actions", () => {
 		);
 	});
 
+	// jsdom has no layout; CodeMirror's measure pass asks Range for client rects.
+	Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+	Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
+	it("Live mode saves the typed buffer byte for byte through write_file and leaves the viewer alone", async () => {
+		// catches: Live save going through a serializer, or replacing the read-only viewer
+		fileContent =
+			"# Title\r\n\r\ntext **bold** <!--tweak:begin:c1-->w<!--tweak:end:c1 @2026-01-01T00:00:00.000Z\nn-->\r\n";
+		const tabId = mdTabsStore.add("/repo", "docs/live.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		await waitFor(() => expect(container.textContent).toContain("Title"));
+		expect(container.querySelector(".cm-editor")).toBeNull();
+		fireEvent.click(screen.getByText("Live"));
+		// Live renders the preview; a click on the heading swaps it for its source editor.
+		const heading = await waitFor(() => {
+			const h = container.querySelector<HTMLElement>("h1[data-comment-source-start]");
+			if (!h) throw new Error("live view not rendered");
+			return h;
+		});
+		fireEvent.click(heading);
+		await waitFor(() => {
+			if (!container.querySelector(".cm-content")) throw new Error("block editor not mounted");
+		});
+		const view = (await import("@codemirror/view")).EditorView.findFromDOM(
+			container.querySelector(".cm-editor") as HTMLElement,
+		);
+		expect(view).not.toBeNull();
+		view?.dispatch({ changes: { from: 0, insert: "X" } });
+		fireEvent.click(await screen.findByText("Save"));
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", {
+				repoPath: "/repo",
+				file: "docs/live.md",
+				content: `X${fileContent}`,
+			}),
+		);
+	});
+
 	function addAgent(name: string, sessionId: string, repoPath: string) {
 		const id = terminalsStore.add({ name, sessionId, fontSize: 14, cwd: repoPath, awaitingInput: null });
 		terminalsStore.update(id, { agentType: "claude", repoPath });
@@ -154,9 +192,111 @@ describe("MarkdownTab agent review actions", () => {
 				text: expect.stringContaining("/repo/docs/review.md"),
 			}),
 		);
-		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
 		expect(addToast).toHaveBeenCalledWith("Sent to agent", expect.stringContaining("queued"), "info");
-		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
+		expect(container.querySelector(".header")?.contains(send)).toBe(false);
+	});
+
+	// Catches: completing an earlier send consumes a checkbox edit saved while enqueue was pending.
+	it("keeps a checkbox edit made during an in-flight send available for another send", async () => {
+		fileContent += "\n\n- [ ] Answer";
+		addAgent("Reviewer", "session-one", "/repo");
+		let finishSend!: (outcome: { typed: boolean; queued: number }) => void;
+		mockRpc.mockImplementation((command: string) =>
+			command === "enqueue_agent_command"
+				? new Promise((resolve) => {
+						finishSend = resolve;
+					})
+				: Promise.resolve(undefined),
+		);
+		mockInvoke.mockImplementation((command: string, args?: { content?: string }) => {
+			if (command === "write_file" && args?.content !== undefined) fileContent = args.content;
+			return Promise.resolve(command === "read_file" ? fileContent : undefined);
+		});
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(finishSend).toBeTypeOf("function"));
+		fireEvent.click(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+		await waitFor(() => expect(fileContent).toContain("- [x] Answer"));
+		finishSend({ typed: true, queued: 0 });
+		await waitFor(() => expect(toastsStore.toasts.some((toast) => toast.title === "Sent to agent")).toBe(true));
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).not.toBeNull();
+	});
+
+	// Catches: retained tweak markers leave Agent/Send rendered after delivery.
+	it("MarkdownTab send hides controls", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+		expect(screen.queryByRole("combobox", { name: "Review agent" })).toBeNull();
+		repositoriesStore.bumpRevision("/repo");
+		await screen.findByRole("heading", { name: "Heading" });
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
+	});
+
+	// Catches: remembering sent markers permanently hides controls for a new tweak or edit.
+	it.each(["tweak", "checkbox", "text"])("MarkdownTab new change after send: %s", async (change) => {
+		fileContent += "\n\n- [ ] Answer\n";
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+		if (change === "tweak") {
+			fileContent += "\n<!--tweak:block:c_new @2026-10-14T08:00:00.000Z\nNew feedback-->\nNew paragraph\n";
+			repositoriesStore.bumpRevision("/repo");
+		} else if (change === "checkbox") {
+			fireEvent.click(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+		} else {
+			fireEvent.click(screen.getByText("Live"));
+			const heading = await waitFor(() => {
+				const element = container.querySelector<HTMLElement>("h1[data-comment-source-start]");
+				if (!element) throw new Error("Live heading not rendered");
+				return element;
+			});
+			fireEvent.click(heading);
+			await waitFor(() => expect(container.querySelector(".cm-editor")).not.toBeNull());
+			const view = (await import("@codemirror/view")).EditorView.findFromDOM(
+				container.querySelector(".cm-editor") as HTMLElement,
+			);
+			view?.dispatch({ changes: { from: 0, insert: "New " } });
+			fireEvent.click(await screen.findByText("Save"));
+		}
+		await screen.findByRole("button", { name: "Send changes to agent" });
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
+	});
+
+	// Catches: a rejected enqueue consumes pending changes and hides retry controls.
+	it("MarkdownTab failed send keeps controls", async () => {
+		mockRpc.mockRejectedValueOnce(new Error("Agent unavailable"));
+		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() => expect(addToast).toHaveBeenCalledWith("Couldn't send changes", "Agent unavailable", "error"));
+		expect(screen.getByRole("button", { name: "Send changes to agent" }).hasAttribute("disabled")).toBe(false);
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
+	});
+
+	it("marks Send ready only while it can send", async () => {
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		expect((send as HTMLButtonElement).disabled).toBe(true);
+		expect(send.hasAttribute("data-ready")).toBe(false);
+	});
+
+	it("marks Send ready when an agent is selected", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		expect(send.getAttribute("data-ready")).toBe("true");
 	});
 
 	it("queues an absolute Markdown file without prefixing its repository path", async () => {
@@ -412,6 +552,38 @@ describe("MarkdownTab agent review actions", () => {
 		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
 	});
 
+	it("shows the agent controls after a checkbox tick in a file without tweak comments, and sends without a tweak count", async () => {
+		fileContent = "- [ ] Approve the plan\n";
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/answers.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const checkbox = await waitFor(() => {
+			const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+			expect(box).not.toBeNull();
+			return box as HTMLInputElement;
+		});
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
+
+		fireEvent.click(checkbox);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		fireEvent.click(send);
+
+		await waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("enqueue_agent_command", {
+				sessionId: "session-one",
+				text: expect.stringMatching(
+					/^Open \/repo\/docs\/answers\.md, re-read the whole file.*checkbox.*user's answer/s,
+				),
+			}),
+		);
+		const sent = mockRpc.mock.calls.find(([method]) => method === "enqueue_agent_command")?.[1].text as string;
+		expect(sent).not.toMatch(/\b0 embedded|tweak review/);
+		// The edit has been delivered: with no tweaks left, the controls go away until the next edit.
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+	});
+
 	it.each([
 		["../src/main.rs:42", "/repo/src/main.rs", "src/main.rs", 42],
 		["../LICENSE", "/repo/LICENSE", "LICENSE", undefined],
@@ -487,6 +659,38 @@ describe("MarkdownTab agent review actions", () => {
 		expect(toast).toHaveBeenCalledWith("File not found", "File not found: ./gone.rs", "error");
 		// The File Browser visibility change persists UI prefs after a 500ms debounce.
 		await new Promise((resolve) => setTimeout(resolve, 550));
+	});
+
+	it("opens a relative .md link in the markdown viewer when the backend sends anchor:null,line:null", async () => {
+		// Real wire shape of Rust MarkdownLinkTarget::File before skip_serializing_if (story 1352).
+		fileContent = "[next](./next.md)";
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "resolve_markdown_link"
+					? {
+							kind: "file",
+							absolute_path: "/repo/docs/next.md",
+							open_path: "docs/next.md",
+							is_directory: false,
+							same_document: false,
+							anchor: null,
+							line: null,
+						}
+					: fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		const editor = vi.spyOn(editorTabsStore, "add").mockReturnValue("opened");
+		const md = vi.spyOn(mdTabsStore, "add");
+		fireEvent.click(link);
+		await waitFor(() => expect(md).toHaveBeenCalledWith("/repo", "docs/next.md", "/repo"));
+		expect(editor).not.toHaveBeenCalled();
 	});
 
 	it("opens a relative path outside the filesystem root", async () => {
@@ -659,5 +863,66 @@ describe("MarkdownTab agent review actions", () => {
 		} finally {
 			HTMLElement.prototype.scrollIntoView = original;
 		}
+	});
+});
+
+describe("MarkdownTab preview paging keys", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(command === "read_file" || command === "read_external_file" ? "# Long document" : undefined),
+		);
+		mdTabsStore.clearAll();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		mdTabsStore.clearAll();
+	});
+
+	// jsdom has no layout: give the scroll container a 500px viewport over 2000px of content.
+	async function renderPreview() {
+		const tabId = mdTabsStore.add("/repo", "docs/long.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		await waitFor(() => expect(container.textContent).toContain("Long document"));
+		const wrapper = container.querySelector<HTMLElement>('[data-focus-target="md-tab"]') as HTMLElement;
+		const scroller = container.querySelector<HTMLElement>("[class*='content']") as HTMLElement;
+		Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
+		Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
+		return { wrapper, scroller };
+	}
+
+	it("PageDown on the focused wrapper scrolls the preview down by one visible page", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		wrapper.focus();
+		fireEvent.keyDown(wrapper, { key: "PageDown" });
+		expect(scroller.scrollTop).toBeGreaterThan(0);
+		expect(scroller.scrollTop).toBeLessThanOrEqual(500);
+	});
+
+	it("PageUp scrolls back up and Home/End jump to the ends", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		fireEvent.keyDown(wrapper, { key: "End" });
+		expect(scroller.scrollTop).toBe(1500);
+		fireEvent.keyDown(wrapper, { key: "PageUp" });
+		expect(scroller.scrollTop).toBeLessThan(1500);
+		expect(scroller.scrollTop).toBeGreaterThan(900);
+		fireEvent.keyDown(wrapper, { key: "Home" });
+		expect(scroller.scrollTop).toBe(0);
+	});
+
+	it("leaves modified keys (Shift+PageDown terminal scroll) alone", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		fireEvent.keyDown(wrapper, { key: "PageDown", shiftKey: true });
+		expect(scroller.scrollTop).toBe(0);
+	});
+
+	it("does not hijack paging keys typed in a form control", async () => {
+		const { wrapper, scroller } = await renderPreview();
+		const input = document.createElement("input");
+		wrapper.appendChild(input);
+		fireEvent.keyDown(input, { key: "PageDown" });
+		expect(scroller.scrollTop).toBe(0);
 	});
 });

@@ -94,6 +94,42 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("sidebar density", () => {
+		// Catches: the toggle changing the view but not the saved prefs, so the choice is lost on restart.
+		it("cycles auto, compact, rich and saves each choice", () => {
+			testInScope(() => {
+				expect(store.state.sidebarDensityMode).toBe("auto");
+				store.cycleSidebarDensityMode();
+				expect(store.state.sidebarDensityMode).toBe("compact");
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
+					config: expect.objectContaining({ sidebar_density: "compact" }),
+				});
+				store.cycleSidebarDensityMode();
+				expect(store.state.sidebarDensityMode).toBe("rich");
+				store.cycleSidebarDensityMode();
+				expect(store.state.sidebarDensityMode).toBe("auto");
+			});
+		});
+
+		// Catches: hydrate ignoring the saved mode, or accepting a junk value.
+		it("restores a saved mode and ignores an unknown one", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({ sidebar_density: "rich" });
+				await store.hydrate();
+				expect(store.state.sidebarDensityMode).toBe("rich");
+				mockInvoke.mockResolvedValueOnce({ sidebar_density: "huge" });
+				await store.hydrate();
+				expect(store.state.sidebarDensityMode).toBe("rich");
+				// A value saved by an older build (comfortable, touch) is not a mode now.
+				mockInvoke.mockResolvedValueOnce({ sidebar_density: "touch" });
+				await store.hydrate();
+				expect(store.state.sidebarDensityMode).toBe("rich");
+			});
+		});
+	});
+
 	describe("sidebar", () => {
 		it("defaults to visible", () => {
 			testInScope(() => {
@@ -208,13 +244,23 @@ describe("uiStore", () => {
 
 	describe("hydrate()", () => {
 		it("loads sidebar state from Rust backend", async () => {
-			mockInvoke.mockResolvedValueOnce({ sidebar_visible: false, sidebar_width: 280 });
+			mockInvoke.mockResolvedValueOnce({ sidebar_visible: false, sidebar_width: 340 });
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(store.state.sidebarVisible).toBe(false);
-				expect(store.state.sidebarWidth).toBe(280);
+				expect(store.state.sidebarWidth).toBe(340);
 				expect(mockInvoke).toHaveBeenCalledWith("load_ui_prefs");
+			});
+		});
+
+		// Catches: the load path skipping the clamp, so a width saved under the old 200px floor reopens narrower than 300.
+		it("loads a saved width below the 300 floor as 300", async () => {
+			mockInvoke.mockResolvedValueOnce({ sidebar_visible: true, sidebar_width: 220 });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.sidebarWidth).toBe(300);
 			});
 		});
 
@@ -310,15 +356,17 @@ describe("uiStore", () => {
 
 		it("setSidebarWidth updates width", () => {
 			testInScope(() => {
-				store.setSidebarWidth(250);
-				expect(store.state.sidebarWidth).toBe(250);
+				store.setSidebarWidth(350);
+				expect(store.state.sidebarWidth).toBe(350);
 			});
 		});
 
 		it("setSidebarWidth clamps to min/max", () => {
 			testInScope(() => {
 				store.setSidebarWidth(100);
-				expect(store.state.sidebarWidth).toBe(200);
+				expect(store.state.sidebarWidth).toBe(300);
+				store.setSidebarWidth(299);
+				expect(store.state.sidebarWidth).toBe(300);
 				store.setSidebarWidth(600);
 				expect(store.state.sidebarWidth).toBe(500);
 			});
@@ -419,7 +467,7 @@ describe("uiStore", () => {
 	describe("panel widths", () => {
 		it("defaults to expected widths", () => {
 			testInScope(() => {
-				expect(store.state.settingsNavWidth).toBe(180);
+				expect(store.state.settingsNavWidth).toBe(232);
 			});
 		});
 
@@ -463,7 +511,7 @@ describe("uiStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.settingsNavWidth).toBe(180);
+				expect(store.state.settingsNavWidth).toBe(232);
 			});
 		});
 
@@ -476,7 +524,7 @@ describe("uiStore", () => {
 					config: expect.objectContaining({
 						sidebar_visible: true,
 						sidebar_width: 300,
-						settings_nav_width: 180,
+						settings_nav_width: 232,
 					}),
 				});
 			});

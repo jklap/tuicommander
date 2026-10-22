@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModifierSymbol } from "../../platform";
 
@@ -47,11 +48,14 @@ import { Toolbar } from "../../components/Toolbar/Toolbar";
 import { activityStore } from "../../stores/activityStore";
 import { commandPaletteStore } from "../../stores/commandPalette";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { githubStore } from "../../stores/github";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { makeTerminal } from "../helpers/store";
 
 function setTauriEnv(on: boolean) {
 	const global = globalThis as Record<string, unknown>;
@@ -117,6 +121,43 @@ describe("Toolbar", () => {
 	it("renders toolbar element", () => {
 		const { container } = render(() => <Toolbar />);
 		expect(container.querySelector(".toolbar")).not.toBeNull();
+	});
+
+	// Catches: history arrows enabled at the ends of the history, or a tooltip that does not name the target terminal.
+	it("history arrows are disabled at the ends and their tooltip names the target terminal", () => {
+		const first = terminalsStore.add(makeTerminal({ name: "Alpha" }));
+		const second = terminalsStore.add(makeTerminal({ name: "Beta" }));
+		try {
+			terminalsStore.setActive(first);
+			terminalsStore.setActive(second);
+			const { container } = render(() => <Toolbar />);
+			const back = container.querySelector("[data-testid='history-back']") as HTMLButtonElement;
+			const forward = container.querySelector("[data-testid='history-forward']") as HTMLButtonElement;
+			expect(back.disabled).toBe(false);
+			expect(back.title).toContain("Alpha");
+			expect(forward.disabled).toBe(true);
+			fireEvent.click(back);
+			expect(back.disabled).toBe(true);
+			expect(forward.disabled).toBe(false);
+			expect(forward.title).toContain("Beta");
+		} finally {
+			terminalsStore.remove(first);
+			terminalsStore.remove(second);
+		}
+	});
+
+	// Catches: the sidebar layout mode readable only through title/tooltip, which touch never shows.
+	it("prints the sidebar layout mode on the density toggle and cycles it", () => {
+		const { container } = render(() => <Toolbar />);
+		const label = () => container.querySelector("[data-testid='sidebar-density-label']")?.textContent;
+		const toggle = container.querySelector("[data-testid='sidebar-density-toggle']") as HTMLElement;
+		expect(label()).toBe("A");
+		fireEvent.click(toggle);
+		expect(label()).toBe("C");
+		fireEvent.click(toggle);
+		expect(label()).toBe("R");
+		fireEvent.click(toggle);
+		expect(label()).toBe("A");
 	});
 
 	it("renders sidebar toggle button", () => {
@@ -380,6 +421,51 @@ describe("Toolbar", () => {
 			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
 			expect(container.querySelector(".activityItemSubtitle")?.textContent).toBe("2 new updates");
 		});
+		// Catches: static plugin launchers contribute an impossible-to-dismiss badge.
+		it("keeps a status-only bell unbadged while its plugin row remains visible", () => {
+			activityStore.registerSection({ id: "status", label: "STATUS", priority: 10, canDismissAll: false });
+			activityStore.addItem({
+				id: "status",
+				pluginId: "test",
+				sectionId: "status",
+				title: "Plugin status",
+				icon: "<svg/>",
+				dismissible: false,
+			});
+			const { container } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")).toBeNull();
+			fireEvent.click(container.querySelector(".bell")!);
+			expect(container.textContent).toContain("Plugin status");
+			expect(container.textContent).toContain("Open project journal");
+			addTestNotif();
+			expect(container.querySelector(".notifCount")?.textContent).toBe("1");
+			prNotificationsStore.dismissAll();
+			expect(container.querySelector(".notifCount")).toBeNull();
+		});
+
+		// Catches: Progress unread counts have no explicit acknowledgement without opening the journal.
+		it("marks Progress read explicitly without clearing other notifications or opening the journal", () => {
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: { entry: { id: 1, project: "/repo", createdAtMs: 1, type: "done", text: "Finished" } },
+			});
+			addTestNotif();
+			const { container, getByRole, queryByRole } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
+			fireEvent.click(container.querySelector(".bell")!);
+			fireEvent.click(getByRole("button", { name: "Mark as read" }));
+			expect(progressStore.unreadCount).toBe(0);
+			expect(progressStore.dialogVisible()).toBe(false);
+			expect(container.querySelector(".notifCount")?.textContent).toBe("1");
+			expect(container.textContent).toContain("Open project journal");
+			expect(queryByRole("button", { name: "Mark as read" })).toBeNull();
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: { entry: { id: 2, project: "/repo", createdAtMs: 2, type: "done", text: "Next" } },
+			});
+			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
+		});
+
 		it("bell is always visible even with no notifications", () => {
 			const { container } = render(() => <Toolbar />);
 			expect(container.querySelector(".bell")).not.toBeNull();
@@ -693,24 +779,74 @@ describe("Toolbar", () => {
 			expect(name).not.toBeNull();
 			expect(name?.previousElementSibling?.classList.contains("leftSpacer")).toBe(true);
 		});
+	});
+	describe("ahead/behind count", () => {
+		/** Answers `get_github_status` per checkout path, like the Rust command does. */
+		function mockCheckoutStatus(byPath: Record<string, { ahead: number; behind: number }>) {
+			vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+				if (cmd !== "get_github_status") return undefined;
+				const path = (args as { path: string }).path;
+				const counts = byPath[path] ?? { ahead: 0, behind: 0 };
+				return { has_remote: true, current_branch: "b", ...counts };
+			});
+		}
 
-		it("switches to the short wordmark only below the width where the full one fits", () => {
-			// 254 = 78 traffic-light inset + 110 wordmark + ~56 toggles + 10 padding.
-			uiStore.setSidebarWidth(254);
-			const wide = render(() => <Toolbar />);
-			expect(wide.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(false);
-			wide.unmount();
+		function selectBranch(repoPath: string, branch: string, worktreePath: string | null) {
+			repositoriesStore.add({ path: repoPath, displayName: "Repo" });
+			repositoriesStore.setActive(repoPath);
+			repositoriesStore.setWorkspace(repoPath, branch, { branchName: branch, worktreePath });
+			repositoriesStore.setActiveWorkspace(repoPath, branch);
+		}
 
-			uiStore.setSidebarWidth(253);
-			const narrow = render(() => <Toolbar />);
-			expect(narrow.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
-			narrow.unmount();
+		afterEach(() => {
+			vi.mocked(invoke).mockReset();
+			vi.mocked(invoke).mockResolvedValue(undefined);
 		});
 
-		it("still marks narrow at the minimum sidebar width", () => {
-			uiStore.setSidebarWidth(200);
-			const { container } = render(() => <Toolbar />);
-			expect(container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
+		it("does not show the repo root count next to a worktree branch without upstream", async () => {
+			const root = "/ab1/repo";
+			// Main checkout is 1004 ahead of origin/main; the worktree branch has no upstream (0/0).
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 1004, behind: 0 });
+			mockCheckoutStatus({ "/ab1/repo-wt/feat": { ahead: 0, behind: 0 } });
+			selectBranch(root, "feat", "/ab1/repo-wt/feat");
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			await waitFor(() =>
+				expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_github_status", { path: "/ab1/repo-wt/feat" }),
+			);
+			expect(container.querySelector(".aheadBehind")).toBeNull();
+		});
+
+		it("shows the worktree's own count when its branch is ahead of its upstream", async () => {
+			const root = "/ab2/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 1004, behind: 0 });
+			mockCheckoutStatus({ "/ab2/repo-wt/feat": { ahead: 3, behind: 2 } });
+			selectBranch(root, "feat", "/ab2/repo-wt/feat");
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			await waitFor(() => expect(container.querySelector(".aheadBehind")?.textContent).toBe(" ↑3 ↓2"));
+		});
+
+		it("shows the repo root count for the main checkout", () => {
+			const root = "/ab3/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 5, behind: 0 });
+			selectBranch(root, "main", null);
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			expect(container.querySelector(".aheadBehind")?.textContent).toBe(" ↑5");
+		});
+
+		it("shows no count for the main checkout when it is level with its upstream", () => {
+			const root = "/ab4/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 0, behind: 0 });
+			selectBranch(root, "main", null);
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			expect(container.querySelector(".aheadBehind")).toBeNull();
 		});
 	});
 });

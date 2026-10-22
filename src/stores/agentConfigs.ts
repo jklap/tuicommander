@@ -1,8 +1,19 @@
 import { createStore, produce } from "solid-js/store";
-import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType, type HeadlessAgentChoice } from "../agents";
+import {
+	AGENTS,
+	type AgentRunConfig,
+	type AgentsConfig,
+	type AgentType,
+	type EgoPermissionMode,
+	type EgoSandbox,
+	type HeadlessAgentChoice,
+	toHeadlessAgentChoice,
+} from "../agents";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { rpc } from "../transport";
 import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { buildEnvFromEntries, type EnvVarEntry } from "../utils/envVars";
 import { appLogger } from "./appLogger";
 
@@ -37,6 +48,9 @@ function remoteIO(connectionId: string): AgentConfigIO {
 }
 
 interface AgentConfigsState {
+	hibernate_idle_minutes: number;
+	abandoned_shell_hours: number;
+	hibernate_scope: "background_only" | "always";
 	agents: Record<
 		string,
 		{
@@ -52,10 +66,20 @@ interface AgentConfigsState {
 			native_status_signals?: boolean;
 			prevent_alt_screen?: boolean;
 			skip_trust_dialog?: boolean;
+			ego_mode?: EgoPermissionMode;
+			ego_sandbox?: EgoSandbox;
+			launch_instructions?: string;
+			launch_modules?: Record<string, boolean>;
+			launch_instructions_disabled?: boolean;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
 	headless_agent: HeadlessAgentChoice | null;
+	/** Global user additions; null means no additions. */
+	launch_instructions: string | null;
+	launch_modules: Record<string, boolean>;
+	launch_instructions_disabled: boolean;
+	launch_additions_migrated: boolean;
 	loaded: boolean;
 	loadError: string | null;
 }
@@ -66,39 +90,59 @@ function clone<T>(obj: T): T {
 	return JSON.parse(JSON.stringify(obj));
 }
 
-export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
-	let savedBase: AgentsConfig | null = null;
-	let saveTail: Promise<void> | null = null;
+export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectionId?: string) {
+	const writer = createConfigDeltaWriter<AgentsConfig>("save_agents_config", "config", io.save);
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
+		hibernate_idle_minutes: 60,
+		abandoned_shell_hours: 0,
+		hibernate_scope: "background_only",
 		headless_agent: null,
+		launch_instructions: null,
+		launch_modules: {},
+		launch_instructions_disabled: false,
+		launch_additions_migrated: true,
 		loaded: false,
 		loadError: null,
 	});
 
+	function wire(): AgentsConfig {
+		return {
+			agents: clone(state.agents),
+			hibernate_idle_minutes: state.hibernate_idle_minutes,
+			abandoned_shell_hours: state.abandoned_shell_hours,
+			hibernate_scope: state.hibernate_scope,
+			headless_agent: state.headless_agent ?? undefined,
+			launch_instructions: state.launch_instructions ?? undefined,
+			launch_modules: clone(state.launch_modules),
+			launch_instructions_disabled: state.launch_instructions_disabled,
+			launch_additions_migrated: state.launch_additions_migrated,
+		};
+	}
+
+	function applyLoaded(config: AgentsConfig): void {
+		setState(
+			produce((s) => {
+				s.agents = config.agents ?? {};
+				s.hibernate_idle_minutes = config.hibernate_idle_minutes ?? 60;
+				s.abandoned_shell_hours = config.abandoned_shell_hours ?? 0;
+				s.hibernate_scope = config.hibernate_scope ?? "background_only";
+				s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
+				s.launch_instructions = config.launch_instructions ?? null;
+				s.launch_modules = config.launch_modules ?? {};
+				s.launch_instructions_disabled = config.launch_instructions_disabled ?? false;
+				s.launch_additions_migrated = config.launch_additions_migrated ?? true;
+				s.loaded = true;
+				s.loadError = null;
+			}),
+		);
+	}
+
 	/** Save changes since the last acknowledged snapshot. */
 	async function saveToDisk(): Promise<void> {
 		try {
-			if (!state.loaded || !savedBase) throw new Error("Agent config has not loaded; save refused");
-			const full: AgentsConfig = {
-				agents: clone(state.agents),
-				headless_agent: state.headless_agent ?? undefined,
-			};
-			const write = async () => {
-				if (!savedBase) throw new Error("Agent config has not loaded; save refused");
-				await io.save(savedBase, full);
-				savedBase = full;
-			};
-			const operation = saveTail ? saveTail.then(write) : write();
-			const settled = operation.then(
-				() => undefined,
-				() => undefined,
-			);
-			saveTail = settled;
-			void settled.then(() => {
-				if (saveTail === settled) saveTail = null;
-			});
-			await operation;
+			if (!state.loaded) throw new Error("Agent config has not loaded; save refused");
+			await writer.save(wire());
 		} catch (err) {
 			appLogger.error("config", "Failed to save agent config", err);
 			throw err;
@@ -106,23 +150,77 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	}
 
 	const actions = {
+		async setLaunchModule(id: string, enabled: boolean, type?: AgentType): Promise<void> {
+			setState(
+				produce((s) => {
+					if (type) {
+						if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+						s.agents[type].launch_modules = { ...s.agents[type].launch_modules, [id]: enabled };
+					} else s.launch_modules[id] = enabled;
+				}),
+			);
+			await saveToDisk();
+		},
+		async setLaunchInstructionsDisabled(disabled: boolean, type?: AgentType): Promise<void> {
+			setState(
+				produce((s) => {
+					if (type) {
+						if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+						s.agents[type].launch_instructions_disabled = disabled;
+					} else s.launch_instructions_disabled = disabled;
+				}),
+			);
+			await saveToDisk();
+		},
+
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "agents",
+				connectionId,
+				read: io.load,
+				apply: (remote) => {
+					if (!state.loaded) return;
+					const merged = writer.adopt(remote, wire());
+					applyLoaded(merged.value);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
+		async setAbandonedShellHours(hours: number): Promise<void> {
+			if (!Number.isInteger(hours) || hours < 0 || hours > 65535) return;
+			setState({ abandoned_shell_hours: hours });
+			await saveToDisk();
+		},
+		async setHibernate(minutes: number, scope: "background_only" | "always"): Promise<void> {
+			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) return;
+			setState({ hibernate_idle_minutes: minutes, hibernate_scope: scope });
+			await saveToDisk();
+		},
 		/** Hydrate store from persisted config */
 		async hydrate(): Promise<void> {
 			try {
 				const config = await io.load();
-				savedBase = clone(config);
-				setState(
-					produce((s) => {
-						s.agents = config.agents ?? {};
-						s.headless_agent = config.headless_agent ?? null;
-						s.loaded = true;
-						s.loadError = null;
-					}),
-				);
+				writer.loaded(config);
+				applyLoaded(config);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate agent configs", err);
 				setState({ loaded: false, loadError: err instanceof Error ? err.message : String(err) });
 				throw err;
+			}
+		},
+
+		/** Persist ego launch choices through the existing machine-specific config transport. */
+		async setEgoPermissions(permissions: { ego_mode?: EgoPermissionMode; ego_sandbox?: EgoSandbox }): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents.ego) s.agents.ego = { run_configs: [] };
+					Object.assign(s.agents.ego, permissions);
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				/* saveToDisk logs the error */
 			}
 		},
 
@@ -258,6 +356,43 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		/** Get the headless command template for an agent (user override or built-in default) */
 		getHeadlessTemplate(type: AgentType): string | undefined {
 			return state.agents[type]?.headless_template ?? AGENTS[type]?.defaultHeadlessTemplate;
+		},
+
+		/** Global launch instructions override (undefined = shipped default). */
+		getLaunchInstructions(): string | undefined {
+			return state.launch_instructions ?? undefined;
+		},
+
+		/** Set the global launch instructions. Pass undefined to reset to the default. */
+		async setLaunchInstructions(text: string | undefined): Promise<void> {
+			setState("launch_instructions", text ?? null);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
+		},
+
+		/** Per-agent launch instructions override (undefined = the global text). */
+		getAgentLaunchInstructions(type: AgentType): string | undefined {
+			return state.agents[type]?.launch_instructions;
+		},
+
+		/** Set per-agent launch instructions. Pass undefined to reset to the global text. */
+		async setAgentLaunchInstructions(type: AgentType, text: string | undefined): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) {
+						s.agents[type] = { run_configs: [] };
+					}
+					s.agents[type].launch_instructions = text;
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
 		},
 
 		/** Get the globally configured headless agent */
@@ -501,6 +636,17 @@ const machineHydrations = new Map<string, Promise<void>>();
 
 /** The key a machine is cached under. Local is the empty id — there is no connection. */
 const LOCAL_MACHINE = "";
+let liveSync = false;
+const syncStops = new Map<string, () => void>();
+export function startAgentSettingsSync(): () => void {
+	liveSync = true;
+	for (const [key, store] of machineStores) if (!syncStops.has(key)) syncStops.set(key, store.startRemoteSync());
+	return () => {
+		liveSync = false;
+		for (const stop of syncStops.values()) stop();
+		syncStops.clear();
+	};
+}
 
 /**
  * The store holding one machine's run configs, created on first use.
@@ -514,8 +660,9 @@ export function agentConfigsFor(connectionId?: string | null): AgentConfigStore 
 	const key = connectionId ?? LOCAL_MACHINE;
 	let store = machineStores.get(key);
 	if (!store) {
-		store = createAgentConfigsStore(connectionId ? remoteIO(connectionId) : defaultIO);
+		store = createAgentConfigsStore(connectionId ? remoteIO(connectionId) : defaultIO, connectionId ?? undefined);
 		machineStores.set(key, store);
+		if (liveSync) syncStops.set(key, store.startRemoteSync());
 	}
 	return store;
 }
@@ -547,6 +694,8 @@ export function ensureAgentConfigs(connectionId?: string | null): Promise<AgentC
  */
 export function invalidateAgentConfigs(connectionId: string): void {
 	if (!connectionId) return;
+	syncStops.get(connectionId)?.();
+	syncStops.delete(connectionId);
 	machineStores.delete(connectionId);
 	machineHydrations.delete(connectionId);
 }

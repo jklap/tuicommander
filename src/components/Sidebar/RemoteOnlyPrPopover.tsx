@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -122,6 +123,9 @@ export const RemoteOnlyPrPopover: Component<{
 		setCleanupCtx(null);
 	};
 
+	let popoverRef: HTMLDivElement | undefined;
+	useOutsideDismiss({ inside: () => [popoverRef], onClose: props.onClose, enabled: () => !cleanupCtx() });
+
 	const visiblePrs = createMemo(() => props.prs.filter((pr) => !dismissedPrs().has(pr.number)));
 
 	const dismissedCount = createMemo(() => dismissedPrs().size);
@@ -159,7 +163,7 @@ export const RemoteOnlyPrPopover: Component<{
 			const preferred =
 				repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
 			// Persist the working method so future merges use it directly
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);
@@ -222,11 +226,11 @@ export const RemoteOnlyPrPopover: Component<{
 	const handleViewDiff = async (pr: BranchPrStatus) => {
 		setDiffLoadingPr(pr.number);
 		try {
-			const diff = await invoke<string>("get_pr_diff", {
+			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
 		} catch (e) {
 			const msg = String(e);
 			appLogger.error("github", `Failed to load PR #${pr.number} diff`, { error: msg });
@@ -262,8 +266,7 @@ export const RemoteOnlyPrPopover: Component<{
 				)}
 			</Show>
 			<Show when={!cleanupCtx()}>
-				<div class={s.remoteOnlyOverlay} onClick={props.onClose} onKeyDown={handleKeyDown} tabIndex={-1} />
-				<div class={s.remoteOnlyPopover} onKeyDown={handleKeyDown} tabIndex={-1}>
+				<div ref={popoverRef} class={s.remoteOnlyPopover} onKeyDown={handleKeyDown} tabIndex={-1}>
 					<div class={s.remoteOnlyHeader}>
 						<span>{t("sidebar.remoteOnlyPrs", "Remote-only PRs")}</span>
 						<Show when={dismissedCount() > 0}>
@@ -297,6 +300,8 @@ export const RemoteOnlyPrPopover: Component<{
 											reviewDecision={pr.review_decision}
 											ciFailed={pr.checks?.failed}
 											ciPending={pr.checks?.pending}
+											unresolvedThreads={pr.unresolved_threads}
+											unresolvedThreadsTruncated={pr.unresolved_threads_truncated}
 										/>
 									</div>
 									<Show when={expandedBranch() === pr.branch}>
@@ -304,7 +309,10 @@ export const RemoteOnlyPrPopover: Component<{
 											<button
 												class={s.remoteOnlyDetailDismiss}
 												onClick={() => handleDismiss(pr.number)}
-												title={t("sidebar.dismissPr", "Hide this PR from view")}
+												aria-label={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip-pos="bottom"
+												data-tooltip-align="right"
 											>
 												&times;
 											</button>
@@ -313,7 +321,9 @@ export const RemoteOnlyPrPopover: Component<{
 													<button
 														class={s.remoteOnlyCheckout}
 														onClick={() => props.onCheckout(pr.branch)}
-														title={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{t("sidebar.checkout", "Checkout")}
 													</button>
@@ -321,7 +331,9 @@ export const RemoteOnlyPrPopover: Component<{
 														<button
 															class={s.remoteOnlyWorktree}
 															onClick={() => props.onCreateWorktree?.(pr.branch)}
-															title={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.worktree", "Worktree")}
 														</button>
@@ -331,7 +343,9 @@ export const RemoteOnlyPrPopover: Component<{
 															class={s.remoteOnlyApprove}
 															onClick={() => handleApprove(pr)}
 															disabled={approvingPr() === pr.number}
-															title={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{approvingPr() === pr.number
 																? t("sidebar.approving", "Approving...")
@@ -343,7 +357,9 @@ export const RemoteOnlyPrPopover: Component<{
 															class={s.remoteOnlyMerge}
 															onClick={() => handleMerge(pr)}
 															disabled={mergingPr() === pr.number}
-															title={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{mergingPr() === pr.number ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
 														</button>
@@ -352,7 +368,9 @@ export const RemoteOnlyPrPopover: Component<{
 														class={s.remoteOnlyViewDiff}
 														onClick={() => handleViewDiff(pr)}
 														disabled={diffLoadingPr() === pr.number}
-														title={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{diffLoadingPr() === pr.number
 															? t("sidebar.loadingDiff", "Loading...")

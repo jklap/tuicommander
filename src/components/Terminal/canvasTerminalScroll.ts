@@ -36,6 +36,25 @@ export interface CanvasScrollController {
 	 */
 	cacheRows: (rows: Iterable<{ abs: number; row: DecodedRow }>) => void;
 	isCacheGenerationCurrent: (generation: number) => boolean;
+	/** Counts `commitLiveRows` calls; a fetch compares it to the value it started with. */
+	readonly liveEpoch: number;
+	/**
+	 * Rows `[fromAbs, toAbs)` were live screen rows and are history now, their
+	 * content final. Whatever the cache or a fetch in flight holds for them was
+	 * read while they were still being redrawn (#1264-89c8), so drop it and let
+	 * the chunks that hold them be asked for again.
+	 */
+	commitLiveRows: (fromAbs: number, toAbs: number) => void;
+	/**
+	 * Cache a fetched chunk. When rows were committed while it was in flight, its
+	 * rows from `liveFromAbs` up are stale and are discarded. Returns false then,
+	 * so the caller releases the chunk for a new fetch.
+	 */
+	cacheFetchedRows: (
+		rows: Array<{ abs: number; row: DecodedRow }>,
+		startedAtEpoch: number,
+		liveFromAbs: number,
+	) => boolean;
 	applyDelta: (deltaLines: number, currentOffset: number, historySize: number) => number;
 	/**
 	 * Output pushed `grownLines` into history. A scrolled-back grid raises its
@@ -60,6 +79,29 @@ export function createCanvasScrollController(): CanvasScrollController {
 	let settleTarget: number | null = null;
 	let gestureDistancePx = 0;
 	let cacheGeneration = 0;
+	let liveEpoch = 0;
+
+	function cacheRows(rows: Iterable<{ abs: number; row: DecodedRow }>) {
+		for (const { abs, row } of rows) rowCache.set(abs, row);
+		// Insertion order is Map order, so the oldest keys come first. Evicting
+		// them — rather than clearing the whole cache — keeps the rows a gesture
+		// is about to paint, and needs no generation bump: a dropped old row says
+		// nothing about a chunk still in flight, and invalidating one during
+		// steady output would discard a fetch that is still correct.
+		if (rowCache.size <= ROW_CACHE_MAX) return;
+		const excess = rowCache.size - ROW_CACHE_MAX;
+		let dropped = 0;
+		for (const key of rowCache.keys()) {
+			rowCache.delete(key);
+			// `requestedChunks` means "already asked for, never ask again": a
+			// successful fetch leaves its id there forever. So an evicted row has
+			// to release its chunk, or scrolling back to it paints blanks with no
+			// way to refill them. A chunk that lost even one row is not paintable,
+			// hence release on the first row dropped, not the last.
+			requestedChunks.delete(Math.floor(key / ROW_CACHE_CHUNK));
+			if (++dropped === excess) break;
+		}
+	}
 
 	return {
 		rowCache,
@@ -108,26 +150,26 @@ export function createCanvasScrollController(): CanvasScrollController {
 			rowCache.clear();
 			requestedChunks.clear();
 		},
-		cacheRows(rows) {
-			for (const { abs, row } of rows) rowCache.set(abs, row);
-			// Insertion order is Map order, so the oldest keys come first. Evicting
-			// them — rather than clearing the whole cache — keeps the rows a gesture
-			// is about to paint, and needs no generation bump: a dropped old row says
-			// nothing about a chunk still in flight, and invalidating one during
-			// steady output would discard a fetch that is still correct.
-			if (rowCache.size <= ROW_CACHE_MAX) return;
-			const excess = rowCache.size - ROW_CACHE_MAX;
-			let dropped = 0;
-			for (const key of rowCache.keys()) {
-				rowCache.delete(key);
-				// `requestedChunks` means "already asked for, never ask again": a
-				// successful fetch leaves its id there forever. So an evicted row has
-				// to release its chunk, or scrolling back to it paints blanks with no
-				// way to refill them. A chunk that lost even one row is not paintable,
-				// hence release on the first row dropped, not the last.
-				requestedChunks.delete(Math.floor(key / ROW_CACHE_CHUNK));
-				if (++dropped === excess) break;
+		cacheRows,
+		get liveEpoch() {
+			return liveEpoch;
+		},
+		commitLiveRows(fromAbs, toAbs) {
+			if (toAbs <= fromAbs) return;
+			liveEpoch++;
+			for (let abs = fromAbs; abs < toAbs; abs++) rowCache.delete(abs);
+			for (
+				let chunk = Math.floor(fromAbs / ROW_CACHE_CHUNK);
+				chunk <= Math.floor((toAbs - 1) / ROW_CACHE_CHUNK);
+				chunk++
+			) {
+				requestedChunks.delete(chunk);
 			}
+		},
+		cacheFetchedRows(rows, startedAtEpoch, liveFromAbs) {
+			const current = startedAtEpoch === liveEpoch;
+			cacheRows(current ? rows : rows.filter(({ abs }) => abs < liveFromAbs));
+			return current || !rows.some(({ abs }) => abs >= liveFromAbs);
 		},
 		isCacheGenerationCurrent(generation) {
 			return generation === cacheGeneration;

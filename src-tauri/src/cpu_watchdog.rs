@@ -36,7 +36,7 @@ const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// If the wall-clock gap between two consecutive watchdog polls exceeds this,
 /// the machine was likely asleep (lid closed). Must stay well above
 /// `DIAGNOSTIC_POLL_INTERVAL` (10s) so a normal slow tick never reads as sleep.
-const SLEEP_WAKE_GAP: Duration = Duration::from_secs(30);
+pub(crate) const SLEEP_WAKE_GAP: Duration = Duration::from_secs(30);
 const CPU_THRESHOLD_PCT: f64 = 80.0;
 const CONSECUTIVE_THRESHOLD: u32 = 2;
 const STARTUP_DELAY: Duration = Duration::from_secs(30);
@@ -345,6 +345,8 @@ fn report_frontend_liveness(state: &Arc<AppState>) {
         Verdict::Frozen { gap } => tracing::warn!(
             source = "diagnostics",
             silent_secs = gap.as_secs(),
+            last_heartbeat_received_ms = state.frontend_liveness.last_received_ms(),
+            backend_observed_ms = chrono::Utc::now().timestamp_millis(),
             "Frontend unresponsive: no heartbeat for {}s — the WebView main thread is blocked or gone. \
              The backend and every PTY session are unaffected; recover with \
              POST /debug/reload_webview, or open the UI in a browser on this port.",
@@ -391,14 +393,14 @@ fn next_memory_threshold(footprint: u64, armed: u64) -> Option<u64> {
 /// Log where the memory is, at a level that survives log filtering.
 fn log_memory_report(state: &Arc<AppState>, footprint: u64) {
     const GB: f64 = (1024 * 1024 * 1024) as f64;
-    let report = crate::memory_report::report(state);
+    let report = crate::memory_report::summary(state);
     tracing::error!(
         source = "diagnostics",
         report = %report,
         "Memory footprint {:.2} GB — this is far above a healthy backend and is what \
-         gets the app killed by macOS under memory pressure. The report lists every \
-         structure that grows, biggest first; `accounted_bytes` well below the \
-         footprint means the memory belongs to something outside AppState.",
+         gets the app killed by macOS under memory pressure. This summary contains \
+         allocator counters and structure counts only; request /diagnostics/memory \
+         explicitly for payload accounting and the large-block census.",
         footprint as f64 / GB,
     );
 }
@@ -479,7 +481,9 @@ fn run(state: Arc<AppState>) {
             continue;
         }
 
-        report_frontend_liveness(&state);
+        if !state.webview_unloaded.load(Ordering::Acquire) {
+            report_frontend_liveness(&state);
+        }
 
         let current = match CpuSample::now() {
             Some(s) => s,

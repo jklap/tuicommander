@@ -374,7 +374,8 @@ mod tests {
     #[test]
     fn a_zero_temperature_produces_no_noise_at_all() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        assert_eq!(gaussian(&mut rng, 0.0), 0.0);
+        // `abs`: a zero stddev may yield -0.0 for a negative draw.
+        assert_eq!(gaussian(&mut rng, 0.0).abs().to_bits(), 0.0_f32.to_bits());
     }
 
     #[test]

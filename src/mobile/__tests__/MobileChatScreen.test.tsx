@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.hoisted(() => ({
@@ -9,7 +11,7 @@ const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.h
 	selectSession: vi.fn(async () => {}),
 }));
 vi.mock("../../invoke", () => ({ invoke }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
+vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate, state: { chatMuteIntermediateText: true } } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
@@ -77,6 +79,44 @@ afterEach(() => {
 });
 
 describe("mobile ego chat", () => {
+	// Catches: failed settings reads are presented as an unconfigured ego installation forever.
+	it("waits for settings and retries them on recovery before claiming ego is unconfigured", async () => {
+		hydrate.mockResolvedValueOnce(false as never).mockResolvedValueOnce(true as never);
+		createAcpChat.mockReturnValue({ ...chat(), phase: () => "unconfigured", entries: () => [] });
+		const [revision, setRevision] = createSignal(0);
+		render(() => <MobileChatScreen recoveryRevision={revision()} />);
+		await waitFor(() => expect(screen.getByText(/Chat settings are unavailable/)).toBeTruthy());
+		expect(screen.queryByText(/Configure ego in desktop Settings/)).toBeNull();
+		setRevision(1);
+		await waitFor(() => expect(screen.getByText(/Configure ego in desktop Settings/)).toBeTruthy());
+		expect(hydrate).toHaveBeenCalledWith({ notifyOnError: false });
+	});
+	it("keeps mobile composer actions as labelled icons with the session send glyph", () => {
+		const { container } = render(() => <MobileChatScreen />);
+		const textarea = container.querySelector("textarea");
+		const send = screen.getByRole("button", { name: "Send" });
+		expect(send.textContent?.trim()).toBe("");
+		expect(send.querySelector("svg path")?.getAttribute("d")).toBe("M2.01 21L23 12 2.01 3 2 10l15 2-15 2z");
+
+		const plus = screen.getByRole("button", { name: "More composer actions" });
+		expect((plus.compareDocumentPosition(textarea!) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Park draft" })).toBeNull();
+		fireEvent.click(plus);
+		expect(screen.getByRole("menuitem", { name: "Attach file" })).toBeTruthy();
+		expect(screen.getByRole("menuitem", { name: "Park draft" })).toBeDisabled();
+	});
+	it("sends once on Enter and leaves Shift+Enter for a newline on mobile", () => {
+		const current = chat();
+		createAcpChat.mockReturnValue(current);
+		const { container } = render(() => <MobileChatScreen />);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		fireEvent.input(textarea, { target: { value: "Phone reply" } });
+		fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+		expect(current.send).not.toHaveBeenCalled();
+		fireEvent.keyDown(textarea, { key: "Enter" });
+		expect(current.send).toHaveBeenCalledExactlyOnceWith("Phone reply", [], []);
+	});
+
 	it("passes a tapped transcript file link with the chat workspace to mobile navigation", async () => {
 		const onOpenFile = vi.fn();
 		createAcpChat.mockReturnValue({
@@ -155,10 +195,11 @@ describe("mobile ego chat", () => {
 		expect(container.querySelector("textarea")).toBeTruthy();
 	});
 
-	it("offers one picker for photos and files without forcing camera capture", () => {
+	it("offers a regular picker and a separate camera capture picker", () => {
 		const { container } = render(() => <MobileChatScreen />);
 		const pickers = container.querySelectorAll('input[type="file"]');
-		expect(pickers).toHaveLength(1);
+		expect(pickers).toHaveLength(2);
+		expect(pickers[1].getAttribute("capture")).toBe("environment");
 		expect(pickers[0]).toBeInstanceOf(HTMLInputElement);
 		expect(pickers[0].hasAttribute("capture")).toBe(false);
 		expect(pickers[0].getAttribute("accept")).toContain("image/*");
@@ -176,6 +217,10 @@ describe("mobile ego chat", () => {
 		);
 		const { container } = render(() => <MobileChatScreen />);
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		const openPicker = vi.spyOn(picker, "click");
+		fireEvent.click(screen.getByRole("menuitem", { name: "Attach file" }));
+		expect(openPicker).toHaveBeenCalledOnce();
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
 		expect(current.send).not.toHaveBeenCalled();
@@ -234,8 +279,10 @@ describe("mobile ego chat", () => {
 		createAcpChat.mockReturnValue(shared);
 		render(() => <MobileChatScreen />);
 
-		expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-		expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		expect(screen.getByRole("menuitem", { name: "Queue" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+		expect(shared.cancel).toHaveBeenCalledOnce();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel queued prompt Follow up from desktop" }));
 		expect(shared.cancelQueued).toHaveBeenCalledWith("phone-turn");
 	});
@@ -244,10 +291,12 @@ describe("mobile ego chat", () => {
 		const { container } = render(() => <MobileChatScreen />);
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		fireEvent.input(textarea, { target: { value: "Phone draft" } });
-		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Park draft" }));
 		expect(textarea.value).toBe("");
-		expect(screen.getByText("Parked draft")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		expect(screen.queryByRole("menu")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Restore parked draft" }));
 		expect(textarea.value).toBe("Phone draft");
 	});
 
@@ -265,10 +314,12 @@ describe("mobile ego chat", () => {
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
-		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Park draft" }));
 		expect(screen.queryByText("report.pdf")).toBeNull();
 		expect(current.send).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		fireEvent.click(screen.getByRole("button", { name: "More composer actions" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Restore parked draft" }));
 		expect(screen.getByText("report.pdf")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		expect(current.send).toHaveBeenCalledWith(
@@ -277,4 +328,89 @@ describe("mobile ego chat", () => {
 			[{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }],
 		);
 	});
+	// The browser transport throws `RPC <command> failed: <status> <body>`; this is the body Boss saw on his iPhone.
+	const UNCERTAIN_LOAD =
+		"RPC acp_session_load failed: 502 " +
+		JSON.stringify({
+			code: "agent_error",
+			message:
+				"the session's last run has an uncertain effect; close it with `session/close` and start a new chat with `session/new`",
+			connectionId: "01a12ce9-7cae-72bd-b367-1b7e3fcf4ce7",
+			sessionId: null,
+			operation: "load",
+			retryable: false,
+		});
+
+	it("shows a plain message and Start new chat, not raw JSON and Retry, for a refused uncertain session", async () => {
+		const current = {
+			...chat(),
+			error: () => UNCERTAIN_LOAD,
+			closeFailed: vi.fn(async () => {}),
+			startSession: vi.fn(),
+		};
+		createAcpChat.mockReturnValue(current);
+		const { container } = render(() => <MobileChatScreen />);
+		expect(container.textContent).not.toContain("agent_error");
+		expect(container.textContent).not.toContain("connectionId");
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Start new chat" }));
+		await waitFor(() => expect(current.startSession).toHaveBeenCalledOnce());
+		expect(current.closeFailed).toHaveBeenCalledOnce();
+		expect(current.closeFailed.mock.invocationCallOrder[0]).toBeLessThan(
+			current.startSession.mock.invocationCallOrder[0],
+		);
+	});
+
+	it("keeps Retry for a retryable refusal and shows its own message", () => {
+		const body = JSON.stringify({ code: "transport_closed", message: "connection dropped", retryable: true });
+		const current = { ...chat(), error: () => `RPC acp_session_load failed: 502 ${body}` };
+		createAcpChat.mockReturnValue(current);
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/connection dropped/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(current.recover).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: "Start new chat" })).toBeNull();
+	});
+
+	it("keeps Retry for an error that carries no structured body", () => {
+		createAcpChat.mockReturnValue({ ...chat(), error: () => "Saved conversation unavailable" });
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/Saved conversation unavailable/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+	});
+
+	it("shows a non-retryable refusal without Retry or the new-chat action", () => {
+		const body = JSON.stringify({ code: "invalid_input", message: "workspace is not allowed", retryable: false });
+		createAcpChat.mockReturnValue({ ...chat(), error: () => `RPC acp_session_new failed: 400 ${body}` });
+		render(() => <MobileChatScreen />);
+		expect(screen.getByText(/workspace is not allowed/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Start new chat" })).toBeNull();
+	});
+});
+
+// Catches: mobile Chat omitting table actions or opening a document that cannot return to the conversation.
+it("opens a table document and returns to Chat without changing its conversation", async () => {
+	const source = "| Storia | Priorità | Cosa manca |\n| --- | --- | --- |\n| #1918 | P2 | Aggiornare la sessione |";
+	createAcpChat.mockReturnValue({ ...chat(), entries: () => [{ id: "table", kind: "agent", text: source }] });
+	const view = render(() => <MobileChatScreen />);
+	await Promise.resolve();
+	fireEvent.click(view.getByRole("button", { name: "Open as document" }));
+	expect(view.getByRole("dialog", { name: "AI Chat table" })).toBeTruthy();
+	fireEvent.click(view.getByRole("button", { name: "Back to Chat" }));
+	expect(view.queryByRole("dialog")).toBeNull();
+	expect(selectSession).not.toHaveBeenCalled();
+});
+
+// Catches: Chat changes resize the mobile composer or screen chrome.
+it("scopes the Chat size to the AI Chat transcript, excluding its composer", async () => {
+	const { mobileFontSizes } = await import("../mobileFontSize");
+	while (mobileFontSizes.chat() < 20) mobileFontSizes.step("chat", 1);
+	const view = render(() => <MobileChatScreen />);
+	const reading = view.container.querySelector("[data-mobile-reading]") as HTMLElement;
+	expect(reading.style.getPropertyValue("--font-base")).toBe("20px");
+	const composer = await screen.findByRole("textbox");
+	expect(composer.closest("[data-mobile-reading]")).toBeNull();
+	expect(view.container.querySelector("header")?.closest("[data-mobile-reading]")).toBeNull();
+	while (mobileFontSizes.chat() > 14) mobileFontSizes.step("chat", -1);
 });

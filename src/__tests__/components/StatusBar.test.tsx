@@ -35,6 +35,7 @@ vi.mock("../../hooks/useGitHub", () => ({
 }));
 
 vi.mock("../../stores/repositories", () => ({
+	resolveRepoPathFor: (path: string) => path,
 	repositoriesStore: {
 		getActive: mockGetActive,
 		get: vi.fn(() => undefined),
@@ -114,6 +115,8 @@ vi.mock("../../stores/userActivity", () => ({
 }));
 
 import { StatusBar } from "../../components/StatusBar/StatusBar";
+import { getTickerPriority } from "../../features/claudeUsage";
+import { getCodexTickerPriority } from "../../features/codexUsage";
 import { acpStore } from "../../stores/acp";
 import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
@@ -244,6 +247,138 @@ describe("StatusBar", () => {
 		const statusInfo = container.querySelector(".info");
 		expect(statusInfo).not.toBeNull();
 		expect(statusInfo!.textContent).toBe("Ready");
+	});
+
+	describe("non-modal popups dismiss on an outside press without a backdrop", () => {
+		const outsidePress = (onSidebarPress: () => void) => {
+			const sidebar = document.createElement("aside");
+			sidebar.addEventListener("pointerdown", onSidebarPress);
+			document.body.appendChild(sidebar);
+			const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+			sidebar.dispatchEvent(event);
+			sidebar.remove();
+			return event;
+		};
+
+		// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the sidebar.
+		it("ticker popover closes on an outside pointer press and leaves the event alone", () => {
+			statusBarTicker.addMessage({ id: "t:1", pluginId: "t", label: "T", text: "hello", priority: 10, ttlMs: 0 });
+			const { container } = render(() => <StatusBar {...defaultProps} />);
+			fireEvent.contextMenu(container.querySelector(".tickerMessage")!);
+			expect(container.querySelector(".tickerPopover")).not.toBeNull();
+			expect(container.querySelector(".tickerOverlay")).toBeNull();
+
+			const onSidebarPress = vi.fn();
+			const event = outsidePress(onSidebarPress);
+
+			expect(container.querySelector(".tickerPopover")).toBeNull();
+			expect(onSidebarPress).toHaveBeenCalledOnce();
+			expect(event.defaultPrevented).toBe(false);
+		});
+
+		// Catches: pressing inside the open ticker popover dismisses it before its row handler runs.
+		it("ticker popover stays open for a press inside it", () => {
+			statusBarTicker.addMessage({ id: "t:1", pluginId: "t", label: "T", text: "hello", priority: 10, ttlMs: 0 });
+			const { container } = render(() => <StatusBar {...defaultProps} />);
+			fireEvent.contextMenu(container.querySelector(".tickerMessage")!);
+			fireEvent.pointerDown(container.querySelector(".tickerPopover")!);
+			expect(container.querySelector(".tickerPopover")).not.toBeNull();
+		});
+
+		// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the sidebar.
+		it("info balloon closes on an outside pointer press and leaves the event alone", () => {
+			vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+			vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+			const { container } = render(() => <StatusBar {...defaultProps} statusInfo="A very long status message" />);
+			vi.advanceTimersByTime(50);
+			fireEvent.click(container.querySelector(".info")!);
+			expect(container.querySelector(".infoBalloon")).not.toBeNull();
+			expect(container.querySelector(".infoBalloonOverlay")).toBeNull();
+
+			const onSidebarPress = vi.fn();
+			const event = outsidePress(onSidebarPress);
+
+			expect(container.querySelector(".infoBalloon")).toBeNull();
+			expect(onSidebarPress).toHaveBeenCalledOnce();
+			expect(event.defaultPrevented).toBe(false);
+			vi.restoreAllMocks();
+		});
+
+		// Catches: the toggle trigger counts as an outside press, so closing it by click re-opens it.
+		it("info balloon still toggles closed from its own trigger", () => {
+			vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+			vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+			const { container } = render(() => <StatusBar {...defaultProps} statusInfo="A very long status message" />);
+			vi.advanceTimersByTime(50);
+			const trigger = container.querySelector(".info")!;
+			fireEvent.click(trigger);
+			expect(container.querySelector(".infoBalloon")).not.toBeNull();
+			fireEvent.pointerDown(trigger);
+			fireEvent.click(trigger);
+			expect(container.querySelector(".infoBalloon")).toBeNull();
+			vi.restoreAllMocks();
+		});
+	});
+
+	describe("usage blink boundary", () => {
+		// Catches: the badge blinks early, or a priority producer never reaches its critical class.
+		it.each(["claude", "codex", "pty"] as const)("%s blinks only from 96 percent", (source) => {
+			for (const percentage of [69, 70, 90, 95, 95.9, 96, 100]) {
+				mockTerminalGetActive.mockReturnValue({
+					agentType: source === "pty" ? "grok" : source,
+					usageLimit: source === "pty" ? { percentage, limitType: "weekly" } : null,
+				});
+				if (source !== "pty") {
+					const priority =
+						source === "claude"
+							? getTickerPriority({
+									five_hour: { utilization: percentage, resets_at: null },
+									seven_day: null,
+									seven_day_opus: null,
+									seven_day_sonnet: null,
+									seven_day_oauth_apps: null,
+									seven_day_cowork: null,
+									extra_usage: null,
+									plan: null,
+									meta: null,
+								})
+							: getCodexTickerPriority({
+									plan_type: null,
+									rate_limit: {
+										allowed: true,
+										limit_reached: false,
+										primary_window: {
+											used_percent: percentage,
+											limit_window_seconds: 18000,
+											reset_after_seconds: null,
+											reset_at: null,
+										},
+										secondary_window: null,
+									},
+									additional_rate_limits: [],
+									credits: null,
+									model_usage: {},
+								});
+					statusBarTicker.addMessage({
+						id: "claude-usage:rate",
+						pluginId: "claude-usage",
+						label: source === "claude" ? "Claude" : "Codex",
+						text: `5h: ${percentage}%`,
+						priority,
+						ttlMs: 0,
+					});
+				}
+				const { container, unmount } = render(() => <StatusBar {...defaultProps} />);
+				const usage = container.querySelector(".agentUsage");
+				expect(usage).not.toBeNull();
+				expect(usage!.classList.contains("agentUsageCritical"), `${source} at ${percentage}%`).toBe(percentage >= 96);
+				expect(usage!.classList.contains("agentUsageWarning"), `${source} at ${percentage}%`).toBe(
+					percentage >= 70 && percentage < 96,
+				);
+				unmount();
+				statusBarTicker.clear();
+			}
+		});
 	});
 
 	it("absorbs matching Codex usage into the active agent badge", () => {

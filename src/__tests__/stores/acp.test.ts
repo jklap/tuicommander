@@ -12,6 +12,7 @@ import type {
 	AcpConnectionSnapshot,
 	AcpPendingInteraction,
 	AcpRequestPermissionRequest,
+	AcpSessionConfigOption,
 } from "../../types/acp";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
@@ -82,6 +83,61 @@ beforeEach(() => {
 	mockInvoke.mockReset();
 	mockInvoke.mockResolvedValue(undefined);
 	acpStore.reset();
+});
+
+// Catches: async replacement offers merge stale options or alter a sibling attachment.
+describe("acpStore: async config offers", () => {
+	const model: AcpSessionConfigOption = {
+		id: "model",
+		name: "Model",
+		type: "select",
+		currentValue: "opus",
+		options: [{ value: "opus", name: "Opus" }],
+	};
+
+	it.each([{ options: [] }, { options: [model] }])(
+		"replaces the complete option set with $options for only the matching session",
+		({ options }) => {
+			const sibling = "sibling-session";
+			const old = { ...model, id: "old-model" };
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [attachment({ configOptions: [old] }), attachment({ sessionId: sibling, configOptions: [old] })],
+				}),
+			);
+			acpStore.applyFrame(
+				CONNECTION,
+				frame(
+					2,
+					{
+						kind: "sessionUpdate",
+						update: { sessionUpdate: "config_option_update", configOptions: options },
+					},
+					SESSION,
+				),
+			);
+			expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions).toEqual(options);
+			expect(acpStore.attachment(CONNECTION, sibling)?.configOptions).toEqual([old]);
+			expect(acpStore.cursor(CONNECTION)).toBe(2);
+		},
+	);
+
+	// Catches: a late offer for a detached session creates a phantom attachment.
+	it("does not create an attachment for an unknown session", () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+		acpStore.applyFrame(
+			CONNECTION,
+			frame(
+				2,
+				{
+					kind: "sessionUpdate",
+					update: { sessionUpdate: "config_option_update", configOptions: [model] },
+				},
+				"detached-session",
+			),
+		);
+		expect(acpStore.attachments(CONNECTION)).toEqual([attachment()]);
+	});
 });
 
 describe("acpStore: what it holds", () => {

@@ -356,7 +356,7 @@ mod tests {
     fn it_can_remove_a_document() {
         let mut search_engine = SearchEngineBuilder::<usize>::with_avgdl(2.0).build();
         let document = Document::new(123, "bananas and apples");
-        let document_id = document.id.clone();
+        let document_id = document.id;
 
         search_engine.upsert(document);
         search_engine.remove(&document_id);

@@ -1,6 +1,49 @@
 # Plugin Authoring Guide
 
-TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins can be **built-in** (compiled with the app) or **external** (loaded at runtime from the user's plugins directory).
+## Scoped plugin settings (#1785-c7a1)
+
+Loaded plugins expose `plugins.<id>` descriptors through the Rust settings owner.
+`plugin_settings_action(pluginId, action)` and `POST /api/plugins/{id}/settings`
+share describe/get/set/reset/patch semantics. The backend fixes both the owner and
+`plugins/<id>/data/config.json`; requests cannot choose a store, target or file.
+Get requires explicit paths; writes require the last `expectedRevision`.
+
+A configurable manifest declares `settings: { schema, defaults }`. The schema is
+closed (`additionalProperties: false`), bounded to 128 annotated leaves, and uses
+only the supported object, scalar and scalar-array constraints. Every leaf needs
+`x-setting` sensitivity, apply mode, effect, operations and `confirmationClass`.
+Opaque objects, unsupported constraints, missing metadata and secret defaults are
+rejected. A plugin with an existing config file and no schema cannot load or write
+that config. Other plugin data, including statistics, remains separate.
+Tasks setup stores GitHub Work, Jira and GitLab provider account selections in
+`data/work-items.json` through the plugin data API, not the Settings catalogue.
+Configure these providers in Tasks setup; credential accounts stay in Settings > Accounts.
+
+Core supplies typed migrations for build-cleaner, at-capacity-retry,
+cache-keepalive, claude-wakeup and the Telegram notifier example. Registration
+fills missing defaults without discarding saved values, validates the result and
+atomically writes an owner-only config file (0600 on Unix). Numeric settings retain
+their typed domains without adding new policy limits to legacy values. Data, config
+and lock paths must stay inside the canonical plugin root and cannot be symlinks;
+links of the whole plugin directory remain supported. Existing bot tokens
+remain available to the notifier's private config reader; the settings service
+returns only set/unset. Catalogue definitions, errors and reload events contain no
+stored credentials. Plugin enablement stays in `app.disabled_plugin_ids`; native
+agent usage has no private plugin store.
+
+Patches validate the entire batch against current state under the shared config
+and cross-process file locks. Stale revisions conflict, failed writes emit no
+reload event, and unload removes descriptors and revokes retained owner handles.
+After persistence, `plugin-changed` is dual-emitted to desktop and SSE so existing
+unload/load callbacks reread config. `applied: false` reports scheduled reload,
+not completed callback acknowledgement. Backend unregistration is awaited before
+reload registration. General MCP settings publication remains a separate cutover.
+
+Plugins can call `host.settings({ action: "get", paths: ["/enabled"] })` and pass
+the resulting revision to set/reset/patch. The host supplies its plugin ID.
+
+
+TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins are external ES modules loaded at runtime from the user's plugins directory in the desktop app. The native agent usage feature is initialized separately; there is no built-in plugin registration list.
 
 ## Quick Start: External Plugin
 
@@ -59,7 +102,7 @@ export default {
 };
 ```
 
-4. Save the file — hot reload picks it up. Adding a brand-new plugin directory or symlink while the app is running is also discovered live, so no restart is needed.
+4. In the desktop app, save a `.js`, `.mjs`, or `.json` code file outside `data/` to trigger hot reload. New top-level plugin directories and symlinks are discovered live. The watcher does not follow symlink targets, so edits within a linked target may need an explicit reload or restart. Browser/PWA clients do not load these external packages or run this watcher.
 
 ## Architecture
 
@@ -106,17 +149,19 @@ Tauri OutputParser --> pluginRegistry.dispatchStructuredEvent(type, payload, ses
 2. **Validation** — Frontend validates manifest fields and `minAppVersion`
 3. **Import** — `import("plugin://my-plugin/main.js")` loads the module via the custom URI protocol (on Windows the loader rewrites this to `http://plugin.localhost/my-plugin/main.js`, since WebView2 only serves custom schemes under `http://{scheme}.localhost/...`)
 4. **Module check** — Default export must have `id`, `onload`, `onunload`
-5. **Register** — `pluginRegistry.register(plugin, capabilities)` calls `plugin.onload(host)`
+5. **Register** — `pluginRegistry.register(plugin, capabilities)` awaits `plugin.onload(host, signal)`
 6. **Active** — Plugin receives PTY lines, structured events, and can use the PluginHost API
 7. **Hot reload** — File changes emit `plugin-changed` events; the plugin is unregistered and re-imported. Creating a new top-level plugin directory or symlink after startup also emits the event (the watcher does not descend into symlink targets, so the create of the link itself is the trigger), and the new plugin is discovered and loaded without a restart
-8. **Unload** — `plugin.onunload()` is called, then all registrations are auto-disposed
+8. **Unload** — `plugin.onunload()` is called only if its `onload` started, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
+
+Async startup receives an `AbortSignal`. Unload or reload aborts it and stops waiting for obsolete startup work. Pass the signal to cancellable operations. After unload, calls through the old host throw an abort error before they can register providers or change host state. The host cannot stop arbitrary plugin code or cancel requests that ignore the signal. A replacement waits for backend teardown, not for obsolete startup to finish. Startup must settle (resolve or reject); the host sets no startup or backend teardown timeout. An active startup that never settles remains loading, and a pending backend teardown blocks replacements for that plugin ID. A replacement removed before its startup begins receives neither `onload` nor `onunload`.
 
 ### Crash Safety
 
 Every boundary is wrapped in try/catch:
 - `import()` — syntax errors or missing exports are caught
 - Module validation — missing `id`, `onload`, or `onunload` logs an error and skips the plugin
-- `plugin.onload()` — if it throws, partial registrations are cleaned up automatically
+- `plugin.onload()` — synchronous throws and rejected promises are logged and partial registrations are cleaned up automatically
 - Watcher/handler dispatch — exceptions are caught and logged, other plugins continue
 - UI callbacks registered through `PluginHost` (file icons/previews, activity
   items, context menu actions, ticker messages, dashboards, commands) are
@@ -139,9 +184,10 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 | `description` | string | no | Short description |
 | `author` | string | no | Author name |
 | `capabilities` | string[] | no | Tier 3/4 capabilities needed (defaults to `[]`) |
-| `allowedUrls` | string[] | no | URL patterns allowed for `net:http` (e.g. `["https://api.example.com/*"]`) |
+| `allowedUrls` | string[] | for `net:http` | Non-empty URL patterns required for HTTP access (e.g. `["https://api.example.com/*"]`) |
 | `agentTypes` | string[] | no | Agent types this plugin targets (e.g. `["claude"]`). Omit or `[]` for universal plugins. |
 | `binaries` | string[] | no | CLI binaries this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`) |
+| `providers` | (string \| object)[] | no | Account providers for `httpFetch({account})`; requires `net:http`. A core id (`"github"`) or a token-only descriptor registered on load (see [Core account registry integration](#core-account-registry-integration)) |
 
 ### Validation Rules
 
@@ -156,7 +202,7 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 ```typescript
 interface TuiPlugin {
   id: string;
-  onload(host: PluginHost): void;
+  onload(host: PluginHost, signal?: AbortSignal): void | Promise<void>;
   onunload(): void;
 }
 ```
@@ -182,7 +228,7 @@ Errors thrown inside `onload`, `onunload`, output watchers, and structured event
 
 ### Tier 1: Activity Center + Watchers + Providers (always available)
 
-All `register*()` methods return a `Disposable` with a `dispose()` method. You do **not** need to call `dispose()` manually — all registrations are automatically disposed when `onunload()` is called (including during hot reload). Only call `dispose()` if you need to dynamically remove a registration while the plugin is still running.
+All `register*()` methods return a `Disposable` with a `dispose()` method. You do **not** need to call `dispose()` manually — all registrations are automatically disposed when `onunload()` is called (including during hot reload). Panels opened through `openPanel` also close on unload, and their message, visibility and close bridges are removed. Resources created directly by plugin code, such as timers or DOM listeners, must be released by `onunload()`. Only call `dispose()` if you need to dynamically remove a registration while the plugin is still running.
 
 #### host.registerSection(section) -> Disposable
 
@@ -391,11 +437,17 @@ Register a callback for terminal/branch state changes. Fires on agent start/stop
 ```typescript
 const sub = host.onStateChange((event) => {
   // event.type: "agent-started" | "agent-stopped" | "branch-changed"
-  //           | "shell-state-changed" | "awaiting-input-changed"
-  // event.sessionId, event.terminalId, event.detail (branch name for branch-changed)
+  //           | "repo-changed" | "shell-state-changed" | "awaiting-input-changed"
+  // event.detail: new branch, repo path, shell state or awaiting-input kind; undefined when cleared
+  // Branch/repo events describe active navigation (sessionId: null, terminalId: "").
+  // Shell/awaiting events identify the changed terminal and its session.
 });
 // sub.dispose() to unsubscribe
 ```
+
+State events report changes after the runtime starts; use snapshot getters for initial values. Terminal events observe existing terminal sessions, including remote updates. Branch events describe the active workspace's branch, not every repository HEAD in the background.
+
+When teardown clears a session and changes its final shell or awaiting-input state together, those events retain the old session ID. A replacement session establishes a new baseline without replaying its initial state.
 
 ### Tier 2b: Git Read (capability-gated)
 
@@ -422,6 +474,13 @@ const diff = await host.getGitDiff("/Users/me/project", "staged");
 // Returns unified diff string
 ```
 
+#### `host.getRemotes(repoPath) -> Promise<Array<{ name, url }>>`
+
+```typescript
+const remotes = await host.getRemotes("/Users/me/project");
+// [{ name: "origin", url: "https://github.com/acme/app.git" }] — credentials in URLs are removed
+```
+
 ### Tier 3: Write Actions (capability-gated)
 
 These methods require declaring capabilities in `manifest.json`. Calling without the required capability throws `PluginCapabilityError`.
@@ -440,12 +499,18 @@ await host.writePty(sessionId, "\x03"); // Send Ctrl-C
 
 Sends user input to an agent session with correct Enter handling. **Requires `"pty:write"` capability.**
 
+
+
 Ink-based agents (Claude Code, Codex, etc.) run in raw mode and need Ctrl-U, the text, and `\r` as three writes with a real time gap between them, so each arrives in its own read (Claude Code strips a Ctrl-U that arrives inside a long text and then refuses the Enter). Shell sessions receive Ctrl-U + text in one write, then `\r`. This method handles both cases automatically based on the detected agent type.
 
 ```typescript
 await host.sendAgentInput(sessionId, "y");       // confirm a prompt
 await host.sendAgentInput(sessionId, "explain this code"); // send a message
 ```
+
+#### `host.sendAgentInputIfEmpty(sessionId, text) -> Promise<boolean>`
+
+Requires `"pty:write"`. For automated idle messages, use `host.sendAgentInputIfEmpty(sessionId, text)`. The backend checks the current idle, awaiting, and tracked composer state and serializes the complete submission with raw user input and its bookkeeping. It returns `false` without writing when blocked; it returns `true` after submission. This mode never answers a dialog or drains queued commands. Do not use a separate composer read to authorize a later send. Plugin load and reload replay the current `awaiting` state and shell state with `agent_type`. Older hosts do not expose this method, so plugins fail closed instead of falling back to destructive input.
 
 #### host.openMarkdownPanel(title, contentUri) -> void
 
@@ -693,13 +758,7 @@ Remove a ticker message by id. **Requires `"ui:ticker"` capability.**
 host.clearTicker("my-status");
 ```
 
-#### host.postTickerMessage(options) -> void *(legacy)*
-
-Alias for `setTicker` without `label` support. Prefer `setTicker` for new plugins.
-
-#### host.removeTickerMessage(id) -> void *(legacy)*
-
-Alias for `clearTicker`.
+The removed `postTickerMessage` and `removeTickerMessage` aliases are not supported. Use `setTicker` and `clearTicker`.
 
 ### Tier 3d: Panel UI (capability-gated)
 
@@ -805,7 +864,7 @@ panel.close();
 </style>
 ```
 
-**Dashboard layout classes.** For analytics/status dashboards, the base stylesheet also ships a `.dashboard`/`.dash-*` class family that mirrors the built-in Claude Usage dashboard. Use them instead of inventing layout CSS — see [`docs/plugins-style.md`](./plugins-style.md) for the full guide, checklist, and class reference.
+**Dashboard layout classes.** For analytics/status dashboards, the base stylesheet also ships a `.dashboard`/`.dash-*` class family that mirrors the native Claude Usage dashboard. Use them instead of inventing layout CSS — see [`docs/plugins-style.md`](./plugins-style.md) for the full guide, checklist, and class reference.
 
 #### host.openEditorTab(filePath, repoPath, opts?)
 
@@ -867,7 +926,7 @@ A plugin may only register one dashboard — calling `registerDashboard` a secon
 
 #### host.registerCommand(options) -> Disposable
 
-Register a plugin command that users can bind to a keyboard shortcut. The command appears in *Settings → Keyboard Shortcuts* under a dedicated "Plugin Commands" section and can be rebound by the user. The action name is auto-namespaced as `plugin:<pluginId>:<id>`.
+Register a plugin command that users can bind to a keyboard shortcut. The command appears in *Settings → Keyboard Shortcuts* under a dedicated "Plugin Commands" section and can be rebound by the user. The action name is auto-namespaced as `plugin:<pluginId>:<id>`. The active frontend publishes these IDs to the Rust keybinding choices owner; unload removes them from later refreshes. This runtime publication never saves shortcut overrides.
 
 ```typescript
 host.registerCommand({
@@ -903,7 +962,7 @@ All standard elements (buttons, inputs, tables) will look correct automatically.
 | `--text-on-error` | Text on error backgrounds |
 | `--text-on-success` | Text on success backgrounds |
 
-**Security:** The iframe uses `sandbox="allow-scripts"` without `allow-same-origin`, blocking access to Tauri IPC and the parent page DOM. The `close-panel` message type is handled as a system message; all other messages are routed to the `onMessage` callback.
+**Security:** The iframe uses `sandbox="allow-scripts allow-same-origin"`. This permits scripts and same-origin access; it is not an isolation boundary from the host DOM. Plugin modules also execute in the host JavaScript realm. The `close-panel` message type is handled as a system message; all other messages are routed to the `onMessage` callback.
 
 #### TUIC SDK (`window.tuic`)
 
@@ -1139,9 +1198,11 @@ if (credJson) {
 
 #### `host.httpFetch(url, options?) -> Promise<HttpResponse>`
 
+`httpFetch(url, { signal })` accepts a host-local `AbortSignal`. A pre-aborted signal starts no request; abort cancels the Rust request while waiting for headers or collecting the body and rejects with `AbortError`. Unloading the plugin also cancels its active HTTP requests. Signals never cross IPC/HTTP: the host sends a generated UUID and a plugin-scoped cancel command. Requests without a signal keep the same response contract.
+
 Make an HTTP request. Non-2xx status codes are returned normally (not thrown as errors). **Requires `"net:http"` capability.**
 
-External plugins can only fetch URLs matching their manifest's `allowedUrls` patterns.
+Plugins can only fetch URLs matching their manifest's `allowedUrls` patterns. A manifest declaring `net:http` with empty or omitted `allowedUrls` is rejected. An empty list never grants unrestricted access, including localhost or private destinations.
 
 ```typescript
 const resp = await host.httpFetch("https://api.example.com/data", {
@@ -1163,11 +1224,17 @@ interface HttpResponse {
 }
 ```
 
+**Account requests:** `httpFetch(url, { account: "<account id>" })` makes Rust inject that account's credential (`Authorization: Bearer <token>`, or `Basic` for Basic accounts). The plugin never sees the token. Rules: the manifest `providers` list must contain the account's provider; the URL must be under the account host (same scheme, host and port, path prefix of the site URL; GitHub accounts use their API base, `https://api.github.com/` or `https://<ghe>/api/`); the account host rule replaces the `allowedUrls` check for the first URL; you must not set `Authorization` yourself. Each redirect hop must be under the account host or match `allowedUrls`, and a hop to another scheme, host or port loses the `Authorization` header. The token is read again for each request, so a re-entered credential applies at once; a 401 comes back to you as a normal response. Token values in the response body and headers are replaced with `[redacted]`.
+
+```typescript
+const me = await host.httpFetch(`${site}/rest/api/3/myself`, { account: accountId });
+```
+
 **Security and limits:**
 - `file://`, `data://`, `ftp://` schemes are blocked
 - 30-second timeout, 10 MB response limit, max 5 redirects
 - Localhost (`localhost`, `127.0.0.1`, `::1`, `[::1]`, `0.0.0.0`) is blocked unless explicitly declared in `allowedUrls`
-- Built-in plugins (no `capabilities` array) can fetch any `http://` or `https://` URL without restrictions
+- Every HTTP request must match a declared pattern; an empty list permits no requests
 
 **`allowedUrls` pattern matching:**
 - Patterns use prefix matching with an optional trailing `*` wildcard
@@ -1210,7 +1277,7 @@ console.log(status.index.documents); // 1486
 - Only binaries declared in the plugin's `binaries` manifest field can be executed
 - Working directory must be absolute and within `$HOME`
 - 30-second timeout
-- 5 MB stdout limit
+- 5 MiB limit per stdout/stderr stream; both streams drain concurrently. Overflow or read failure stops the process with an error.
 - Binary is resolved via PATH lookup and known install locations (`~/.cargo/bin/`, `/usr/local/bin/`, etc.)
 
 ### Tier 4: Scoped Tauri Invoke (whitelisted commands only)
@@ -1281,14 +1348,14 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 
 | Capability | Unlocks | Risk |
 |------------|---------|------|
-| `pty:write` | `host.writePty()`, `host.sendAgentInput()` | Can send input to terminals |
+| `pty:write` | `host.writePty()`, `host.sendAgentInput()`, `host.sendAgentInputIfEmpty()` | Can send input to terminals |
 | `pty:read` | `host.invoke("get_input_buffer_content", …)` | Can read the terminal input line buffer |
 | `ui:markdown` | `host.openMarkdownPanel()`, `host.openMarkdownFile()`, `host.openMarkdownFileBackground()` | Can open panels and files in the UI |
 | `ui:sound` | `host.playNotificationSound(sound?)` | Can play sounds (question, error, completion, warning, info) |
 | `ui:panel` | `host.openPanel()` | Can render arbitrary HTML in sandboxed iframe |
 | `ui:ticker` | `host.setTicker()`, `host.clearTicker()` | Can post messages to the shared status bar ticker |
 | `credentials:read` | `host.readCredential()` | Can read system credentials (consent dialog shown) |
-| `net:http` | `host.httpFetch()` | Can make HTTP requests (scoped to `allowedUrls`) |
+| `net:http` | `host.httpFetch()` | Requires a non-empty `allowedUrls` list; requests must match a declared pattern |
 | `invoke:read_file` | `host.invoke("read_file", ...)` | Can read files on disk |
 | `invoke:list_markdown_files` | `host.invoke("list_markdown_files", ...)` | Can list directory contents |
 | `fs:read` | `host.readFile()`, `host.readFiles()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MiB default; binary reads may request up to the 512 MiB host ceiling) |
@@ -1299,7 +1366,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
 | `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
-| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
+| `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()`, `host.getRemotes()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
@@ -1341,7 +1408,6 @@ TUICommander polls the foreground process of each terminal's PTY every 3 seconds
 | `claude` | `"claude"` |
 | `gemini` | `"gemini"` |
 | `opencode` | `"opencode"` |
-| `aider` | `"aider"` |
 | `codex` | `"codex"` |
 | `amp` | `"amp"` |
 | `cursor-agent` | `"cursor"` |
@@ -1402,13 +1468,19 @@ Never use emoji — they render inconsistently across platforms.
 
 ## Hot Reload
 
+Reload batches deduplicate changed enabled IDs and run one discovery request for
+that batch. Concurrent notifications share a serialized reload queue. Only the
+selected plugin roots are read; payload hashing reuses unchanged file hashes by
+modification time and size. Same-version source edits still change the computed
+payload digest. Full discovery remains available at startup.
+
 When any file in a plugin directory changes, the app:
 1. Emits a `plugin-changed` event with the plugin ID
 2. Calls `pluginRegistry.unregister(id)` (runs `onunload`, disposes all registrations)
-3. Re-imports the module with a cache-busting query (`?t=timestamp`)
+3. Re-imports the module under a fresh path version (`plugin://<id>/~v<timestamp>/main.js`). Relative imports inherit the version, so every file the entry imports is re-read too
 4. Validates and re-registers the plugin
 
-This means you can edit `main.js` and see changes without restarting the app.
+This means you can edit `main.js` or any file it imports and see changes without restarting the app. The `~v<digits>` segment exists only in the URL; do not name a plugin directory that way.
 
 ## Build & Install
 
@@ -1430,14 +1502,75 @@ my-plugin/
   main.js
 ```
 
+## Core-rendered plugin UX
+
+
+Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
+
+### Manifest UX field inventory
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `version`.
+
+### Core UX component inventory
+`BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
+
+#### PluginsTab
+
+Settings > Plugins has Installed and Browse views. Installed lists loaded/discovered plugin state. Browse reads community registry entries and offers install, update and refresh actions. Installation accepts ZIP archives. The manifest `id` identifies the package, `main` selects its module, and `minAppVersion` controls compatibility. `author` is optional metadata. `allowedUrls`, `agentTypes`, `binaries` and `providers` drive host access/event routing, not editable settings controls.
+
+#### PluginRow
+
+The Installed row shows manifest `name` (falls back to `id`), `version`, `description` and `capabilities`. It shows load errors, error counts and available updates. Its toggle persists enabled state; Logs expands PluginLogViewer; external packages can be uninstalled. A README.md adds a documentation button. `host.registerDashboard({ label?, icon?, open })` adds a dashboard button: core closes Settings before calling `open`. Register only one dashboard per plugin. `host.registerCommand({ id, title, defaultShortcut?, run })` adds a rebindable entry under Settings > Keyboard Shortcuts > Plugin Commands.
+
+#### PluginLogViewer
+
+The expanded Logs view shows the plugin ring buffer's timestamp, level and message, or an empty state. Use `host.log(level, message, data?)`; host boundary errors are captured automatically.
+
+#### BrowseRow
+
+The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available, or Installed for the current version. Registry metadata is separate from the installed manifest.
+
+### Settings schema and Tasks views
+
+#### Tasks list
+
+Core `TasksList` consumes the async `WorkItemProvider` port. Providers supply
+account and provider IDs, a display name, field descriptors, saved filters and
+`list(query, signal)`. Core renders Solid controls and virtual rows; providers
+return data only. Source selection partitions cached pages by provider and
+account. Queries include filters, saved-filter ID, search, sort and cursor.
+Search waits 250 ms after input; sorting and filters run in the provider.
+Grouping calls `grouped(query, signal)` with `groupBy`; core renders the returned
+group names and members without inferring membership.
+`nextCursor` enables Load more; repeated cursors stop pagination, and repeated
+item references update the existing row. The cache holds at most 32 pages.
+An obsolete request cannot replace current rows. A failed refresh retains
+available rows and marks them stale. Detail data is requested by the detail
+view after the host receives `onOpen(reference)`. Shell mounting is separate.
+
+The optional manifest `settings: { schema, defaults }` registers a scoped settings owner. Core renders one searchable Integrations page per live plugin catalogue and removes it on unload. All reads, edits and resets use the existing revision-checked plugin settings service. Titles and descriptions label controls; secrets show only set/unset. Objects group leaves; string enums render selects, booleans toggles, integers and numbers numeric inputs. Bounded arrays use multi-selects for string enums, lists for strings, and JSON inputs for other item types. Read-only fields render status controls. Plugins do not import core Settings components or save a second configuration file.
+
+### GitHub Work adapter status
+
+`plugins/github-work/provider.js` exports `createGitHubProvider` against the A4
+contract and an injected account-scoped fetch port. It returns data only; core owns
+rendering and start-work execution. Recorded GitHub fixtures cover REST read shapes.
+The adapter does not receive tokens or maintain a separate rate limiter.
+
+The plugin lifecycle and manifest use `host.httpFetch(url, {account})` from
+story 1697-4cdc; the catalog lists GitHub Work. Configure `data/config.json` with
+account IDs and repositories as described in the module README. B6/B7 core ports and the duplicate-picker consumer also need integration.
+The current `host.invoke` whitelist must not be bypassed to reach core PR commands.
+Projects v2 success paths remain unverified because the recording credential lacks
+`read:project`. See the module README for the open integration tasks.
+
 ## Plugin Management (Settings > Plugins)
 
 The Settings panel has a **Plugins** tab with two sub-tabs:
 
 ### Installed
 
-- Lists all plugins (built-in and external) with toggle, logs, and uninstall buttons
-- Built-in plugins show a "Built-in" badge and cannot be toggled or uninstalled
+- Lists external plugins with toggle, logs, and uninstall buttons; native agent usage is managed in Settings > Agents
+- The UI retains a legacy "Built-in" badge path, but no built-in plugin packages are registered by the current startup code
 - Error count badges appear on plugins with recent errors
 - "Logs" button opens an expandable log viewer showing the plugin's ring buffer
 - "Install from file..." button opens a file dialog accepting `.zip` archives
@@ -1446,7 +1579,7 @@ The Settings panel has a **Plugins** tab with two sub-tabs:
 
 - Shows plugins from the community registry (fetched from GitHub)
 - "Install" button downloads and installs directly
-- "Update available" badge when a newer version exists
+- "Update available" badge when a newer version exists or equal-version payloads differ
 - "Refresh" button forces a new registry fetch (normally cached for 1 hour)
 
 ### Enable/Disable
@@ -1484,9 +1617,11 @@ TUICommander registers the `tuic://` URL scheme for external integration:
 
 The registry is a JSON file hosted on GitHub (`sstraus/tuicommander-plugins` repo). The app fetches it on demand (Browse tab) with a 1-hour TTL cache.
 
-Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`.
+Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`, and optional `contentSha256`.
 
-The Browse tab compares installed versions to detect available updates.
+The Browse and Installed tabs compare versions and, at the same version, payload identities. Rust recomputes installed `contentSha256` during discovery; a manifest cannot supply it. A missing identity keeps version-only behavior, and a newer installed version is never downgraded.
+
+The community packager generates `contentSha256` from sorted UTF-8 relative paths (using `/`), NUL, each file's lowercase hexadecimal SHA-256, and LF. It hashes that complete sequence again with SHA-256. Directories named `data`, `node_modules`, `scripts`, `.claude`, `.git`, and files matching `package*.json` are excluded. Thus user settings and ZIP timestamps do not cause updates. Internal symlinks or unreadable files leave the installed identity unknown; the plugin can still load. This is content identity, not publisher authentication. The raw source catalogue can precede release completion; wait for the plugin release workflow before installing.
 
 ## Per-Plugin Error Logging
 
@@ -1507,7 +1642,7 @@ code from the desktop configuration directory.
 
 See `examples/plugins/report-watcher/` for a template showing how to extract terminal output into Activity Center items with a markdown viewer.
 
-To create a built-in plugin, add it to `BUILTIN_PLUGINS` in `src/plugins/index.ts`.
+Create new plugins as external packages with a manifest and ES module entry point. `src/plugins/index.ts` initializes native agent usage and loads external packages; it has no `BUILTIN_PLUGINS` list.
 
 ## Testing
 
@@ -1732,3 +1867,254 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 | Module not found | `main` field doesn't match filename | Ensure `"main": "main.js"` matches your actual file |
 | Changes not reflecting | Hot reload cache | Save the file again, or restart the app |
 | `default export` error | Module doesn't `export default { ... }` | Ensure your module has a default export with `id`, `onload`, `onunload` |
+
+## Core account registry integration
+
+Provider accounts and sites are core-owned. Metadata reads expose credential presence only. Manifest `providers` descriptors (`{id,label,kinds,verify:{path,loginPointer}}`) register with `accounts::register_provider(<plugin id>, descriptor)` when the plugin loads; non-core providers use bearer/basic tokens only. Unload unregisters descriptors but keeps accounts and credentials.
+
+`providers`: optional account providers this plugin may use with `httpFetch({account})`; requires `net:http`. An entry is either a core provider id (only `"github"`) or a token-only descriptor that core registers when the plugin loads and removes when it unloads (accounts and credentials stay): `{ "id": "jira", "label": "Jira", "kinds": ["basic", "bearer"], "verify": { "path": "/rest/api/3/myself", "loginPointer": "/displayName" } }`. `kinds` accepts `bearer` and `basic`; `verify.path` is a path under the site URL that the account Test calls, and `loginPointer` is the JSON Pointer of the viewer name in its response. An id may appear once; a declared descriptor must not use a core id.
+
+Authenticated HTTP goes through `host.httpFetch(url, { account })` (see Tier 3h). Account actions are not currently a grant in `host.invoke`. Secret entry belongs in the core private native sink, which calls the write-only account service; plugins must never receive token values. See [Shared account registry](backend/github.md#shared-account-registry).
+
+## Core setting controls
+
+The core provides account, editable-list, multiselect, read-only status and action
+button controls for catalogue-backed settings and work-item forms. Plugins do not
+import these Solid components or gain new manifest fields from them. The host
+owns account selection and native secret entry; no token enters a plugin prop.
+See `plugin_dev_guide` → **Settings field kinds** for the core-rendered contracts.
+
+## Tasks roadmap
+
+Core `TasksRoadmap` renders `WorkItemProvider.list` pages and the provider's date
+descriptors. The host passes `provider`, `onOpen(reference)`, optional `query`,
+`visible`, `initialDate`, `startFieldId` and `targetFieldId`. Absent field IDs use
+the first and second `kind: "date"` descriptors in provider order. Field names are
+never guessed. Provider-declared start/target roles need a later contract extension.
+
+Month/quarter zoom and Previous, Next and Today navigate the local calendar.
+ISO date-only values retain their calendar day. Timestamps must carry an explicit
+offset and display in the viewer's local time zone. Bars include the target day
+and clip to the visible period. A single endpoint gives a one-day milestone.
+Missing, invalid or reversed dates stay clickable in the **Without usable dates**
+side list; out-of-period tasks stay listed in the timeline.
+
+The shell hides the Roadmap view while the selected provider declares no
+`kind: "date"` field.
+
+Both lists use virtual rows. **Load more** follows provider cursors. Failed
+refreshes retain stale results; obsolete provider responses cannot replace the
+active view. This component adds no manifest, IPC or HTTP API. Tasks shell mounting
+is a separate integration step.
+
+## Tasks data contract (Phase A4)
+
+Register via `host.registerWorkItemProvider(provider)`, returning an auto-cleaned
+Disposable. Provider/account pairs must be unique; core consumers use
+`workItemProviderRegistry.get(providerId, accountId)` or `.list(providerId?)`.
+The async `WorkItemProvider` port includes list/detail/comments/act, dynamic
+createFields(itemType?), grouped(query) and board(id, query). Grouping uses query.groupBy;
+board lanes include per-card moves (columnId and action) so UI never guesses legal moves.
+The test/development fake is `createInMemoryWorkItemProvider()` in
+`src/plugins/testing/inMemoryWorkItemProvider.ts`, seeded from the same synthetic
+JSON as the Rust fake. No fake routes or IPC commands are installed.
+
+
+Core owns the Solid Tasks views; provider plugins supply data, schemas and actions,
+never view HTML. A4 defines DTOs only: registration, transport and visible views
+are delivered by the following integration steps.
+
+### Work-item links (Phase A3b)
+
+`host.linkItem(repoPath, branch, link)` persists a link from a worktree branch to a
+work item; `host.unlinkItem(repoPath, branch)` removes it and resolves `true` when a
+link existed. No capability is required. `link` is
+`{ reference: { providerId, accountId, id }, key, title, url, state: { id, name, tone } | null }`;
+`url` must be http(s). The sidebar branch row shows `key` coloured by `state.tone`;
+hovering refreshes the state through the provider's `detail(reference)`, and a click
+opens `url` without selecting the branch. TUIC drops the link when it removes the
+worktree. `repoPath` is the main repository path, `branch` the worktree branch name.
+
+### Work-item field kind inventory
+`text`, `markdown`, `enum`, `user`, `labels`, `date`, `number`, `link`
+
+- `text`: a plain text input; `markdown`: the shared markdown renderer/editor.
+- `enum`: a select using provider option IDs; `user`: a user picker, multiple users.
+- `labels`: multiple labels with stable IDs; `date`: ISO-8601 date input.
+- `number`: finite numeric input; `link`: URL/link control.
+
+Display-only fields set `sortable`, `filterable` and `groupable` to false. The roadmap still reads date fields.
+
+The canonical DTOs are `work_items::model` and `work_items::protocol` in Rust.
+Generate their TypeScript declarations with
+`python3 scripts/generate-work-item-types.py`; import from
+`src/types/work-items.gen.ts`. Fields use camelCase; discriminated unions use
+`{kind, value}` with snake_case kinds. `WorkItemRef` scopes opaque item IDs by
+`providerId` and `accountId`. Missing field keys mean not loaded; null means unset.
+
+Each field schema declares `sortable`, `groupable` and `filterable` booleans for
+the provider list endpoint. Tasks offers only those declared query controls.
+Create and detail schemas set these to false when they are not list fields.
+A rejected query restores the last successful controls and shows the reason.
+
+`WorkItemQuery` carries ANDed filters (values are ORed), saved filter ID, native
+search, sort, bounded page size and opaque cursor. Providers must bind cursors to
+the account/query; selecting a preset starts with no cursor. `WorkItemPage`
+contains items, `nextCursor` and an optional `total` (all matches, when the provider knows it). Details load body, field schemas, allowed action
+descriptors and a separately paginated comment page on open. Comment entries are
+`normal`, `review_thread` (resolved, outdated, path, line, originalLine, reviewed
+commitId and a nullable parsed `finding`), or `review_summary` (state and reviewed
+commitId). Comment authors carry `bot`. Bodies are markdown, not trusted HTML; finding
+text is untrusted bot data, shown as plain text and never applied or executed.
+
+Actions are `create`, `edit_field`, `transition`, `comment`, and `start_work`.
+Transitions use provider action IDs, not state display names. Board columns may carry a default edit/transition action or null; per-card moves
+carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
+branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
+core executes the existing worktree/agent workflow and owns errors/rollback.
+Core `CardMoveMenu` provides a portalled, keyboard-accessible menu of other columns and enables only destinations allowed by the card's moves.
+
+`work_items::demo::demo_provider()` supplies deterministic local-only data with
+list, detail, comments, schemas, saved filters, board columns and mutations.
+It touches no network, credentials, filesystem or subprocesses. It is a development
+provider, not a fixture proving GitHub/Jira/GitLab API compatibility. Its search is
+literal text; sort supports key/title/updatedAt. Its cursor expires on mutation.
+
+## Tasks detail
+
+Core's `TasksDetail` consumes the async `WorkItemProvider` port and a `WorkItemRef`.
+The Tasks shell supplies the selected provider/reference and `visible` state.
+Providers supply data and declared actions; they do not render this view.
+
+The header shows key, title, type, state and updated time. Detail field schemas
+select text, Markdown, enum, user, labels, date, number and link controls. Saving
+requires an editable field and an enabled `edit_field` action. Required fields
+cannot be cleared. Values retain their tagged field-value shape. The detail shows
+Description first, then the fields, then Comments. A schema of more than eight
+fields folds behind a "Fields (N)" summary so a wide Jira project does not push
+Description and Comments out of view; no field is dropped.
+
+Descriptions and normal comments, review threads and review summaries render
+through `ContentRenderer` with `untrustedContent`. Markdown, tables, images and
+`<details>` survive; scripts, event handlers and provider CSS do not. Review
+threads show file/line and resolved state. The provider's comment cursor drives
+Load more. Add comment retains its draft on rejection.
+An accepted comment clears its draft even if reloading opened comment pages
+fails. Core keeps the returned item, reports the history error and lets Retry
+reload those pages.
+
+Transition buttons use declared IDs and disabled reasons. The pending action
+label appears immediately while the authoritative state ID stays intact.
+Success adopts the returned detail; rejection restores the state label and
+shows the error. Core does not infer a target state from a transition name.
+
+A `start_work` descriptor in `actions` shows a Start work button in the detail and
+in the board card's actions menu (the menu reads the item's detail when opened).
+Core sends the provider a `start_work` action (active repository, branch, item
+brief, `draft` delivery); the provider returns the intent and core runs the host
+start-work workflow with the item link. The button shows a pending state, then
+the started branch, or the error with Retry. The branch is the item field
+`branch` (text) when the provider fills it, else a slug of key and title. This
+field is a hint and needs no schema entry. "Copy branch name" copies that branch.
+
+Refresh is manual and periodic (60 seconds by default) while the detail, Tasks
+view and document are visible. Refresh preserves disclosure state and reloads
+comment pages already opened. Switching items rejects stale responses.
+
+## Start work and URL paste
+
+`host.startWork({ repoPath, branch, baseRef?, prompt, agentType?, delivery?, link? })`
+(capability `pty:write`) creates a worktree on a new `branch` (from `baseRef`, default
+the repo's default branch) and opens an agent in it. The agent is `agentType` or, when
+omitted, the first enabled agent with a run config on the repo's machine; that run
+config supplies the command and env. The prompt sits inside an `<untrusted-content>`
+block, control bytes removed, capped at 12000 characters. `delivery: "draft"`
+(default) waits for the agent's composer and types the prompt there, leaving Enter to
+the user. `"submit"` starts the agent with the prompt as its first message, quoted as
+one POSIX shell argument after a `--` option terminator, for claude, codex, gemini and grok
+(their `--help` lists a positional prompt for an interactive session and they honour `--`); other agents (pi has no `--`
+handling), prompts over 16384
+characters and cmd/PowerShell shells get the prompt typed and submitted instead. `link` links the item to the
+new worktree. It resolves to `{ repoPath, workspaceId, branch, worktreePath }`.
+The GitHub Auto-fix action uses the same path with `delivery: "submit"`.
+
+`host.registerUrlResolver((url, signal) => ...)` claims URLs pasted in the command
+palette. Return `null` for a URL that is not yours, or `{ link, startWork? }`.
+Resolvers run in registration order; the first non-null result wins and a resolver
+that throws is skipped. When a worktree is already linked to `link.reference`, the
+palette offers **Open worktree**; otherwise it offers **Start work** with your
+request (`repoPath` defaults to the active repository).
+
+## Tasks create
+
+Core's `TasksCreate` consumes `createFields` and `act` of the `WorkItemProvider` port.
+The host supplies `provider`, `onCreated(detail)` to open the created item, and
+optional `onCancel`. Providers supply types and schemas; they do not render the form.
+
+`createFields()` without a type must return an enum field with id `itemType` that
+lists the creatable types; a single type is preselected. `createFields(type)`
+returns the fields of that type (an unknown type is an error, and `create`
+rejects an undeclared `itemType`). Title and Description are fixed inputs, so a
+schema does not repeat them. Only editable fields render.
+
+Create lists Type, Title, Description and the required fields first. Optional
+fields sit in a folded "Optional fields (N)" group with a name filter; the filter
+only hides a field and never hides one that blocks Create.
+
+A type change reloads the schema; values survive only for the same field id and
+kind, and a late schema of an earlier type is dropped. Create stays disabled until
+Title, Type and every required field of the current type are set. Submit sends one
+`create` action with every current field (unset is null). A rejection keeps the draft.
+
+Create user controls use optional `lookupUsers(fieldId, query, signal?)`, which
+returns `{id, name}` choices for that provider/account. Search text is never a
+selected user; rejected searches stay visible and late responses are discarded.
+Static user options remain selectable. Labels without static options accept
+comma-separated free text. Required-field errors are linked to their controls.
+The Jira provider omits configured Project and selected Issue Type from its
+create schema, searches project-assignable users for Assignee, and searches users
+for Reporter. Cloud choices use account IDs; Data Center choices use usernames.
+A provider may declare optional `singleUser(fieldId)`; Jira does, so a second pick in
+a user field replaces the first. The control shows and announces the chosen user.
+Jira create metadata that carries `hasDefaultValue` (Reporter) is not required in
+the form, and empty optional fields are left out of the create payload so Jira
+applies its own defaults.
+
+## Tasks setup
+
+With no work-item provider registered, the Tasks tab shows install prompts for
+`github-work`, `gitlab` and `jira`. Once a plugin is installed, a form edits its
+account (`id`, `repository`, `host`, `project`/`projectId`, `boards`) and merges it
+into the plugin's `data/config.json`, then reloads the plugin. Other accounts and keys
+stay; a file that is not valid JSON is never overwritten. **Provider settings** in the
+Tasks header opens the same form. The Plugins settings tab lists install hints for
+the work-item plugins that are missing. Open Tasks is always offered.
+
+A provider page with `total <= 1000` can enable complete local Tasks queries after every page is collected and its unique item count matches the stable total. Omit `total` when unknown; never infer a count from a cursor or loaded rows. Local query projection is the host Rust command `project_work_items`, shared with `/tasks/project`. Collection preserves GitLab type, state and preset scope. GitLab username filters remain server-side because list rows hold numeric user identities, not usernames. Roadmap keeps provider paging and does not collect complete scopes automatically.
+
+GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
+
+### Account-scoped GitHub review and action ports
+
+`host.githubReviewThreads(account, reference, after)` returns the core B6 review
+thread page, including head SHA, bot authors and parsed findings.
+`host.githubPrAction(account, reference, request)` calls core B7 policy.
+Both require `net:http` and an on-disk manifest declaring `providers: ["github"]`.
+The reference must identify a GitHub pull request in the selected account. Core
+loads that exact account credential, never a local repository default. Cross-account
+references fail before credential lookup. No token is returned to the plugin.
+
+Requests use `action`: `state`, `auto_merge` (`enabled`, optional `mergeMethod`,
+`expectedHeadSha`), `queue` (`enqueued`, optional `expectedHeadSha`), `merge`
+(`mergeMethod`, `expectedHeadSha`), `rerun` (`runId`), or `review` (`draft` with
+`headSha`, `body`, `event`, `comments`). Existing core reviewed-head validation,
+merge queue policy and shared request budgets apply unchanged. The desktop command
+`plugin_github_action` and `POST /api/plugins/{plugin_id}/github` accept identical
+`{account, reference, request}` payloads (IPC also supplies `pluginId`).
+The GitHub Work runtime binds both ports when it registers each configured account.
+No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Settings startup is not a plugin capability
+
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority.
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.

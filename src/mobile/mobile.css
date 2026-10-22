@@ -1,3 +1,5 @@
+@import "../styles/chat-tokens.css";
+
 /* TUICommander PWA — Standalone global styles.
  * Isolated from the desktop global.css to allow independent evolution.
  */
@@ -30,6 +32,8 @@
   --urgent: #ffd700;
   --error: #ef4444;
   --text-on-accent: #000000;
+  /* Commander uses white accent text, which is too faint for this small banner. */
+  --mobile-update-foreground: #000000;
   --text-on-error: #000000;
   --text-on-success: #000000;
 
@@ -39,7 +43,7 @@
   --radius-lg: 6px;
   --radius-xl: 8px;
   --radius-pill: 12px;
-  --radius-full: 50%;
+  --radius-full: 9999px;
 
   /* --- Elevation --- */
   --shadow-popup: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -86,4 +90,8 @@ input, textarea, select {
 
 #mobile-app {
   height: auto;
+}
+
+html[data-theme="vscode-light"] {
+  --mobile-update-foreground: #ffffff;
 }

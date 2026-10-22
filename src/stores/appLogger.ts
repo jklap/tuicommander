@@ -8,8 +8,9 @@
  * objects so Web Inspector does not retain them as script arguments.
  *
  * The local JS ring buffer serves as a fast reactive cache for the UI.
- * Every push is also fire-and-forget mirrored to the Rust backend ring buffer
- * via `push_log`, making logs durable across webview reloads.
+ * Info/warn/error and bounded dictation lifecycle debug records are also mirrored
+ * to the Rust backend ring buffer via `push_log`, surviving webview reloads.
+ * Other debug records remain local.
  *
  * The local cache is split into two independent bounded pools keyed by audience
  * ("user" vs "diagnostic"). A flood of diagnostic telemetry (freeze/perf traces)
@@ -271,6 +272,22 @@ function createAppLogger() {
 			last.timestamp = Date.now();
 			// Bump revision so UI sees updated repeat count
 			setRevision((r) => r + 1);
+			// UI coalescing must not discard a second stall's numeric metadata.
+			if (
+				level !== "debug" &&
+				source === "app" &&
+				(message.startsWith("SLOW git.refreshBatch:") ||
+					message.startsWith("SLOW git.statsBatch:") ||
+					message.startsWith("UI freeze:"))
+			) {
+				pushToRust(
+					level,
+					source,
+					message,
+					data === undefined ? undefined : JSON.stringify(data, logDataReplacer),
+					audience,
+				);
+			}
 			return;
 		}
 
@@ -305,8 +322,9 @@ function createAppLogger() {
 		}
 
 		// Mirror info/warn/error to Rust backend for MCP and cross-reload durability.
-		// Skip debug — too high-frequency for the ring buffer.
-		if (level !== "debug") {
+		// Debug stays local except bounded dictation lifecycle records (six per take),
+		// needed to reconstruct a phone incident from the owner's existing log ring.
+		if (level !== "debug" || (source === "dictation" && message.startsWith("Browser dictation lifecycle:"))) {
 			const dataJson = data !== undefined ? JSON.stringify(data, logDataReplacer) : undefined;
 			pushToRust(level, source, message, dataJson, audience);
 		}

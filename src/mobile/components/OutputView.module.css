@@ -3,6 +3,8 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Following and history prepends manage their own viewport position. */
+  overflow-anchor: none;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   background: var(--bg-primary);
@@ -25,6 +27,9 @@
 }
 
 .tableBlock {
+  /* Keep the answer rule inside the scroll clip without indenting table text. */
+  margin-left: -8px;
+  padding-left: 8px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
@@ -32,7 +37,27 @@
 }
 
 .line {
+  position: relative;
   min-height: 1.5em;
+}
+
+.answerRule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 3px;
+  pointer-events: none;
+}
+
+.intent {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.dotSlot {
+  display: inline-block;
+  width: 1ch;
+  text-indent: 0;
 }
 
 .text > .line {

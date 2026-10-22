@@ -247,10 +247,13 @@ pub(super) async fn plugin_exec(
 
 #[derive(Deserialize)]
 pub(super) struct HttpFetchBody {
+    #[serde(rename = "requestId")]
+    pub request_id: Option<String>,
     pub url: String,
     pub method: Option<String>,
     pub headers: Option<HashMap<String, String>>,
     pub body: Option<String>,
+    pub account: Option<String>,
 }
 
 pub(super) async fn plugin_http_fetch(
@@ -259,16 +262,36 @@ pub(super) async fn plugin_http_fetch(
     Json(body): Json<HttpFetchBody>,
 ) -> Response {
     json_result(
-        crate::plugin_http::plugin_http_fetch_impl(
+        crate::plugin_http::plugin_http_fetch_cancellable_impl(
             &state,
             body.url,
             body.method,
             body.headers,
             body.body,
+            body.account,
             plugin_id,
+            body.request_id,
         )
         .await,
     )
+}
+
+#[derive(Deserialize)]
+pub(super) struct HttpCancelBody {
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+}
+
+pub(super) async fn plugin_http_cancel(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<HttpCancelBody>,
+) -> Response {
+    json_result(crate::plugin_http::plugin_http_cancel_impl(
+        &state,
+        plugin_id,
+        body.request_id,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +351,27 @@ pub(super) async fn plugin_unregister(
     json_result(Ok::<_, String>(()))
 }
 
+pub(super) async fn plugin_settings(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(action): Json<crate::settings::plugins::PluginAction>,
+) -> Response {
+    use axum::{http::StatusCode, response::IntoResponse};
+    match crate::plugin_settings::plugin_settings_action_impl(&state, plugin_id, action).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => {
+            let status = if error.code == "not_found" {
+                StatusCode::NOT_FOUND
+            } else if error.code == "conflict" {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(error)).into_response()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct OutputWatchersBody {
     /// Identifies the frontend that owns this set — a desktop window and a
@@ -360,4 +404,29 @@ pub(super) async fn plugin_readme(AxumPath(plugin_id): AxumPath<String>) -> Resp
     // Returns Option<String>: None → JSON null. json_result expects Result so wrap it.
     let path = crate::plugins::get_plugin_readme_path(plugin_id);
     json_result(Ok::<Option<String>, String>(path))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct GithubActionBody {
+    account: String,
+    reference: crate::work_items::model::WorkItemRef,
+    request: crate::plugin_github::Request,
+}
+
+pub(super) async fn plugin_github_action(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<GithubActionBody>,
+) -> Response {
+    json_result(
+        crate::plugin_github::execute(
+            &state,
+            plugin_id,
+            body.account,
+            body.reference,
+            body.request,
+        )
+        .await,
+    )
 }

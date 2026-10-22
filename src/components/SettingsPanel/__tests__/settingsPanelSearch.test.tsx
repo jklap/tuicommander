@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../__tests__/mocks/tauri";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
+import { mockInvoke } from "../../../__tests__/mocks/tauri";
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
 		state: {
+			customLaunchers: [],
 			ide: "vscode",
 			font: "JetBrains Mono",
 			defaultFontSize: 12,
@@ -41,7 +44,11 @@ vi.mock("../../../stores/notifications", () => ({
 }));
 
 vi.mock("../../../stores/ui", () => ({
-	uiStore: { state: { settingsNavWidth: 180 }, setSettingsNavWidth: vi.fn(), persistUIPrefs: vi.fn() },
+	uiStore: {
+		state: { settingsNavWidth: 180, tasksViewPreferences: {} },
+		setSettingsNavWidth: vi.fn(),
+		persistUIPrefs: vi.fn(),
+	},
 }));
 
 vi.mock("../../../stores/repositories", () => ({
@@ -58,6 +65,7 @@ vi.mock("../../../stores/repoSettings", () => ({
 	repoSettingsStore: { get: vi.fn(() => undefined), getOrCreate: vi.fn(), update: vi.fn(), reset: vi.fn() },
 }));
 
+import { appLogger } from "../../../stores/appLogger";
 import { settingsStore } from "../../../stores/settings";
 import { SettingsPanel } from "../SettingsPanel";
 
@@ -88,7 +96,7 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 	expect(container.querySelector("nav button[class*='active']")?.textContent).toBe(tab);
 
 	const scrolled: Element[] = [];
-	for (const el of container.querySelectorAll("h3, label, span")) {
+	for (const el of container.querySelectorAll("h2, h3, label, span")) {
 		el.scrollIntoView = () => scrolled.push(el);
 	}
 	await waitFor(() => expect(scrolled).toHaveLength(1));
@@ -98,12 +106,31 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 describe("SettingsPanel search", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockInvoke.mockImplementation(async (command: string) => {
+			if (command === "load_mcp_upstreams") return { servers: [] };
+			if (command === "list_remote_connections" || command === "remote_connection_statuses") return [];
+			if (command === "discover_ssh_hosts") return { hosts: [], hashed_count: 0 };
+			return undefined;
+		});
+		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
 	});
 
 	afterEach(() => {
 		delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
 		vi.unstubAllGlobals();
+		// These transport-only fixtures omit native config/home responses. Capture
+		// their known fallback diagnostics, but reject unrelated warning noise.
+		for (const [, message] of [...vi.mocked(appLogger.warn).mock.calls, ...vi.mocked(appLogger.error).mock.calls]) {
+			expect([
+				"Failed to load native tool config, using defaults",
+				"Failed to get home directory",
+				"Failed to load config defaults; expert settings stay visible",
+			]).toContain(message);
+		}
+		vi.mocked(appLogger.warn).mockRestore();
+		vi.mocked(appLogger.error).mockRestore();
 	});
 
 	it("shows no results until something is typed", () => {
@@ -158,6 +185,32 @@ describe("SettingsPanel search", () => {
 		expect(onHeading).not.toHaveBeenCalled();
 	});
 
+	// Catches: searching the static catalogue eagerly mounts service pages and runs their probes.
+	it("finds service settings without mounting the service page", () => {
+		const { container } = open();
+		const callsBeforeSearch = mockInvoke.mock.calls.length;
+		fireEvent.input(searchInput(container), { target: { value: "upstream mcp servers" } });
+		expect(resultRows(container).some((row) => row.textContent?.includes("Upstream MCP Servers"))).toBe(true);
+		expect(mockInvoke.mock.calls.slice(callsBeforeSearch)).toEqual([]);
+		expect(container.querySelector("#settings-upstream-mcp")).toBeNull();
+	});
+
+	// Catches: a previous query masks a caller's new deep-linked page when Settings reopens.
+	it("clears a previous search when reopening at a different requested page", () => {
+		const [visible, setVisible] = createSignal(true);
+		const [tab, setTab] = createSignal("general");
+		const { container } = render(() => <SettingsPanel visible={visible()} initialTab={tab()} onClose={() => {}} />);
+		fireEvent.input(searchInput(container), { target: { value: "master volume" } });
+		expect(resultRows(container)).toHaveLength(1);
+		setVisible(false);
+		setTab("notifications");
+		setVisible(true);
+		expect(searchInput(container).value).toBe("");
+		expect(resultRows(container)).toHaveLength(0);
+		expect(container.querySelector("nav button[class*='active']")?.textContent).toBe("Notifications");
+		expect(container.textContent).toContain("Notification Settings");
+	});
+
 	it("restores the tab list when the query is cleared", () => {
 		const { container } = open();
 		fireEvent.input(searchInput(container), { target: { value: "master volume" } });
@@ -185,7 +238,7 @@ describe("SettingsPanel search", () => {
 		it("the remote machines heading opens Remote Machines at its heading", async () => {
 			const { container } = open();
 			const target = await openResult(container, "remote machines", "Remote Machines", "Remote Machines");
-			expect(target.tagName).toBe("H3");
+			expect(target.tagName).toBe("H2");
 			expect(ownText(target)).toBe("Remote Machines");
 		});
 
@@ -205,7 +258,12 @@ describe("SettingsPanel search", () => {
 
 		it("a keyboard shortcut opens Keyboard Shortcuts at that control", async () => {
 			const { container } = open();
-			const target = await openResult(container, "global hotkey", "Keyboard Shortcuts", "Global Hotkey");
+			const target = await openResult(
+				container,
+				"toggle window",
+				"Keyboard Shortcuts",
+				"Global Hotkey (Toggle Window)",
+			);
 			expect(ownText(target)).toBe("Global Hotkey (Toggle Window)");
 		});
 
@@ -219,14 +277,14 @@ describe("SettingsPanel search", () => {
 	describe("offers only what the current client can open", () => {
 		it("offers nothing on AI Chat while the experimental feature is off", () => {
 			const { container } = open();
-			fireEvent.input(searchInput(container), { target: { value: "providers" } });
+			fireEvent.input(searchInput(container), { target: { value: "provider catalogue" } });
 			expect(resultRows(container)).toHaveLength(0);
 		});
 
 		it("offers AI Chat once the feature is on", () => {
 			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
 			const { container } = open();
-			fireEvent.input(searchInput(container), { target: { value: "providers" } });
+			fireEvent.input(searchInput(container), { target: { value: "provider catalogue" } });
 			expect(resultRows(container)).toHaveLength(1);
 		});
 
@@ -234,10 +292,18 @@ describe("SettingsPanel search", () => {
 			// It lives on General, like MDKB, not behind the AI Chat flag.
 			const { container } = open();
 			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
-			expect(resultRows(container)).toHaveLength(1);
+			const rows = resultRows(container);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.textContent)).toEqual([
+				expect.stringContaining("General"),
+				expect.stringContaining("All settings (Expert)"),
+			]);
+			expect(rows.every((row) => !row.textContent?.includes("AI Chat"))).toBe(true);
 		});
 
-		it("offers no desktop-only control in a browser", () => {
+		// Catches: a browser result opening the unavailable native hotkey recorder
+		// instead of the machine-owned, HTTP-capable catalogue inspector.
+		it("offers the machine hotkey inspector but not the desktop recorder in a browser", () => {
 			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
 			// Browser mode talks HTTP; no backend listens in a unit test
 			vi.stubGlobal(
@@ -246,7 +312,15 @@ describe("SettingsPanel search", () => {
 			);
 			const { container } = open();
 			fireEvent.input(searchInput(container), { target: { value: "global hotkey" } });
-			expect(resultRows(container)).toHaveLength(0);
+			const rows = resultRows(container);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].textContent).toContain("All settings (Expert)");
+			expect(rows[0].textContent).not.toContain("Keyboard Shortcuts");
+			fireEvent.click(rows[0]);
+			expect(container.querySelector("select[data-non-setting='Select an owner field to inspect']")).toHaveProperty(
+				"value",
+				"app.global_hotkey",
+			);
 		});
 	});
 });

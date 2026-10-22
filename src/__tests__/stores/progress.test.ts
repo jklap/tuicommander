@@ -2,6 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
 const toastAdd = vi.fn();
+const nativeSend = vi.fn();
+
+vi.mock("@tauri-apps/plugin-notification", () => ({
+	isPermissionGranted: vi.fn().mockResolvedValue(true),
+	requestPermission: vi.fn().mockResolvedValue("granted"),
+	sendNotification: nativeSend,
+}));
 
 vi.mock("../../invoke", () => ({ invoke: invokeMock }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
@@ -45,6 +52,7 @@ describe("progressStore", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.resetModules();
+		nativeSend.mockReset();
 	});
 
 	it("shows the complete journal when the backend returns multiple pages", async () => {
@@ -301,6 +309,35 @@ describe("progressStore", () => {
 		expect(store.unreadCount).toBe(0);
 	});
 
+	it("notifies natively for unfocused done and blocked outcomes but not intent or hand-off", async () => {
+		vi.stubGlobal("__TAURI_INTERNALS__", {});
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			const { createProgressStore } = await import("../../stores/progress");
+			const store = createProgressStore();
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(31, 100, "done") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(32, 200, "blocked") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(33, 300, "intent") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(34, 400, "delegated") } });
+			await vi.waitFor(() => expect(nativeSend).toHaveBeenCalledTimes(2));
+			expect(nativeSend).toHaveBeenCalledWith(
+				expect.objectContaining({
+					title: expect.stringContaining("Repo"),
+					body: "entry 31",
+				}),
+			);
+			expect(nativeSend).toHaveBeenCalledWith(
+				expect.objectContaining({
+					title: expect.stringContaining("Repo"),
+					body: "entry 32",
+				}),
+			);
+		} finally {
+			focus.mockRestore();
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("keeps a failed command visible as one line", async () => {
 		invokeMock.mockRejectedValue(new Error("database is locked"));
 		const { createProgressStore } = await import("../../stores/progress");
@@ -308,5 +345,88 @@ describe("progressStore", () => {
 
 		expect(await store.deleteEntries("/repo", [1])).toBe(false);
 		expect(store.state.projects["/repo"].error).toBe("database is locked");
+	});
+
+	describe("sidebar flow", () => {
+		const flow = { project: "/repo", participants: [], events: [], truncated: false };
+
+		// Catches: every branch row of one repo issuing its own progress_flow call.
+		it("collapses asks closer than the minimum gap into one backend read", async () => {
+			invokeMock.mockResolvedValue(flow);
+			const { createProgressStore } = await import("../../stores/progress");
+			const store = createProgressStore();
+			await Promise.all([store.refreshSidebarFlow("/repo"), store.refreshSidebarFlow("/repo")]);
+			expect(invokeMock).toHaveBeenCalledTimes(1);
+			expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: {} });
+			expect(store.sidebarFlow("/repo")).toEqual(flow);
+			store.resetForTests();
+		});
+
+		// Catches: a trailing refresh firing after the last row showing the flow has left.
+		it("cancels the trailing refresh when the last holder releases, not before", async () => {
+			vi.useFakeTimers();
+			try {
+				invokeMock.mockResolvedValue(flow);
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				const releaseA = store.holdSidebarFlow("/repo");
+				const releaseB = store.holdSidebarFlow("/repo");
+				await store.refreshSidebarFlow("/repo");
+				await store.refreshSidebarFlow("/repo"); // inside the gap: schedules the trailing read
+				releaseA();
+				await vi.advanceTimersByTimeAsync(6000);
+				expect(invokeMock).toHaveBeenCalledTimes(2); // still held: trailing read ran
+				await vi.advanceTimersByTimeAsync(6000);
+				await store.refreshSidebarFlow("/repo"); // read 3
+				await store.refreshSidebarFlow("/repo"); // inside the gap: schedules the trailing read
+				releaseB();
+				await vi.advanceTimersByTimeAsync(6000);
+				expect(invokeMock).toHaveBeenCalledTimes(3); // released: trailing read cancelled
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		// Catches: a failed newer read discarding an older response that is still valid.
+		it("applies an older response when the newer request failed", async () => {
+			vi.useFakeTimers();
+			try {
+				let resolveOld: (f: typeof flow) => void = () => {};
+				invokeMock
+					.mockImplementationOnce(
+						() =>
+							new Promise((r) => {
+								resolveOld = r;
+							}),
+					)
+					.mockRejectedValueOnce(new Error("boom"));
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				const first = store.refreshSidebarFlow("/repo");
+				vi.advanceTimersByTime(6000);
+				await store.refreshSidebarFlow("/repo");
+				resolveOld(flow);
+				await first;
+				expect(store.sidebarFlow("/repo")).toEqual(flow);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		// Catches: a failed read blanking the subagent lines that were already on screen.
+		it("keeps the last flow when a read fails", async () => {
+			vi.useFakeTimers();
+			try {
+				invokeMock.mockResolvedValueOnce(flow).mockRejectedValueOnce(new Error("boom"));
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				await store.refreshSidebarFlow("/repo");
+				vi.advanceTimersByTime(6000);
+				await store.refreshSidebarFlow("/repo");
+				expect(store.sidebarFlow("/repo")).toEqual(flow);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
 	});
 });

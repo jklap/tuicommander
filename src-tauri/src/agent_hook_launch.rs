@@ -4,6 +4,22 @@ use crate::agent_hook::{SENTINEL, claude_hook_map};
 use serde_json::{Map, Value};
 use std::path::Path;
 
+/// Recorded installed Claude help supplies advertised verbs when a probe is unavailable.
+pub(crate) const RECORDED_CLAUDE_HELP: &str =
+    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+
+fn claude_command_names(help: &str) -> impl Iterator<Item = &str> {
+    help.lines()
+        .skip_while(|line| line.trim() != "Commands:")
+        .skip(1)
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+}
+
+pub(crate) fn claude_help_is_usable(help: &str) -> bool {
+    claude_command_names(help).next().is_some()
+}
+
 pub(crate) fn enabled(agent_type: &str) -> bool {
     crate::config::load_agents_config()
         .agents
@@ -108,6 +124,18 @@ esac
     )
 }
 
+/// Boot-time entry shared by the desktop and both headless binaries: a
+/// `claude` spawn points at `agent-hooks/claude.json`, so every process that can
+/// spawn agents must write it before serving. A failure is logged, not fatal.
+pub(crate) fn regenerate_launch_assets_at_boot(config_dir: &Path) {
+    if let Err(error) = regenerate_launch_assets(config_dir) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to generate launch-scoped agent status assets: {error}"
+        );
+    }
+}
+
 pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> {
     let dir = config_dir.join("agent-hooks");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -115,23 +143,199 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     crate::config::persist_atomic(&dir.join("claude.json"), &claude)?;
     let codex = codex_script(&codex_user_notify());
     let codex_path = dir.join("codex-notify.sh");
-    crate::config::persist_atomic(&codex_path, codex.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| format!("chmod {}: {e}", codex_path.display()))?;
-    }
-    Ok(())
+    crate::config::persist_atomic_with_mode(&codex_path, codex.as_bytes(), 0o700)?;
+    crate::launch_instructions::write_files(config_dir)
 }
 
+/// Administrative and ACP verbs from the recorded installed ego help.
+pub(crate) const EGO_NON_RUN_COMMANDS: &[&str] = &[
+    "fork",
+    "compact",
+    "export",
+    "ls",
+    "usage",
+    "models",
+    "hooks",
+    "doctor",
+    "acp",
+    "a2a",
+    "auth",
+    "mcp",
+    "config",
+    "rules",
+    "mcp-server",
+];
+
+/// Translate persisted ego choices once for terminal launches and MCP spawns.
+/// Configured choices replace raw overrides; `--` and its positional text are preserved.
+fn ego_permission_args(config: &crate::config::AgentsConfig, args: &[String]) -> Vec<String> {
+    let Some(settings) = config.agents.get("ego") else {
+        return args.to_vec();
+    };
+    let options = [
+        ("--mode", settings.ego_mode.map(|value| value.as_str())),
+        (
+            "--sandbox",
+            settings.ego_sandbox.map(|value| value.as_str()),
+        ),
+    ];
+    if options.iter().all(|(_, value)| value.is_none()) {
+        return args.to_vec();
+    }
+    if args
+        .first()
+        .is_some_and(|first| EGO_NON_RUN_COMMANDS.contains(&first.as_str()))
+    {
+        return args.to_vec();
+    }
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            result.extend_from_slice(&args[index..]);
+            break;
+        }
+        if options
+            .iter()
+            .any(|(flag, value)| value.is_some() && arg == flag)
+        {
+            index += 1;
+            if args.get(index).is_some_and(|value| !value.starts_with('-')) {
+                index += 1;
+            }
+            continue;
+        }
+        if options
+            .iter()
+            .any(|(flag, value)| value.is_some() && arg.starts_with(&format!("{flag}=")))
+            || (settings.ego_mode.is_some() && ["--plan", "--yolo"].contains(&arg.as_str()))
+        {
+            index += 1;
+            continue;
+        }
+        result.push(arg.clone());
+        index += 1;
+    }
+    let insertion = usize::from(
+        result
+            .first()
+            .is_some_and(|arg| ["run", "resume"].contains(&arg.as_str())),
+    );
+    result.splice(
+        insertion..insertion,
+        options
+            .into_iter()
+            .filter_map(|(flag, value)| value.map(|value| [flag.to_string(), value.to_string()]))
+            .flatten(),
+    );
+    result
+}
+
+/// Structured launches: status integration, then the marker instructions.
+pub(crate) fn launch_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+    attachment_dir: &Path,
+) -> Vec<String> {
+    launch_args_for(
+        agent_type,
+        binary_path,
+        args,
+        config_dir,
+        attachment_dir,
+        false,
+    )
+}
+
+pub(crate) fn launch_args_for(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+    attachment_dir: &Path,
+    child: bool,
+) -> Vec<String> {
+    if is_claude_subcommand(agent_type, binary_path, args) {
+        return args.to_vec();
+    }
+    let result = augment_launch(agent_type, binary_path, args, config_dir);
+    let mut result = if child {
+        crate::launch_instructions::args_for(agent_type, result, config_dir, true)
+    } else {
+        crate::launch_instructions::args(agent_type, result, config_dir)
+    };
+    let flag = match agent_type {
+        "claude" => Some("--add-dir"),
+        "gemini" => Some("--include-directories"),
+        "ego" => Some("--read-only-dir"),
+        _ => None,
+    };
+    // A custom binary may be a shell or opaque wrapper, not the harness.
+    // Never pass harness grant options to it. Name-based harness hops inherit
+    // TUIC_ATTACHMENTS_DIR and use the PATH shim; absolute hops bypass that shim
+    // and must arrange their own read access (documented custom-launch limit).
+    let binary_name = binary_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(binary_path);
+    let direct_harness = binary_name.strip_suffix(".exe").unwrap_or(binary_name) == agent_type;
+    if let Some(flag) = flag.filter(|_| direct_harness) {
+        // Ego's run/resume options belong after the subcommand; a root option
+        // before it makes the CLI parse the verb as its positional prompt.
+        let insertion = usize::from(
+            agent_type == "ego"
+                && result
+                    .first()
+                    .is_some_and(|arg| ["run", "resume"].contains(&arg.as_str())),
+        );
+        result.splice(
+            insertion..insertion,
+            [format!("{flag}={}", attachment_dir.display())],
+        );
+    }
+    result
+}
+
+/// A Claude verb (`mcp list`, `auth status`) takes no launch flags. Probes the
+/// installed help only when the first argument could be one.
+fn is_claude_subcommand(agent_type: &str, binary_path: &str, args: &[String]) -> bool {
+    agent_type == "claude"
+        && args.first().is_some_and(|arg| !arg.starts_with('-'))
+        && claude_is_subcommand(
+            args,
+            &crate::agent::cli_help(binary_path).unwrap_or_default(),
+        )
+}
+
+/// The status integration alone, as the tests pin it.
+#[cfg(test)]
 pub(crate) fn augment_args(
     agent_type: &str,
     binary_path: &str,
     args: &[String],
     config_dir: &Path,
 ) -> Vec<String> {
-    let result = augment_args_when(enabled(agent_type), agent_type, args, config_dir);
+    if enabled(agent_type) && is_claude_subcommand(agent_type, binary_path, args) {
+        return args.to_vec();
+    }
+    augment_launch(agent_type, binary_path, args, config_dir)
+}
+
+/// `augment_args` after the Claude verb check.
+fn augment_launch(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+) -> Vec<String> {
+    if agent_type == "ego" {
+        return ego_permission_args(&crate::config::load_agents_config(), args);
+    }
+    let enabled = enabled(agent_type);
+    let result = augment_args_when(enabled, agent_type, args, config_dir);
     if screen_flag_candidate(agent_type, args).is_none() {
         return result;
     }
@@ -151,6 +355,9 @@ pub(crate) fn build_agent_launch_args(
     binary_path: &str,
     args: &[String],
 ) -> Vec<String> {
+    if agent_type == "ego" {
+        return ego_permission_args(&crate::config::load_agents_config(), args);
+    }
     if screen_flag_candidate(agent_type, args).is_none() {
         return args.to_vec();
     }
@@ -201,6 +408,25 @@ fn add_screen_flag(
     result
 }
 
+/// Installed help owns advertised verbs. On probe failure, retain the verbs
+/// verified in the recorded help. The reported remote-control refusal proves
+/// that exact hidden command also rejects root launch settings.
+pub(crate) fn claude_is_subcommand(args: &[String], help: &str) -> bool {
+    let Some(first) = args
+        .first()
+        .filter(|arg| !arg.is_empty() && !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    let help = if !claude_help_is_usable(help) {
+        RECORDED_CLAUDE_HELP
+    } else {
+        help
+    };
+    first == "remote-control"
+        || claude_command_names(help).any(|names| names.split('|').any(|name| name == first))
+}
+
 fn augment_args_when(
     enabled: bool,
     agent_type: &str,
@@ -213,9 +439,10 @@ fn augment_args_when(
     }
     match agent_type {
         "claude"
-            if !args.iter().any(|arg| {
-                arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
-            }) =>
+            if !claude_is_subcommand(args, "")
+                && !args.iter().any(|arg| {
+                    arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
+                }) =>
         {
             result.push("--settings".into());
             result.push(
@@ -249,6 +476,138 @@ fn augment_args_when(
 mod tests {
     use super::*;
 
+    /// Catches: a successful probe publishes unusable stdout/stderr as Claude help.
+    #[test]
+    fn successful_probe_without_command_rows_is_unavailable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let truncated = RECORDED_CLAUDE_HELP.split("Commands:").next().unwrap();
+        for (case, help) in [
+            ("whitespace", " \n\t"),
+            ("truncated", truncated),
+            ("header-only", "Commands:\n  \n"),
+            ("recorded", RECORDED_CLAUDE_HELP),
+        ] {
+            let help_path = dir.path().join(format!("{case}.txt"));
+            std::fs::write(&help_path, help).unwrap();
+            for (stream, redirect) in [("stdout", ""), ("stderr", " >&2")] {
+                let binary = crate::test_support::fake_ssh_script(
+                    &format!("claude-help-{case}-{stream}"),
+                    &format!(
+                        "cat {}{redirect}",
+                        shell_quote(&help_path.to_string_lossy())
+                    ),
+                    &format!("type \"{}\"{redirect}", help_path.display()),
+                );
+                let actual = crate::agent::cli_help(&binary.to_string_lossy());
+                assert_eq!(actual.is_some(), case == "recorded", "{case} on {stream}");
+            }
+        }
+    }
+
+    /// Catches: a hyphen in an ordinary prompt disables native status hooks.
+    #[test]
+    fn prompt_with_hyphen_retains_native_settings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        for prompt in ["fix-bug", "Explain the remote-control failure"] {
+            let args = vec![prompt.to_string()];
+            let actual = augment_args("claude", &binary.to_string_lossy(), &args, dir.path());
+            assert!(
+                actual.iter().any(|arg| arg == "--settings"),
+                "prompt {prompt:?} lost native status settings: {actual:?}"
+            );
+        }
+    }
+
+    /// Catches: a failed help probe adds launch settings to the mcp subcommand.
+    #[test]
+    fn unavailable_help_does_not_corrupt_subcommand_arguments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["mcp".into(), "list".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "a failed help probe must not add settings to a subcommand"
+        );
+    }
+
+    /// Catches: failed help injects root settings into the recorded auth subcommand.
+    #[test]
+    fn unavailable_help_preserves_recorded_auth_subcommand() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["auth".into(), "status".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "recorded auth command must retain argv when help is unavailable"
+        );
+    }
+
+    /// Catches: launch-scoped settings corrupt a verb or its alias, while a
+    /// positional prompt gets misclassified as a command.
+    #[test]
+    fn claude_subcommands_use_captured_help_and_preserve_prompt_launches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let help = include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+        let help_path = dir.path().join("claude-help.txt");
+        std::fs::write(&help_path, help).unwrap();
+        let script = crate::test_support::fake_ssh_script(
+            "claude-recorded-help-launch",
+            &format!("cat {}", shell_quote(&help_path.to_string_lossy())),
+            &format!("type \"{}\"", help_path.display()),
+        );
+        let binary = script.to_string_lossy();
+        for verb in [
+            "auth",
+            "doctor",
+            "mcp",
+            "plugin",
+            "plugins",
+            "update",
+            "upgrade",
+            "remote-control",
+        ] {
+            let args = vec![verb.into()];
+            assert_eq!(
+                augment_args("claude", &binary, &args, dir.path()),
+                args,
+                "{verb}"
+            );
+        }
+        for args in [
+            vec![],
+            vec!["prompt".into()],
+            vec!["fix-bug".into()],
+            vec!["--resume".into(), "x".into()],
+        ] {
+            let mut expected = args.clone();
+            expected.extend([
+                "--settings".into(),
+                dir.path()
+                    .join("agent-hooks/claude.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
+            assert_eq!(augment_args("claude", &binary, &args, dir.path()), expected);
+        }
+        let args = vec!["remote-control".into(), "--resume".into(), "x".into()];
+        assert_eq!(augment_args("claude", &binary, &args, dir.path()), args);
+    }
+
     #[cfg(unix)]
     #[test]
     fn screen_probe_is_skipped_when_its_answer_cannot_change_launch_args() {
@@ -267,6 +626,200 @@ mod tests {
             let _ = augment_args(agent, &binary, &args, Path::new("/unused"));
             assert!(!marker.exists(), "{agent} {args:?} needlessly ran --help");
         }
+    }
+
+    /// Catches: UI spelling diverges from installed ego, or unset injects a default.
+    #[test]
+    fn ego_permission_values_match_recorded_help_without_implicit_defaults() {
+        use crate::config::{AgentSettings, AgentsConfig, EgoPermissionMode, EgoSandbox};
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let help = include_str!("../tests/fixtures/agent-help/ego-run-2026-10-06.txt");
+        let resume_help = include_str!("../tests/fixtures/agent-help/ego-resume-2026-10-06.txt");
+        for (key, flag, advertised, values) in [
+            (
+                "ego_mode",
+                "--mode",
+                "Permission mode: ",
+                vec!["plan", "default", "edits", "auto", "yolo"],
+            ),
+            (
+                "ego_sandbox",
+                "--sandbox",
+                "Filesystem confinement: ",
+                vec!["ro", "workspace"],
+            ),
+        ] {
+            for value in values {
+                for recorded in [help, resume_help] {
+                    assert!(recorded.contains(flag));
+                    let options = recorded
+                        .lines()
+                        .find_map(|line| line.trim().strip_prefix(advertised))
+                        .unwrap();
+                    assert!(options.split('|').any(|option| option == value));
+                }
+                let settings: AgentSettings =
+                    serde_json::from_value(serde_json::json!({key: value})).unwrap();
+                let config = AgentsConfig {
+                    agents: [("ego".into(), settings)].into(),
+                    ..Default::default()
+                };
+                crate::config::save_agents_config(crate::config::load_agents_config(), config)
+                    .unwrap();
+                assert_eq!(
+                    build_agent_launch_args("ego", "ego", &["run".into(), "task".into()]),
+                    ["run", flag, value, "task"]
+                );
+            }
+        }
+        let mut config = AgentsConfig::default();
+        config.agents.insert("ego".into(), AgentSettings::default());
+        let args = vec!["run".into(), "--mode".into(), "auto".into(), "task".into()];
+        crate::config::save_agents_config(crate::config::load_agents_config(), config.clone())
+            .unwrap();
+        assert_eq!(build_agent_launch_args("ego", "ego", &args), args);
+        config.agents.get_mut("ego").unwrap().ego_mode = Some(EgoPermissionMode::Plan);
+        config.agents.get_mut("ego").unwrap().ego_sandbox = Some(EgoSandbox::Workspace);
+        crate::config::save_agents_config(crate::config::load_agents_config(), config).unwrap();
+        assert_eq!(
+            build_agent_launch_args(
+                "ego",
+                "ego",
+                &[
+                    "run".into(),
+                    "--yolo".into(),
+                    "--mode=auto".into(),
+                    "--sandbox".into(),
+                    "off".into(),
+                    "--".into(),
+                    "--mode=yolo".into()
+                ]
+            ),
+            [
+                "run",
+                "--mode",
+                "plan",
+                "--sandbox",
+                "workspace",
+                "--",
+                "--mode=yolo"
+            ]
+        );
+        // Catches: a valueless override consumes another option or prompt text.
+        for (args, suffix) in [
+            (
+                vec!["run", "--mode", "--sandbox", "off", "--", "--mode=yolo"],
+                vec!["--", "--mode=yolo"],
+            ),
+            (
+                vec!["run", "--mode", "--verbose", "task"],
+                vec!["--verbose", "task"],
+            ),
+            (vec!["run", "--sandbox"], vec![]),
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let expected = [
+                vec!["run", "--mode", "plan", "--sandbox", "workspace"],
+                suffix,
+            ]
+            .concat();
+            assert_eq!(build_agent_launch_args("ego", "ego", &args), expected);
+            assert_eq!(augment_args("ego", "ego", &args, dir.path()), expected);
+        }
+        for command in [
+            "fork",
+            "compact",
+            "export",
+            "ls",
+            "usage",
+            "models",
+            "hooks",
+            "doctor",
+            "acp",
+            "a2a",
+            "auth",
+            "mcp",
+            "config",
+            "rules",
+            "mcp-server",
+        ] {
+            let recorded = include_str!("../tests/fixtures/agent-help/ego-2026-10-06.txt");
+            assert!(
+                recorded
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(command))
+            );
+            assert_eq!(
+                build_agent_launch_args("ego", "ego", &[command.into()]),
+                [command]
+            );
+        }
+        // Catches: an invalid enum discards the valid sibling permission field.
+        for (document, expected) in [
+            (
+                serde_json::json!({"ego_mode": "invalid", "ego_sandbox": "ro"}),
+                vec!["run", "--sandbox", "ro"],
+            ),
+            (
+                serde_json::json!({"ego_mode": "edits", "ego_sandbox": "off"}),
+                vec!["run", "--mode", "edits"],
+            ),
+            (
+                serde_json::json!({"ego_mode": 42, "ego_sandbox": {}}),
+                vec!["run"],
+            ),
+        ] {
+            let settings: AgentSettings = serde_json::from_value(document).unwrap();
+            let config = AgentsConfig {
+                agents: [("ego".into(), settings)].into(),
+                ..Default::default()
+            };
+            crate::config::save_agents_config(crate::config::load_agents_config(), config).unwrap();
+            assert_eq!(
+                build_agent_launch_args("ego", "ego", &["run".into()]),
+                expected
+            );
+        }
+    }
+
+    /// Catches: either terminal or MCP spawn bypasses persisted ego permissions.
+    #[test]
+    fn ego_permissions_reach_terminal_and_mcp_argument_builders() {
+        use crate::config::{AgentSettings, AgentsConfig, EgoPermissionMode, EgoSandbox};
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let config = AgentsConfig {
+            agents: [(
+                "ego".into(),
+                AgentSettings {
+                    ego_mode: Some(EgoPermissionMode::Edits),
+                    ego_sandbox: Some(EgoSandbox::Ro),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        crate::config::save_agents_config(AgentsConfig::default(), config).unwrap();
+        for args in [
+            vec![],
+            vec!["run".into(), "task".into()],
+            vec!["resume".into(), "session".into()],
+        ] {
+            let terminal = build_agent_launch_args("ego", "ego", &args);
+            let spawn = augment_args("ego", "ego", &args, dir.path());
+            assert_eq!(terminal, spawn);
+            assert!(
+                terminal
+                    .windows(4)
+                    .any(|flags| flags == ["--mode", "edits", "--sandbox", "ro"])
+            );
+        }
+        assert_eq!(
+            build_agent_launch_args("git", "git", &[]),
+            Vec::<String>::new()
+        );
     }
 
     #[cfg(unix)]
@@ -484,7 +1037,7 @@ mod tests {
             3,
             "all same-event sources must remain loaded"
         );
-        assert!(commands[2].contains("7770;state=busy"));
+        assert!(commands[2].contains("7770;state=prompt"));
 
         for command in commands {
             let status = std::process::Command::new("/bin/sh")
@@ -499,5 +1052,146 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(global_marker).unwrap(), "global");
         assert_eq!(std::fs::read_to_string(project_marker).unwrap(), "project");
+    }
+}
+
+#[cfg(test)]
+mod critic_1302_tests {
+    use super::*;
+
+    /// Catches: two boots on one config dir (desktop + `tuic-remote`) tear
+    /// `claude.json`, so a `claude --settings` spawn reads half a document.
+    #[test]
+    fn concurrent_boots_never_expose_a_torn_claude_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("agent-hooks/claude.json");
+        regenerate_launch_assets_at_boot(dir.path());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writers: Vec<_> = (0..4)
+            .map(|_| {
+                let root = dir.path().to_path_buf();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        regenerate_launch_assets_at_boot(&root);
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..300 {
+            let bytes = std::fs::read(&path).expect("claude.json always present");
+            serde_json::from_slice::<serde_json::Value>(&bytes).expect("never torn");
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for writer in writers {
+            writer.join().unwrap();
+        }
+    }
+
+    /// Catches: `codex-notify.sh` is renamed into place as 0600 and chmod'ed
+    /// afterwards, so a codex spawn racing a second boot finds it not executable.
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_script_is_never_visible_without_the_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("agent-hooks/codex-notify.sh");
+        regenerate_launch_assets_at_boot(dir.path());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let root = dir.path().to_path_buf();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    regenerate_launch_assets_at_boot(&root);
+                }
+            })
+        };
+        let mut bad = 0;
+        for _ in 0..2000 {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            if mode & 0o100 == 0 {
+                bad += 1;
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().unwrap();
+        assert_eq!(bad, 0, "observed the script without its execute bit {bad}x");
+    }
+}
+
+#[cfg(test)]
+#[path = "agent_hook_launch_critic1400_tests.rs"]
+mod critic1400_tests;
+
+#[cfg(test)]
+mod attachment_grant_tests {
+    // Catches: a confined ego launch has no read-only upload grant.
+    #[test]
+    fn attachment_launch_grants_ego_read_only_directory() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let directory = root.path().join("attachments/pty-ego");
+        let args = super::launch_args(
+            "ego",
+            "ego",
+            &["--sandbox=workspace".into()],
+            root.path(),
+            &directory,
+        );
+        assert!(args.contains(&format!("--read-only-dir={}", directory.display())));
+        assert!(args.contains(&"--sandbox=workspace".into()));
+    }
+
+    // Catches: a prepended grant makes ego parse run/resume as the root prompt, rejecting the real prompt.
+    #[test]
+    fn attachment_ego_grant_stays_after_subcommand() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let directory = root.path().join("attachments/pty-ego");
+        for verb in ["run", "resume"] {
+            let args = super::launch_args(
+                "ego",
+                "ego",
+                &[verb.into(), "--sandbox=ro".into(), "task".into()],
+                root.path(),
+                &directory,
+            );
+            assert_eq!(args[0], verb, "the ego subcommand must precede its options");
+            assert_eq!(args[1], format!("--read-only-dir={}", directory.display()));
+        }
+    }
+
+    // Catches: Claude/Gemini launch without the directory grant, or codex/grok get an unknown flag.
+    #[test]
+    fn attachment_launch_grants_only_harnesses_that_need_them() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for (agent, flag) in [
+            ("claude", Some("--add-dir")),
+            ("gemini", Some("--include-directories")),
+            ("codex", None),
+            ("grok", None),
+            ("ego", Some("--read-only-dir")),
+        ] {
+            let args = super::launch_args(
+                agent,
+                agent,
+                &[],
+                root.path(),
+                &root.path().join("attachments/pty-granted"),
+            );
+            if let Some(flag) = flag {
+                assert!(
+                    args.iter().any(|arg| arg
+                        == &format!(
+                            "{flag}={}",
+                            root.path().join("attachments/pty-granted").display()
+                        )),
+                    "missing grant for {agent}"
+                );
+            } else {
+                assert!(!args.iter().any(|arg| arg.starts_with("--add-dir")
+                    || arg.starts_with("--include-directories")
+                    || arg.starts_with("--set=roots=")));
+            }
+        }
     }
 }

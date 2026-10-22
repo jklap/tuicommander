@@ -11,7 +11,7 @@
 }
 
 .dashboard {
-  width: 500px;
+  width: 600px;
   max-width: 90vw;
   max-height: 70vh;
   background: var(--bg-secondary);
@@ -254,14 +254,4 @@
   border-top: 1px solid var(--border);
   font-size: var(--font-sm);
   color: var(--fg-muted);
-}
-
-.footerHint {
-  margin-left: auto;
-}
-
-@media (max-width: 540px) {
-  .footerHint {
-    display: none;
-  }
 }

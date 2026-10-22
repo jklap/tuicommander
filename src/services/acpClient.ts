@@ -27,15 +27,47 @@ import type {
 	AcpSessionConfigOptionValue,
 	AcpSessionId,
 	AcpStreamFrame,
+	EgoCompactResponse,
 } from "../types/acp";
 import { randomUuid } from "../utils/randomId";
 import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
+
+export interface ChatLaunch {
+	executable: string;
+	profile: string;
+	workspace: string;
+	peerId: string;
+}
+export interface ChatOpenRequest {
+	sessionId?: string;
+	executable?: string;
+	profile?: string;
+	workspace?: string;
+}
+export interface ChatOpened {
+	connection: AcpConnectionSnapshot;
+	sessionId: AcpSessionId;
+	launch: ChatLaunch;
+	replayed: boolean;
+}
 
 export interface AcpListedSession {
 	sessionId: AcpSessionId;
 	cwd: string;
 	title?: string | null;
 	updatedAt?: string | null;
+	_meta?: {
+		ego?: {
+			lineage?: {
+				kind?: string;
+				sourceSessionId: string;
+				rootSessionId?: string;
+				atMessageId?: string;
+				sourceDeleted?: boolean;
+			};
+		};
+		tuicommander?: { lineageDepth?: number; deleted?: boolean };
+	};
 }
 
 export interface AcpSessionList {
@@ -64,6 +96,8 @@ interface Live {
 
 export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 	const live = new Map<AcpConnectionId, Live>();
+	/** Sessions whose `session/load` replay has not yet ended, with the connection that carries it. */
+	const replaying = new Map<AcpSessionId, AcpConnectionId>();
 
 	async function subscribe(connectionId: AcpConnectionId, entry: Live): Promise<void> {
 		const handle = await open({
@@ -98,6 +132,16 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.spent = 0;
 		acpStore.applyFrame(connectionId, frame);
 		acpTranscript.applyFrame(frame);
+		if (
+			frame.kind === "event" &&
+			frame.sessionId &&
+			replaying.get(frame.sessionId) === connectionId &&
+			frame.event.kind === "sessionUpdate" &&
+			frame.event.update.sessionUpdate === "session_info_update"
+		) {
+			replaying.delete(frame.sessionId);
+			acpTranscript.settleReplayed(frame.sessionId);
+		}
 		if (frame.kind !== "event") {
 			// `gap` and `end` are both terminal and neither is recoverable by
 			// reading again: a gap means the journal no longer holds what the
@@ -129,6 +173,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.abandoned = true;
 		entry.handle?.close();
 		live.delete(connectionId);
+		for (const [sessionId, owner] of replaying) if (owner === connectionId) replaying.delete(sessionId);
 	}
 
 	/**
@@ -172,7 +217,25 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		return snapshot;
 	}
 
+	/** The backend snapshot owns the complete attachment option set. */
+	async function refresh(connectionId: AcpConnectionId): Promise<void> {
+		acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
+	}
+
 	return {
+		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
+			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
+			// An attached conversation keeps receiving live output while open is pending.
+			// Replace its projection only when the backend actually loaded history,
+			// before subscribing to the journal that carries that replay.
+			if (opened.replayed) {
+				acpTranscript.clear(opened.sessionId);
+				replaying.set(opened.sessionId, opened.connection.connectionId);
+			}
+			await adopt(opened.connection);
+			return opened;
+		},
+
 		/** Launch ego on a repo root and read everything that connection holds. */
 		async connect(root: string): Promise<AcpConnectionSnapshot> {
 			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root }));
@@ -197,9 +260,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		/** Read the connection's current picture without touching its stream. */
-		async refresh(connectionId: AcpConnectionId): Promise<void> {
-			acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
-		},
+		refresh,
 
 		async disconnect(connectionId: AcpConnectionId): Promise<AcpConnectionSettlement> {
 			forget(connectionId);
@@ -235,6 +296,9 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			// erased conversation under a live session reads as history that is
 			// gone rather than as a request that failed.
 			const cleared = acpTranscript.clear(sessionId);
+			// ego ends a replay with a `session_info_update` and sends it after
+			// the response, so the frame can beat this call's own return.
+			replaying.set(sessionId, connectionId);
 			try {
 				await invoke("acp_session_load", {
 					connectionId,
@@ -242,10 +306,56 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 					authority: { cwd, additionalDirectories: [] },
 				});
 			} catch (error) {
+				replaying.delete(sessionId);
 				acpTranscript.restore(sessionId, cleared);
 				throw error;
 			}
 			await this.refresh(connectionId);
+		},
+
+		/**
+		 * Branch a session at its tip and return the child's id.
+		 *
+		 * The child is attached by this call, so it needs no `session/load`. ego
+		 * replays history on load, not fork, so the parent's visible prefix is copied across:
+		 * the child tab would otherwise open empty on a conversation it carries in
+		 * full. A later load clears before it replays, so the copy cannot double.
+		 */
+		async forkSession(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			cwd: string,
+			atMessageId?: string,
+		): Promise<AcpSessionId> {
+			const attachment = await invoke<{ sessionId: AcpSessionId }>("acp_session_fork", {
+				connectionId,
+				sessionId,
+				...(atMessageId ? { atMessageId } : {}),
+				authority: { cwd, additionalDirectories: [] },
+			});
+			const entries = acpTranscript.entries(sessionId);
+			const selected = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : -1;
+			// ego forks after the completed containing turn, including its later replies
+			// and tools. The next user prompt starts the next turn in live and replayed history.
+			const nextTurn = entries.findIndex((entry, index) => index > selected && entry.kind === "user");
+			const cutoff = atMessageId ? (selected < 0 ? 0 : nextTurn < 0 ? entries.length : nextTurn) : entries.length;
+			acpTranscript.restore(
+				attachment.sessionId,
+				entries.slice(0, cutoff).map((entry) => ({ ...entry, inherited: true })),
+			);
+			await this.refresh(connectionId);
+			return attachment.sessionId;
+		},
+
+		async deleteSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
+			await invoke("acp_session_delete", { connectionId, sessionId });
+			// Deletion is already durable. A lost snapshot must not report a refusal
+			// and leave an open tab pointing at history the agent has removed.
+			try {
+				await this.refresh(connectionId);
+			} catch (error) {
+				appLogger.warn("ai-chat", "refresh after conversation deletion failed", error);
+			}
 		},
 
 		async closeSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
@@ -357,7 +467,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		async compact(connectionId: AcpConnectionId, sessionId: AcpSessionId) {
-			return invoke("acp_session_compact", { connectionId, sessionId, requestId: randomUuid() });
+			return invoke<EgoCompactResponse>("acp_session_compact", { connectionId, sessionId, requestId: randomUuid() });
 		},
 	};
 }

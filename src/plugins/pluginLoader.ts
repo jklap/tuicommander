@@ -12,8 +12,10 @@ import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { compareAppVersion } from "../utils/semver";
 import { updateAppConfig } from "../utils/updateAppConfig";
 import { pluginRegistry } from "./pluginRegistry";
+import type { PluginSettingsDefinition } from "./pluginSettings";
 import type { TuiPlugin } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -39,9 +41,13 @@ export function registerBuiltInPlugin(plugin: TuiPlugin): void {
 // ---------------------------------------------------------------------------
 
 export interface PluginManifest {
+	/** Complete private-setting schema; legacy first-party plugins are migrated by Rust. */
+	settings?: PluginSettingsDefinition;
 	id: string;
 	name: string;
 	version: string;
+	/** Backend-derived payload identity; never read from manifest.json. */
+	contentSha256?: string;
 	minAppVersion: string;
 	main: string;
 	description?: string;
@@ -58,19 +64,6 @@ export interface PluginManifest {
 // Validation
 // ---------------------------------------------------------------------------
 
-/** Simple semver comparison: returns -1, 0, or 1 */
-export function compareSemver(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
-	for (let i = 0; i < 3; i++) {
-		const va = pa[i] ?? 0;
-		const vb = pb[i] ?? 0;
-		if (va < vb) return -1;
-		if (va > vb) return 1;
-	}
-	return 0;
-}
-
 /**
  * Validate a plugin manifest. Returns null if valid, error string if invalid.
  */
@@ -81,7 +74,7 @@ export function validateManifest(manifest: PluginManifest): string | null {
 	if (!manifest.main) return "manifest: main is required";
 
 	if (!manifest.minAppVersion) return "manifest: minAppVersion is required";
-	if (compareSemver(manifest.minAppVersion, APP_VERSION) > 0) {
+	if (compareAppVersion(manifest.minAppVersion, APP_VERSION) > 0) {
 		return `plugin "${manifest.id}" requires app version ${manifest.minAppVersion}, current is ${APP_VERSION}`;
 	}
 
@@ -157,8 +150,7 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 	if (enabled) {
 		if (builtIn) {
 			// Re-register built-in plugin
-			pluginRegistry.register(builtIn);
-			pluginStore.updatePlugin(id, { loaded: true, error: null });
+			await pluginRegistry.register(builtIn);
 		} else {
 			// Load external plugin from disk
 			const manifests = await invoke<PluginManifest[]>("list_user_plugins");
@@ -176,11 +168,11 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 	} else {
 		// Unload the plugin
 		if (builtIn) {
-			pluginRegistry.unregister(id);
+			await pluginRegistry.unregister(id);
 			pluginStore.updatePlugin(id, { loaded: false });
-		} else if (loadedPluginIds.has(id)) {
+		} else {
 			// pluginRegistry.unregister() already issues the Rust-side unregister.
-			pluginRegistry.unregister(id);
+			await pluginRegistry.unregister(id);
 			loadedPluginIds.delete(id);
 		}
 	}
@@ -204,6 +196,17 @@ const loadedPluginIds = new Set<string>();
 export function pluginModuleBaseUrl(id: string, main: string, windows: boolean): string {
 	const relPath = `${id}/${main}`;
 	return windows ? `http://plugin.localhost/${relPath}` : `plugin://${relPath}`;
+}
+
+/**
+ * Entry URL of one load of a plugin. The version is a path segment (`~v<n>`) right
+ * after the id, not a query: the WebView resolves a relative `import "./x.js"`
+ * against the importing module's URL, drops the query, and keys its module map on
+ * the result. A query would bust `main.js` only and leave every sub-module on the
+ * copy from the first load. `register_plugin_protocol()` strips the segment.
+ */
+export function pluginModuleUrl(id: string, main: string, windows: boolean, version: number): string {
+	return pluginModuleBaseUrl(id, `~v${version}/${main}`, windows);
 }
 
 async function loadPlugin(manifest: PluginManifest): Promise<void> {
@@ -233,8 +236,8 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// supplies. A per-plugin token was considered and rejected: same-realm JS can
 	// read, proxy or monkey-patch it, so it would be a boundary in name only.
 	//
-	// `?t=` cache-busts for hot reload.
-	const url = `${pluginModuleBaseUrl(manifest.id, manifest.main, isWindows())}?t=${Date.now()}`;
+	// A fresh `~v<n>` path version per load cache-busts the whole module graph for hot reload.
+	const url = pluginModuleUrl(manifest.id, manifest.main, isWindows(), Date.now());
 	let mod: unknown;
 	try {
 		mod = await import(/* @vite-ignore */ url);
@@ -258,8 +261,9 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	// Await register() — it performs Rust registration + onload asynchronously.
 	// Without the await we'd log success and add to loadedPluginIds before those
 	// actually complete (race).
-	await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes);
+	if (!(await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes))) return;
 	loadedPluginIds.add(manifest.id);
+	replayActiveAgents(terminalsStore);
 
 	logger.info(`Loaded v${manifest.version}`);
 	appLogger.info("plugin", `Loaded plugin "${manifest.id}" v${manifest.version}`);
@@ -273,36 +277,42 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
  * Handle the plugin-changed event from Rust's file watcher.
  * Rust emits payload as string[] (array of changed plugin IDs).
  */
-async function handlePluginChanged(event: { payload: string[] }): Promise<void> {
-	const changedIds = event.payload;
-	if (!Array.isArray(changedIds) || changedIds.length === 0) return;
+const pendingReloadIds = new Set<string>();
+let reloadInFlight: Promise<void> | null = null;
 
-	let anyReloaded = false;
+function handlePluginChanged(event: { payload: string[] }): Promise<void> {
+	if (!Array.isArray(event.payload) || event.payload.length === 0) return Promise.resolve();
+	for (const id of event.payload) pendingReloadIds.add(id);
+	if (!reloadInFlight) {
+		reloadInFlight = Promise.resolve().then(async () => {
+			try {
+				while (pendingReloadIds.size > 0) {
+					const ids = [...pendingReloadIds];
+					pendingReloadIds.clear();
+					await reloadChangedPlugins(ids);
+				}
+			} finally {
+				reloadInFlight = null;
+			}
+		});
+	}
+	return reloadInFlight;
+}
 
-	for (const pluginId of changedIds) {
-		// Skip disabled plugins early — no IPC, no store churn
-		if (disabledPluginIds.has(pluginId)) {
-			appLogger.debug("plugin", `Plugin "${pluginId}" changed but disabled, skipping`);
-			continue;
-		}
-
+async function reloadChangedPlugins(changedIds: string[]): Promise<void> {
+	const enabledIds = [...new Set(changedIds)].filter((id) => !disabledPluginIds.has(id));
+	if (enabledIds.length === 0) return;
+	let manifests: PluginManifest[];
+	try {
+		manifests = await invoke<PluginManifest[]>("list_user_plugins", { pluginIds: enabledIds });
+	} catch (err) {
+		appLogger.error("plugin", "Failed to list plugins for reload", err);
+		return;
+	}
+	for (const pluginId of enabledIds) {
 		appLogger.info("plugin", `Plugin "${pluginId}" changed, reloading...`);
-
-		// Unregister if previously loaded
-		if (loadedPluginIds.has(pluginId)) {
-			// pluginRegistry.unregister() already issues the Rust-side unregister.
-			pluginRegistry.unregister(pluginId);
-			loadedPluginIds.delete(pluginId);
-		}
-
-		// Re-discover this specific plugin's manifest
-		let manifests: PluginManifest[];
-		try {
-			manifests = await invoke<PluginManifest[]>("list_user_plugins");
-		} catch (err) {
-			appLogger.error("plugin", "Failed to list plugins for reload", err);
-			return;
-		}
+		await pluginRegistry.unregister(pluginId);
+		loadedPluginIds.delete(pluginId);
 
 		const manifest = manifests.find((m) => m.id === pluginId);
 		if (!manifest) {
@@ -320,16 +330,16 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 		}
 
 		await loadPlugin(manifest);
-		anyReloaded = true;
-	}
-
-	if (anyReloaded) {
-		replayActiveAgents(terminalsStore);
 	}
 }
 
+/** Reload one plugin after a change the file watcher does not see (for example its data/config.json). */
+export function reloadPlugin(pluginId: string): Promise<void> {
+	return handlePluginChanged({ payload: [pluginId] });
+}
+
 /** Replay agent-started events for terminals that already have a running agent. */
-function replayActiveAgents(store: typeof terminalsStore): void {
+export function replayActiveAgents(store: typeof terminalsStore): void {
 	for (const id of store.getIds()) {
 		const t = store.get(id);
 		if (t?.agentType && t.sessionId) {
@@ -338,8 +348,17 @@ function replayActiveAgents(store: typeof terminalsStore): void {
 				sessionId: t.sessionId,
 				terminalId: id,
 			});
+			pluginRegistry.dispatchStructuredEvent(
+				"awaiting",
+				{ awaiting: t.awaitingInput === "question", confident: t.awaitingInputConfident === true },
+				t.sessionId,
+			);
 			if (t.shellState) {
-				pluginRegistry.dispatchStructuredEvent("shell-state", { state: t.shellState }, t.sessionId);
+				pluginRegistry.dispatchStructuredEvent(
+					"shell-state",
+					{ state: t.shellState, agent_type: t.agentType },
+					t.sessionId,
+				);
 			}
 		}
 	}
@@ -354,6 +373,9 @@ function replayActiveAgents(store: typeof terminalsStore): void {
  * Call once at app startup after the disabled-plugin state is synchronized.
  */
 export async function loadUserPlugins(syncDisabled = true): Promise<void> {
+	// DEFERRED (2026-10-20) — Isolated headless/Vite user-plugin E2Es need a browser
+	// module-asset transport first. HTTP RPC parity alone cannot load plugin://
+	// modules; do not remove this guard or substitute a test loader as live proof.
 	if (!isTauri()) {
 		appLogger.debug("plugin", "User plugin loading skipped in browser mode");
 		return;

@@ -38,6 +38,37 @@ export interface EgoProviders {
 	providers: EgoProvider[];
 }
 
+export type EgoRootAccess = "read" | "read-write";
+
+export interface EgoRootsEdit {
+	rootDir: string;
+	rootAccess: EgoRootAccess;
+	readAllowlist: string;
+	writableDirs: string;
+}
+
+export interface EgoEffectivePerimeter {
+	workspace: string;
+	roots: { path: string; access: EgoRootAccess; source: string }[];
+	sandbox: string;
+	sandbox_source: string;
+	backend: string;
+	capabilities: unknown;
+	capabilities_reason?: string;
+	probe_evidence?: string;
+	network: string;
+	warnings: string[];
+}
+
+export interface EgoPerimeterView {
+	profile: string | null;
+	roots: EgoRootsEdit;
+	networkEnabled: boolean;
+	execEnforcement: "enforcedByOs" | "promptOnly" | "notChecked";
+	effective: EgoEffectivePerimeter;
+	preview: string;
+}
+
 export type EgoCliErrorCode = "notConfigured" | "invalidInput" | "launchFailed" | "commandFailed" | "unreadableOutput";
 
 /** A failure of the ego command line, carrying what it printed. */
@@ -55,4 +86,23 @@ export function isEgoCliError(value: unknown): value is EgoCliError {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<EgoCliError>;
 	return typeof candidate.code === "string" && typeof candidate.message === "string";
+}
+
+/**
+ * The ego failure a rejection carries, whichever transport delivered it.
+ *
+ * Desktop IPC rejects with the `EgoCliError` itself. The HTTP transport throws
+ * an `HttpRpcError` whose `body` is that same error as JSON (`ego_routes.rs`).
+ * Matched structurally so this file stays free of the transport module.
+ */
+export function asEgoCliError(value: unknown): EgoCliError | null {
+	if (isEgoCliError(value)) return value;
+	const body = (value as { body?: unknown } | null)?.body;
+	if (typeof body !== "string") return null;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		return isEgoCliError(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
 }

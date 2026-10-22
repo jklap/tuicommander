@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../../__tests__/mocks/tauri";
 
@@ -12,6 +14,12 @@ vi.mock("../../../../stores/ui", async () => {
 		},
 	};
 });
+
+const remoteRpc = vi.hoisted(() => vi.fn());
+vi.mock("../../../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../transport")>()),
+	rpc: remoteRpc,
+}));
 
 const settingsState = vi.hoisted(() => ({ intentTabTitle: true, suggestFollowups: true, progressTracking: true }));
 vi.mock("../../../../stores/settings", () => ({
@@ -40,8 +48,9 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 	setPluginEnabled: vi.fn(),
 }));
 
-import { AGENTS } from "../../../../agents";
+import { AGENTS, type AgentsConfig, LIMITED_SUPPORT_LABEL } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
+import { appLogger } from "../../../../stores/appLogger";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
 import { AgentsTab } from "../AgentsTab";
@@ -92,7 +101,7 @@ async function setup(agents: Record<string, unknown> = {}) {
 }
 
 /** Render the tab and expand one agent's row, where the per-agent controls live. */
-function renderExpanded(agent: "claude" | "gemini" = "claude") {
+function renderExpanded(agent: "claude" | "gemini" | "codex" | "ego" = "claude") {
 	const result = render(() => <AgentsTab />);
 	const header = [...result.container.querySelectorAll("[role='button']")].find((el) =>
 		el.textContent?.includes(AGENTS[agent].name),
@@ -108,8 +117,13 @@ describe("AgentsTab expert controls", () => {
 		vi.clearAllMocks();
 		settingsState.progressTracking = true;
 		uiStore.setSettingsExpertMode(false);
-		mockInvoke.mockImplementation((cmd: string) => {
+		mockInvoke.mockImplementation((cmd: string, payload?: { config: AgentsConfig }) => {
+			if (cmd === "list_installed_mcp_integrations") return Promise.resolve([]);
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
+			if (cmd === "save_agents_config" && payload) {
+				agentsConfig = JSON.parse(JSON.stringify(payload.config.agents));
+				return Promise.resolve(undefined);
+			}
 			if (cmd === "load_agents_config") return Promise.resolve({ agents: agentsConfig });
 			// The intent/progress/follow-up overrides render only with the bridge installed.
 			if (cmd === "get_agent_mcp_status")
@@ -121,6 +135,75 @@ describe("AgentsTab expert controls", () => {
 	afterEach(() => {
 		settingsExpertStore._resetForTests();
 		uiStore.setSettingsExpertMode(false);
+	});
+
+	it("labels only amp, cursor and droid as limited support", async () => {
+		await setup();
+		const { container } = render(() => <AgentsTab />);
+		const labelled = [...container.querySelectorAll("[role='button']")]
+			.filter((row) => row.textContent?.includes(LIMITED_SUPPORT_LABEL))
+			.map((row) => row.textContent ?? "");
+		expect(LIMITED_SUPPORT_LABEL).toBe("limited support, need more tests");
+		expect(labelled).toHaveLength(3);
+		for (const agent of ["amp", "cursor", "droid"] as const) {
+			expect(labelled.filter((text) => text.includes(AGENTS[agent].name))).toHaveLength(1);
+		}
+		for (const agent of ["claude", "codex", "grok", "ego"] as const) {
+			expect(labelled.some((text) => text.includes(AGENTS[agent].name))).toBe(false);
+		}
+	});
+
+	it("quotes the same label in the user guide for the same three agents", () => {
+		const rows = readFileSync("docs/user-guide/ai-agents.md", "utf8")
+			.split("\n")
+			.filter((line) => line.includes(LIMITED_SUPPORT_LABEL));
+		expect(rows.map((row) => row.split("|")[1].trim().split(" ")[0])).toEqual(["Amp", "Cursor", "Droid"]);
+	});
+
+	it("persists ego permission choices through config transport instead of losing them on reload", async () => {
+		await setup();
+		const { container } = renderExpanded("ego");
+		fireEvent.change(container.querySelector("#ego-permission-mode")!, { target: { value: "edits" } });
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ ego: expect.objectContaining({ ego_mode: "edits" }) }),
+					}),
+				}),
+			),
+		);
+		fireEvent.change(container.querySelector("#ego-permission-sandbox")!, { target: { value: "ro" } });
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ ego: expect.objectContaining({ ego_mode: "edits", ego_sandbox: "ro" }) }),
+					}),
+				}),
+			),
+		);
+		// Hydration must recover the actual IO save, not a hand-set oracle.
+		await agentConfigsStore.hydrate();
+		expect((container.querySelector("#ego-permission-mode") as HTMLSelectElement).value).toBe("edits");
+		expect((container.querySelector("#ego-permission-sandbox") as HTMLSelectElement).value).toBe("ro");
+		fireEvent.change(container.querySelector("#ego-permission-mode")!, { target: { value: "" } });
+		await waitFor(() => expect(agentConfigsStore.state.agents.ego.ego_mode).toBeUndefined());
+		expect(agentConfigsStore.state.agents.ego.ego_sandbox).toBe("ro");
+	});
+
+	it.each([
+		[["--dangerously-bypass-approvals-and-sandbox", "--search"], true],
+		[["--search"], false],
+		[["--", "--dangerously-bypass-approvals-and-sandbox"], false],
+	] as const)("does not hide active bypass or mistake positional text for bypass: %s", async (args, visible) => {
+		await setup({
+			codex: { run_configs: [{ name: "Default", command: "codex", args: [...args], env: {}, is_default: true }] },
+		});
+		const { container } = renderExpanded("codex");
+		expect(container.querySelector('[aria-label="Approvals and sandbox bypassed"]') !== null).toBe(visible);
 	});
 
 	it("hides the expert controls at their defaults in basic mode and keeps the basic ones", async () => {
@@ -205,7 +288,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Prevent alternate screen"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		expect(agentConfigsStore.getPreventAltScreen("gemini")).toBe(false);
@@ -218,7 +301,7 @@ describe("AgentsTab expert controls", () => {
 		const label = [...container.querySelectorAll("label")].find((el) =>
 			el.textContent?.includes("Accept workspace trust for managed spawns"),
 		);
-		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		const checkbox = container.querySelector(`#${label?.htmlFor}`) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		await waitFor(() =>
@@ -237,7 +320,10 @@ describe("AgentsTab expert controls", () => {
 		await setup();
 		uiStore.setSettingsExpertMode(true);
 		const { container } = renderExpanded("claude");
-		const input = container.querySelector<HTMLInputElement>("#idle-close-claude");
+		const label = [...container.querySelectorAll("label")].find(
+			(e) => e.textContent === "Close idle managed child after",
+		);
+		const input = container.querySelector<HTMLInputElement>(`#${label?.htmlFor}`);
 		expect(input?.value).toBe("15");
 		fireEvent.change(input!, { target: { value: "0" } });
 		await waitFor(() => expect(agentConfigsStore.getIdleCloseMinutes("claude")).toBe(0));
@@ -251,5 +337,61 @@ describe("AgentsTab expert controls", () => {
 				}),
 			),
 		);
+	});
+});
+
+// The real machine registry hydrates from transport; only the external IO is held.
+describe("launch preview machine ownership", () => {
+	beforeEach(() => vi.spyOn(appLogger, "error").mockImplementation(() => undefined));
+	let settleLoad: (() => void) | undefined;
+	afterEach(() => {
+		settleLoad?.();
+		vi.restoreAllMocks();
+		settingsExpertStore._resetForTests();
+	});
+	it.each(["delayed", "failed"])("catches stale local preview during %s remote hydration", async (outcome) => {
+		let resolveLoad!: (value: { agents: Record<string, unknown> }) => void;
+		let rejectLoad!: (error: Error) => void;
+		const load = new Promise<{ agents: Record<string, unknown> }>((resolve, reject) => {
+			resolveLoad = resolve;
+			rejectLoad = reject;
+		});
+		settleLoad = () => resolveLoad({ agents: {} });
+		const preview = (text: string) => ({
+			...DEFAULTS,
+			launch_instructions: { default_text: text, required_markers: [], effective_text: {} },
+		});
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "load_agents_config") return Promise.resolve({ agents: {} });
+			if (cmd === "get_config_defaults") return Promise.resolve(preview("LOCAL PREVIEW"));
+			if (cmd === "list_installed_mcp_integrations") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		remoteRpc.mockImplementation((cmd: string) => {
+			if (cmd === "load_agents_config") return load;
+			if (cmd === "get_config_defaults") return Promise.resolve(preview("REMOTE PREVIEW"));
+			return Promise.resolve(undefined);
+		});
+		await agentConfigsStore.hydrate();
+		await settingsExpertStore.open();
+		const [machine, setMachine] = createSignal<string>();
+		const view = render(() => <AgentsTab connectionId={machine()} />);
+		await waitFor(() => expect(view.getByText("LOCAL PREVIEW")).toBeTruthy());
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
+		setMachine(`preview-${outcome}`);
+		await waitFor(() => expect(remoteRpc).toHaveBeenCalledWith("load_agents_config", {}, `preview-${outcome}`));
+		expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
+		if (outcome === "failed") {
+			rejectLoad(new Error("remote offline"));
+			await waitFor(() => expect(view.container.textContent).toContain("remote offline"));
+			expect(appLogger.error).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
+			expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
+		} else {
+			resolveLoad({ agents: {} });
+			await waitFor(() => expect(view.getByText("REMOTE PREVIEW")).toBeTruthy());
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
+		}
 	});
 });

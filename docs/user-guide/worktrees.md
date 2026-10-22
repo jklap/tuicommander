@@ -16,6 +16,18 @@ When you click a non-main branch in the sidebar:
 
 Main branches (main, master, develop) use the original repository directory — no worktree is created.
 
+When an agent creates a worktree without spawning a separate session, its tab
+stays associated with that worktree during repository refreshes. This changes
+sidebar placement while preserving the shell's working directory. An explicit
+worktree declaration also survives restart when a saved agent tab is restored.
+Removing the worktree also removes its saved placement declaration, so a recycled
+checkout does not leave an agent pointed at the old directory.
+
+Suspended tabs still own their checkout. Close or resume and move these tabs before
+removing, archiving, or recycling that checkout. Cleanup names the suspended tab
+and refuses even a forced removal; recycling skips it. A removed checkout also
+loses its old Worktrees bell offer, so that offer cannot open the obsolete path.
+
 ## Worktree Storage Strategies
 
 Configure where worktrees are stored (Settings → Git & GitHub → Worktree Defaults → Storage):
@@ -78,6 +90,11 @@ Click `+` next to a repository name. A dialog opens where you can:
 
 When "Prompt on create" is off (Settings → Git & GitHub → Worktree Defaults), clicking `+` instantly creates a linked worktree with an auto-generated name based on the default branch.
 
+The default branch is the main checkout's explicitly configured base when it
+resolves to a commit. Otherwise, TUICommander uses local `main`, then local
+`master`, then the remote HEAD branch, then the main checkout's attached branch. This also supports repositories with no remote and
+a non-standard base branch. Linked worktrees do not supply the fallback branch.
+
 ### From Branch Right-Click (quick-clone)
 
 Right-click any non-main branch without a worktree → **Create Worktree**. This creates a new branch named `{source}--{random-name}` based on the selected branch, with a worktree directory.
@@ -103,7 +120,15 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
-In Ask mode, a dialog containing only clean orphaned worktrees removes them after the countdown; **Keep** or Escape cancels it. Dirty or untracked files and commits unreachable from every branch disable the countdown and appear with a reason. Auto-remove also skips these unsafe worktrees. An agent can answer the open dialog through MCP `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; removal is checked again by the backend before it proceeds. Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
+A detached HEAD does not mean that a branch was deleted. Cleanup excludes a
+checkout when a non-default local branch still points at its HEAD. A missing
+checkout directory remains eligible for registration cleanup. Detached checkouts
+without that branch protection retain the dirty-file, operation and live-session
+checks. Clean, reachable checkouts without live sessions are removed silently;
+other candidates require review in Ask mode. Choosing **Keep** holds until the
+checkout fingerprint changes. An agent can answer an open review through MCP
+`repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; the backend
+checks removal again. Failed removals remain available for a later attempt.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
@@ -127,6 +152,15 @@ Before manual removal, the confirmation distinguishes a branch with no commits o
 
 Both **Archive** and **Delete** remove the worktree, so one-click cleanup asks before merging when the worktree is not known to be clean or has a live terminal session. The confirmation names the sessions and what happens to the files: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, cleanup stops. Post-merge cleanup uses the same review before moving or deleting the checkout.
 
+A branch can be integrated even when its original commits are absent from
+main: squash merges and rebased copies change commit IDs. TUICommander checks
+patches, the result of a virtual merge, and revised copies with matching
+subjects. MCP exposes the reason with `repo branch_integration` or
+`repo branch_integrations`. A branch that only follows its base is `in_sync`,
+not integrated: its query returns `integrated: false` and no merge proof. A content-based result still needs a recovery ref
+at `refs/archive/<branch>` pointing to the current tip before safe branch
+deletion; incomplete or uncertain changes remain protected.
+
 The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 
 Removing a worktree without force also refuses uncommitted changes when the
@@ -140,7 +174,7 @@ edits to a path that was already dirty. Initialized submodule refs, stash entrie
 and reflog-only commits are preserved in the main checkout's module repository
 before removal. If the main checkout's copy of a
 submodule is uninitialized or points at the wrong Git repository, removal stops
-and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
+and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning, including modules whose configured names differ from their checkout paths. Each destination must have one valid path in its owning main module's `.gitmodules`; missing or malformed mappings stop cleanup and retain the registration.
 
 If Git has already removed the registration but left a directory behind, cleanup
 still cancels any pending build-input warming before reporting a directory error.
@@ -171,9 +205,11 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
 
+Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
+
 Removing a worktree:
 1. Closes all terminals associated with that branch
-2. Checks checkout and submodule state, restores owner write permission inside the worktree, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
+2. Checks checkout and submodule state, restores owner write permission inside the worktree and owner search permission on directories before traversing them, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
 3. Removes the branch entry from the sidebar
 4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks a normal removal. A confirmed dirty-file removal can remove the checkout, but keeps an unmerged branch and reports a warning. Merge it first, or turn off **Delete branch on remove** to keep the branch.
 5. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
@@ -265,9 +301,24 @@ If a session starts in a new sibling worktree before that refresh, TUICommander 
 
 Switching branches in TUICommander does not change the working directory of existing terminals. Each branch's terminals stay in their worktree path.
 
-If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing the worktree directory closes its terminal sessions.
+If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing or recycling a worktree closes only terminals whose current working directory is inside that checkout. A repo-root terminal is never closed merely because a stale sidebar row lists it. Creating or declaring a worktree does not move the caller's tab unless its working directory is in that checkout. Reload and saved-tab restore also use the terminal's working directory, not an old worktree declaration. If a saved tab belongs to another workspace, restoring it does not activate it in the selected workspace or retain it in that workspace's pane layout. The selected workspace shows its own tabs or its normal empty state.
 
 When you switch branches:
 - Previous branch's terminals are hidden (but remain alive)
 - New branch's terminals are shown
 - If the new branch has no terminals, a fresh one is created
+
+Force-deleting a branch preserves its tip at `refs/archive/<branch>`. It refuses a branch checked out in any worktree and never replaces a different existing archive: a reused branch name is archived as `refs/archive/<branch>-<sha7>`.
+
+Worktree names that sanitize to an existing checkout name produce an error when they target a different branch. TUICommander keeps that checkout and its uncommitted files.
+
+Automatic sidebar refreshes are spaced at least five seconds apart for each repository. Changes during that window are collected into one refresh at its end, so the final update is retained. Badges can lag by five seconds plus the time needed to read Git state.
+
+Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
+
+### Reuse of finished worktrees
+
+A safe removal keeps a clean, integrated checkout in the archive area for reuse.
+A later worktree creation can reuse it under the new branch name without copying
+ignored build artifacts. Freshly created worktrees stay reserved even before a session
+starts. Dirty, unmerged, locked, and live worktrees are not reused.

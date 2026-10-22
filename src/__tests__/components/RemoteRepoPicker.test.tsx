@@ -109,6 +109,16 @@ describe("RemoteRepoPicker", () => {
 		await findByText("Gits");
 	});
 
+	// Catches: a rejected HTML home response is hidden or copied into the path input.
+	it("shows the transport HTML error and leaves the home body out of the path", async () => {
+		const message =
+			"RPC get_home_directory: expected JSON from http://verification.test/system/home-directory, received text/html";
+		mockRpc.mockRejectedValue(new Error(message));
+		const { findByText, container } = open();
+		await findByText(`Could not find this machine's home directory: Error: ${message}`);
+		expect((container.querySelector("input") as HTMLInputElement).value).toBe("/");
+	});
+
 	// Catches: reopening a connection discards the last browsed remote folder.
 	it("reopens at the last directory visited on that connection", async () => {
 		serveTree({ "/": [dir("home")], "/home": [dir("stefano")] });
@@ -341,5 +351,27 @@ describe("RemoteRepoPicker", () => {
 		await findByText("tuicommander");
 		fireEvent.click(await findByText("Add This Folder"));
 		expect(onConfirm).toHaveBeenCalledWith("/home/stefano/Gits");
+	});
+});
+
+// Catches: a browser picker routes the serving machine through a nonexistent remote connection.
+describe("current-server repository picker", () => {
+	it("browses server home, confirms a directory and cancels without registering", async () => {
+		serveTree({ "/server-home": [dir("projects"), file("notes.txt")], "/server-home/projects": [] }, "/server-home");
+		const onConfirm = vi.fn();
+		const onClose = vi.fn();
+		const view = render(() => (
+			<RemoteRepoPicker visible connectionName="tuic.test:9876" onConfirm={onConfirm} onClose={onClose} />
+		));
+		await view.findByText("projects");
+		expect(view.queryByText("notes.txt")).toBeNull();
+		expect(mockRpc).toHaveBeenCalledWith("get_home_directory", {}, "");
+		expect(mockRpc).toHaveBeenCalledWith("list_directory", { repoPath: "/server-home", subdir: "" }, "");
+		fireEvent.click(view.getByText("projects"));
+		await waitFor(() => expect(view.getByRole("textbox")).toHaveValue("/server-home/projects"));
+		fireEvent.click(view.getByText("Add This Folder"));
+		expect(onConfirm).toHaveBeenCalledWith("/server-home/projects");
+		fireEvent.click(view.getByText("Cancel"));
+		expect(onConfirm).toHaveBeenCalledTimes(1);
 	});
 });

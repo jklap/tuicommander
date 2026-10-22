@@ -6,13 +6,13 @@ import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import {
-	displayTask,
 	effectiveActivityState,
 	isActivityWorking,
 	projectName,
 	reconcileActivityOrder,
 	terminalStatusLabel,
 } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/displayTask";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";
@@ -31,7 +31,7 @@ export const statusClasses = {
 
 /** Truncate a string to a single line for display */
 function truncate(text: string, maxLen = 80): string {
-	const oneLine = text.replace(/\n/g, " ").trim();
+	const oneLine = text.replaceAll("\n", " ").trim();
 	if (oneLine.length <= maxLen) return oneLine;
 	return oneLine.slice(0, maxLen - 1) + "\u2026";
 }
@@ -313,9 +313,6 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 
 			<div class={s.footer}>
 				<span>{terminals().length} terminal(s)</span>
-				<Show when={!props.embedded}>
-					<span class={s.footerHint}>Click to switch • Esc to close</span>
-				</Show>
 			</div>
 		</>
 	);

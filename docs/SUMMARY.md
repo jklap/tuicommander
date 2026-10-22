@@ -25,11 +25,13 @@
 
 - [Agent Support](./user-guide/ai-agents.md)
 - [Agent Teams](./user-guide/agent-teams.md)
+- [Automations](./user-guide/automations.md)
 - [Project Progress](./user-guide/project-progress.md)
 - [Progress Reporting Evaluation](./evaluations/progress-reporting.md)
 - [AI Chat](./user-guide/ai-chat.md)
 - [Smart Prompts](./user-guide/smart-prompts.md)
 - [Prompt Library](./user-guide/prompt-library.md)
+- [Guided Event Configuration](./user-guide/event-driven-templates.md)
 - [Voice Dictation](./user-guide/dictation.md)
 
 ## Git & GitHub
@@ -65,7 +67,6 @@
 - [Detection Matrix](./architecture/agents/detection-matrix.md)
 - [Claude Code](./architecture/agents/claude-code.md)
 - [Codex](./architecture/agents/codex.md)
-- [Aider](./architecture/agents/aider.md)
 - [Gemini CLI](./architecture/agents/gemini-cli.md)
 - [OpenCode](./architecture/agents/opencode.md)
 - [pi](./architecture/agents/pi.md)
@@ -79,6 +80,7 @@
 - [Output Parser](./backend/output-parser.md)
 - [Error Classification](./backend/error-classification.md)
 - [Git Operations](./backend/git.md)
+  - [Native Worktree Recycling Measurement](./evidence/worktree-recycling-1705-native.md)
 - [GitHub Integration](./backend/github.md)
 - [MCP & HTTP Server](./backend/mcp-http.md)
 - [ACP Client for ego](./backend/acp.md)

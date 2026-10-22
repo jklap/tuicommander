@@ -22,9 +22,11 @@
 //!    states the ceiling once, for every adapter.
 
 pub mod assets;
+pub mod edge;
 pub mod external;
 pub mod library;
 pub mod pocket;
+pub mod rejection;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,6 +69,8 @@ pub enum SpeechError {
     Runaway { budget_seconds: f32 },
     /// Anything the engine itself reported.
     Failed(String),
+    /// The service refused authentication or access; retries must cool down.
+    Rejected { status: u16 },
 }
 
 impl std::fmt::Display for SpeechError {
@@ -80,6 +84,10 @@ impl std::fmt::Display for SpeechError {
             Self::Runaway { budget_seconds } => write!(
                 f,
                 "Speech synthesis exceeded its budget of {budget_seconds:.1}s and was stopped"
+            ),
+            Self::Rejected { status } => write!(
+                f,
+                "The speech service rejected the request (HTTP {status}); reply in text or choose another speech engine"
             ),
             Self::Failed(reason) => write!(f, "Speech synthesis failed: {reason}"),
         }
@@ -229,7 +237,7 @@ mod tests {
             samples: vec![0.0; 24_000],
             sample_rate: 24_000,
         };
-        assert_eq!(audio.duration_seconds(), 1.0);
+        assert_eq!(audio.duration_seconds().to_bits(), 1.0_f32.to_bits());
     }
 
     #[test]
@@ -238,7 +246,7 @@ mod tests {
             samples: vec![0.0; 24_000],
             sample_rate: 0,
         };
-        assert_eq!(audio.duration_seconds(), 0.0);
+        assert_eq!(audio.duration_seconds().to_bits(), 0.0_f32.to_bits());
     }
 
     #[test]

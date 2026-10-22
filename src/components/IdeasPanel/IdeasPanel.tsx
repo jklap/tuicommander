@@ -1,15 +1,16 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
-import { invoke } from "../../invoke";
-import { appLogger } from "../../stores/appLogger";
 import { generateId, ideasStore } from "../../stores/ideas";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
+import { savePastedImage } from "../../utils/pastedImage";
 import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
 import s from "./IdeasPanel.module.css";
 
 export interface IdeasPanelProps {
@@ -21,28 +22,6 @@ export interface IdeasPanelProps {
 	 *  Absent when the host cannot queue (no agent session). */
 	onQueueToTerminal?: (text: string) => void;
 	mode?: "inline" | "detached";
-}
-
-const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-
-/** Map MIME type to file extension */
-function mimeToExtension(mime: string): string {
-	const map: Record<string, string> = {
-		"image/png": "png",
-		"image/jpeg": "jpg",
-		"image/webp": "webp",
-		"image/gif": "gif",
-	};
-	return map[mime] ?? "png";
-}
-
-/** Convert a Blob to a base64 string */
-async function blobToBase64(blob: Blob): Promise<string> {
-	const buffer = await blob.arrayBuffer();
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary);
 }
 
 /** Extract last path segment as display name */
@@ -70,9 +49,14 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 	const [editingImages, setEditingImages] = createSignal<string[]>([]);
 	let textareaRef: HTMLTextAreaElement | undefined;
 
-	const filteredIdeas = () => ideasStore.getFilteredIdeas(props.repoPath);
-	const badgeCount = () => ideasStore.pendingCount(props.repoPath);
-	const hasCompleted = () => ideasStore.getFilteredIdeas(props.repoPath).some((n) => n.usedAt !== null);
+	// In-memory only: the panel persists no other UI state (edit/draft/reassign are all signals).
+	const [showAllRepos, setShowAllRepos] = createSignal(false);
+	/** Repo filter of the visible list; null = every idea (store convention). */
+	const listRepo = () => (showAllRepos() ? null : props.repoPath);
+
+	const filteredIdeas = () => ideasStore.getFilteredIdeas(listRepo());
+	const badgeCount = () => ideasStore.pendingCount(listRepo());
+	const hasCompleted = () => filteredIdeas().some((n) => n.usedAt !== null);
 
 	const repoOptions = () => {
 		const repos = repositoriesStore.state.repositories;
@@ -86,37 +70,12 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 	const allPendingImages = () => [...editingImages(), ...pendingImages()];
 
 	const handlePaste = async (e: ClipboardEvent) => {
-		const items = e.clipboardData?.items;
-		if (!items) return;
-
-		for (const item of items) {
-			if (ACCEPTED_IMAGE_TYPES.includes(item.type)) {
-				e.preventDefault();
-				const blob = item.getAsFile();
-				if (!blob) continue;
-
-				const ideaId = pendingIdeaId() ?? editingId() ?? generateId();
-				if (!pendingIdeaId() && !editingId()) setPendingIdeaId(ideaId);
-
-				try {
-					const dataBase64 = await blobToBase64(blob);
-					const extension = mimeToExtension(item.type);
-					// `noteId` is the backend argument name and the on-disk asset
-					// directory (`note-images/<id>/`). It keeps the old vocabulary
-					// on purpose — see the boundary note in `stores/ideas.ts`.
-					const savedPath = await invoke<string>("save_note_image", {
-						noteId: ideaId,
-						dataBase64,
-						extension,
-					});
-					setPendingImages((prev) => [...prev, savedPath]);
-				} catch (err) {
-					appLogger.error("store", "Failed to save pasted image", err);
-				}
-				return; // Only handle first image item
-			}
-		}
-		// No image items found — let default text paste proceed
+		const savedPath = await savePastedImage(e, () => {
+			const ideaId = pendingIdeaId() ?? editingId() ?? generateId();
+			if (!pendingIdeaId() && !editingId()) setPendingIdeaId(ideaId);
+			return ideaId;
+		});
+		if (savedPath) setPendingImages((prev) => [...prev, savedPath]);
 	};
 
 	const handleSubmit = () => {
@@ -209,7 +168,16 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 			<div class={p.header}>
 				<div class={p.headerLeft}>
 					<span class={p.title}>
-						<span style={{ filter: "grayscale(1) brightness(1.5)", "font-style": "normal" }}>💡</span>{" "}
+						<svg
+							viewBox="0 0 24 24"
+							width="14"
+							height="14"
+							fill="currentColor"
+							aria-hidden="true"
+							style={{ "vertical-align": "text-bottom" }}
+						>
+							<path d="M9 21c0 .5.4 1 1 1h4c.6 0 1-.5 1-1v-1H9v1zm3-19C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .5.4 1 1 1h6c.6 0 1-.5 1-1v-2.3c1.8-1.3 3-3.4 3-5.7 0-3.9-3.1-7-7-7z" />
+						</svg>{" "}
 						{t("ideasPanel.title", "Ideas")}
 					</span>
 					<Show when={badgeCount() > 0}>
@@ -217,10 +185,24 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					</Show>
 				</div>
 				<div class={p.headerRight}>
+					<button
+						class={cx(p.headerBtn, showAllRepos() && s.headerBtnPressed)}
+						onClick={() => setShowAllRepos((v) => !v)}
+						aria-pressed={showAllRepos()}
+						title={
+							showAllRepos()
+								? t("ideasPanel.showThisRepo", "Show this repository only")
+								: t("ideasPanel.showAllRepos", "Show ideas from all repositories")
+						}
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M8 1 .5 4.5 8 8l7.5-3.5L8 1zm-6.1 7.3L.5 9l7.5 3.5L15.5 9l-1.4-.7L8 11.2 1.9 8.3zm0 3.5L.5 12.5 8 16l7.5-3.5-1.4-.7L8 14.7l-6.1-2.9z" />
+						</svg>
+					</button>
 					<Show when={hasCompleted()}>
 						<button
 							class={p.headerBtn}
-							onClick={() => ideasStore.clearCompleted()}
+							onClick={() => ideasStore.clearCompleted(listRepo())}
 							title={t("ideasPanel.clearCompleted", "Clear completed ideas")}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -234,7 +216,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 
 			<div class={cx(p.content, s.list)}>
 				<Show when={filteredIdeas().length === 0}>
-					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet. Add one below.")}</div>
+					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet.")}</div>
 				</Show>
 				<For each={filteredIdeas()}>
 					{(idea) => (
@@ -277,7 +259,8 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 											</button>
 										}
 									>
-										<select
+										<Select
+											compact
 											class={s.reassignSelect}
 											value={idea.repoPath ?? "__global__"}
 											onChange={(e) => handleReassign(idea.id, e.currentTarget.value)}
@@ -286,7 +269,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 										>
 											<option value="__global__">Global</option>
 											<For each={repoOptions()}>{(repo) => <option value={repo.path}>{repo.displayName}</option>}</For>
-										</select>
+										</Select>
 									</Show>
 								</div>
 							</div>
@@ -352,7 +335,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 						</For>
 					</div>
 				</Show>
-				<textarea
+				<Textarea
 					ref={textareaRef}
 					data-focus-target="notes"
 					class={s.input}
@@ -360,7 +343,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					placeholder={
 						editingId()
 							? t("ideasPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
-							: t("ideasPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
+							: t("ideasPanel.placeholder", "New idea…")
 					}
 					value={inputText()}
 					onInput={(e) => setInputText(e.currentTarget.value)}

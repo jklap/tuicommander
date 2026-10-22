@@ -7,150 +7,223 @@ authors and communities behind each project.
 
 ## Rust Dependencies
 
+<!-- BEGIN GENERATED:rust -->
 | Crate | Version | License |
 |-------|---------|---------|
-| aes-gcm | 0.10.3 | Apache-2.0 OR MIT |
-| anyhow | 1.0.102 | MIT OR Apache-2.0 |
+| agent-client-protocol | 2.0.0 | Apache-2.0 |
+| anyhow | 1.0.104 | MIT OR Apache-2.0 |
+| arboard | 3.6.1 | MIT OR Apache-2.0 |
+| arrayvec | 0.7.8 | MIT OR Apache-2.0 |
 | async-stream | 0.3.6 | MIT |
-| axum | 0.8.8 | MIT |
-| axum-server | 0.7.3 | MIT |
-| axum-server-dual-protocol | 0.7.0 | MIT OR Apache-2.0 |
+| axum | 0.8.9 | MIT |
+| axum-server | 0.8.0 | MIT |
+| base32 | 0.5.1 | MIT OR Apache-2.0 |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT |
-| bcrypt | 0.19.0 | MIT |
-| bm25 | 2.3.2 | MIT |
-| chrono | 0.4.44 | MIT OR Apache-2.0 |
-| cpal | 0.17.1 | Apache-2.0 |
-| dashmap | 6.1.0 | MIT |
-| dirs | 6.0.0 | MIT OR Apache-2.0 |
-| futures-util | 0.3.32 | MIT OR Apache-2.0 |
-| genai | 0.6.0-beta.16 | MIT OR Apache-2.0 |
-| gh-token | 0.1.8 | MIT OR Apache-2.0 |
-| glob | 0.3.3 | MIT OR Apache-2.0 |
-| grep-matcher | 0.1.8 | Unlicense OR MIT |
+| bcrypt | 0.19.2 | MIT |
+| bitflags | 2.13.1 | MIT OR Apache-2.0 |
+| cap-fs-ext | 3.4.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| cap-std | 3.4.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| cc | 1.3.0 | MIT OR Apache-2.0 |
+| chromey | 2.58.2 | MIT OR Apache-2.0 |
+| chrono | 0.4.45 | MIT OR Apache-2.0 |
+| chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
+| clap | 4.6.3 | MIT OR Apache-2.0 |
+| console-subscriber | 0.5.0 | MIT |
+| cpal | 0.18.2 | Apache-2.0 |
+| croner | 4.0.1 | MIT |
+| ctor | 0.8.0 | Apache-2.0 OR MIT |
+| cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
+| dashmap | 6.2.1 | MIT |
+| deunicode | 1.6.2 | BSD-3-Clause |
+| dirs | 7.0.0 | MIT OR Apache-2.0 |
+| drag | 2.1.1 | Apache-2.0 OR MIT |
+| flate2 | 1.1.10 | MIT OR Apache-2.0 |
+| futures-util | 0.3.33 | MIT OR Apache-2.0 |
+| gix | 0.89.0 | MIT OR Apache-2.0 |
+| glob | 0.3.4 | MIT OR Apache-2.0 |
+| grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
-| grep-searcher | 0.1.16 | Unlicense OR MIT |
-| hkdf | 0.12.4 | MIT OR Apache-2.0 |
-| ignore | 0.4.25 | Unlicense OR MIT |
+| grep-searcher | 0.1.17 | Unlicense OR MIT |
+| hex | 0.4.3 | MIT OR Apache-2.0 |
+| home | 0.5.12 | MIT OR Apache-2.0 |
+| iana-time-zone | 0.1.65 | MIT OR Apache-2.0 |
+| ignore | 0.4.31 | Unlicense OR MIT |
 | include_dir | 0.7.4 | MIT |
+| jsonc-parser | 0.33.1 | MIT |
+| jsonschema | 0.59.0 | MIT |
 | keepawake | 0.6.0 | MIT |
 | keyring | 3.6.3 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 |
-| libc | 0.2.184 | MIT OR Apache-2.0 |
+| libc | 0.2.188 | MIT OR Apache-2.0 |
+| log | 0.4.33 | MIT OR Apache-2.0 |
+| memchr | 2.8.3 | Unlicense OR MIT |
 | mime_guess | 2.0.5 | MIT |
+| moka | 0.12.15 | MIT OR Apache-2.0 AND Apache-2.0 |
 | notify | 8.2.0 | CC0-1.0 |
-| oauth2 | 5.0.0 | MIT OR Apache-2.0 |
+| open | 5.4.0 | MIT |
 | ort | 2.0.0-rc.13 | MIT OR Apache-2.0 |
+| p256 | 0.13.2 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
+| polling | 3.11.0 | Apache-2.0 OR MIT |
 | portable-pty | 0.9.0 | MIT |
-| rand | 0.10.0 | MIT OR Apache-2.0 |
-| regex | 1.12.3 | MIT OR Apache-2.0 |
-| reqwest | 0.13.2 | MIT OR Apache-2.0 |
-| rodio | 0.20.1 | MIT OR Apache-2.0 |
-| rustls | 0.23.37 | Apache-2.0 OR ISC OR MIT |
+| rand | 0.10.2 | MIT OR Apache-2.0 |
+| rand_core | 0.6.4 | MIT OR Apache-2.0 |
+| rayon | 1.12.0 | MIT OR Apache-2.0 |
+| regex | 1.13.1 | MIT OR Apache-2.0 |
+| regex-automata | 0.4.16 | MIT OR Apache-2.0 |
+| reqwest | 0.13.5 | MIT OR Apache-2.0 |
+| rfd | 0.16.0 | MIT |
+| ring | 0.17.14 | Apache-2.0 AND ISC |
+| rodio | 0.23.0 | MIT OR Apache-2.0 |
+| rusqlite | 0.40.2 | MIT |
+| rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | safetensors | 0.6.2 | Apache-2.0 |
+| same-file | 1.0.6 | Unlicense OR MIT |
+| schemars | 1.2.1 | MIT |
 | sentencepiece-model | 0.1.4 | BSD-2-Clause |
-| serde | 1.0.228 | MIT OR Apache-2.0 |
-| serde_json | 1.0.149 | MIT OR Apache-2.0 |
-| sha2 | 0.10.9 | MIT OR Apache-2.0 |
-| tauri | 2.10.3 | Apache-2.0 OR MIT |
-| tauri-build | 2.5.6 | Apache-2.0 OR MIT |
-| tauri-plugin-clipboard-manager | 2.3.2 | Apache-2.0 OR MIT |
-| tauri-plugin-deep-link | 2.4.8 | Apache-2.0 OR MIT |
-| tauri-plugin-dialog | 2.7.0 | Apache-2.0 OR MIT |
-| tauri-plugin-global-shortcut | 2.3.1 | Apache-2.0 OR MIT |
-| tauri-plugin-opener | 2.5.3 | Apache-2.0 OR MIT |
-| tauri-plugin-process | 2.3.1 | Apache-2.0 OR MIT |
-| tauri-plugin-single-instance | 2.4.1 | Apache-2.0 OR MIT |
-| tauri-plugin-updater | 2.10.1 | Apache-2.0 OR MIT |
-| tauri-plugin-window-state | 2.4.1 | Apache-2.0 OR MIT |
+| serde | 1.0.229 | MIT OR Apache-2.0 |
+| serde_json | 1.0.151 | MIT OR Apache-2.0 |
+| serde_yaml | 0.9.34+deprecated | MIT OR Apache-2.0 |
+| sha2 | 0.11.0 | MIT OR Apache-2.0 |
+| sourcemap | 9.3.2 | BSD-3-Clause |
+| ssh2-config | 0.8.2 | MIT |
+| stop-words | 0.9.0 | MIT OR Apache-2.0 |
+| tar | 0.4.46 | MIT OR Apache-2.0 |
+| tauri | 2.12.1 | Apache-2.0 OR MIT |
+| tauri-build | 2.7.1 | Apache-2.0 OR MIT |
+| tauri-plugin-deep-link | 2.6.1 | Apache-2.0 OR MIT |
+| tauri-plugin-dialog | 2.8.1 | Apache-2.0 OR MIT |
+| tauri-plugin-global-shortcut | 2.4.0 | Apache-2.0 OR MIT |
+| tauri-plugin-notification | 2.7.0 | Apache-2.0 OR MIT |
+| tauri-plugin-opener | 2.7.0 | Apache-2.0 OR MIT |
+| tauri-plugin-process | 2.4.0 | Apache-2.0 OR MIT |
+| tauri-plugin-single-instance | 2.5.2 | Apache-2.0 OR MIT |
+| tauri-plugin-updater | 2.14.0 | Apache-2.0 OR MIT |
+| tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokenizers | 0.22.2 | Apache-2.0 |
-| tokio | 1.51.1 | MIT |
-| tokio-tungstenite | 0.28.0 | MIT |
-| tower-http | 0.6.8 | MIT |
+| tokio | 1.53.1 | MIT |
+| tokio-tungstenite | 0.29.0 | MIT |
+| toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_edit | 0.25.13+spec-1.1.0 | MIT OR Apache-2.0 |
+| tower-http | 0.7.0 | MIT |
 | tracing | 0.1.44 | MIT |
+| tracing-appender | 0.2.5 | MIT |
 | tracing-subscriber | 0.3.23 | MIT |
+| tungstenite | 0.29.0 | MIT OR Apache-2.0 |
+| ulid | 3.0.0 | MIT |
+| unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
+| unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | url | 2.5.8 | MIT OR Apache-2.0 |
-| uuid | 1.23.0 | Apache-2.0 OR MIT |
-| vt100 | 0.16.2 | MIT |
-| web-push-native | 0.4.0 | MIT OR Apache-2.0 |
+| uuid | 1.27.0 | Apache-2.0 OR MIT |
 | webrtc-audio-processing | 2.1.0 | BSD-3-Clause |
+| whichlang | 0.1.1 | MIT |
 | whisper-rs | 0.16.0 | Unlicense |
-| zip | 8.5.1 | MIT |
+| zeroize | 1.9.0 | Apache-2.0 OR MIT |
+| zip | 9.0.5 | MIT |
+<!-- END GENERATED:rust -->
 
 ### Rust Platform-Specific Dependencies
 
+<!-- BEGIN GENERATED:rust-platform -->
 | Crate | Version | License | Platform |
 |-------|---------|---------|----------|
 | block2 | 0.6.2 | MIT | macOS |
+| gio | 0.18.4 | MIT | Linux |
+| mac-notification-sys | 0.6.15 | MIT OR Apache-2.0 | macOS |
+| miow | 0.6.1 | MIT OR Apache-2.0 | Windows |
 | objc2 | 0.6.4 | MIT | macOS |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | macOS |
 | objc2-foundation | 0.3.2 | MIT | macOS |
+| piper | 0.2.5 | MIT OR Apache-2.0 | Windows |
+| rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Linux |
+| rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Linux |
+| signal-hook | 0.4.4 | MIT OR Apache-2.0 | Linux |
+| webview2-com | 0.39.1 | MIT | Windows |
+| windows-core | 0.62.2 | MIT OR Apache-2.0 | Windows |
+| windows-sys | 0.59.0 | MIT OR Apache-2.0 | Windows |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | Windows |
+<!-- END GENERATED:rust-platform -->
 
 ### Rust Dev Dependencies
 
+<!-- BEGIN GENERATED:rust-dev -->
 | Crate | Version | License |
 |-------|---------|---------|
+| csv | 1.4.0 | Unlicense OR MIT |
+| divan | 0.1.21 | MIT OR Apache-2.0 |
+| insta | 1.48.0 | Apache-2.0 |
 | mockito | 1.7.2 | MIT |
-| serial_test | 3.4.0 | MIT |
-| tempfile | 3.27.0 | MIT OR Apache-2.0 |
+| serial_test | 3.5.0 | MIT |
 | tower | 0.5.3 | MIT |
+<!-- END GENERATED:rust-dev -->
 
 ---
 
 ## JavaScript / TypeScript Dependencies
 
+<!-- BEGIN GENERATED:js -->
 | Package | Version | License |
 |---------|---------|---------|
-| @codemirror/commands | 6.10.2 | MIT |
-| @codemirror/language | 6.12.2 | MIT |
+| @codemirror/autocomplete | 6.20.3 | MIT |
+| @codemirror/commands | 6.11.0 | MIT |
+| @codemirror/lang-markdown | 6.5.2 | MIT |
+| @codemirror/language | 6.12.4 | MIT |
 | @codemirror/language-data | 6.5.2 | MIT |
-| @codemirror/search | 6.6.0 | MIT |
-| @codemirror/state | 6.5.4 | MIT |
-| @codemirror/view | 6.39.16 | MIT |
-| @git-diff-view/core | 0.1.3 | MIT |
-| @git-diff-view/solid | 0.1.3 | MIT |
+| @codemirror/search | 6.7.2 | MIT |
+| @codemirror/state | 6.7.4 | MIT |
+| @codemirror/view | 6.43.11 | MIT |
+| @git-diff-view/core | 0.1.7 | MIT |
+| @git-diff-view/solid | 0.1.7 | MIT |
+| @lezer/common | 1.5.2 | MIT |
 | @lezer/highlight | 1.2.3 | MIT |
-| @tanstack/solid-virtual | 3.13.21 | MIT |
-| @tauri-apps/api | 2.10.1 | Apache-2.0 OR MIT |
-| @tauri-apps/plugin-deep-link | 2.4.7 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-dialog | 2.7.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-opener | 2.5.3 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-process | 2.3.1 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-updater | 2.10.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-window-state | 2.4.1 | MIT OR Apache-2.0 |
-| @xterm/addon-fit | 0.11.0 | MIT |
-| @xterm/addon-search | 0.16.0 | MIT |
-| @xterm/addon-unicode11 | 0.9.0 | MIT |
-| @xterm/addon-web-links | 0.12.0 | MIT |
-| @xterm/addon-webgl | 0.19.0 | MIT |
-| @xterm/xterm | 6.0.0 | MIT |
-| dompurify | 3.3.2 | MPL-2.0 OR Apache-2.0 |
-| marked | 17.0.4 | MIT |
+| @replit/codemirror-css-color-picker | 6.3.0 | MIT |
+| @tanstack/solid-virtual | 3.13.38 | MIT |
+| @tauri-apps/api | 2.12.1 | Apache-2.0 OR MIT |
+| @tauri-apps/plugin-deep-link | 2.6.1 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-dialog | 2.8.1 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-notification | 2.7.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-opener | 2.7.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-process | 2.4.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-updater | 2.14.0 | MIT OR Apache-2.0 |
+| ansi-to-html | 0.7.2 | MIT |
+| dompurify | 3.4.17 | MPL-2.0 OR Apache-2.0 |
+| marked | 18.0.12 | MIT |
+| mermaid | 12.1.0 | MIT |
 | qrcode | 1.5.4 | MIT |
-| rollup | 4.59.0 | MIT |
-| solid-codemirror | 2.3.1 | MIT |
-| solid-js | 1.9.11 | MIT |
-| vite-plugin-solid | 2.11.10 | MIT |
+| solid-codemirror | 2.3.3 | MIT |
+| solid-js | 1.9.17 | MIT |
+<!-- END GENERATED:js -->
 
 ### JavaScript Dev Dependencies
 
+<!-- BEGIN GENERATED:js-dev -->
 | Package | Version | License |
 |---------|---------|---------|
+| @biomejs/biome | 2.5.13 | MIT OR Apache-2.0 |
 | @solidjs/testing-library | 0.8.10 | MIT |
-| @tauri-apps/cli | 2.10.0 | Apache-2.0 OR MIT |
-| @testing-library/jest-dom | 6.9.1 | MIT |
+| @stryker-mutator/core | 10.0.0 | Apache-2.0 |
+| @tauri-apps/cli | 2.12.1 | Apache-2.0 OR MIT |
+| @testing-library/dom | 10.4.1 | MIT |
+| @testing-library/jest-dom | 7.0.1 | MIT |
+| @types/jsdom | 30.0.0 | MIT |
 | @types/qrcode | 1.5.6 | MIT |
-| @vitest/coverage-v8 | 4.0.18 | MIT |
-| happy-dom | 20.8.9 | MIT |
-| lightningcss | 1.31.1 | MPL-2.0 |
-| rollup-plugin-visualizer | 7.0.1 | MIT |
-| typescript | 5.9.3 | Apache-2.0 |
-| vite | 7.3.2 | MIT |
-| vite-plugin-checker | 0.12.0 | MIT |
+| @typescript/typescript6 | 6.0.2 | Apache-2.0 |
+| @vitest/coverage-v8 | 5.0.0 | MIT |
+| happy-dom | 20.11.0 | MIT |
+| jsdom | 30.0.1 | MIT |
+| lightningcss | 1.33.0 | MPL-2.0 |
+| rollup | 4.62.2 | MIT |
+| rollup-plugin-visualizer | 7.1.1 | MIT |
+| typescript | 7.0.2 | Apache-2.0 |
+| vite | 8.3.0 | MIT |
+| vite-plugin-checker | 0.14.5 | MIT |
 | vite-plugin-purgecss | 0.2.13 | MIT |
-| vitest | 4.0.18 | MIT |
+| vite-plugin-solid | 2.11.14 | MIT |
+| vitest | 5.0.0 | MIT |
+<!-- END GENERATED:js-dev -->
 
 ---
 
@@ -158,20 +231,26 @@ authors and communities behind each project.
 
 Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apache-2.0 OR MIT`).
 
+<!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT | 55 |
-| MIT OR Apache-2.0 | 49 |
-| Apache-2.0 | 4 |
-| Unlicense OR MIT | 4 |
-| Unlicense | 3 |
+| MIT OR Apache-2.0 | 80 |
+| MIT | 70 |
+| Apache-2.0 | 8 |
+| Unlicense OR MIT | 7 |
+| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |
+| BSD-3-Clause | 3 |
+| MIT OR Apache-2.0 OR Zlib | 2 |
+| Apache-2.0 AND ISC | 1 |
 | Apache-2.0 OR ISC OR MIT | 1 |
-| Zlib OR Apache-2.0 OR MIT | 1 |
+| BSD-2-Clause | 1 |
+| CC0-1.0 | 1 |
+| MIT OR Apache-2.0 AND Apache-2.0 | 1 |
+| MIT OR BSD-3-Clause | 1 |
 | MPL-2.0 | 1 |
 | MPL-2.0 OR Apache-2.0 | 1 |
-| BSD-2-Clause | 1 |
-| BSD-3-Clause | 1 |
-| CC0-1.0 | 1 |
+| Unlicense | 1 |
+<!-- END GENERATED:summary -->
 
 All dependencies use OSI-approved or public-domain-equivalent licenses compatible
 with commercial and open-source distribution.

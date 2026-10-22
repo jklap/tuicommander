@@ -53,6 +53,7 @@ fn extra_bin_dirs() -> &'static [String] {
                 std::env::var("LOCALAPPDATA").unwrap_or_else(|_| format!("{home}\\AppData\\Local"));
             dirs.extend([
                 format!("{home}\\.cargo\\bin"),
+                format!("{program_files}\\Git\\cmd"),
                 format!("{local_app_data}\\Programs\\Microsoft VS Code\\bin"),
                 format!("{local_app_data}\\Programs\\cursor\\resources\\app\\bin"),
                 format!("{program_files}\\Microsoft VS Code\\bin"),

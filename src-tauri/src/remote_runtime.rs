@@ -135,6 +135,8 @@ pub(crate) struct RemoteConnectionStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) retry_after_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<String>,
 }
 
@@ -153,6 +155,7 @@ struct Entry {
     update_notice: Option<String>,
     update_in_progress: Option<u64>,
     error: Option<String>,
+    retry_after_secs: Option<u64>,
     tunnel_id: Option<String>,
     /// The task that owns this connection's whole lifecycle: bring it up, keep
     /// it up, retry while it is down. Its presence IS the desired state — there
@@ -184,7 +187,7 @@ impl Entry {
         };
         RemoteConnectionStatus {
             id: id.to_string(),
-            status,
+            status: status.clone(),
             base_url: connected.then(|| self.base_url.clone()).flatten(),
             token: connected.then(|| self.token.clone()).flatten(),
             protocol_version: connected.then_some(self.protocol_version).flatten(),
@@ -193,7 +196,12 @@ impl Entry {
             live_sessions: connected.then_some(self.live_sessions).flatten(),
             update_notice: connected.then(|| self.update_notice.clone()).flatten(),
             update_in_progress: (connected && self.update_in_progress.is_some()).then_some(true),
-            error: self.error.clone(),
+            error: matches!(status, RemoteStatus::Error | RemoteStatus::Unauthenticated)
+                .then(|| self.error.clone())
+                .flatten(),
+            retry_after_secs: matches!(status, RemoteStatus::Error | RemoteStatus::Disconnected)
+                .then_some(self.retry_after_secs)
+                .flatten(),
             step,
         }
     }
@@ -265,6 +273,13 @@ impl RemoteRuntime {
             .iter()
             .map(|e| e.value().snapshot(e.key()))
             .collect()
+    }
+
+    /// Saved records, pending tunnels and unauthenticated probes do not count.
+    pub(crate) fn has_connected_server(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.status == Some(RemoteStatus::Connected))
     }
 
     /// Base URL for a connected connection, or `None`. The routing answer.
@@ -414,6 +429,13 @@ fn update<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
     };
     if before.as_ref() == Some(&after) {
         return;
+    }
+    if before
+        .as_ref()
+        .is_some_and(|s| s.status == RemoteStatus::Connected)
+        != (after.status == RemoteStatus::Connected)
+    {
+        let _ = state.mcp.tools_changed.send(());
     }
     publish(state, &after);
 }
@@ -616,6 +638,17 @@ fn publish(state: &Arc<AppState>, status: &RemoteConnectionStatus) {
     let _ = payload;
 }
 
+/// Reannounce this connected owner's stream epoch so consumers discard missed hints.
+/// Take the snapshot before publishing; no runtime map guard crosses the emit.
+pub(crate) fn resync_connected(state: &Arc<AppState>, id: &str) {
+    let status = state.remote.entries.get(id).map(|entry| entry.snapshot(id));
+    if let Some(status) = status
+        && status.status == RemoteStatus::Connected
+    {
+        publish(state, &status);
+    }
+}
+
 /// What the daemon says when the credential is wrong, in the one place both
 /// callers read it from.
 const REJECTED_CREDENTIALS: &str =
@@ -656,26 +689,140 @@ pub(crate) struct Health {
     pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
 }
 
+/// Inspect the complete cause chain without exposing URLs or credentials.
+fn request_failure_kinds(error: &reqwest::Error) -> (bool, bool, bool) {
+    use std::error::Error;
+    {
+        let mut cause: Option<&(dyn Error + 'static)> = Some(error);
+        let mut dns = false;
+        let mut refused = false;
+        let mut tls = false;
+        while let Some(source) = cause {
+            let text = source.to_string().to_ascii_lowercase();
+            dns |= [
+                "dns error",
+                "failed to lookup address",
+                "name or service not known",
+                "nodename nor servname",
+                "no such host",
+                "name resolution",
+            ]
+            .iter()
+            .any(|needle| text.contains(needle));
+            if let Some(io) = source.downcast_ref::<std::io::Error>() {
+                refused |= io.kind() == std::io::ErrorKind::ConnectionRefused;
+                // io::Error::source skips its wrapped error and returns that
+                // error's source, so inspect the payload before continuing.
+                tls |= io
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<rustls::Error>());
+            }
+            tls |= source.downcast_ref::<rustls::Error>().is_some()
+                || text.contains("certificate")
+                || text.contains("tls handshake");
+            // hyper-rustls nests io::Error around tokio-rustls's io::Error.
+            // Follow each payload: source() alone can skip the TLS error.
+            cause = source
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .map(|inner| inner as &(dyn Error + 'static))
+                .or_else(|| source.source());
+        }
+        (dns, refused, tls)
+    }
+}
+
+/// reqwest's outer message hides the resolver, TCP and TLS cause.
+async fn request_error(error: reqwest::Error, base_url: &str) -> String {
+    let host = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "remote host".into());
+    let (dns, refused, tls) = request_failure_kinds(&error);
+    let message = if error.is_timeout() {
+        format!("Connection to {host} timed out")
+    } else if dns {
+        let advice = if !host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
+            "use the full host name or the IP"
+        } else {
+            "check the host name or use the IP"
+        };
+        format!("Cannot resolve {host} — {advice}")
+    } else if refused {
+        format!("Connection refused by {host} — check the daemon and port")
+    } else if tls {
+        format!("TLS connection to {host} failed — check the certificate and HTTPS settings")
+    } else {
+        format!("Cannot connect to {host} — check the address and network")
+    };
+    // Never include source strings: they can carry a URL with a token/password.
+    format!("Unreachable: {message}")
+}
+
+async fn response_error(mut response: reqwest::Response, base_url: &str) -> String {
+    let host = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "remote host".into());
+    let status = response.status();
+    if status == reqwest::StatusCode::FORBIDDEN {
+        let mut prefix = Vec::with_capacity(1024);
+        while prefix.len() < 1024 {
+            let Ok(Some(bytes)) = response.chunk().await else {
+                break;
+            };
+            prefix.extend_from_slice(&bytes[..bytes.len().min(1024 - prefix.len())]);
+        }
+        let text = String::from_utf8_lossy(&prefix);
+        if text.to_ascii_lowercase().contains("untrusted host") {
+            return format!(
+                "{host} rejected this name (HTTP 403 Untrusted Host) — use a name trusted by the daemon"
+            );
+        }
+        return format!("Access denied by {host} (HTTP 403) — check permissions");
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return format!("Authentication required by {host} (HTTP 401) — check the password");
+    }
+    format!("Request to {host} failed: {status}")
+}
+
 /// Read `/health` — the one route served without a credential — to learn the
 /// protocol version and prove the daemon is reachable at all.
 pub(crate) async fn read_health(
     client: &reqwest::Client,
     base_url: &str,
 ) -> Result<Health, String> {
-    let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let response = client
-        .get(&url)
+    let response = health_response(client, base_url).await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => return Err(request_error(error, base_url).await),
+    };
+    parse_health_response(response, base_url).await
+}
+
+async fn health_response(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(format!("{}/health", base_url.trim_end_matches('/')))
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("Unreachable: {e}"))?;
+}
+
+async fn parse_health_response(
+    response: reqwest::Response,
+    base_url: &str,
+) -> Result<Health, String> {
     if !response.status().is_success() {
-        return Err(format!("Health check failed: {}", response.status()));
+        return Err(response_error(response, base_url).await);
     }
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Malformed health response: {e}"))?;
+        .map_err(|e| format!("Malformed health response: {}", e.without_url()))?;
     Ok(Health {
         protocol_version: body
             .get("protocol_version")
@@ -692,6 +839,45 @@ pub(crate) async fn read_health(
             .get("build")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
     })
+}
+
+async fn read_direct_health_with_lookup<F, Fut>(
+    client: &reqwest::Client,
+    base_url: &str,
+    lookup: F,
+) -> Result<(String, Health), String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    let mut effective = base_url.to_owned();
+    let response = match health_response(client, base_url).await {
+        Ok(response) => response,
+        Err(error) => {
+            let mut url =
+                reqwest::Url::parse(base_url).map_err(|_| "Invalid remote URL".to_owned())?;
+            let short_host = url
+                .host_str()
+                .filter(|host| !host.contains('.') && host.parse::<std::net::IpAddr>().is_err());
+            if !error.is_timeout()
+                && request_failure_kinds(&error).0
+                && let Some(host) = short_host
+                && let Some(fqdn) = lookup(host.to_owned()).await
+            {
+                url.set_host(Some(&fqdn))
+                    .map_err(|_| "Invalid advertised peer name".to_owned())?;
+                effective = url.to_string().trim_end_matches('/').to_owned();
+                match health_response(client, &effective).await {
+                    Ok(response) => response,
+                    Err(error) => return Err(request_error(error, &effective).await),
+                }
+            } else {
+                return Err(request_error(error, base_url).await);
+            }
+        }
+    };
+    let health = parse_health_response(response, &effective).await?;
+    Ok((effective, health))
 }
 
 /// Outcome of a probe against a route that requires the credential.
@@ -711,13 +897,16 @@ async fn probe_authenticated(
     let url = format!("{}/api/version", base_url.trim_end_matches('/'));
     let mut request = client.get(&url).timeout(PROBE_TIMEOUT);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
     match request.send().await {
         Ok(response) if response.status().is_success() => Probe::Ok,
         Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => Probe::Rejected,
-        Ok(response) => Probe::Failed(format!("Status check failed: {}", response.status())),
-        Err(e) => Probe::Failed(format!("Unreachable: {e}")),
+        Ok(response) => Probe::Failed(response_error(response, base_url).await),
+        Err(e) => Probe::Failed(request_error(e, base_url).await),
     }
 }
 
@@ -947,6 +1136,7 @@ fn claim_and_supervise(
         } else {
             entry.status = Some(RemoteStatus::Connecting);
             entry.error = None;
+            entry.retry_after_secs = None;
             Some(entry.snapshot(id))
         }
     };
@@ -966,7 +1156,7 @@ async fn handshake(
 ) -> Result<Option<String>, ConnectFailure> {
     let client = state.remote.http_client();
 
-    let base_url = resolve_base_url(state, connection)
+    let mut base_url = resolve_base_url(state, connection)
         .await
         .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
@@ -982,6 +1172,19 @@ async fn handshake(
                     ))
                 })?,
         )
+    } else if matches!(connection.transport, RemoteTransport::Direct { .. }) {
+        match read_direct_health_with_lookup(&client, &base_url, |host| async move {
+            crate::tailscale::peer_fqdn(&host).await
+        })
+        .await
+        {
+            Ok((effective, health)) => {
+                base_url = effective;
+                update(state, id, |entry| entry.base_url = Some(base_url.clone()));
+                Ok(health)
+            }
+            Err(error) => Err(error),
+        }
     } else {
         read_health(&client, &base_url).await
     };
@@ -1076,17 +1279,8 @@ async fn deploy_and_wait(
     else {
         unreachable!("ssh_profile only returns Some for SSH transports")
     };
-    let token = match crate::remote_connection::pairing_token(&connection.id)
-        .map_err(ConnectFailure::error)?
-    {
-        Some(token) => token,
-        None => {
-            let token = uuid::Uuid::new_v4().to_string();
-            crate::remote_connection::set_pairing_token(&connection.id, &token)
-                .map_err(ConnectFailure::error)?;
-            token
-        }
-    };
+    let token = crate::remote_connection::ensure_pairing_token(state, &connection.id)
+        .map_err(ConnectFailure::error)?;
 
     update(state, id, |entry| {
         entry.status = Some(RemoteStatus::Deploying {
@@ -1257,6 +1451,11 @@ async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), S
 /// configured, and the reason `disconnect` on an unknown id used to conjure one
 /// and announce it.
 pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
+    retire_runtime(state, id);
+}
+
+/// Return the retirement generation so a credential reconnect cannot undo a later disconnect.
+fn retire_runtime(state: &Arc<AppState>, id: &str) -> (u64, bool) {
     // The bump and the removal are one critical section, under the same mutex
     // `claim_and_supervise` holds across its generation read and its insert.
     // Separately they interleave: a supervisor that read its generation before
@@ -1267,17 +1466,40 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
     // with no entry in the map yet, and retiring its generation is the only
     // thing that stops it. Bumping only when an entry exists would miss exactly
     // the task that is about to create one.
-    let removed = {
+    let (generation, removed) = {
         let _lifecycle = state.remote.lifecycle();
         state.remote.retire_generation(id);
-        state.remote.entries.remove(id)
+        (state.remote.generation(id), state.remote.entries.remove(id))
     };
     // Outside the lock: nothing in `dispose` decides whether an entry exists,
     // and it aborts tasks, stops a tunnel and publishes.
     let Some((_, entry)) = removed else {
-        return;
+        return (generation, false);
     };
     dispose(state, id, entry);
+    (generation, true)
+}
+
+/// Retire only the credential's runtime. Reconnect an active connection through
+/// the normal claimed attempt; a disconnected connection stays disconnected.
+/// Claim synchronously so a later Disconnect can retire the queued attempt.
+pub(crate) fn credentials_changed(state: &Arc<AppState>, id: &str) {
+    let (generation, active) = retire_runtime(state, id);
+    if !active {
+        return;
+    }
+    let Ok(connection) = load_connection(state, id) else {
+        return;
+    };
+    let Some(connecting) = claim_and_supervise(state, id, generation) else {
+        return;
+    };
+    let state = state.clone();
+    let id = id.to_owned();
+    tokio::spawn(async move {
+        // The attempt publishes its own safe status/error and obeys generation retirement.
+        let _ = attempt(&state, &id, connection, connecting, generation).await;
+    });
 }
 
 /// Delete-specific teardown: clear local runtime state immediately, then make
@@ -1285,22 +1507,30 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
 /// connection owns. Disconnect deliberately does not do this — it is allowed
 /// to leave the daemon alive for a cheap reconnect within `survive_secs`.
 pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
-    stop_deleted_ephemeral(state, id);
+    match RemoteConnectionStore::load(&state.data_dir) {
+        Ok(connections) => {
+            if let Some(connection) = connections.iter().find(|connection| connection.id == id) {
+                teardown_deleted_record(state, connection);
+                return;
+            }
+        }
+        Err(error) => {
+            tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup")
+        }
+    }
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
 }
 
-fn stop_deleted_ephemeral(state: &Arc<AppState>, id: &str) {
-    let connection = match RemoteConnectionStore::load(&state.data_dir) {
-        Ok(connections) => connections
-            .into_iter()
-            .find(|connection| connection.id == id),
-        Err(error) => {
-            tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup");
-            None
-        }
-    };
-    let Some(profile) = connection.as_ref().and_then(delete_stop_profile) else {
+/// Settings removal retains this record across persistence instead of rereading a deleted row.
+pub(crate) fn teardown_deleted_record(state: &Arc<AppState>, connection: &RemoteConnection) {
+    stop_deleted_ephemeral(connection);
+    teardown(state, &connection.id);
+    state.remote.attempted_updates.remove(&connection.id);
+}
+
+fn stop_deleted_ephemeral(connection: &RemoteConnection) {
+    let Some(profile) = delete_stop_profile(connection) else {
         return;
     };
     tokio::spawn(async move {
@@ -1336,6 +1566,9 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     crate::remote_mirror::drop_connection(state, id);
     if let Some(tunnel_id) = entry.tunnel_id.take() {
         state.tunnel_manager.stop_if_running(&tunnel_id);
+    }
+    if entry.status == Some(RemoteStatus::Connected) {
+        let _ = state.mcp.tools_changed.send(());
     }
     // The entry is gone, so there is nothing left for `update` to diff against:
     // the departure is announced by hand, and only when the connection was not
@@ -1474,8 +1707,21 @@ fn spawn_supervisor(state: &Arc<AppState>, id: String) {
                 // state `autoconnect_all` spawns into.
                 _ => {
                     let _ = connect_inner(&task_state, &task_id, generation).await;
-                    if task_state.remote.status_of(&task_id) != RemoteStatus::Connected {
-                        tokio::time::sleep(jittered(backoff)).await;
+                    if matches!(
+                        task_state.remote.status_of(&task_id),
+                        RemoteStatus::Error | RemoteStatus::Disconnected
+                    ) {
+                        let delay = jittered(backoff);
+                        {
+                            let _lifecycle = task_state.remote.lifecycle();
+                            if task_state.remote.generation(&task_id) != generation {
+                                return;
+                            }
+                            update(&task_state, &task_id, |entry| {
+                                entry.retry_after_secs = Some(delay.as_secs_f64().ceil() as u64);
+                            });
+                        }
+                        tokio::time::sleep(delay).await;
                         backoff = next_backoff(backoff);
                     }
                 }
@@ -1521,6 +1767,7 @@ pub(crate) fn autoconnect_all(state: &Arc<AppState>) {
 /// heartbeat and the mirror is a long-lived stream, so one failing must not take
 /// the other down.
 fn spawn_mirror(state: &Arc<AppState>, id: String) {
+    crate::mcp_http::remote_peer::connect_configured(state, id.clone());
     let previous = {
         let mut entry = state.remote.entries.entry(id.clone()).or_default();
         entry.mirror.take()
@@ -1566,26 +1813,24 @@ async fn poll_once(state: &Arc<AppState>, id: &str) {
             let refresh = state.remote.entries.get(id).is_some_and(|entry| {
                 entry.status == Some(RemoteStatus::Connected) && entry.out_of_date == Some(true)
             });
-            if refresh {
-                if let Ok(health) = read_health(&state.remote.http_client(), &base_url).await {
-                    let sessions = health.session_count;
-                    let retry = state.remote.entries.get(id).is_some_and(|entry| {
-                        entry.status == Some(RemoteStatus::Connected)
-                            && entry.update_in_progress.is_none()
-                            && sessions == Some(0)
-                            && (entry.live_sessions != Some(0)
-                                || entry.update_notice.as_deref().is_some_and(|notice| {
-                                    notice.starts_with(
-                                        "Remote update failed: Live session count changed",
-                                    )
-                                }))
-                    });
-                    update_connected(state, id, |entry| entry.live_sessions = sessions);
-                    if retry
-                        && load_connection(state, id).is_ok_and(|connection| connection.auto_update)
-                    {
-                        spawn_build_comparison(state, id);
-                    }
+            if refresh && let Ok(health) = read_health(&state.remote.http_client(), &base_url).await
+            {
+                let sessions = health.session_count;
+                let retry = state.remote.entries.get(id).is_some_and(|entry| {
+                    entry.status == Some(RemoteStatus::Connected)
+                        && entry.update_in_progress.is_none()
+                        && sessions == Some(0)
+                        && (entry.live_sessions != Some(0)
+                            || entry.update_notice.as_deref().is_some_and(|notice| {
+                                notice
+                                    .starts_with("Remote update failed: Live session count changed")
+                            }))
+                });
+                update_connected(state, id, |entry| entry.live_sessions = sessions);
+                if retry
+                    && load_connection(state, id).is_ok_and(|connection| connection.auto_update)
+                {
+                    spawn_build_comparison(state, id);
                 }
             }
         }
@@ -1669,6 +1914,85 @@ mod tests {
     use axum::http::StatusCode;
     use std::future::Future;
 
+    // Catches: connection transitions change discovery without invalidating clients.
+    #[test]
+    fn conditional_remote_connected_set_changes_notify_tools() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut notices = state.mcp.tools_changed.subscribe();
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connecting)
+        });
+        assert!(notices.try_recv().is_err());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| entry.live_sessions = Some(4));
+        assert!(notices.try_recv().is_err());
+        update(&state, "two", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Unauthenticated)
+        });
+        assert!(notices.try_recv().is_ok());
+        assert!(state.remote.has_connected_server());
+        teardown(&state, "two");
+        assert!(notices.try_recv().is_ok());
+        assert!(!state.remote.has_connected_server());
+    }
+
+    // Catches: a queued credential reconnect undoing a later explicit Disconnect.
+    #[tokio::test]
+    async fn credential_reconnect_cannot_revive_retired_generation() {
+        let state = test_state();
+        state.remote.force_connected_for_test(
+            "fixture",
+            "http://not-contacted.invalid",
+            Some("old"),
+        );
+        let (generation, active) = retire_runtime(&state, "fixture");
+        assert!(active);
+        teardown(&state, "fixture");
+        assert!(claim_and_supervise(&state, "fixture", generation).is_none());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
+    }
+
+    // Catches: a chunk boundary inside the daemon's "Untrusted Host" response
+    // misdirects the user to permissions instead of the rejected host name.
+    #[tokio::test]
+    async fn health_untrusted_host_split_across_chunks_still_explains_the_rejected_name() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            // Same body as request_boundary::check, with valid HTTP
+            // chunking that an intermediary may use independently of the text.
+            socket
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n9\r\nUntrusted\r\n5\r\n Host\r\n0\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let error = read_health(&test_client(), &format!("http://{address}"))
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.contains("rejected this name"),
+            "chunked Untrusted Host response lost its cause: {error}"
+        );
+    }
+
     /// A client for the probe tests, which have no `AppState` to borrow one
     /// from. The same builder the runtime uses, so a test cannot pass against a
     /// client shaped differently from the real one.
@@ -1702,7 +2026,10 @@ mod tests {
         let runtime = RemoteRuntime::default();
         assert_eq!(runtime.status_of("nope"), RemoteStatus::Disconnected);
         assert!(runtime.base_url("nope").is_none());
-        assert!(runtime.snapshot().is_empty());
+        assert_eq!(
+            runtime.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
     }
 
     #[test]
@@ -2352,10 +2679,8 @@ mod tests {
             .await;
         let upload = server
             .mock("POST", "/remote/update")
-            .match_query(mockito::Matcher::UrlEncoded(
-                "token".into(),
-                "test-token".into(),
-            ))
+            .match_header("cookie", "tui-session=test-token")
+            .match_query(mockito::Matcher::Missing)
             .with_status(409)
             .with_body("old daemon still serving")
             .expect(1)
@@ -2537,7 +2862,10 @@ mod tests {
 
         state.remote.entries.remove("machine");
         record_updated_build(&state, "machine", build);
-        assert!(state.remote.snapshot().is_empty());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
     }
 
     #[test]
@@ -2571,6 +2899,7 @@ mod tests {
             update_notice: None,
             update_in_progress: None,
             error: None,
+            retry_after_secs: None,
             step: Some("asset".into()),
         });
 
@@ -2634,6 +2963,256 @@ mod tests {
         assert!(!json.contains("base_url"), "base_url leaked into {json}");
     }
 
+    // Catches: a DNS-failed short Direct host stays unreachable despite a known peer.
+    #[tokio::test]
+    async fn direct_dns_failure_retries_unique_tailscale_peer() {
+        let mut server = mockito::Server::new_async().await;
+        let health = server
+            .mock("GET", "/prefix/health")
+            .with_status(200)
+            .with_body(r#"{"protocol_version":1}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        // The recorded peer may exist on the host's real Tailscale network.
+        // Fail its short-name lookup locally; only the advertised FQDN resolves.
+        #[derive(Debug)]
+        struct ShortNameDnsFailure;
+        impl reqwest::dns::Resolve for ShortNameDnsFailure {
+            fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                assert_eq!(name.as_str(), "mac-mint");
+                Box::pin(async {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "test short-name DNS failure",
+                    )
+                    .into())
+                })
+            }
+        }
+        let address: std::net::SocketAddr = server.host_with_port().parse().unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(ShortNameDnsFailure))
+            .resolve("mac-mint.tail911da.ts.net", address)
+            .build()
+            .unwrap();
+        let original = format!("http://mac-mint:{}/prefix", address.port());
+        let (effective, result) =
+            read_direct_health_with_lookup(&client, &original, |host| async move {
+                assert_eq!(host, "mac-mint");
+                crate::tailscale::peer_fqdn_from_status(
+                    include_bytes!("fixtures/tailscale/short-name-peer.json"),
+                    &host,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            effective,
+            format!("http://mac-mint.tail911da.ts.net:{}/prefix", address.port())
+        );
+        assert_eq!(result.protocol_version, Some(1));
+        health.assert_async().await;
+    }
+
+    // Catches: fallback rewrites working names or retries an auth failure.
+    #[tokio::test]
+    async fn direct_recovery_never_looks_up_working_hosts_or_http_failures() {
+        let mut server = mockito::Server::new_async().await;
+        for status in [200, 401, 403] {
+            let probe = server
+                .mock("GET", "/health")
+                .with_status(status)
+                .with_body(r#"{"protocol_version":1}"#)
+                .expect(1)
+                .create_async()
+                .await;
+            let result = read_direct_health_with_lookup(&test_client(), &server.url(), |_| async {
+                panic!("reachable host must not trigger Tailscale lookup")
+            })
+            .await;
+            assert_eq!(result.is_ok(), status == 200);
+            probe.assert_async().await;
+        }
+    }
+
+    // Catches: DNS fallback loops or retries dotted names and TCP failures.
+    #[tokio::test]
+    async fn direct_recovery_excludes_fqdns_and_refusals_and_bounds_missing_peers() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = read_direct_health_with_lookup(
+            &client,
+            "http://no-such-host.invalid:9877",
+            |_| async { panic!("FQDN must not trigger Tailscale lookup") },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve no-such-host.invalid"),
+            "{error}"
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("short-peer", address)
+            .build()
+            .unwrap();
+        let error = read_direct_health_with_lookup(
+            &client,
+            &format!("http://short-peer:{}", address.port()),
+            |_| async { panic!("refused connection must not trigger Tailscale lookup") },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Connection refused"), "{error}");
+        let error = read_direct_health_with_lookup(
+            &test_client(),
+            "http://unknown-short-peer:9877",
+            |_| async { None },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve unknown-short-peer"),
+            "{error}"
+        );
+        let error = read_direct_health_with_lookup(
+            &test_client(),
+            "http://unknown-short-peer:9877",
+            |_| async { Some("no-such-host.invalid".to_owned()) },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve no-such-host.invalid"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn health_connection_refused_names_the_host_and_cause() {
+        // Catches: reqwest's top-level "error sending request" hiding TCP refusal.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let error = read_health(&test_client(), &base).await.unwrap_err();
+        assert!(error.contains("Connection refused by 127.0.0.1"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn dns_failure_names_the_host_instead_of_outer_reqwest_error() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = read_health(&client, "http://no-such-host.invalid:9877")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("Cannot resolve no-such-host.invalid"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_and_tls_failures_are_not_generic_network_errors() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = client
+            .get(&base)
+            .timeout(Duration::from_millis(50))
+            .send()
+            .await
+            .unwrap_err();
+        let message = request_error(error, &base).await;
+        assert!(
+            message.contains("Connection to 127.0.0.1 timed out"),
+            "{message}"
+        );
+        let server = mockito::Server::new_async().await;
+        let https = server.url().replacen("http:", "https:", 1);
+        let error = client
+            .get(&https)
+            .timeout(PROBE_TIMEOUT)
+            .send()
+            .await
+            .unwrap_err();
+        let details = format!("{error:?}");
+        let message = request_error(error, &https).await;
+        assert!(
+            message.contains("TLS connection to 127.0.0.1 failed"),
+            "{message}: {details}"
+        );
+    }
+
+    #[tokio::test]
+    async fn forbidden_host_and_auth_failures_are_not_misreported_as_unreachable() {
+        for (status, body, expected) in [
+            (
+                403,
+                "Untrusted Host",
+                "rejected this name (HTTP 403 Untrusted Host)",
+            ),
+            (403, "Forbidden", "Access denied by 127.0.0.1 (HTTP 403)"),
+            (
+                401,
+                "Unauthorized",
+                "Authentication required by 127.0.0.1 (HTTP 401)",
+            ),
+        ] {
+            let mut server = mockito::Server::new_async().await;
+            let _health = server
+                .mock("GET", "/health")
+                .with_status(status)
+                .with_body(body)
+                .create_async()
+                .await;
+            let error = read_health(&test_client(), &server.url())
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            let _version = server
+                .mock("GET", "/api/version")
+                .with_status(status)
+                .with_body(body)
+                .create_async()
+                .await;
+            match probe_authenticated(&test_client(), &server.url(), None).await {
+                Probe::Rejected if status == 401 => {}
+                Probe::Failed(message) if status == 403 => {
+                    assert!(message.contains(expected), "{message}")
+                }
+                other => panic!("unexpected probe: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn active_attempt_snapshots_never_mix_old_failure_or_retry_with_progress() {
+        let mut entry = Entry {
+            error: Some("Unreachable: old error".into()),
+            retry_after_secs: Some(3),
+            ..Entry::default()
+        };
+        for status in [
+            RemoteStatus::Connecting,
+            RemoteStatus::Deploying {
+                step: "asset".into(),
+            },
+            RemoteStatus::Connected,
+        ] {
+            entry.status = Some(status);
+            let snapshot = entry.snapshot("id");
+            assert_eq!(snapshot.error, None);
+            assert_eq!(snapshot.retry_after_secs, None);
+        }
+        entry.status = Some(RemoteStatus::Error);
+        let payload = remote_connection_status_payload(&entry.snapshot("id"));
+        assert_eq!(payload["error"], "Unreachable: old error");
+        assert_eq!(payload["retry_after_secs"], 3);
+    }
+
     #[tokio::test]
     async fn health_reports_the_protocol_version() {
         let mut server = mockito::Server::new_async().await;
@@ -2691,15 +3270,66 @@ mod tests {
         assert!(error.contains("503"), "{error}");
     }
 
+    // Catches: reqwest query-token URLs leaking into logs, UI errors, and SSE status pushes.
     #[tokio::test]
-    async fn the_probe_carries_the_token_in_the_query_string() {
-        // Not a header: the same credential has to work for a WebSocket upgrade,
-        // which cannot set one. If this ever moves to a header, the terminal
-        // stream breaks and nothing else does — a split that is hard to see.
+    async fn closed_port_probe_redacts_token_before_logs_and_status_publication() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        drop(listener);
+        let secret = "PAIRING_SECRET_1457";
+        let Probe::Failed(error) = probe_authenticated(&test_client(), &base, Some(secret)).await
+        else {
+            panic!("closed port must fail");
+        };
+        assert!(error.contains("Unreachable"), "{error}");
+        assert!(!error.contains(secret), "credential in error: {error}");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut bus = state.event_bus.subscribe();
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("log dir");
+        let file = std::fs::File::create(dir.path().join("log")).expect("log file");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            set_error(&state, "closed-port", RemoteStatus::Error, error);
+        }
+        let log = std::fs::read_to_string(dir.path().join("log")).expect("read log");
+        assert!(
+            log.contains("Remote connection failed"),
+            "missing log: {log}"
+        );
+        assert!(!log.contains(secret), "credential in log: {log}");
+        let snapshot = serde_json::to_string(&state.remote.snapshot()).expect("snapshot");
+        assert!(snapshot.contains("Unreachable"));
+        assert!(
+            !snapshot.contains(secret),
+            "credential in UI status: {snapshot}"
+        );
+        let crate::state::AppEvent::RemoteConnectionStatusChanged { payload } =
+            bus.try_recv().expect("status event")
+        else {
+            panic!("expected status event");
+        };
+        let published = payload.to_string();
+        assert!(published.contains("Unreachable"));
+        assert!(
+            !published.contains(secret),
+            "credential in event: {published}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_probe_carries_the_token_in_a_cookie_header() {
+        // Native HTTP uses the daemon's existing session cookie; only browser
+        // WebSocket upgrades need query-token authentication.
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "t ok".into()))
+            .match_header("cookie", "tui-session=t ok")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body("{}")
             .create_async()
@@ -2964,7 +3594,10 @@ mod tests {
         // no task, no socket, no timer — and this is the regression that says
         // so, because "it is lazy" is invisible in a profile until it is not.
         let state = test_state();
-        assert!(state.remote.snapshot().is_empty());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
         assert!(state.remote.base_url("anything").is_none());
         assert!(state.remote.token("anything").is_none());
         assert_eq!(
@@ -3137,7 +3770,8 @@ mod tests {
             .await;
         let probe = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-1".into()))
+            .match_header("cookie", "tui-session=tok-1")
+            .match_query(mockito::Matcher::Missing)
             .with_body("{}")
             .create_async()
             .await;
@@ -3322,6 +3956,47 @@ mod tests {
         let mut direct = RemoteConnection::new_direct("lan", "http://host:9877", "boss");
         direct.deploy = DeployMode::OnConnect;
         assert!(delete_stop_profile(&direct).is_none());
+    }
+
+    // Catches: a retained deleted record no longer selecting the stop command's SSH authority.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removed_record_stops_ephemeral_daemon_after_disk_removal() {
+        let state = test_state();
+        let mut connection = RemoteConnection::new_ssh("ephemeral", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        RemoteConnectionStore::save(&state.data_dir, std::slice::from_ref(&connection)).unwrap();
+        crate::remote_connection::remove_remote_connection(&state.data_dir, &connection.id)
+            .unwrap();
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let cache = dir.path().join(".cache/tuic");
+        std::fs::create_dir_all(&cache).unwrap();
+        let mut daemon = tokio::process::Command::new("sh")
+            .args(["-c", "exec sleep 120"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        std::fs::write(
+            cache.join("tuic-remote.pid"),
+            daemon.id().unwrap().to_string(),
+        )
+        .unwrap();
+        let script = format!(
+            "export HOME={}\nfor arg do command=\"$arg\"; done\nexec sh -c \"$command\"",
+            dir.path().display()
+        );
+        let ssh = crate::test_support::fake_ssh_script("removed_record_stop", &script, "exit /b 0");
+        let profile =
+            delete_stop_profile(&connection).expect("retained record owns ephemeral SSH authority");
+        crate::remote_deploy::stop_ephemeral_with_binary(&profile, &ssh)
+            .await
+            .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(15), daemon.wait())
+            .await
+            .expect("the owned daemon must exit after its stop command")
+            .unwrap();
+        assert!(!status.success());
+        assert!(!cache.join("tuic-remote.pid").exists());
     }
 
     #[test]
@@ -3652,13 +4327,15 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let stale = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-1".into()))
+            .match_header("cookie", "tui-session=tok-1")
+            .match_query(mockito::Matcher::Missing)
             .with_status(401)
             .create_async()
             .await;
         let fresh = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-2".into()))
+            .match_header("cookie", "tui-session=tok-2")
+            .match_query(mockito::Matcher::Missing)
             .with_body("{}")
             .create_async()
             .await;
@@ -3711,7 +4388,7 @@ mod tests {
 
         // Dedup is on the client view: 12 identical pushes a minute would be
         // the whole cost of the poll.
-        assert!(drain_statuses(&mut events).is_empty());
+        assert_eq!(drain_statuses(&mut events), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -3753,6 +4430,7 @@ mod tests {
                 update_notice: None,
                 update_in_progress: None,
                 error: None,
+                retry_after_secs: None,
                 step: None,
             });
             assert_eq!(payload["id"], "abc");

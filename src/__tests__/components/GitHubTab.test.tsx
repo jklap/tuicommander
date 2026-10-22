@@ -9,7 +9,7 @@ const h = vi.hoisted(() => {
 	const resolutions: Record<string, unknown> = {};
 	const repos: Record<string, { path: string; displayName: string }> = {};
 	let circleCiStatus = { configured: false, source: "none" };
-	const rpc = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+	const rpc = vi.fn((cmd: string, args?: Record<string, unknown>): Promise<unknown> => {
 		switch (cmd) {
 			case "github_resolve_repos": {
 				const map: Record<string, unknown> = {};
@@ -70,16 +70,9 @@ const h = vi.hoisted(() => {
 			case "github_poll_login":
 			case "github_poll_add_account":
 				return Promise.resolve({ status: "pending" });
-			case "github_add_account": {
-				const acc: Account = {
-					id: String(args?.host),
-					host: { host: String(args?.host) },
-					login: "ent-user",
-					kind: "ghe_pat",
-				};
-				accounts.push(acc);
-				return Promise.resolve(acc);
-			}
+			case "account_secret_form":
+				return Promise.resolve({ status: "stored", names: [] });
+
 			case "github_remove_account": {
 				const idx = accounts.findIndex((a) => a.id === args?.id);
 				if (idx >= 0) accounts.splice(idx, 1);
@@ -90,7 +83,9 @@ const h = vi.hoisted(() => {
 		}
 	});
 	return {
+		events: { handlers: {} as Record<string, (payload: unknown) => void> },
 		rpc,
+		defaultRpc: rpc.getMockImplementation()!,
 		accounts,
 		resolutions,
 		repos,
@@ -103,7 +98,14 @@ const h = vi.hoisted(() => {
 	};
 });
 
-vi.mock("../../transport", () => ({ rpc: h.rpc, isTauri: () => true }));
+vi.mock("../../transport", () => ({
+	rpc: h.rpc,
+	isTauri: () => true,
+	subscribeEvents: vi.fn(async (handlers) => {
+		h.events.handlers = handlers;
+		return () => {};
+	}),
+}));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
 		get state() {
@@ -133,7 +135,8 @@ function resetState() {
 	for (const k of Object.keys(h.resolutions)) delete h.resolutions[k];
 	for (const k of Object.keys(h.repos)) delete h.repos[k];
 	h.circleCiStatus = { configured: false, source: "none" };
-	h.rpc.mockClear();
+	h.rpc.mockReset();
+	h.rpc.mockImplementation(h.defaultRpc);
 }
 
 describe("GitHubTab — single-account collapse (006)", () => {
@@ -161,6 +164,64 @@ describe("GitHubTab — single-account collapse (006)", () => {
 	});
 });
 
+describe("GitHubTab — default credential recovery", () => {
+	let GitHubTab: Awaited<ReturnType<typeof loadTab>>;
+	beforeEach(async () => {
+		resetState();
+		GitHubTab = await loadTab();
+	});
+
+	function authenticated(source: "oauth" | "env") {
+		const original = h.rpc.getMockImplementation()!;
+		let connected = true;
+		h.rpc.mockImplementation((cmd, args) => {
+			if (cmd === "github_auth_status" && connected) {
+				return Promise.resolve({
+					authenticated: true,
+					login: "octocat",
+					avatar_url: null,
+					source,
+					scopes: "read:org, repo",
+				});
+			}
+			if (cmd === "github_logout" || cmd === "github_disconnect") connected = false;
+			return original(cmd, args);
+		});
+	}
+
+	// Catches: a real authenticated OAuth response has no Logout/re-login path.
+	it("logs out the default OAuth account and offers device-flow login again", async () => {
+		authenticated("oauth");
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		fireEvent.click(await findByText("Logout"));
+		expect(await findByText("Login with GitHub")).toBeTruthy();
+		expect(queryByText("octocat")).toBeNull();
+		fireEvent.click(await findByText("Login with GitHub"));
+		expect(await findByText("WDJB-MJHT")).toBeTruthy();
+	});
+
+	// Catches: environment credentials leave no route back to device-flow login.
+	it("disconnects an environment account and offers device-flow login", async () => {
+		authenticated("env");
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		expect(await findByText("Switch to OAuth")).toBeTruthy();
+		fireEvent.click(await findByText("Disconnect"));
+		expect(await findByText("Login with GitHub")).toBeTruthy();
+		expect(queryByText("octocat")).toBeNull();
+	});
+
+	// Catches: a uniquely resolved repository opens the account binding manager.
+	it("keeps bindings hidden for a uniquely resolved default account repository", async () => {
+		authenticated("oauth");
+		h.repos["/work/proj"] = { path: "/work/proj", displayName: "proj" };
+		h.resolutions["/work/proj"] = { status: "bound", account: { id: "github.com" }, owner: "octocat", repo: "hello" };
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		await findByText("Logout");
+		expect(queryByText("Repository Bindings")).toBeNull();
+		expect(await findByText("Add another GitHub account")).toBeTruthy();
+	});
+});
+
 describe("GitHubTab — additional accounts", () => {
 	let GitHubTab: Awaited<ReturnType<typeof loadTab>>;
 	beforeEach(async () => {
@@ -183,20 +244,28 @@ describe("GitHubTab — additional accounts", () => {
 		expect(await findByText(/github\.com · OAuth/)).toBeTruthy();
 	});
 
-	it("adds an Enterprise account via github_add_account(host, pat)", async () => {
-		const { getByText, getByPlaceholderText, findByText } = render(() => <GitHubTab />);
-		// Reveal the manager first (single-account collapse).
+	// Catches: Enterprise PAT entry being exposed to the Settings webview.
+	it("launches Enterprise secret entry with metadata only", async () => {
+		const { getByText, getByPlaceholderText, queryByPlaceholderText, findByText } = render(() => <GitHubTab />);
 		fireEvent.click(await findByText("Add another GitHub account"));
 		await findByText("No additional accounts configured.");
-
+		expect(queryByPlaceholderText("Personal Access Token")).toBeNull();
 		fireEvent.input(getByPlaceholderText("ghe.example.com"), { target: { value: "ghe.acme.com" } });
-		fireEvent.input(getByPlaceholderText("Personal Access Token"), { target: { value: "ghp_secret" } });
 		fireEvent.click(getByText("Add account"));
-
 		await waitFor(() =>
-			expect(h.rpc).toHaveBeenCalledWith("github_add_account", { host: "ghe.acme.com", pat: "ghp_secret" }),
+			expect(h.rpc).toHaveBeenCalledWith("account_secret_form", {
+				request: {
+					action: "add",
+					account: {
+						provider: "github",
+						host: "ghe.acme.com",
+						kind: "bearer",
+						label: "ghe.acme.com",
+						username: null,
+					},
+				},
+			}),
 		);
-		expect(await findByText("ent-user")).toBeTruthy();
 	});
 
 	it("starts a device-flow login when adding a github.com account (003)", async () => {
@@ -285,6 +354,19 @@ describe("GitHubTab — CircleCI token", () => {
 	beforeEach(async () => {
 		resetState();
 		GitHubTab = await loadTab();
+	});
+
+	// Catches: a newly merged credential owner staying stale in the open Settings page.
+	it("refreshes CircleCI status after an external settings write without saving a token draft", async () => {
+		const { findByText, getByPlaceholderText } = render(() => <GitHubTab />);
+		await findByText("Not configured");
+		const input = getByPlaceholderText("CircleCI read-only token") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "unfinished token draft" } });
+		h.circleCiStatus = { configured: true, source: "vault" };
+		h.events.handlers["settings-changed"]({ section: "circleci", generation: 1, persisted: true, applied: true });
+		expect(await findByText("Configured (vault)")).toBeTruthy();
+		expect(input.value).toBe("unfinished token draft");
+		expect(h.rpc).not.toHaveBeenCalledWith("circleci_set_token", expect.anything());
 	});
 
 	it("shows configured status and removes a stored token explicitly", async () => {

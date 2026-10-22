@@ -137,6 +137,12 @@ generation egresses to. Model, effort and mode arrive instead as
 `session/set_config_option` options the session itself publishes, so a host
 picks from what the agent offered rather than from a list this client made up.
 
+A `config_option_update` may arrive after `session/new`, before any prompt.
+It replaces the matching attachment’s complete option set and publishes the
+connection snapshot before the update enters the journal. The frontend refreshes
+that snapshot on the update, using the same path as an explicit set-config reply.
+An empty offer clears the controls; other session attachments keep their options.
+
 The snapshot is also what makes `method_not_found` fatal. Nothing reaches the
 wire that the snapshot did not allow, so a method-not-found coming back is not
 the agent declining — it is the agent disowning what it published, and the one
@@ -219,6 +225,11 @@ deliberately does not have:
   session id) so a storm of them can be attributed. The AI Chat panel keeps one
   replay per tab in flight and does not replay a tab whose load failed until a
   person selects it or presses Retry.
+- **Configured conversation reopen preserves live output.** `acp_chat_open`
+  reports whether history was loaded using `replayed`. The client keeps the
+  existing transcript while the request is pending or refused. On a genuine
+  replay, it clears the projection before subscribing to the returned journal;
+  an already attached conversation keeps chunks received during the request.
 - **A replay starts before the load response.** Ego may send `session/update`
   chunks while `session/load` is pending. The requested session ID is already
   known, so those updates enter the ordered journal before the attachment is
@@ -264,3 +275,48 @@ non-bundled binary that replays a `tests/fixtures/acp/*.jsonl` scenario through
 the exact production launch path. `tests/fixtures/acp/ego-initialize.json` is a
 recording of what real ego answers, copied from ego's own committed golden;
 editing it to make a test pass would turn the recording into a wish.
+
+### Mid-turn text steering
+
+The shared Rust connection actor routes text-only `acp_session_prompt` submissions
+through advertised `agentCapabilities._meta.ego.steer` v1 (`_ego/steer`, text
+content). Only a running, prompting attachment with an empty FIFO qualifies. Accepted input returns
+the existing turn ID, emits no `PromptSent`, and appears through ego's
+`user_message_chunk`. Steering reserves its submission position in the existing
+FIFO until the response arrives; later submissions queue behind it and cannot drain
+past it. Accepted or uncertain outcomes consume the reservation. `not-busy` and
+`rejected` retain it for normal prompt serialization;
+attachments and absent or mismatched capabilities retain the queue. An uncertain
+transport outcome is reported without retry because acceptance may be durable.
+Only the `_ego/steer` request has a 10-second deadline (`EGO_STEER_TIMEOUT`):
+this is a durable append that ego normally acknowledges in milliseconds. A timeout
+reports that delivery is uncertain, releases the FIFO reservation through the
+existing error settlement, and never resends the text. Other ACP requests retain
+their existing behavior.
+
+## Repository profile ceiling
+
+Desktop `acp_session_new`, HTTP session creation and new conversation-specific
+chat launches call the same
+`acp_commands::session_new` core. The manager reads `.tuic.json` at the canonical
+session cwd. If it contains `ego_profile`, the request includes
+`_meta.ego.profile` and the machine Settings selection as `ceilingProfile`.
+An empty machine selection refuses creation. TUIC does not calculate policy.
+Ego resolves and restricts mode, sandbox, roots and executable paths.
+
+TUIC requires ego to acknowledge both selected names, an effective policy object
+and a string-array `warnings` result before attaching the session. This prevents
+an older ego that ignores the extension from being exposed as a bounded session.
+Attachment snapshots carry nonempty warnings as `profileWarnings` on both
+transports. AI Chat shows them once per visible conversation through its existing
+warning notice path. With no repo selection, requests and snapshots retain their
+previous shape. Unattended sessions retain their existing launch behavior.
+Load, resume, fork and compact rely on ego's durable ceiling, rather than sending
+a replacement authority from the current repository file.
+
+
+Ego settings (#1775-330c): model/provider defaults and perimeter reads/writes now
+share one captured trusted executable, configured profile and AI Chat workspace
+per operation. These owner CLI calls do not change any live ACP session. The
+internal settings adapter preserves this distinction; launch defaults stay in the
+`app` store and apply to later launches.

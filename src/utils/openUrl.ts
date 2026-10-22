@@ -1,4 +1,4 @@
-import { openPath, openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { isTauri } from "../transport";
 
@@ -19,7 +19,9 @@ export function handleOpenUrl(url: string): void {
 		return;
 	}
 	if (isTauri()) {
-		tauriOpenUrl(url).catch((err) => appLogger.error("app", "Failed to open URL", err));
+		invoke("open_default_app", { target: url, kind: "url" }).catch((err) =>
+			appLogger.error("app", "Failed to open URL", err),
+		);
 	} else {
 		window.open(url, "_blank");
 	}
@@ -40,5 +42,7 @@ export function openLocalPath(path: string): void {
 		appLogger.warn("app", `Cannot open a local path in browser mode: ${path.slice(0, 120)}`);
 		return;
 	}
-	openPath(path).catch((err) => appLogger.error("app", "Failed to open path externally", { path, error: String(err) }));
+	invoke("open_default_app", { target: path, kind: "path" }).catch((err) =>
+		appLogger.error("app", "Failed to open path externally", { path, error: String(err) }),
+	);
 }

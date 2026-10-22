@@ -1,8 +1,11 @@
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { isTauri } from "../transport";
 import { type BrowserVoiceSession, connectBrowserVoice } from "../utils/browserVoice";
+import { browserVoiceMediaSession } from "../utils/browserVoiceMediaSession";
 import { type Earcon, playEarcon, primeEarcons } from "../utils/earcon";
+import { mergeSettingsSnapshot } from "../utils/mergeSettingsSnapshot";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
 
@@ -27,8 +30,15 @@ interface DictationConfig {
 	hands_free_start_notice: string;
 	/** Play the hands-free earcons on the owning client. On by default. */
 	hands_free_earcons: boolean;
-	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
+	/** Capture speech hands-free. Off is a replies-only conversation: input stays push-to-talk. Applies to the next conversation. */
+	hands_free_listening: boolean;
+	hands_free_spoken_replies: boolean;
+	/** A user-supplied speech engine as argv, used when `speech_engine` is `external`. Edited in Expert. */
 	speech_command: string[];
+	/** Which engine speaks replies. Rust answers an unset value from what is installed, so this is never empty on read. */
+	speech_engine: SpeechEngineId;
+	/** The Edge voice (`it-IT-IsabellaNeural`). Empty means the language's default. */
+	speech_edge_voice: string;
 	/** Which of the language's voices speaks. Empty means the first one it ships. */
 	speech_voice: string;
 	/** Speech level of every reply in dBFS (-30..=-12). */
@@ -68,6 +78,17 @@ export interface SpeechAsset {
 	missing: string[];
 }
 
+/** The engines that can speak a reply. Edge is the default; the other two are Expert. */
+export type SpeechEngineId = "edge" | "pocket" | "external";
+
+/** One Microsoft Edge voice, as the service lists it. Mirrors Rust's `EdgeVoice`. */
+export interface EdgeVoice {
+	id: string;
+	locale: string;
+	gender: string;
+	label: string;
+}
+
 /** One voice a language can speak with. Mirrors Rust's `VoiceChoice`. */
 export interface SpeechVoice {
 	id: string;
@@ -88,6 +109,8 @@ export type HandsFreePhase =
 /** Live hands-free state, mirroring Rust's `HandsFreeStatus`. */
 export interface HandsFreeStatus {
 	armed: boolean;
+	/** Speech is captured. False is a replies-only conversation: input stays push-to-talk. */
+	listening: boolean;
 	phase: HandsFreePhase;
 	/** The bound terminal. Unchanged by focus for as long as it is set. */
 	sessionId: string | null;
@@ -120,7 +143,17 @@ export interface SpeechStatus {
 	rendering: boolean;
 	/** Audio is playing. */
 	speaking: boolean;
+	/** A reply is held mid-playback and `resume_speech` continues it; `speaking` is false meanwhile. */
+	paused: boolean;
 	lastError: string | null;
+}
+
+/** What the pill's playback controls show: pause + stop, play + stop, or nothing. */
+export type PlaybackState = "idle" | "speaking" | "paused";
+
+export function playbackState(speech: SpeechStatus | null): PlaybackState {
+	if (speech?.paused) return "paused";
+	return speech?.speaking ? "speaking" : "idle";
 }
 
 /**
@@ -235,6 +268,9 @@ export interface ModelInfo {
 	actual_size_mb: number;
 }
 
+/** Marker of the backend refusal when another instance owns dictation (`dictation::ownership`). */
+const OWNED_ELSEWHERE_MARKER = "owned by another TUICommander instance";
+
 /** Model status values from Rust backend */
 type ModelStatus = "not_downloaded" | "downloaded" | "ready";
 
@@ -246,6 +282,8 @@ interface DictationStatus {
 	recording: boolean;
 	processing: boolean;
 	audio_level?: number;
+	/** Another instance holds dictation for this config directory. */
+	owned_elsewhere?: boolean;
 }
 
 /** Transcription response from Rust backend */
@@ -318,6 +356,8 @@ interface DictationStoreState {
 	modelSizeMb: number;
 	recording: boolean;
 	processing: boolean;
+	/** Another TUICommander instance owns dictation; this one cannot record. */
+	ownedElsewhere: boolean;
 	loading: boolean; // Model is being loaded into memory on first use
 	downloading: boolean;
 	downloadPercent: number;
@@ -344,7 +384,19 @@ interface DictationStoreState {
 	handsFreeActivationPhrase: string;
 	/** Whether the delivered/dropped earcons play. Defaults to true, as in Rust. */
 	handsFreeEarcons: boolean;
-	/** Which voice speaks. Empty means the language's first, decided in Rust. */
+	handsFreeListening: boolean;
+	spokenReplies: boolean;
+	/** Which engine speaks replies. */
+	speechEngine: SpeechEngineId;
+	/** The external speech command as argv; empty when none is set. */
+	speechCommand: string[];
+	/** The Edge voice. Empty means the language's default, decided in Rust. */
+	speechEdgeVoice: string;
+	/** The service's voices for the language last asked for (`refreshEdgeVoices`). */
+	edgeVoices: EdgeVoice[];
+	/** Why the Edge voice list could not be read (offline, service down), or null. */
+	edgeVoicesError: string | null;
+	/** Which Pocket voice speaks. Empty means the language's first, decided in Rust. */
 	speechVoice: string;
 	/** Speech level of every reply in dBFS (-30..=-12). */
 	speechVolumeDb: number;
@@ -403,9 +455,17 @@ function createDictationStore() {
 	 * state would make every subscriber re-run when a socket opened.
 	 */
 	let browserVoice: BrowserVoiceSession | null = null;
+	let nowPlaying: ReturnType<typeof browserVoiceMediaSession> = null;
+	const stopBrowserVoice = () => {
+		nowPlaying?.stop();
+		nowPlaying = null;
+		browserVoice?.stop();
+		browserVoice = null;
+	};
 	// A language switch may start a second request before the first answers.
 	// Only the most recently requested voice list may update the picker.
 	let speechVoicesRequest = 0;
+	let edgeVoicesRequest = 0;
 
 	const [state, setState] = createStore<DictationStoreState>({
 		enabled: false,
@@ -419,6 +479,7 @@ function createDictationStore() {
 		modelSizeMb: 0,
 		recording: false,
 		processing: false,
+		ownedElsewhere: false,
 		loading: false,
 		downloading: false,
 		downloadPercent: 0,
@@ -431,6 +492,13 @@ function createDictationStore() {
 		handsFreeHoldBackMs: DEFAULT_HOLD_BACK_MS,
 		handsFreeActivationPhrase: "",
 		handsFreeEarcons: true,
+		handsFreeListening: true,
+		spokenReplies: true,
+		speechEngine: "edge",
+		speechCommand: [],
+		speechEdgeVoice: "",
+		edgeVoices: [],
+		edgeVoicesError: null,
 		speechVoice: "",
 		speechVolumeDb: DEFAULT_SPEECH_VOLUME_DB,
 		speechLevelling: DEFAULT_SPEECH_LEVELLING,
@@ -488,10 +556,16 @@ function createDictationStore() {
 						...current,
 						rendering: event.payload.state === "rendering",
 						speaking: event.payload.state === "speaking",
+						// Only a reply starting or ending settles this; a push for a
+						// queued or rendering one says nothing about a held reply.
+						paused: ["speaking", "finished", "interrupted", "failed"].includes(event.payload.state)
+							? false
+							: current.paused,
 						lastError: event.payload.error ?? current.lastError,
 					}
 				: current,
 		);
+		nowPlaying?.update(state.speech?.paused === true);
 	});
 
 	let audioLevelTimer: ReturnType<typeof setInterval> | null = null;
@@ -515,6 +589,8 @@ function createDictationStore() {
 	// stopped from `applyHandsFree`, the one place that stores the status.
 	const HANDS_FREE_STATUS_EVERY = 5;
 	let handsFreeTimer: ReturnType<typeof setInterval> | null = null;
+	// A poll started before arm/disarm must not overwrite that transition.
+	let handsFreeGeneration = 0;
 	const stopHandsFreeMonitor = () => {
 		if (handsFreeTimer) clearInterval(handsFreeTimer);
 		handsFreeTimer = null;
@@ -533,13 +609,31 @@ function createDictationStore() {
 			}
 		}, 75);
 	};
+	const speechControl = async (command: "pause_speech" | "resume_speech" | "stop_speech"): Promise<void> => {
+		try {
+			setState("speech", await invoke<SpeechStatus>(command));
+			nowPlaying?.update(state.speech?.paused === true);
+		} catch (err) {
+			appLogger.warn("dictation", `${command} refused`, err);
+			await actions.refreshSpeechStatus();
+		}
+	};
+
 	const applyHandsFree = (status: HandsFreeStatus) => {
 		const earcon = turnEarcon(state.handsFree, status, isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner);
 		if (earcon && state.handsFreeEarcons) playEarcon(earcon);
 		setState("handsFree", status);
 		if (status.armed) {
+			if (browserVoice && !nowPlaying) {
+				nowPlaying = browserVoiceMediaSession({
+					play: () => actions.resumeSpeech(),
+					pause: () => actions.pauseSpeech(),
+					stop: () => actions.disarmHandsFree(),
+				});
+			}
 			startHandsFreeMonitor();
 		} else {
+			stopBrowserVoice();
 			stopHandsFreeMonitor();
 			setState("audioLevel", 0);
 		}
@@ -550,31 +644,66 @@ function createDictationStore() {
 		setState("backendInfo", event.payload.backend);
 	});
 
+	let savedVoice: Partial<DictationStoreState> | undefined;
+	function renderConfig(config: DictationConfig): Partial<DictationStoreState> {
+		return {
+			enabled: config.enabled,
+			hotkey: config.hotkey,
+			language: config.language,
+			selectedModel: config.model ?? "large-v3-turbo",
+			selectedDevice: config.device ?? null,
+			longPressMs: config.long_press_ms ?? 400,
+			autoSend: config.auto_send ?? true,
+			notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
+			handsFreeStartNotice: config.hands_free_start_notice ?? "",
+			handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
+			handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
+			handsFreeEarcons: config.hands_free_earcons ?? true,
+			handsFreeListening: config.hands_free_listening ?? true,
+			spokenReplies: config.hands_free_spoken_replies ?? true,
+			speechEngine: config.speech_engine || "edge",
+			speechCommand: config.speech_command ?? [],
+			speechEdgeVoice: config.speech_edge_voice ?? "",
+			speechVoice: config.speech_voice ?? "",
+			speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
+			speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
+			rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
+			noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
+		};
+	}
+	function applyRemoteConfig(config: DictationConfig, preserveDirty: boolean): void {
+		const incoming = renderConfig(config);
+		const local = Object.fromEntries(
+			Object.keys(incoming).map((key) => [key, state[key as keyof DictationStoreState]]),
+		);
+		const merged = mergeSettingsSnapshot(savedVoice ?? incoming, local, incoming);
+		savedVoice = incoming;
+		setState(preserveDirty ? merged.value : incoming);
+		if (preserveDirty) reportSettingsConflicts(merged.conflicts);
+	}
+
 	const actions = {
+		startRemoteSync(): () => void {
+			const stopVoice = settingsRefresh.register({
+				section: "voice",
+				read: () => invoke<DictationConfig>("get_dictation_config"),
+				apply: (config) => applyRemoteConfig(config, true),
+			});
+			const stopCorrections = settingsRefresh.register({
+				section: "corrections",
+				read: () => invoke<Record<string, string>>("get_correction_map"),
+				apply: (map) => setState("corrections", reconcile(map)),
+			});
+			return () => {
+				stopVoice();
+				stopCorrections();
+			};
+		},
 		/** Load config from Rust backend (file-based) */
 		async refreshConfig(): Promise<void> {
-			if (!isTauri()) return;
 			try {
 				const config = await invoke<DictationConfig>("get_dictation_config");
-				setState({
-					enabled: config.enabled,
-					hotkey: config.hotkey,
-					language: config.language,
-					selectedModel: config.model ?? "large-v3-turbo",
-					selectedDevice: config.device ?? null,
-					longPressMs: config.long_press_ms ?? 400,
-					autoSend: config.auto_send ?? true,
-					notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
-					handsFreeStartNotice: config.hands_free_start_notice ?? "",
-					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
-					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
-					handsFreeEarcons: config.hands_free_earcons ?? true,
-					speechVoice: config.speech_voice ?? "",
-					speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
-					speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
-					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
-					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
-				});
+				applyRemoteConfig(config, false);
 				if (config.recovered_from_corruption) {
 					appLogger.warn("dictation", "Recovered valid dictation settings from malformed config fields");
 					toastsStore.add(
@@ -626,12 +755,19 @@ function createDictationStore() {
 				if (partial.hands_free_start_notice !== undefined)
 					storeUpdate.handsFreeStartNotice = partial.hands_free_start_notice;
 				if (partial.speech_voice !== undefined) storeUpdate.speechVoice = partial.speech_voice;
+				if (partial.speech_engine !== undefined) storeUpdate.speechEngine = partial.speech_engine;
+				if (partial.speech_command !== undefined) storeUpdate.speechCommand = partial.speech_command;
+				if (partial.speech_edge_voice !== undefined) storeUpdate.speechEdgeVoice = partial.speech_edge_voice;
 				if (partial.speech_volume_db !== undefined) storeUpdate.speechVolumeDb = partial.speech_volume_db;
 				if (partial.speech_levelling !== undefined) storeUpdate.speechLevelling = partial.speech_levelling;
+				if (partial.hands_free_listening !== undefined) storeUpdate.handsFreeListening = partial.hands_free_listening;
+				if (partial.hands_free_spoken_replies !== undefined)
+					storeUpdate.spokenReplies = partial.hands_free_spoken_replies;
 				if (partial.hands_free_earcons !== undefined) storeUpdate.handsFreeEarcons = partial.hands_free_earcons;
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
+				savedVoice = { ...savedVoice, ...storeUpdate };
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save dictation config", err);
 			}
@@ -655,6 +791,14 @@ function createDictationStore() {
 
 		setNotifyModelOnHandsFree(value: boolean): void {
 			actions.saveConfig({ hands_free_notify_model: value });
+		},
+
+		setHandsFreeListening(value: boolean): void {
+			void actions.saveConfig({ hands_free_listening: value });
+		},
+
+		setSpokenReplies(value: boolean): void {
+			void actions.saveConfig({ hands_free_spoken_replies: value });
 		},
 
 		setHandsFreeEarcons(value: boolean): void {
@@ -703,6 +847,34 @@ function createDictationStore() {
 			actions.saveConfig({ speech_voice: value });
 		},
 
+		setSpeechEngine(value: SpeechEngineId): Promise<void> {
+			return actions.saveConfig({ speech_engine: value });
+		},
+
+		setSpeechCommand(argv: string[]): Promise<void> {
+			return actions.saveConfig({ speech_command: argv });
+		},
+
+		setSpeechEdgeVoice(value: string): void {
+			actions.saveConfig({ speech_edge_voice: value });
+		},
+
+		/**
+		 * Read the service's voices for a language. A failure (offline, service
+		 * down) is kept as text for the picker to show: an empty list with no
+		 * reason would look like "this language has no voices".
+		 */
+		async refreshEdgeVoices(language: string): Promise<void> {
+			const request = ++edgeVoicesRequest;
+			try {
+				const voices = await invoke<EdgeVoice[]>("get_edge_voices", { language });
+				if (request === edgeVoicesRequest) setState({ edgeVoices: voices, edgeVoicesError: null });
+			} catch (err) {
+				appLogger.warn("dictation", `Failed to list Edge voices for ${language}`, err);
+				if (request === edgeVoicesRequest) setState({ edgeVoices: [], edgeVoicesError: String(err) });
+			}
+		},
+
 		setSpeechVolumeDb(value: number): Promise<void> {
 			return actions.saveConfig({ speech_volume_db: value });
 		},
@@ -741,6 +913,7 @@ function createDictationStore() {
 					modelSizeMb: status.model_size_mb,
 					recording: status.recording,
 					processing: status.processing,
+					ownedElsewhere: status.owned_elsewhere === true,
 					audioLevel: normalizeAudioLevel(status.audio_level),
 				});
 			} catch (err) {
@@ -752,7 +925,7 @@ function createDictationStore() {
 		async refreshCorrections(): Promise<void> {
 			try {
 				const map = await invoke<Record<string, string>>("get_correction_map");
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get correction map", err);
 			}
@@ -762,7 +935,7 @@ function createDictationStore() {
 		async saveCorrections(map: Record<string, string>): Promise<void> {
 			try {
 				await invoke("set_correction_map", { map });
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save corrections", err);
 			}
@@ -770,11 +943,16 @@ function createDictationStore() {
 
 		/** List available audio devices */
 		async refreshDevices(): Promise<void> {
-			try {
-				const devices = await invoke<AudioDevice[]>("list_audio_devices");
-				setState("devices", devices);
-			} catch (err) {
-				appLogger.error("dictation", "Failed to list audio devices", err);
+			// The first enumeration can wait on the macOS microphone prompt until the
+			// backend gives up. A failure keeps the previous list, and one more try
+			// picks up the answer that arrived late.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					setState("devices", await invoke<AudioDevice[]>("list_audio_devices"));
+					return;
+				} catch (err) {
+					appLogger.error("dictation", "Failed to list audio devices", err);
+				}
 			}
 		},
 
@@ -829,7 +1007,10 @@ function createDictationStore() {
 				startAudioLevelPolling();
 			} catch (err) {
 				const errStr = String(err);
-				if (errStr.includes("microphone_denied")) {
+				if (errStr.includes(OWNED_ELSEWHERE_MARKER)) {
+					setState("ownedElsewhere", true);
+					toastsStore.add("Dictation unavailable", errStr, "warn");
+				} else if (errStr.includes("microphone_denied")) {
 					appLogger.error(
 						"dictation",
 						"Microphone access denied. Open System Settings > Privacy > Microphone to allow access.",
@@ -998,8 +1179,10 @@ function createDictationStore() {
 		 * the speaker state below is not part of that answer.
 		 */
 		async refreshHandsFree(): Promise<void> {
+			const generation = handsFreeGeneration;
 			try {
-				applyHandsFree(await invoke<HandsFreeStatus>("get_hands_free_status"));
+				const status = await invoke<HandsFreeStatus>("get_hands_free_status");
+				if (generation === handsFreeGeneration) applyHandsFree(status);
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get hands-free status", err);
 			}
@@ -1009,10 +1192,20 @@ function createDictationStore() {
 		async refreshSpeechStatus(): Promise<void> {
 			try {
 				setState("speech", await invoke<SpeechStatus>("get_speech_status"));
+				nowPlaying?.update(state.speech?.paused === true);
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get speech status", err);
 			}
 		},
+
+		/**
+		 * Pause, resume or stop the spoken reply. The backend answers with the
+		 * speaker's new state, which is stored as is; on a refusal the state is
+		 * re-read so the pill never keeps showing a button that no longer applies.
+		 */
+		pauseSpeech: () => speechControl("pause_speech"),
+		resumeSpeech: () => speechControl("resume_speech"),
+		stopSpeech: () => speechControl("stop_speech"),
 
 		/**
 		 * Bind hands-free to a terminal and open the microphone.
@@ -1029,14 +1222,15 @@ function createDictationStore() {
 		 * through the microphone of the machine running TUICommander.
 		 */
 		async armHandsFree(sessionId: string): Promise<boolean> {
+			handsFreeGeneration += 1;
 			setState("handsFreeError", null);
 			try {
 				const owner = isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner;
 				// Inside the arming gesture, so the first earcon is not lost
 				// to a context that started suspended.
 				primeEarcons();
-				// `refreshConfig` is desktop-only, so this is where a browser
-				// tab learns whether to play them. Never a reason to refuse.
+				// Refresh earcons at each arm, including after another client saved.
+				// Never a reason to refuse capture.
 				void invoke<DictationConfig>("get_dictation_config")
 					.then((config) => {
 						if (typeof config?.hands_free_earcons === "boolean")
@@ -1044,8 +1238,8 @@ function createDictationStore() {
 					})
 					.catch(() => {});
 				if (!isTauri()) {
-					browserVoice?.stop();
-					browserVoice = await connectBrowserVoice(owner);
+					stopBrowserVoice();
+					browserVoice = await connectBrowserVoice(owner, undefined, state.handsFreeListening);
 				}
 				applyHandsFree(
 					await invoke<HandsFreeStatus>("arm_hands_free_dictation", {
@@ -1059,8 +1253,8 @@ function createDictationStore() {
 				// The socket is this tab's microphone: leaving it open after a
 				// refused arm would keep the device light on for a
 				// conversation that does not exist.
-				browserVoice?.stop();
-				browserVoice = null;
+				stopBrowserVoice();
+				if (String(err).includes(OWNED_ELSEWHERE_MARKER)) setState("ownedElsewhere", true);
 				setState("handsFreeError", String(err));
 				appLogger.error("dictation", "Failed to arm hands-free", err);
 				return false;
@@ -1073,6 +1267,7 @@ function createDictationStore() {
 		 * there; nothing else is parked anywhere to take back.
 		 */
 		async disarmHandsFree(): Promise<void> {
+			handsFreeGeneration += 1;
 			setState("handsFreeError", null);
 			try {
 				const result = await invoke<{ status: HandsFreeStatus }>("disarm_hands_free_dictation");
@@ -1084,8 +1279,7 @@ function createDictationStore() {
 			} finally {
 				// Whether or not the backend answered: the conversation is over
 				// as far as this tab is concerned, and the microphone closes.
-				browserVoice?.stop();
-				browserVoice = null;
+				stopBrowserVoice();
 			}
 		},
 

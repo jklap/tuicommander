@@ -18,7 +18,7 @@ import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
-import { designModeStore } from "../../stores/designMode";
+import { designModeBrowsers, designModeStore } from "../../stores/designMode";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -29,6 +29,7 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
@@ -38,11 +39,13 @@ import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 // Named for its first caller; it is a plain `file://` → path parser and returns
 // null for every other scheme, which is exactly the guard needed here.
 import { parseOsc7Url } from "../../utils/osc7";
+import { orderTerminalsByPaneLayout } from "../../utils/paneTabOrder";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
+import { resumeTerminal, type SuspendOutcome, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import type { ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
@@ -51,6 +54,7 @@ import { DiffTabView, EditorTabView, MarkdownTabView, TerminalTabView } from "./
 
 export interface TabBarProps {
 	quickSwitcherActive?: boolean;
+	tabHintsActive?: boolean;
 	onTabSelect: (id: string) => void;
 	onTabClose: (id: string, skipConfirm?: boolean) => void;
 	onCloseOthers: (id: string) => void;
@@ -119,6 +123,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const handleNewTabClick = () => {
 		if (newAgentMenu.consumeClick()) return;
 		props.onNewTab();
+	};
+
+	const reportOutcome = async (pending: Promise<SuspendOutcome>) => {
+		const outcome = await pending;
+		if (!outcome.ok) toastsStore.add(t("tabBar.suspendRefused", "Tab not changed"), outcome.reason, "warn");
 	};
 
 	const getTabContextMenuItems = (): ContextMenuItem[] => {
@@ -316,6 +325,16 @@ export const TabBar: Component<TabBarProps> = (props) => {
 						action: () => props.onDetachTab?.(id),
 						disabled: !hasSession || exited,
 					},
+			term?.suspended
+				? {
+						label: t("tabBar.resumeTab", "Resume Tab"),
+						action: () => void reportOutcome(resumeTerminal(id)),
+					}
+				: {
+						label: t("tabBar.suspendTab", "Suspend Tab"),
+						action: () => void reportOutcome(suspendTerminal(id)),
+						disabled: !term || suspendRefusal(term) !== null,
+					},
 		];
 		if (worktreeTargets.length > 0) {
 			items.push(
@@ -369,7 +388,17 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					label: isArmed
 						? t("tabBar.stopDesignMode", "Stop Design Mode")
 						: t("tabBar.startDesignMode", "Start Design Mode"),
-					action: () => designModeStore.toggle(sessionId),
+					action: () => {
+						if (isArmed) designModeStore.toggle(sessionId);
+					},
+					...(!isArmed
+						? {
+								children: designModeBrowsers.map((browser) => ({
+									label: browser.label,
+									action: () => designModeStore.toggle(sessionId, browser.id),
+								})),
+							}
+						: {}),
 				},
 			);
 		}
@@ -458,24 +487,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		}
 
 		// In split mode, reorder tabs to match the spatial pane layout (DFS order)
-		if (!paneLayoutStore.isSplit()) return ids;
-		const idSet = new Set(ids);
-		const ordered: string[] = [];
-		for (const groupId of paneLayoutStore.getAllGroupIds()) {
-			const group = paneLayoutStore.state.groups[groupId];
-			if (!group) continue;
-			for (const tab of group.tabs) {
-				if (tab.type === "terminal" && idSet.has(tab.id)) {
-					ordered.push(tab.id);
-					idSet.delete(tab.id);
-				}
-			}
-		}
-		// Append any orphan terminals not assigned to a pane group
-		for (const id of ids) {
-			if (idSet.has(id)) ordered.push(id);
-		}
-		return ordered;
+		return orderTerminalsByPaneLayout(ids);
 	};
 
 	// Branch key for filtering non-terminal tabs. A legitimate use of focus: this
@@ -860,6 +872,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 									dragOverSide={dragOverSide()}
 									dragInvalid={dragInvalid()}
 									isEditing={editingId() === id}
+									tabHintsActive={Boolean(props.tabHintsActive)}
 									quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 									showWorkspaceMetadata={true}
 									designModeStatus={designModeForTab(id)?.status}
@@ -950,6 +963,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												dragOverSide={dragOverSide()}
 												dragInvalid={dragInvalid()}
 												isEditing={editingId() === id}
+												tabHintsActive={Boolean(props.tabHintsActive)}
 												quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 												showWorkspaceMetadata={false}
 												designModeStatus={designModeForTab(id)?.status}

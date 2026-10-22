@@ -10,6 +10,262 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Abandoned shells",
+		description:
+			"Plain shells with no running processes are marked abandoned after one idle hour. Settings → Agents → Idle agent hibernation has an expert setting to close them after a chosen number of hours; automatic closure is off by default.",
+		shortcut: null,
+	},
+	{
+		feature: "Session identifiers",
+		description:
+			"Right-click a sidebar session row to copy its PTY session ID, live child process ID, or MCP alias. Hover an entry to see its value.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile font sizes",
+		description:
+			"Use the Terminal and Chat controls in mobile Settings → Appearance to set each reading size independently. The choices stay on this device; composers and UI controls do not change.",
+		shortcut: null,
+	},
+	{
+		feature: "Launch playbook modules",
+		description:
+			"In Settings > Agents, select launch modules and add global or per-agent instructions without copying generated rules. Changes apply to new launches.",
+		shortcut: null,
+	},
+	{
+		feature: "All settings inspector",
+		description:
+			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",
+		shortcut: null,
+	},
+	{
+		feature: "ego terminal Chat view",
+		description:
+			"Switch an ego terminal from CLI to Chat to read completed replies and folded tool calls. Configure an ego executable with local transcript v1 support first; use CLI for interactive prompts.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile latest output",
+		description:
+			"When you scroll back in mobile CLI or Chat output, tap the down-arrow above Send to return to the latest output without sending a terminal key.",
+		shortcut: null,
+	},
+	{
+		feature: "AI Chat table actions",
+		description:
+			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Hands-free conversation shortcut",
+		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
+		shortcut: `${mod}+Alt+V`,
+	},
+	{
+		feature: "Tab shortcut hints",
+		description: `Hold ${mod} alone for 450 ms to show shortcuts on the first nine terminal tabs. Release it or use another key, mouse button, or scroll to hide the hints.`,
+		shortcut: null,
+	},
+	{
+		feature: "Delete AI Chat conversations",
+		description:
+			"Open ⋯ → Delete conversation… in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+
+		shortcut: null,
+	},
+	{
+		feature: "ego provider recovery",
+		description:
+			"When terminal ego reports a provider outage, the status bar shows its recovery attempt and next retry. Select Force retry to send /retry once to that terminal.",
+		shortcut: null,
+	},
+	{
+		feature: "Idle agent hibernation",
+		description:
+			"Settings → Agents can hibernate unattended agent tabs after awake idle time. Open a hibernated tab or send it input to resume its saved session.",
+		shortcut: null,
+	},
+	{
+		feature: "Follow Tasks comments",
+		description:
+			"Follow an item in Tasks detail, then enable OS notifications for Tasks in Settings → Notifications. Existing detail refreshes notify for new comments; no extra background polling is added.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks local queries",
+		description:
+			"Tasks loads complete scopes of at most 1,000 items for all-field sorting, grouping and filtering. Unknown or larger totals use the provider-supported server controls.",
+		shortcut: null,
+	},
+	{
+		feature: "Claude Chat on mobile",
+		description:
+			"Select Chat in a Claude session header to read the conversation. Use the same input to reply, and switch to CLI for prompts missing from Chat.",
+		shortcut: null,
+	},
+	{
+		feature: "Plugin settings",
+		description:
+			"Find loaded plugin settings under Integrations, or search for a field in Settings. Plugin pages disappear when the plugin unloads.",
+		shortcut: null,
+	},
+	{
+		feature: "Desktop Markdown on mobile",
+		description:
+			"Open a session’s More actions menu on your phone to read the Markdown files open on desktop for that repository.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile composer actions",
+		description:
+			"Tap + beside a mobile draft to attach a file, take a photo, or use the draft and queue actions supported by that conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile keyboard correction",
+		description:
+			"In the mobile Settings tab, use the Input section to disable autocorrect and spellcheck for literal terminal command entry. The choice stays on your device.",
+		shortcut: null,
+	},
+	{
+		feature: "Close to background",
+		description:
+			"In desktop Settings > General, choose Ask, Background or Quit for main-window close. Background keeps sessions running. The tray or menu-bar icon shows working and awaiting agents and offers Show and Quit.",
+		shortcut: null,
+	},
+	{
+		feature: "Compose images",
+		description:
+			"Drop images on Compose or use Attach images beside Send to choose several. Paste still works; image paths appear in your draft.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks view memory",
+		description:
+			"Tasks remembers your source, view, grouping, sort and filters separately for each repository and provider account.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks board",
+		description:
+			"Use More in any lane to load the next board page. Select Move… on a card to change its lane without dragging.",
+		shortcut: null,
+	},
+	{
+		feature: "Terminal Chat answers",
+		description:
+			"Hover or focus an answer card to copy the whole reply. Pasted terminal output shows two lines; select + N lines to expand it.",
+		shortcut: null,
+	},
+	{
+		feature: "Agent toast cards",
+		description:
+			"Normal agent notices show a card only on their active origin terminal tab; other tabs receive bell entries only. Turn off Show cards from the active terminal in Settings > Notifications to keep only urgent cards.",
+		shortcut: null,
+	},
+	{
+		feature: "New chat text",
+		description:
+			"While reading earlier chat messages, select New text below to return to the latest reply. Toggle the indicator in Settings > Appearance > Chat.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile prompt queue",
+		description:
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+		shortcut: null,
+	},
+	{
+		feature: "Tasks roadmap",
+		description:
+			"Switch Month or Quarter in the Tasks roadmap to change the timeline scale. Tasks without usable dates stay in the side list.",
+		shortcut: null,
+	},
+	{
+		feature: "Design Mode",
+		description:
+			"Right-click a terminal web link and choose Start in Design Mode to connect that agent and open the page directly. Pick elements and comment in the browser sidebar before sending.",
+		shortcut: null,
+	},
+	{
+		feature: "Spoken replies",
+		description:
+			"Turn off Spoken replies in mobile hands-free or Settings > Voice to keep dictating while the agent answers in text.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile Control Keys",
+		description:
+			"Tap Ctrl in the mobile terminal keybar to send Ctrl+C, Ctrl+B, Ctrl+D or the agent-aware Ctrl+Enter key.",
+		shortcut: null,
+	},
+	{
+		feature: "Automations",
+		description:
+			"Open Automations from the command palette to edit schedules. Enable Include precheck stdout in the agent prompt to add bounded check results before your unchanged prompt. Select Runs for history and saved output.",
+		shortcut: null,
+	},
+	{
+		feature: "Terminal Chat Input",
+		description:
+			"Switch a Claude terminal to Chat to reply in docked Compose. Ctrl+Enter sends now; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
+		shortcut: null,
+	},
+	{
+		feature: "ego Launch Permissions",
+		description:
+			"Choose permission mode and sandbox in Settings > Agents > ego for new terminal launches and managed spawns.",
+		shortcut: null,
+	},
+	{
+		feature: "Launch Instruction Inspector",
+		description:
+			"Right-click a terminal and choose Inspect Launch Instructions to read captured launch sections, sources and byte sizes.",
+		shortcut: null,
+	},
+	{
+		feature: "Conversation Launch Options",
+		description:
+			"Use ⋯ → New conversation with options in AI Chat to give one conversation its own ego profile, workspace and executable.",
+		shortcut: null,
+	},
+	{
+		feature: "AI Chat Repository Pin",
+		description:
+			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
+		shortcut: null,
+	},
+	{
+		feature: "Repository Ego Profiles",
+		description:
+			"Select ego_profile in a workspace's .tuic.json. Ego restricts it to your explicit machine profile and AI Chat shows any clamp warnings.",
+		shortcut: null,
+	},
+	{
+		feature: "ego Perimeter",
+		description:
+			"Use Settings > AI Chat to restrict ego roots, edit read and write directories, and inspect ego's effective perimeter before starting a new conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Child Agent Navigation",
+		description:
+			"In the rich sidebar, click the agent count below a parent to open its children in another repository.",
+		shortcut: null,
+	},
+	{
+		feature: "Touch Branch Actions",
+		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
+		shortcut: null,
+	},
+	{
+		feature: "Private Secret Forms",
+		description:
+			"Ask an agent to request named credentials in a private form. Review the exact command before allowing it to use them.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat Prompt Parking",
 		description:
 			"Park a half-written AI Chat prompt to ask something else; it returns after your next Send. On phones, tap Park.",
@@ -50,6 +306,11 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plans and Stories",
 		description: "Open Plans and Stories from the project toolbar to create plans, track criteria, and review work.",
+		shortcut: null,
+	},
+	{
+		feature: "Workflow Run History",
+		description: "Open Run history in Plans and Stories to follow a plan's persisted workflow timeline.",
 		shortcut: null,
 	},
 	{
@@ -126,7 +387,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plugin File Previews",
 		description:
-			"Install preview plugins from Settings > Plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
+			"Install preview plugins from Settings > Manage plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
 		shortcut: null,
 	},
 	{
@@ -138,12 +399,18 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Prompts",
 		description:
-			"Press Cmd+Shift+K to open the Prompts dropdown — 24 built-in context-aware prompts for git, review, PR, and more.",
+			"Open the Prompts dropdown and search Configure for guided issue-to-draft-PR, incoming PR review and authorized bounded-fix setup. The guides verify prerequisites before configuration.",
 		shortcut: `${mod}+Shift+K`,
 	},
 	{
 		feature: "Pin Tab",
 		description: "Right-click any tab and select Pin — pinned tabs stay visible when you switch branches.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation worktree cleanup",
+		description:
+			"Open Automations → Runs to inspect a completed run’s worktree and remove it when the backend confirms it is safe.",
 		shortcut: null,
 	},
 	{
@@ -526,6 +793,12 @@ export const TIPS: Tip[] = [
 		feature: "Native Agent Hooks",
 		description:
 			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
+		shortcut: null,
+	},
+	{
+		feature: "Automation Templates",
+		description:
+			"Choose a built-in template in a new automation draft after entering its repository and run config. Review it and save it paused before enabling runs.",
 		shortcut: null,
 	},
 ];

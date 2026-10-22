@@ -235,7 +235,19 @@ export function useSmartPrompts() {
 			"resolve_prompt_variables",
 			{ content: prompt.content, repoPath: repoPath || null },
 		);
-		const allVars = { ...gitVars, ...resolveFrontendVars(repoPath), ...manualVariables };
+		const allVars: Record<string, string> = { ...gitVars, ...resolveFrontendVars(repoPath), ...manualVariables };
+		// The open review threads are read from GitHub only when the prompt asks for them.
+		if (varNames.includes("pr_open_threads") && !("pr_open_threads" in allVars) && allVars.pr_number && repoPath) {
+			try {
+				allVars.pr_open_threads = await invoke<string>("get_pr_open_threads", {
+					repoPath,
+					prNumber: Number(allVars.pr_number),
+				});
+			} catch (err) {
+				appLogger.warn("prompts", `Cannot read the open review threads for "${prompt.name}"`, err);
+				return { ok: false, reason: String(err) };
+			}
+		}
 		const unresolved = varNames.filter((v) => !(v in allVars));
 		if (unresolved.length > 0) {
 			return { ok: false, reason: "unresolved_variables", output: JSON.stringify(unresolved) };

@@ -2,30 +2,45 @@ import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { listenForWorkItemMcpRequests } from "../plugins/workItemMcpBridge";
+import { presentAutomationNotice } from "../services/automationNotifications";
+import { persistBackgroundSnapshot } from "../services/backgroundSnapshot";
+import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
+import { startAgentSettingsSync } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
+import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
+import { keybindingsStore } from "../stores/keybindings";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
+import { promptLibraryStore } from "../stores/promptLibrary";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
+import { repoDefaultsStore } from "../stores/repoDefaults";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
+import { tunnelsStore } from "../stores/tunnels";
 import { uiStore } from "../stores/ui";
+import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
-import { isTauri, subscribeEvents } from "../transport";
+import { isTauri, rpc, subscribeEvents } from "../transport";
+import { getSessionConnection } from "../transportRuntime";
 import type { RepoChangeKind, SavedTerminal } from "../types";
-import { classifyFile } from "../utils/filePreview";
+import { classifyFile, isImageFile } from "../utils/filePreview";
+import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
+import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspendedSessions";
+import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -51,8 +66,11 @@ interface McpToastPayload {
 	message: string | null;
 	level: string;
 	sound: string | null;
+	/** Absent on events from daemons older than the field; treated as normal. */
+	urgency?: string;
 	origin_repo_path?: string;
 	origin_session_id?: string;
+	__tuic_origin?: { connection: string; name?: string };
 }
 
 const MCP_TOAST_LISTENER_KEY = "__tuic_mcp_toast_listener__";
@@ -79,6 +97,7 @@ function replaceMcpToastListener(handler: (event: { payload: McpToastPayload }) 
 
 interface SessionCreatedPayload {
 	session_id: string;
+	tuic_session?: string | null;
 	cwd: string | null;
 	agent_type?: string | null;
 	display_name?: string | null;
@@ -98,6 +117,7 @@ export interface AppInitDeps {
 		listActiveSessions: () => Promise<
 			Array<{
 				session_id: string;
+				worktree_path?: string | null;
 				cwd: string | null;
 				display_name?: string | null;
 				pty_description?: string | null;
@@ -106,6 +126,7 @@ export interface AppInitDeps {
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				connection_id?: string | null;
 				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
@@ -122,7 +143,6 @@ export interface AppInitDeps {
 		>;
 		close: (sessionId: string) => Promise<void>;
 	};
-	setQuitDialogVisible: (visible: boolean) => void;
 	setStatusInfo: (msg: string) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
@@ -135,10 +155,10 @@ export interface AppInitDeps {
 		startPrNotificationTimer: () => void;
 		loadFontFromConfig: () => void;
 		refreshDictationConfig: () => Promise<void>;
+		startDictationSettingsSync: () => () => void;
 		startUserActivityListening: () => void;
 	};
 	applyPlatformClass: () => string;
-	onCloseRequested: (handler: (event: { preventDefault: () => void }) => void) => void;
 	/** Register a repository by path. Same entry point as the `tuic://open-repo`
 	 *  deep link (`gitOps.addRepoByPath`), so registration has one implementation.
 	 *  Init NEVER calls this on its own — only the parked-tab toast's button does,
@@ -166,7 +186,25 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 			for (const termId of branch.terminals) {
 				const t = terminalsStore.get(termId);
 				if (!t) continue;
+				if (t.sessionId && !t.suspended)
+					void rpc("suspended_session_action", {
+						sessionId: t.sessionId,
+						repoPath: t.repoPath,
+						cwd: t.cwd,
+						request: {
+							action: "sync",
+							sessionId: t.sessionId,
+							metadata: {
+								name: t.name,
+								agentSessionId: t.agentSessionId,
+								agentLaunchCommand: t.agentLaunchCommand,
+								paneSlot: paneLayoutStore.getGroupForTab(termId),
+							},
+						},
+					}).catch((error) => appLogger.warn("terminal", "Failed to sync suspend metadata", { error: String(error) }));
 				saved.push({
+					frontendId: t.id,
+					sessionId: t.sessionId,
 					name: t.name,
 					cwd: t.cwd,
 					fontSize: t.fontSize,
@@ -177,6 +215,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 					alias: t.alias ?? null,
 					agentIntent: t.agentIntent ?? null,
 					lastPrompt: t.lastPrompt ? t.lastPrompt.slice(0, SAVED_PROMPT_MAX_CHARS) : null,
+					suspended: t.suspended,
 				});
 			}
 
@@ -195,7 +234,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 
 /** Attach a backend PTY session to the best matching repo/branch.
  * Remote sessions may use a cwd below a repo or outside every configured repo,
- * so reconnect must use the same ancestor matching and active-branch fallback
+ * so reconnect must use the same cwd-based repository/workspace matching
  * as the live session-created path. */
 function assignSessionToRepoBranch(
 	sessionId: string,
@@ -240,6 +279,7 @@ function assignSessionToRepoBranch(
 	// is still reachable (the session exists, reconcile re-homes it on registration)
 	// and consolidation is opt-in, so this waits for a real report rather than a
 	// speculative change to what the badge counts.
+	terminalsStore.setRepoPath(terminalId, null);
 	globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
 
 	// Which repo the user would have to register to fix this. Without it the
@@ -294,8 +334,23 @@ function assignSessionToRepoBranch(
 	}
 }
 
+let settingsSyncGeneration = 0;
+const settingsSyncStops = new Set<() => void>();
+function stopSettingsSync(): void {
+	for (const stop of settingsSyncStops) stop();
+	settingsSyncStops.clear();
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	const settingsGeneration = ++settingsSyncGeneration;
+	stopSettingsSync();
+	window.removeEventListener("beforeunload", stopSettingsSync);
+	window.addEventListener("beforeunload", stopSettingsSync, { once: true });
+	function ownSettingsSync(start: () => () => void): void {
+		if (settingsGeneration === settingsSyncGeneration) settingsSyncStops.add(start());
+	}
+	listenForWorkItemMcpRequests();
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
 	appLogger.info(
 		"app",
@@ -308,15 +363,23 @@ export async function initApp(deps: AppInitDeps) {
 	const platform = deps.applyPlatformClass();
 	appLogger.debug("app", `Platform detected: ${platform}`);
 
-	// Intercept window close for quit confirmation (Story 057)
-	deps.onCloseRequested((event) => {
-		if (!settingsStore.state.confirmBeforeQuit) return;
-		const activeTerminals = terminalsStore.getIds().filter((id) => terminalsStore.get(id)?.sessionId);
-		if (activeTerminals.length > 0) {
-			event.preventDefault();
-			deps.setQuitDialogVisible(true);
-		}
+	await listen<CloseRequest>("close-dialog", (event) => {
+		if (isTauri()) closeDialogStore.present(event.payload);
 	});
+
+	if (isTauri()) {
+		await listen<{ request_id: string }>("snapshot-now", (event) => {
+			void persistBackgroundSnapshot(
+				event.payload.request_id,
+				async () => {
+					repositoriesStore.snapshotTerminals(collectTerminalSnapshots());
+					mdTabsStore.saveForReload();
+					await Promise.all([repositoriesStore.flushSave(), paneLayoutStore.saveForBackground()]);
+				},
+				(requestId) => invoke("ack_background_snapshot", { requestId }),
+			);
+		});
+	}
 
 	// Periodic terminal snapshot — ensures savedTerminals is always fresh
 	// so app restart recovers terminals even if beforeunload fails.
@@ -336,6 +399,7 @@ export async function initApp(deps: AppInitDeps) {
 		activityStore.flushSave();
 		uiStore.flushSave();
 		paneLayoutStore.flushSave();
+		mdTabsStore.saveForReload();
 
 		// 1. Snapshot terminal metadata per repo/branch before closing
 		const snapshots = collectTerminalSnapshots();
@@ -346,7 +410,7 @@ export async function initApp(deps: AppInitDeps) {
 		// 2. Close PTY sessions — but NOT in Tauri mode during webview reloads
 		// (Vite HMR, manual reload). The Rust backend survives the reload and
 		// list_active_sessions will re-adopt the surviving sessions on re-init.
-		// In Tauri, real quit is handled by the close-requested handler which
+		// In Tauri, real quit is handled by the Rust close policy which
 		// calls app.exit() — beforeunload during quit is a no-op for PTY cleanup.
 		if (!isTauri()) {
 			// Browser only closes sessions it created — leave Tauri-created ones alive
@@ -363,6 +427,22 @@ export async function initApp(deps: AppInitDeps) {
 		appLogger.error("app", "Store hydration failed", err);
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
+
+	const { mcpPopupStore } = await import("../stores/mcpPopup");
+	for (const start of [
+		() => mcpPopupStore.startRemoteSync(),
+		() => promptLibraryStore.startRemoteSync(),
+		() => repoSettingsStore.startRemoteSync(),
+		() => remoteConnectionsStore.startRemoteSync(),
+		() => tunnelsStore.startRemoteSync(),
+		() => uiStore.startRemoteSync(),
+		startAgentSettingsSync,
+		() => settingsStore.startRemoteSync(),
+		() => notificationsStore.startRemoteSync(),
+		() => repoDefaultsStore.startRemoteSync(),
+		() => keybindingsStore.startRemoteSync(),
+	])
+		ownSettingsSync(start);
 
 	// Remote machines, at startup rather than when the Settings panel opens.
 	// Hydration used to be owned by RemoteMachinesPanel, so until the user walked
@@ -386,21 +466,32 @@ export async function initApp(deps: AppInitDeps) {
 	// Only the live event presents a toast, so a reconnect can never replay
 	// historical notifications. Boot reads nothing: the journal is queried when
 	// the dialog opens, for the one project it shows.
-	subscribeEvents(
-		{ "progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload) },
+	await subscribeEvents(
+		{
+			"progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload),
+			"automation-run-changed": (payload) => presentAutomationNotice(payload),
+			"workflow-run-changed": (payload) => workflowRunSignals.accept(payload),
+		},
 		{
 			onResync: () => {
 				const project = progressStore.requestedProject();
 				if (progressStore.dialogVisible() && project) void progressStore.refreshProject(project);
+				workflowRunSignals.resync();
 			},
 		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
+	if (isTauri()) {
+		void listenForNativeNoticeClicks()
+			.then((unlisten) => window.addEventListener("beforeunload", unlisten, { once: true }))
+			.catch((err) => appLogger.error("app", "Failed to register native notification click listener", err));
+	}
 
 	// Recover log entries from Rust backend (survives webview reloads)
 	appLogger.hydrateFromRust().catch(() => {});
 
 	// Restore pane layout from disk (terminal tabs will be re-linked during terminal restore)
 	await paneLayoutStore.loadFromDisk();
+	ownSettingsSync(() => paneLayoutStore.startRemoteSync());
 
 	// Remove splash screen now that stores are hydrated — prevents flash of empty
 	// state (e.g. "Add Repository" button) before persisted repos have loaded.
@@ -544,26 +635,89 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
+		const {
+			title,
+			message,
+			level,
+			sound,
+			urgency,
+			origin_repo_path,
+			origin_session_id,
+			__tuic_origin: origin,
+		} = event.payload;
+		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
+			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
+			return;
+		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// The repo is not glued into the message any more — the toast renders it as
-		// its own badge, so an unregistered origin still names its repo and a
-		// registered one does not say it twice.
-		// Still only a REGISTERED repo: this field scopes the toast (and the bell
-		// item mirrored from it), so an unregistered cwd must not become a repo key.
-		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
+		// Backend notifications stay in the bell. Urgent notices always add a card;
+		// automatic cards surface normal notices only on their active origin terminal.
+		// Only a registered repo may scope a bell item.
+		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
+		const repoPath = origin
+			? ((terminalId && getSessionConnection(origin_session_id) === origin.connection
+					? repositoriesStore.getRepoPathForTerminal(terminalId)
+					: undefined) ?? undefined)
+			: (resolveRepoForCwd(origin_repo_path) ?? undefined);
+		const visibleTitle = origin ? `[${origin.name ?? origin.connection}] ${title}` : title;
 		const visibleMessage = message ?? "";
-		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
-		// repoPath is already undefined without an origin, and the session id is
-		// independent of it — an agent can be bound to a PTY whose cwd resolves to
-		// no registered repo — so both ride along on one call.
-		toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath, origin_session_id);
-		if (!duplicate && isNotificationSound(sound)) void notificationsStore.play(sound);
+		const action = origin_session_id
+			? {
+					label: "Open terminal",
+					onClick: () => {
+						const id = terminalsStore.findBySessionId(origin_session_id);
+						if (id && (!origin || getSessionConnection(origin_session_id) === origin.connection))
+							navigateToTerminal(id);
+					},
+				}
+			: undefined;
+		const noticeId = toastsStore.addToBell(
+			visibleTitle,
+			visibleMessage,
+			safeLevel,
+			repoPath,
+			action,
+			origin_session_id,
+			origin?.connection,
+		);
+		const viewingOrigin =
+			terminalId !== undefined &&
+			terminalId === terminalsStore.state.activeId &&
+			(!origin || getSessionConnection(origin_session_id) === origin.connection);
+		const automaticCard = notificationsStore.state.autoToastCards && viewingOrigin;
+		if (noticeId !== -1 && (urgency === "urgent" || automaticCard))
+			toastsStore.add(
+				visibleTitle,
+				visibleMessage,
+				safeLevel,
+				false,
+				action,
+				undefined,
+				repoPath,
+				origin_session_id,
+				false,
+			);
+		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
+
+	const savedTabs = repositoriesStore
+		.getPaths()
+		.flatMap((repoPath) =>
+			Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {}).flatMap(([workspaceId, branch]) =>
+				(branch.savedTerminals ?? []).map((tab) => ({ repoPath, workspaceId, tab })),
+			),
+		);
+	terminalsStore.reserveSnapshotIds(savedTabs.map(({ tab }) => tab.frontendId));
+	const savedBySession = new Map(
+		savedTabs.filter(({ tab }) => tab.sessionId).map((entry) => [entry.tab.sessionId, entry.tab]),
+	);
+	const savedByTuic = new Map(
+		savedTabs.filter(({ tab }) => tab.tuicSession).map((entry) => [entry.tab.tuicSession, entry.tab]),
+	);
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
-		const { session_id, cwd, agent_type, display_name, parent_session } = event.payload;
+		const { session_id, tuic_session, cwd, agent_type, display_name, parent_session } = event.payload;
 		const parsedAgentType = parseAgentType(agent_type);
 		// A mirrored event describes a session on ANOTHER machine. It is stamped
 		// `__tuic_origin` by `remote_mirror.rs`; building a tab for it attaches the
@@ -576,6 +730,15 @@ export async function initApp(deps: AppInitDeps) {
 		if (browserCreatedSessions.has(session_id)) return;
 		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
 		if (existing) return;
+		const suspended = terminalsStore.getIds().find((id) => {
+			const tab = terminalsStore.get(id);
+			return tab?.suspended && !!tuic_session && tab.tuicSession === tuic_session;
+		});
+		if (suspended) {
+			terminalsStore.setSessionId(suspended, session_id);
+			terminalsStore.update(suspended, { suspended: false });
+			return;
+		}
 
 		appLogger.info("app", `Remote session created: ${session_id}`);
 		// `activeId` is null whenever the user is looking at a non-terminal tab, not
@@ -583,26 +746,31 @@ export async function initApp(deps: AppInitDeps) {
 		// clears it. Read the count instead, before the add — reading `activeId` below
 		// would pull the user off the panel they opened and onto a worker tab.
 		const hadNoTerminals = terminalsStore.getCount() === 0;
-		const id = terminalsStore.add({
-			sessionId: session_id,
-			fontSize: deps.getDefaultFontSize(),
-			name:
-				display_name ||
-				(parsedAgentType
-					? `Session ${terminalsStore.getCount() + 1}`
-					: `PTY: Session ${terminalsStore.getCount() + 1}`),
-			// A spawn-assigned display name is the base title, not a manual rename:
-			// an intent title may refine it and a user rename replaces it, but the
-			// agent's own OSC title (Claude's session title) must not.
-			nameIsCustom: false,
-			nameFromSpawn: Boolean(display_name),
-			cwd: cwd ?? null,
-			awaitingInput: null,
-			isRemote: true,
-			agentType: parsedAgentType,
-			ptyDescription: null,
-			parentSession: parent_session ?? null,
-		});
+		const saved = savedBySession.get(session_id);
+		const id = terminalsStore.add(
+			{
+				sessionId: session_id,
+				tuicSession: tuic_session ?? null,
+				fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
+				name:
+					display_name ||
+					(parsedAgentType
+						? `Session ${terminalsStore.getCount() + 1}`
+						: `PTY: Session ${terminalsStore.getCount() + 1}`),
+				// A spawn-assigned display name is pinned like a manual rename: neither
+				// an intent title nor the agent's OSC title may replace it.
+				nameIsCustom: Boolean(display_name),
+				nameFromSpawn: Boolean(display_name),
+				cwd: cwd ?? null,
+				awaitingInput: null,
+				isRemote: false,
+				isExternallyCreated: true,
+				agentType: parsedAgentType,
+				ptyDescription: null,
+				parentSession: parent_session ?? null,
+			},
+			saved?.frontendId,
+		);
 		remoteSessionTabs.set(session_id, id);
 
 		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo, deps.refreshAllBranchStats);
@@ -612,6 +780,17 @@ export async function initApp(deps: AppInitDeps) {
 		// sessions. The tab is docked but never selected: an MCP spawn must
 		// not take over the pane the user is working in.
 		if (agent_type) {
+			toastsStore.addToBell(
+				"Agent started",
+				display_name || agent_type,
+				"info",
+				resolveRepoForCwd(cwd ?? "") ?? undefined,
+				{
+					label: "Open terminal",
+					onClick: () => navigateToTerminal(id),
+				},
+				session_id,
+			);
 			// In split mode, ensure there is an active group so assignTabToActiveGroup
 			// doesn't silently no-op and leave the tab invisible.
 			if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
@@ -639,6 +818,13 @@ export async function initApp(deps: AppInitDeps) {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
 		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
+
+	listen<{ record: SuspendedSession; __tuic_origin?: unknown }>("session-suspended", (event) => {
+		if (event.payload.__tuic_origin !== undefined) return;
+		const record = event.payload.record;
+		const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
+		assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+	}).catch((err) => appLogger.error("app", "Failed to register session-suspended listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
 		// A mirrored alias names a session on another machine: no tab here ever
@@ -707,7 +893,15 @@ export async function initApp(deps: AppInitDeps) {
 				// own tab button filtered out of the bar.
 				const background = focus === false;
 
-				if (cmd === "open" && repoPath) {
+				if (cmd === "open" && isImageFile(filePath)) {
+					// The preview tab serves images through the asset protocol, in or out
+					// of a repo. The editor cannot read them as UTF-8.
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					if (repoPath) mdTabsStore.addMcpHtmlPreview(id, repoPath, relPath, pinned, background);
+					else mdTabsStore.addMcpHtmlPreview(id, fallbackRepoPath ?? "", filePath, pinned, background);
+				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
 					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
@@ -754,12 +948,19 @@ export async function initApp(deps: AppInitDeps) {
 
 		mdTabsStore.closeMcpFile(id);
 		editorTabsStore.closeMcpFile(id);
-		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
+		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? false, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 
 	// Keep remoteSessionTabs consistent if the user closes a remote tab manually
 	// before the backend session-closed event arrives.
 	terminalsStore.onRemove((termId) => {
+		const term = terminalsStore.get(termId);
+		if (term?.suspended)
+			void rpc("suspended_session_action", {
+				repoPath: term.repoPath,
+				cwd: term.cwd,
+				request: { action: "forget", tuicSession: term.tuicSession },
+			}).catch((error) => appLogger.warn("terminal", "Failed to remove suspended record", { error: String(error) }));
 		for (const [sid, tid] of remoteSessionTabs) {
 			if (tid === termId) remoteSessionTabs.delete(sid);
 		}
@@ -777,12 +978,14 @@ export async function initApp(deps: AppInitDeps) {
 
 		remoteSessionTabs.delete(session_id);
 
-		// Countdown + auto-remove is only for MCP-spawned (remote) tabs. Locally-created
+		// Countdown + auto-remove is only for HTTP/MCP-created tabs. UI-created
 		// tabs are managed by Terminal.tsx's pty-exit handler — applying the rename
-		// here would leave the name stuck forever because the ticker's isRemote
-		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
+		// here would leave the name stuck forever because the ticker's isExternallyCreated
+		// guard aborts on the first tick and the setTimeout's isExternallyCreated guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isRemote) return;
+		if (!t0?.isExternallyCreated) return;
+		// A suspended tab ended its PTY on purpose and must stay, restorable.
+		if (isSuspendingOrSuspended(termId)) return;
 
 		const parsedAgentType = parseAgentType(agent_type);
 		handleAgentExitCompletion(termId, parsedAgentType != null);
@@ -801,7 +1004,7 @@ export async function initApp(deps: AppInitDeps) {
 		const ticker = setInterval(() => {
 			remaining--;
 			const t = terminalsStore.get(termId);
-			if (!t?.isRemote || remaining <= 0) {
+			if (!t?.isExternallyCreated || remaining <= 0) {
 				clearInterval(ticker);
 				return;
 			}
@@ -813,7 +1016,7 @@ export async function initApp(deps: AppInitDeps) {
 			const t = terminalsStore.get(termId);
 			// Only remove if the tab still exists and is still the remote tab for this
 			// session (user may have closed it manually or re-used the slot).
-			if (t?.isRemote) {
+			if (t?.isExternallyCreated) {
 				appLogger.info("app", `Auto-removing remote tab ${termId} for closed session ${session_id}`);
 				terminalsStore.remove(termId);
 			}
@@ -826,6 +1029,10 @@ export async function initApp(deps: AppInitDeps) {
 			mdTabsStore.closeUiTab(pluginId);
 		}
 	}).catch((err) => appLogger.error("app", "Failed to register close-html-tabs listener", err));
+
+	listen<{ state: "hidden" | "unloaded" | "visible" }>("background-mode-changed", (event) => {
+		appLogger.debug("app", `Desktop background state: ${event.payload.state}`);
+	}).catch((error) => appLogger.error("app", "Failed to register background state listener", error));
 
 	// Screenshot capture: MCP ui(action=screenshot) → capture iframe → respond
 	listen<{ id: string; request_id: string }>("screenshot-request", async (event) => {
@@ -868,24 +1075,32 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.remove(id);
 	}
 
-	// Re-adopt surviving PTY sessions or start fresh
+	// Re-adopt surviving PTY sessions or start fresh. `is_remote` records launch
+	// provenance; only `connection_id` identifies execution on another machine.
 	if (survivingSessions.length > 0) {
 		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
 		for (const session of survivingSessions) {
 			const existingId = terminalsStore.getTerminalForSession(session.session_id);
+			const saved = savedBySession.get(session.session_id) ?? savedByTuic.get(session.tuic_session);
 			const id =
 				existingId ??
-				terminalsStore.add({
-					sessionId: session.session_id,
-					fontSize: deps.getDefaultFontSize(),
-					name: session.display_name || terminalsStore.nextDefaultName(),
-					nameIsCustom: session.display_name_is_custom ?? false,
-					ptyDescription: session.pty_description ?? null,
-					isRemote: session.is_remote ?? false,
-					agentType: parseAgentType(session.state?.agent_type),
-					cwd: session.cwd,
-					awaitingInput: null,
-				});
+				terminalsStore.add(
+					{
+						sessionId: session.session_id,
+						fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
+						name: session.display_name || terminalsStore.nextDefaultName(),
+						nameIsCustom: session.display_name_is_custom ?? false,
+						ptyDescription: session.pty_description ?? null,
+						isRemote: Boolean(session.connection_id),
+						isExternallyCreated: session.is_remote ?? false,
+						agentType: parseAgentType(session.state?.agent_type),
+						cwd: session.cwd,
+						awaitingInput: null,
+						agentSessionId: saved?.agentSessionId ?? null,
+						agentLaunchCommand: saved?.agentLaunchCommand ?? null,
+					},
+					saved?.frontendId,
+				);
 			// A session-created event can insert this terminal while the surviving-session
 			// request is pending. Reconcile its independent lifecycle fields too, but do
 			// not let the older shell snapshot overwrite a newer shell-state event.
@@ -898,12 +1113,14 @@ export async function initApp(deps: AppInitDeps) {
 					: currentRevision === 0);
 			terminalsStore.update(id, {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
-				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
+				isRemote: Boolean(session.connection_id),
+				...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
 				// Only the row survives a reload, and only the backend knows where the
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
+				placementPath: null,
 				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
@@ -925,6 +1142,46 @@ export async function initApp(deps: AppInitDeps) {
 			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
+	}
+
+	// A suspended tab has no live PTY to discover, even without live siblings.
+	for (const { repoPath, workspaceId, tab } of savedTabs) {
+		if (!tab.suspended) continue;
+		const alreadyRestored = terminalsStore
+			.getIds()
+			.some(
+				(id) => id === tab.frontendId || (tab.tuicSession && terminalsStore.get(id)?.tuicSession === tab.tuicSession),
+			);
+		if (!alreadyRestored) {
+			const id = terminalsStore.add(
+				{
+					...tab,
+					sessionId: null,
+					suspended: true,
+					awaitingInput: null,
+				},
+				tab.frontendId,
+			);
+			terminalsStore.setRepoPath(id, repoPath);
+			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+		}
+		// Consume this snapshot so a later lazy branch restore cannot duplicate it.
+		const workspace = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
+		repositoriesStore.setWorkspace(repoPath, workspaceId, {
+			savedTerminals: workspace?.savedTerminals?.filter((saved) => saved !== tab),
+		});
+	}
+
+	try {
+		const records = await rpc<Record<string, SuspendedSession>>("suspended_session_action", {
+			request: { action: "list" },
+		});
+		for (const record of Object.values(records ?? {})) {
+			const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
+			assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+		}
+	} catch (error) {
+		appLogger.error("app", "Failed to restore suspended sessions", error);
 	}
 
 	// Ensure non-git repos have a shell branch (migration for repos persisted
@@ -963,42 +1220,47 @@ export async function initApp(deps: AppInitDeps) {
 	deps.stores.loadFontFromConfig();
 
 	// Load dictation config from disk
-	deps.stores.refreshDictationConfig();
+	void deps.stores.refreshDictationConfig().then(() => {
+		ownSettingsSync(deps.stores.startDictationSettingsSync);
+	});
 
 	// Start tracking user activity (click/keydown) for PR display timeouts
 	deps.stores.startUserActivityListening();
 
-	// Restore active repo/branch from persisted state
-	const repoPaths = repositoriesStore.getPaths();
-	if (repoPaths.length > 0) {
-		// Use persisted active repo, falling back to first
-		const persistedActive = repositoriesStore.state.activeRepoPath;
-		const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
-		const firstRepo = repositoriesStore.get(firstPath);
-		repositoriesStore.setActive(firstPath);
-		if (firstRepo?.activeWorkspaceId) {
-			if (survivingSessions.length > 0) {
-				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
-				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
-				if (validTerminals.length > 0) {
-					const remembered = branch?.lastActiveTerminal;
-					const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
-					appLogger.info(
-						"terminal",
-						`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
-					);
-					terminalsStore.setActive(target);
+	try {
+		// Restore active repo/branch from persisted state
+		const repoPaths = repositoriesStore.getPaths();
+		if (repoPaths.length > 0) {
+			// Use persisted active repo, falling back to first
+			const persistedActive = repositoriesStore.state.activeRepoPath;
+			const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
+			const firstRepo = repositoriesStore.get(firstPath);
+			repositoriesStore.setActive(firstPath);
+			if (firstRepo?.activeWorkspaceId) {
+				if (survivingSessions.length > 0) {
+					const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
+					const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
+					if (validTerminals.length > 0) {
+						const remembered = branch?.lastActiveTerminal;
+						const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
+						appLogger.info(
+							"terminal",
+							`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
+						);
+						terminalsStore.setActive(target);
+					} else {
+						await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
+					}
 				} else {
+					// Eagerly restore terminals when a pane layout was loaded from disk —
+					// the layout references terminal IDs that must exist for panes to render.
+					// Without this, the split layout shows empty boxes after a fresh start.
 					await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 				}
-			} else {
-				// Eagerly restore terminals when a pane layout was loaded from disk —
-				// the layout references terminal IDs that must exist for panes to render.
-				// Without this, the split layout shows empty boxes after a fresh start.
-				await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 			}
-			return;
 		}
+	} finally {
+		mdTabsStore.restoreAfterReload();
 	}
 
 	// Lazy restore: don't create terminals on startup.

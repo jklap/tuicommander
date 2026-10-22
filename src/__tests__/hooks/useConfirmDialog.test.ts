@@ -117,6 +117,26 @@ describe("useConfirmDialog", () => {
 			expect(await pending).toBe(false);
 		});
 
+		// Catches: a live-session orphan shown with a countdown or without naming the session.
+		it("names the live session and runs no countdown", async () => {
+			const pending = dialog.confirmOrphanCleanup(
+				"/repo",
+				[
+					{
+						path: "/wt/busy",
+						safe: false,
+						reason: "live session: Claude: refactor",
+						live_sessions: [{ session_id: "s1", name: "Claude: refactor" }],
+					},
+				],
+				10,
+			);
+			expect(dialog.dialogState()?.autoConfirmMs).toBeUndefined();
+			expect(dialog.dialogState()?.message).toContain("/wt/busy: live session: Claude: refactor");
+			dialog.handleClose();
+			expect(await pending).toBe(false);
+		});
+
 		it("an agent answer settles the matching queued orphan prompt", async () => {
 			const unrelated = dialog.confirm({ title: "First", message: "Unrelated" });
 			const orphan = dialog.confirmOrphanCleanup("/repo", [{ path: "/wt/clean", safe: true }], 10);

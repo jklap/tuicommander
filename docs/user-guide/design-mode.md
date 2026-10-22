@@ -1,26 +1,65 @@
 # Design Mode
 
-Design Mode lets you point at an element in a local web app and send its context to the agent terminal you chose. TUICommander opens a separate Chrome window, highlights elements on hover, and captures the element you click. It inserts a compact description and an optional screenshot reference into the agent's input without pressing Enter. Add your instruction after the grab, then submit it yourself.
+Design Mode collects elements and comments in a browser sidebar before sending feedback to an agent. Ordinary page interaction remains available until you explicitly start picking.
 
-## Start and use it
+## Start Design Mode
 
-1. Start your development server. In the repository's **Repo Settings → Scripts** tab, set **Dev Server URL** to its address. This setting is local to your TUICommander installation; it is not read from `.tuic.json`.
-2. Open an agent terminal for that repository. Choose **Start Design Mode** from its tab context menu or the Command Palette. The action is available for agent terminals, not plain shells. The Command Palette acts on the active terminal only. When that terminal's repository is already armed, both places offer **Stop Design Mode** instead.
-3. In the Chrome window, hover to see Chrome's element highlight, then click the element. The click selects the element for Design Mode instead of activating the page's own click handler.
-4. Return to the bound agent terminal. The draft includes a selector, DOM path, nearby text, an HTML snippet, selected computed styles, the design tokens (CSS custom properties such as `--brand`) that the element's own rules reference, with their resolved values, its rectangle, source location when available, and an `[image: …]` line when the screenshot was saved. You can click more elements; each grab is appended to the draft. Add your request and press Enter when ready.
+1. Open an agent terminal in your repository. Choose **Start Design Mode** from its context menu or the Command Palette. **Choose Design Mode browser** offers Edge or Chrome; the palette also offers a command for each browser. Safari is unsupported.
+2. TUIC opens a dedicated profile for this repository and browser. Edge loads the extension automatically from that profile’s own folder. A single discovered dev server opens directly; otherwise, a page explains how to choose or start one. No manual extension installation is required.
+3. Click the TUICommander browser extension icon to open the sidebar. It lists configured and running dev servers. Choose one, enter a URL in the address bar, or use **Start dev server** if you have configured a **Run Script** in Repository Settings. Refresh rescans servers and agents.
+4. Choose **Pick element**, then click an element. A card appears and normal browsing resumes. **Multi-pick** continues collection until **Stop**, Escape or the two-minute timeout. Each card has an independent comment and Delete button. Drafts survive worker suspension; closing their browser tab deletes them. A tab holds at most 32 picks.
+5. Add comments, choose the receiving agent, and click **Send to agent**. The terminal that launched Design Mode is selected initially. Other live local agents in the same Git repository, including linked worktrees, are available. If your selection exits, the sidebar asks you to choose another; it never silently switches recipients.
+6. Feedback is delivered immediately when the agent is idle, or queued for its next idle window. The sidebar reports which happened. Failed sends retain your cards; retries to the same recipient reuse the exact batch and delivery key. Choosing a different recipient rebuilds the batch from retained commented picks with a new delivery key. Only commented picks are sent.
 
-If you leave the URL empty, Chrome opens `about:blank`; navigate to the page yourself. Starting from another agent terminal in the same repository rebinds the existing Design Mode window to that terminal. The status indicator shows which tab is bound. Closing the browser or the bound terminal stops inspection. Closing the terminal also turns off the element highlight and leaves the Chrome window open; clicks made there after that are not sent to any agent. TUICommander also closes the Chrome windows it started when it quits.
+The D badge and Stop action remain on the launching terminal. Browsers open on the backend host, including when TUIC is controlled from a browser/PWA client. No debugging port or automation banner is requested by the v2 launcher. Close an existing Design Mode browser window before starting again: Chromium ignores new extension flags on a running profile, and a cold launch also repairs an extension loaded from another repository’s folder. TUIC reports this condition and does not stop browser processes.
 
-Source locations depend on development build metadata. React 19.1+ and Svelte 5 can provide file and line; Vue provides the component file. Production builds or unrecognised scripts may omit the source location. Source maps are downloaded only for scripts served by the Dev Server URL or by the origin of the page you have open, and only from this machine (loopback); inline maps need no download. A `debugger;` statement in the page does not pause it while Design Mode is attached. Cross-origin iframe elements may not be inspectable from the main page.
+Branded Google Chrome 137+ ignores automatic extension loading. TUIC reports an error and asks you to choose Edge or Chromium; CDP pipe installation is not implemented. Branded Chrome is unverified on the development machine because it is not installed. See the [Chrome extension team announcement](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/1-g8EFx2BBY/m/S0ET5wPjCAAJ).
 
-## Attach browser automation to the same Chrome
+## Page JavaScript errors
 
-Chrome writes its CDP port to `DevToolsActivePort` in its dedicated Design Mode profile directory under TUICommander's configuration directory (`design-mode/<repo-key>/DevToolsActivePort`). The repo key is the first 16 lowercase hex digits of SHA-256 of the canonical main repository path. Read the first line of that file, then pass the port to an automation client:
+Design Mode records the current page's uncaught errors, unhandled promise rejections, `console.error` calls and failed `<script>`, `<link>` and `<img>` loads (a 404 module included), in every frame, from the start of the page load. Each record has a message, source URL, line and column, stack and time. The sidebar keeps the last 50 per tab, deduplicated by message and source, and clears them when the tab loads a new page.
 
-```sh
-agent-browser --session design-mode --cdp <port> snapshot
-```
+When errors exist, the sidebar shows an **Errors** section with a count badge. Tick **Attach to feedback** to send them with your next batch, or use **Send errors only** to send them alone, without any comment. Sent errors are removed from the list. They are untrusted page content: Rust strips terminal controls and URL queries, redacts recognised secrets, bounds the text and fences it, exactly like picks. Failed `fetch` and XHR requests are not observed.
 
-For example, replace `<port>` with `9222` if the file's first line is `9222`. This attaches to the existing Chrome instead of launching a second browser. The port is bound to loopback on the host running TUICommander. Browser/PWA clients can request Design Mode, but its Chrome window opens on that host's screen.
+## Connection and evidence
 
-The selected page is untrusted input. TUICommander limits the grab text, drops event-handler attributes and unsafe URLs, redacts recognised secrets, removes terminal control characters, and encodes field delimiters in page-controlled attribute, style, and token values before inserting the draft. Screenshot capture can fail or exceed its size limit; in that case the text is still inserted without an image line.
+The native host pins the extension identity, repository and exact TUIC instance. It relays a bounded set of operations over that instance’s local socket or named pipe. Reopen Design Mode after restarting TUIC to refresh its binding. Connection failures show the endpoint and reason. An older running backend can list agents but returns an explicit restart error for the new feedback/discovery route.
+
+Cards retain selectors, DOM paths, snippets, selected styles, CSS tokens and available framework source hints. CSS tokens include references in shorthand declarations such as `padding: var(--gap)`, inline styles and adopted sheets in open shadow roots; unrelated theme tokens are excluded. Rust bounds and sanitises page evidence, redacts recognised secrets, strips terminal controls and fences it as untrusted content. Captured PNG crops are saved in `design-grabs` and sent as readable `[image: path]` references. Screenshot capture is optional: permission errors and oversized crops retain DOM evidence. Cross-origin frame picks currently retain DOM evidence without frame screenshots.
+
+Discovery lists only the dev servers of the agent selected in the side panel (initially the session that launched Design Mode; the list refreshes when you pick another agent): the configured **Dev Server URL**, live listeners attributed by process directory or an absolute command path to that session’s worktree, and URLs that session printed in its own terminal. Other worktrees of the repository and other sessions are not listed. Live listeners must answer HTTP GET `/` successfully with a `text/html` Content-Type within 750 ms. TUIC itself is excluded. Probes do not follow redirects; the scan has a 3-second budget. Fresh PTY URLs are accepted only when their port has a verified live owned HTML listener. Multiple candidates are listed instead of automatically choosing one. Windows native host registration currently targets Edge and awaits Chrome/multi-profile validation. Windows discovery offers configured URLs and the address bar; listener attribution is not claimed there. Repo-local `.tuic.json` cannot silently supply executable scripts.
+
+The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Agents ask the browser to reload the reviewed tab with MCP `ui` `action: "design_reload"` (for static pages without HMR). The extension also tells TUICommander it is alive every 5 s: Design Mode stops by itself 60 s after the browser goes away. Everyday-profile installation is later work.
+
+### Start from a link or coordinator
+
+Right-click a terminal HTTP(S) link and choose **Start in Design Mode**, then **Edge** or **Chrome**. This always starts or rebinds to that terminal agent and opens the exact URL, even if another agent is already connected. The D badge follows the bound session.
+
+For layout work, coordinators use MCP `ui` with `action: "design_start"`, `session_id` naming the live terminal agent, and `url` naming the HTTP(S) page. Optional `browser` selects `chrome` or `edge`. Use `action: "design_status"` for bindings and `action: "design_stop"` with the returned `repoPath` as `repo_path`. Browser launch happens on the host; an ACP coordinator does not become the terminal agent.
+
+If the sidebar icon is hidden, open the Extensions (puzzle) menu and pin **TUICommander Design Mode**. You can also press **Option+Shift+D** on macOS or **Alt+Shift+D** on Windows/Linux. Browser choice currently lists Edge and Chrome; launch reports if the chosen browser is not installed.
+
+### Agent browser commands
+
+Agents can request `design_navigate`, `design_reload`, `design_screenshot`,
+`design_errors`, and `design_eval` through `ui`. The native port returns a request-id-matched reply, with a ten-second
+timeout. Open the sidebar on the page to select the reviewed tab. Screenshot fails
+if that tab is not visible; it never captures a different active tab. PNG files are
+stored in the instance's `design-grabs` directory. Errors and eval values are bounded,
+redacted evidence, not instructions. Navigation reports acceptance, not page-load completion.
+
+Local HTTP(S) navigation is allowed by default. Remote navigation needs a host grant.
+Use **Allow eval on this host** or **Allow agents on all sites** in the sidebar to
+explicitly permit agent JavaScript. Default localhost inspection access alone does
+not permit eval. Grants are Chrome extension permissions and can be revoked in
+Chrome's extension settings. Eval runs in the page MAIN world without a debugger port.
+The sidebar retains the last fifty agent actions with session, action, time and outcome.
+
+Direct tools/list, meta search and schema lookup expose Design Mode only for the
+armed terminal session. Start remains callable by its known tool name; otherwise
+arm Design Mode from the UI first. Remote error capture starts on the next page
+load after a host grant and is removed for future loads when the grant is revoked.
+Lifecycle changes emit `notifications/tools/list_changed`. Clients that cache tool
+schemas may still display an old tool; dispatch refuses it with
+`Design Mode not armed for this session`. Live refresh by Claude Code, Codex and ego
+has not yet been verified for this command channel.

@@ -1,7 +1,9 @@
-import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
+import { onFolderDropComplete } from "../../hooks/useFileDrop";
+import { initMouseDrag, isHoldPointer } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
@@ -18,7 +20,8 @@ import type { ContentMatch, DirEntry } from "../../types/fs";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { copyPathToClipboard } from "../../utils/clipboard";
-import { isAbsolutePath, joinPath, replaceBasename } from "../../utils/pathUtils";
+import { openLocalPath } from "../../utils/openUrl";
+import { isAbsolutePath, joinPath, pathStartsWith, replaceBasename } from "../../utils/pathUtils";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
@@ -96,6 +99,16 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	 * best-effort — list_directory still works because it canonicalizes repo_path.
 	 */
 	const root = () => uiStore.state.fileBrowserExternalRoot || props.fsRoot || props.repoPath;
+
+	// The external folder belongs to the repository it was opened from: picking
+	// another repository or worktree returns the browser to it.
+	createEffect(
+		on(
+			() => [props.repoPath, props.fsRoot],
+			() => uiStore.setFileBrowserExternalRoot(null),
+			{ defer: true },
+		),
+	);
 
 	/** The active markdown-panel tab when a file on disk backs it — a markdown tab
 	 * or an HTML preview. The other md types (virtual, plugin panels, dashboards,
@@ -578,7 +591,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		const raw = searchQuery().trim() ? searchResults() : entries();
 		if (sortBy() === "name") return raw; // already sorted by name from Rust
 		// Sort by date: dirs first, then newest first
-		return [...raw].sort((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || b.modified_at - a.modified_at);
+		return raw.toSorted((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || b.modified_at - a.modified_at);
 	});
 
 	/**
@@ -597,6 +610,19 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		setTreeCache(new Map());
 		setRefreshTrigger((n) => n + 1);
 	};
+
+	onCleanup(
+		onFolderDropComplete((request) => {
+			const fsRoot = root();
+			if (!fsRoot || request.connectionId !== repositoriesStore.getConnectionId(props.repoPath ?? "")) return;
+			if (
+				pathStartsWith(request.destDir, fsRoot) ||
+				(request.mode === "move" && request.paths.some((path) => pathStartsWith(path, fsRoot)))
+			) {
+				refresh();
+			}
+		}),
+	);
 
 	const navigateInto = (entry: DirEntry) => {
 		changeSubdir(entry.path);
@@ -840,7 +866,45 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		_ptrGhost.style.top = `${y - 8}px`;
 	};
 
+	// Touch and pen: a swipe is a scroll, never a file move (the move is irreversible).
+	// initMouseDrag arms the drag only after a hold and bails out on movement before that.
+	const handleHoldDragStart = (absPath: string, e: PointerEvent) => {
+		// The hold arms the drag without movement: a release in place or finger jitter
+		// (the context-menu gesture) must not drop the file on the folder under the
+		// finger, so a drop needs displacement beyond the touch slop and a pointer off
+		// the source row (whose nearest folder is the panel root).
+		const sourceRow = e.currentTarget as HTMLElement;
+		const slop = 10;
+		let moved = false;
+		const end = () => {
+			markInternalDragEnd();
+			ptrCleanup();
+			_ptrSrc = null;
+		};
+		initMouseDrag(e, e.currentTarget as HTMLElement, {
+			onStart: () => {
+				markInternalDragStart();
+				_ptrSrc = absPath;
+			},
+			onMove: (x, y) => {
+				if (Math.abs(x - e.clientX) + Math.abs(y - e.clientY) > slop) moved = true;
+				ptrHighlight(x, y);
+			},
+			onDrop: (x, y) => {
+				const target = moved && !sourceRow.contains(document.elementFromPoint(x, y)) ? findDropFolder(x, y) : null;
+				end();
+				if (target?.dataset.absPath) performFileMove(absPath, target.dataset.absPath);
+				_ptrSuppressClick = true;
+				requestAnimationFrame(() => {
+					_ptrSuppressClick = false;
+				});
+			},
+			onCancel: end,
+		});
+	};
+
 	const handlePointerDragStart = (absPath: string, e: PointerEvent) => {
+		if (isHoldPointer(e)) return handleHoldDragStart(absPath, e);
 		if (e.button !== 0) return;
 		// Must mark before drag threshold — Tauri's onDragDropEvent fires on any pointer
 		// hold, and without this flag the OS drop handler in dragDrop.ts would treat an
@@ -1000,10 +1064,8 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				action: () => {
 					const r = root();
 					if (!r) return;
-					import("@tauri-apps/plugin-opener").then(({ openPath }) => {
-						const abs = isAbsolutePath(entry.path) ? entry.path : joinPath(r, entry.path);
-						openPath(abs).catch((err) => appLogger.error("app", "Failed to open file with default app", err));
-					});
+					const abs = isAbsolutePath(entry.path) ? entry.path : joinPath(r, entry.path);
+					openLocalPath(abs);
 				},
 				separator: true,
 			});
@@ -1132,6 +1194,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			tabIndex={-1}
 			data-drop-target={panelDropDir() ? "folder" : undefined}
 			data-abs-path={panelDropDir()}
+			data-drop-connection-id={repositoriesStore.getConnectionId(props.repoPath ?? "")}
 		>
 			<Show when={mode() === "inline"}>
 				<PanelResizeHandle panelId="file-browser-panel" />
@@ -1157,6 +1220,24 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				</div>
 				<PanelWindowControls panelId="file-browser" mode={mode()} onInlineClose={props.onClose} />
 			</div>
+
+			<Show when={uiStore.state.fileBrowserExternalRoot}>
+				{(externalRoot) => (
+					<div class={s.externalRoot} data-testid="external-root-banner">
+						<span class={s.externalRootPath} title={externalRoot()}>
+							{externalRoot()}
+						</span>
+						<button
+							type="button"
+							class={s.externalRootBack}
+							title={t("fileBrowser.backToRepo", "Back to the active repository")}
+							onClick={() => uiStore.setFileBrowserExternalRoot(null)}
+						>
+							{t("fileBrowser.backToRepoLabel", "Back to repository")}
+						</button>
+					</div>
+				)}
+			</Show>
 
 			{/* Search filter with F/C mode toggle */}
 			<div class={s.searchBar}>

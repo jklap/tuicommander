@@ -9,6 +9,7 @@ import { worktreeManagerStore } from "../../stores/worktreeManager";
 import type { BranchPrStatus } from "../../types";
 import { formatRelativeTime } from "../../utils/time";
 import b from "../shared/branch.module.css";
+import { Input } from "../ui/Input";
 import s from "./WorktreeManager.module.css";
 
 /** Row data derived from repo/branch state */
@@ -44,7 +45,7 @@ interface OrphanRow {
 /** Extract display name (last path segment) from a path */
 function displayName(path: string): string {
 	const segments = path.replace(/\/+$/, "").split("/");
-	return segments[segments.length - 1] || path;
+	return segments.at(-1)! || path;
 }
 
 /** Action callbacks for worktree row operations */
@@ -272,7 +273,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 								</div>
 							</Show>
 						</div>
-						<input
+						<Input
 							class={s.searchInput}
 							type="text"
 							placeholder="Filter worktrees…"
@@ -286,7 +287,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 
 					<div class={s.list}>
 						<Show when={worktrees().length === 0 && orphanRows().length === 0}>
-							<div class={s.empty}>No worktrees found. Create one from the sidebar.</div>
+							<div class={s.empty}>No worktrees found.</div>
 						</Show>
 
 						<Show when={worktrees().length > 0 || orphanRows().length > 0}>

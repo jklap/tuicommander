@@ -84,10 +84,10 @@ always moves TUIC history.
 |----------|--------|
 | Cmd+P | Command palette |
 | Cmd+Shift+K | Prompt library |
-| Cmd+R | Run saved command |
-| Cmd+Shift+R | Edit saved command |
+| Cmd+Shift+R | Run saved command |
+| Cmd+R | Reload active web/preview tab |
 | Cmd+Shift+F | Search file contents |
-| Cmd+Ctrl+1–9 | Quick branch switch (hold Cmd+Ctrl, press number) |
+| Cmd+Ctrl+1–9 | Quick branch switch (hold Cmd+Ctrl, press number); in the Global Workspace it switches to tab N |
 
 ### Zoom
 

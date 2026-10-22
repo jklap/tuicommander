@@ -10,6 +10,19 @@ command = "sh scripts/nextest-test-tmp.sh"
 [scripts.setup.repo-test-temp-windows]
 command = "powershell -NoProfile -File scripts/nextest-test-tmp.ps1"
 
+# The bin fixtures are consumed by three groups of lib unit tests (they
+# derive the path from current_exe): mcp_proxy::stdio_client::tests and the ACP
+# push test in state.rs, plus acp_chat::tests::custom_chat_*. Integration tests reach the same bins through
+# CARGO_BIN_EXE_*, which cargo itself builds. Every setup entry below is
+# filtered to those consumers, so a run that selects none of them skips the
+# ~5 min build (#1308-50c9). A new lib unit test that spawns a fixture bin must
+# be added to the filter; scripts/check-nextest-fixture-scope.sh guards it.
+[scripts.setup.fixture-bins-unix]
+command = "sh scripts/build-fixture-bins.sh"
+
+[scripts.setup.fixture-bins-windows]
+command = "powershell -NoProfile -File scripts/build-fixture-bins.ps1"
+
 [profile.default]
 # Surface long-running tests (warn at 30s, 60s, 90s) and hard-kill true hangs
 # at 120s. The slowest legit tests here are the tunnels supervisor retry tests
@@ -24,6 +37,16 @@ setup = "repo-test-temp-unix"
 platform = { host = "cfg(windows)" }
 setup = "repo-test-temp-windows"
 
+[[profile.default.scripts]]
+platform = { host = "cfg(unix)" }
+filter = 'binary_id(=tuicommander) & (test(/^mcp_proxy::stdio_client::tests::/) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service) | test(/^acp_chat::tests::custom_chat_/))'
+setup = "fixture-bins-unix"
+
+[[profile.default.scripts]]
+platform = { host = "cfg(windows)" }
+filter = 'binary_id(=tuicommander) & (test(/^mcp_proxy::stdio_client::tests::/) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service) | test(/^acp_chat::tests::custom_chat_/))'
+setup = "fixture-bins-windows"
+
 # The git_reads parity/shootout tests each spawn several `git` subprocesses in
 # their own TempDir fixture. Under the full parallel run they occasionally hit
 # transient git-subprocess contention (observed: cli_parity_with_legacy failing
@@ -35,6 +58,13 @@ git-subprocess = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'test(/^git_reads::tests::/)'
 test-group = 'git-subprocess'
+
+# Explicitly ignored request-volume measurement: two real 60s windows plus
+# rate-limit checks need more than the routine 120s bound. Its own hang bound
+# is 300s; the outer harness must be strictly larger.
+[[profile.default.overrides]]
+filter = 'test(=github_poller::volume_measurement_1995::measure_github_client_fixture_1995)'
+slow-timeout = { period = "30s", terminate-after = 12 }
 
 [profile.ci]
 # On CI, keep going after a failure so a run reports every failing test, and
@@ -51,6 +81,16 @@ setup = "repo-test-temp-unix"
 [[profile.ci.scripts]]
 platform = { host = "cfg(windows)" }
 setup = "repo-test-temp-windows"
+
+[[profile.ci.scripts]]
+platform = { host = "cfg(unix)" }
+filter = 'binary_id(=tuicommander) & (test(/^mcp_proxy::stdio_client::tests::/) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service) | test(/^acp_chat::tests::custom_chat_/))'
+setup = "fixture-bins-unix"
+
+[[profile.ci.scripts]]
+platform = { host = "cfg(windows)" }
+filter = 'binary_id(=tuicommander) & (test(/^mcp_proxy::stdio_client::tests::/) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service) | test(/^acp_chat::tests::custom_chat_/))'
+setup = "fixture-bins-windows"
 
 [profile.ci.junit]
 path = "junit.xml"

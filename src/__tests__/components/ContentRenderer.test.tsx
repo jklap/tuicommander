@@ -323,6 +323,25 @@ describe("ContentRenderer", () => {
 			expect(img.getAttribute("src")).toBe("asset://localhost/Users/me/repo/assets/diagram.png");
 		});
 
+		it("resolves a relative image against baseDir for a file outside any repository", () => {
+			const { container } = render(() => (
+				<ContentRenderer content="![x](img/x.png)" baseDir="/Users/me/Gits/.tmp/boss" />
+			));
+			expect(container.querySelector("img")?.getAttribute("src")).toBe(
+				"asset://localhost/Users/me/Gits/.tmp/boss/img/x.png",
+			);
+		});
+
+		// Catches: absolute path concatenated onto baseDir (`<baseDir>//Users/...`).
+		it("maps an absolute image path to the asset protocol without prefixing baseDir", () => {
+			const { container } = render(() => (
+				<ContentRenderer content="![x](/Users/me/Gits/.tmp/boss/img/x.png)" baseDir="/Users/me/other" />
+			));
+			expect(container.querySelector("img")?.getAttribute("src")).toBe(
+				"asset://localhost/Users/me/Gits/.tmp/boss/img/x.png",
+			);
+		});
+
 		it("preserves tauri:// image src through sanitization", () => {
 			const md = "![diagram](tauri://localhost/foo.png)";
 			const { container } = render(() => <ContentRenderer content={md} />);

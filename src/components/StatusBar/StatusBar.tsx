@@ -10,7 +10,9 @@ import {
 	Switch,
 } from "solid-js";
 import { AGENT_DISPLAY } from "../../agents";
+import { AGENT_USAGE_BLINK_THRESHOLD } from "../../features/usageThresholds";
 import { useGitHub } from "../../hooks/useGitHub";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
@@ -31,11 +33,13 @@ import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { activePrStatus } from "../../utils/mergedPrGrace";
+import { prReadinessOf } from "../../utils/prReadiness";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { AgentIcon } from "../ui/AgentIcon";
 import { CountBadge } from "../ui/CountBadge";
 import { CiBadge, PrBadge } from "../ui/StatusBadge";
 import { ZoomIndicator } from "../ui/ZoomIndicator";
+import { ProviderRecoveryStatus } from "./ProviderRecoveryStatus";
 import s from "./StatusBar.module.css";
 import { TickerArea } from "./TickerArea";
 
@@ -69,7 +73,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 				kind: interaction.kind,
 			})),
 		);
-		notificationsStore.syncAcpAttention(interactions, !uiStore.state.aiChatPanelVisible);
+		notificationsStore.syncAcpAttention(interactions);
 	});
 	const [showPrDetailPopover, setShowPrDetailPopover] = createSignal(false);
 	const [cwdCopied, setCwdCopied] = createSignal(false);
@@ -146,9 +150,17 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 	// Pendulum ticker: detect overflow on notification text
 	let infoContainerRef: HTMLSpanElement | undefined;
 	let infoTextRef: HTMLSpanElement | undefined;
+	let infoBalloonRef: HTMLDivElement | undefined;
 	const [tickerActive, setTickerActive] = createSignal(false);
 	const [infoBalloonOpen, setInfoBalloonOpen] = createSignal(false);
 	const [infoPulse, setInfoPulse] = createSignal(false);
+
+	// The info text toggles the balloon, so it counts as inside.
+	useOutsideDismiss({
+		inside: () => [infoBalloonRef, infoContainerRef],
+		onClose: () => setInfoBalloonOpen(false),
+		enabled: infoBalloonOpen,
+	});
 
 	// Close balloon on Escape
 	onMount(() => {
@@ -276,8 +288,9 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						</span>
 					</span>
 					<Show when={infoBalloonOpen()}>
-						<div class={s.infoBalloonOverlay} onClick={() => setInfoBalloonOpen(false)} />
-						<div class={s.infoBalloon}>{props.statusInfo}</div>
+						<div ref={infoBalloonRef} class={s.infoBalloon}>
+							{props.statusInfo}
+						</div>
 					</Show>
 				</Show>
 				<Show when={cwdParts()}>
@@ -297,7 +310,12 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					</span>
 				</Show>
 				<TickerArea />
-				<Show when={terminalsStore.getActive()?.agentType}>
+				<Show when={terminalsStore.getActive()?.providerRecovery}>
+					{(recovery) => (
+						<ProviderRecoveryStatus recovery={recovery()} sessionId={terminalsStore.getActive()?.sessionId ?? ""} />
+					)}
+				</Show>
+				<Show when={!terminalsStore.getActive()?.providerRecovery && terminalsStore.getActive()?.agentType}>
 					{(agentType) => {
 						const display = () => AGENT_DISPLAY[agentType()];
 						const ul = () => terminalsStore.getActive()?.usageLimit ?? null;
@@ -336,8 +354,10 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 											<span
 												class={cx(
 													s.agentUsage,
-													ticker().priority >= 90 && s.agentUsageCritical,
-													ticker().priority >= 50 && ticker().priority < 90 && s.agentUsageWarning,
+													ticker().priority >= AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageCritical,
+													ticker().priority >= 50 &&
+														ticker().priority < AGENT_USAGE_BLINK_THRESHOLD &&
+														s.agentUsageWarning,
 												)}
 											>
 												{" "}
@@ -350,8 +370,8 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 											<span
 												class={cx(
 													s.agentUsage,
-													ul().percentage >= 90 && s.agentUsageCritical,
-													ul().percentage >= 70 && ul().percentage < 90 && s.agentUsageWarning,
+													ul().percentage >= AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageCritical,
+													ul().percentage >= 70 && ul().percentage < AGENT_USAGE_BLINK_THRESHOLD && s.agentUsageWarning,
 												)}
 											>
 												{" "}
@@ -387,9 +407,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					<PrBadge
 						number={activePrData()!.number}
 						title={activePrData()!.title}
-						state={activePrData()!.state}
-						mergeable={activePrData()!.mergeable}
-						mergeStateStatus={activePrData()!.merge_state_status}
+						readiness={prReadinessOf(activePrData()!)}
 						onClick={() => setShowPrDetailPopover(true)}
 					/>
 					<Show when={activePrData()!.checks && activePrData()!.checks!.total > 0}>

@@ -4,12 +4,15 @@ import { normalizeCombo } from "../keybindingDefaults";
 import { lastMenuActionTime } from "../menuDedup";
 import { isMacOS, isQuickSwitcherActive } from "../platform";
 import { pluginRegistry } from "../plugins/pluginRegistry";
+import { dictationStore } from "../stores/dictation";
+import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { globalWorkspaceTabIds } from "../utils/paneTabOrder";
 
 /**
  * Normalized combos that are reserved by browsers and should not be intercepted
@@ -41,6 +44,8 @@ export interface ShortcutHandlers {
 	reopenClosedTab: () => void;
 	navigateTab: (direction: "prev" | "next") => void;
 	focusLastTerminal: () => void;
+	historyBack: () => void;
+	historyForward: () => void;
 	jumpWaitingTerminal: () => void;
 	clearTerminal: () => void;
 	refreshTerminal: () => void;
@@ -48,6 +53,8 @@ export interface ShortcutHandlers {
 	handleTerminalSelect: (id: string) => void;
 	handleSplit: (direction: "vertical" | "horizontal") => void;
 	handleRunCommand: (forceDialog: boolean) => void;
+	/** Reload the active web/preview tab. Returns false when there is none. */
+	reloadActiveTab: () => boolean;
 	switchToBranchByIndex: (index: number) => void;
 	isQuickSwitcherOpen: () => boolean;
 	toggleMarkdownPanel: () => void;
@@ -87,6 +94,7 @@ export interface ShortcutHandlers {
 	openPath: () => void;
 	openSecondaryWindow: () => void;
 	toggleCommandOverview: () => void;
+	openTasks: () => void;
 	toggleComposePanel: () => void;
 	detachActivityDashboard: () => void;
 	toggleProcessManager: () => void;
@@ -232,6 +240,8 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "edit-command":
 			handlers.handleRunCommand(true);
 			return true;
+		case "reload-tab":
+			return handlers.reloadActiveTab();
 
 		// Panel toggles
 		case "toggle-markdown":
@@ -342,11 +352,17 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "command-overview":
 			handlers.toggleCommandOverview();
 			return true;
+		case "open-tasks":
+			handlers.openTasks();
+			return true;
 		case "toggle-compose-panel":
 			handlers.toggleComposePanel();
 			return true;
+		case "answers-only":
+			terminalsStore.toggleAnswersOnly();
+			return true;
 		case "toggle-hands-free":
-			void toggleHandsFreeConversation();
+			if (dictationStore.state.enabled) void toggleHandsFreeConversation();
 			return true;
 		case "detach-activity-dashboard":
 			handlers.detachActivityDashboard();
@@ -374,6 +390,12 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "focus-last-terminal":
 			handlers.focusLastTerminal();
 			return true;
+		case "history-back":
+			handlers.historyBack();
+			return true;
+		case "history-forward":
+			handlers.historyForward();
+			return true;
 		case "jump-waiting-terminal":
 			handlers.jumpWaitingTerminal();
 			return true;
@@ -383,8 +405,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			const tabMatch = action.match(/^switch-tab-(\d)$/);
 			if (tabMatch) {
 				const index = parseInt(tabMatch[1], 10) - 1;
-				const ids = handlers.terminalIds();
-				if (index < ids.length) handlers.handleTerminalSelect(ids[index]);
+				selectTabByIndex(handlers, index);
 				return true;
 			}
 
@@ -398,6 +419,13 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return false;
 		}
 	}
+}
+
+/** Select the tab at `index` (0-based) as displayed: the workspace tabs in the
+ *  global workspace, the active branch's terminals otherwise. */
+function selectTabByIndex(handlers: ShortcutHandlers, index: number): void {
+	const ids = globalWorkspaceTabIds() ?? handlers.terminalIds();
+	if (index < ids.length) handlers.handleTerminalSelect(ids[index]);
 }
 
 /** Register keyboard shortcuts. Returns cleanup function. */
@@ -430,14 +458,19 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 
 		// Quick switch to branch by index (Cmd+Ctrl+N on macOS, Ctrl+Alt+N on Win/Linux)
 		// This uses platform-specific modifier detection, handled separately
+		// The chord's hints are shown on the tabs in the global workspace (App.tsx),
+		// so there it selects tab N and never leaves the workspace.
 		if (isQuickSwitcherActive(e) && e.key >= "1" && e.key <= "9") {
 			e.preventDefault();
-			handlers.switchToBranchByIndex(parseInt(e.key, 10));
+			const index = parseInt(e.key, 10);
+			if (globalWorkspaceStore.isActive()) selectTabByIndex(handlers, index - 1);
+			else handlers.switchToBranchByIndex(index);
 			return;
 		}
 
-		// When quick switcher is open, skip other shortcuts
-		if (handlers.isQuickSwitcherOpen()) return;
+		// The held chord also prefixes configured letter actions (Ctrl+Alt+V on Win/Linux).
+		// Numeric branch selection keeps priority above; do not suppress those actions.
+		if (handlers.isQuickSwitcherOpen() && !isQuickSwitcherActive(e)) return;
 
 		// Navigate between split panes (Alt+Arrow) — layout-dependent, not configurable
 		// Skip when focus is in an input field (Alt+Arrow = move cursor by word on macOS)
@@ -501,6 +534,19 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 		}
 	};
 
-	document.addEventListener("keydown", handleKeydown);
-	return () => document.removeEventListener("keydown", handleKeydown);
+	// Held quick-switcher chords must dispatch before the terminal's target listener.
+	const handleQuickSwitcherKeydown = (e: KeyboardEvent) => {
+		if (!isQuickSwitcherActive(e)) return;
+		handleKeydown(e);
+		if (e.defaultPrevented) e.stopPropagation();
+	};
+	const handleOtherKeydown = (e: KeyboardEvent) => {
+		if (!isQuickSwitcherActive(e)) handleKeydown(e);
+	};
+	document.addEventListener("keydown", handleQuickSwitcherKeydown, true);
+	document.addEventListener("keydown", handleOtherKeydown);
+	return () => {
+		document.removeEventListener("keydown", handleQuickSwitcherKeydown, true);
+		document.removeEventListener("keydown", handleOtherKeydown);
+	};
 }

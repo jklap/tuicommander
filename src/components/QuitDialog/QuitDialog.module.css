@@ -64,3 +64,12 @@
 .quit:hover {
   filter: brightness(1.1);
 }
+
+.remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+}

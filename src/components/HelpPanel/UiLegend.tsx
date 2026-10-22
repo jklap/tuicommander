@@ -1,6 +1,6 @@
-import { type Component, For, type JSX } from "solid-js";
+import { type Component, For } from "solid-js";
 import { PrStateBadge } from "../Sidebar/PrStateBadge";
-import { BranchIcon } from "../Sidebar/RepoSection";
+import { BranchIcon, type BranchIconProps, UnmergedMarker } from "../Sidebar/RepoSection";
 import s from "./UiLegend.module.css";
 
 // ---------------------------------------------------------------------------
@@ -53,45 +53,45 @@ interface SymbolEntry {
 
 /** Sidebar row icons. Each entry renders the real `BranchIcon` with the props
  *  that select its shape, so the legend can never drift from the sidebar. */
-interface BranchIconEntry {
-	icon: () => JSX.Element;
+export interface BranchIconEntry {
+	icon: BranchIconProps;
 	label: string;
 	description: string;
 }
 
-const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
+export const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
 	{
-		icon: () => <BranchIcon isMainBranch isMainWorktree branchHasTerminals />,
+		icon: { isMainBranch: true, isMainWorktree: true, branchHasTerminals: true },
 		label: "Main branch",
 		description: "Primary branch (main/master)",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree branchHasTerminals />,
+		icon: { isMainBranch: false, isMainWorktree: true, branchHasTerminals: true },
 		label: "Feature branch",
 		description: "Main worktree switched to another branch",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} branchHasTerminals />,
+		icon: { isMainBranch: false, isMainWorktree: false, branchHasTerminals: true },
 		label: "Worktree",
 		description: "Linked git worktree",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} isShell branchHasTerminals />,
+		icon: { isMainBranch: false, isMainWorktree: false, isShell: true, branchHasTerminals: true },
 		label: "Shell",
 		description: "Folder without a git repository",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} hasQuestion branchHasTerminals />,
+		icon: { isMainBranch: false, isMainWorktree: false, hasQuestion: true, branchHasTerminals: true },
 		label: "Awaiting input",
 		description: "A terminal needs input",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} hasError branchHasTerminals />,
+		icon: { isMainBranch: false, isMainWorktree: false, hasError: true, branchHasTerminals: true },
 		label: "Error",
 		description: "API error or agent stuck",
 	},
 	{
-		icon: () => <BranchIcon isMainBranch={false} isMainWorktree={false} branchHasTerminals={false} />,
+		icon: { isMainBranch: false, isMainWorktree: false, branchHasTerminals: false },
 		label: "Idle",
 		description: "No open terminal on this row",
 	},
@@ -99,13 +99,13 @@ const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
 
 /** Rendered with the real sidebar component, so the legend cannot drift from
  *  what a branch row shows — color, shape and pulse included. */
-interface PrLegendEntry {
+export interface PrLegendEntry {
 	label: string;
 	description: string;
 	badge: Partial<Parameters<typeof PrStateBadge>[0]>;
 }
 
-const PR_BADGE_LEGEND: PrLegendEntry[] = [
+export const PR_BADGE_LEGEND: PrLegendEntry[] = [
 	{ label: "Open", description: "Open PR", badge: { state: "open" } },
 	{
 		label: "Ready",
@@ -129,9 +129,24 @@ const PR_BADGE_LEGEND: PrLegendEntry[] = [
 		description: "Changes requested",
 		badge: { state: "open", reviewDecision: "CHANGES_REQUESTED" },
 	},
+	{
+		label: "Comments",
+		description: "Unresolved review threads (bot and human)",
+		badge: { state: "open", unresolvedThreads: 1 },
+	},
 	{ label: "Review", description: "Awaiting review", badge: { state: "open", reviewDecision: "REVIEW_REQUIRED" } },
 	{ label: "CI Running", description: "CI in progress (pulsing)", badge: { state: "open", ciPending: 1 } },
 	{ label: "Merged", description: "PR merged", badge: { state: "merged" } },
+	{ label: "Closed", description: "PR closed without merging", badge: { state: "closed" } },
+];
+
+const TOOLBAR_COUNT_LEGEND: SymbolEntry[] = [
+	{
+		symbol: "↑N",
+		label: "Ahead",
+		description: "Selected branch has N commits not pushed to its upstream. Absent without an upstream",
+	},
+	{ symbol: "↓N", label: "Behind", description: "Selected branch is N commits behind its upstream" },
 ];
 
 const STATS_LEGEND: SymbolEntry[] = [
@@ -149,7 +164,6 @@ export const UiLegend: Component = () => {
 			{/* Terminal dot states */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Terminal Status Dots</label>
-				<p class={s.hint}>The colored dot on each terminal tab</p>
 				<div class={s.grid}>
 					<For each={TERMINAL_DOT_LEGEND}>
 						{(entry) => (
@@ -166,7 +180,6 @@ export const UiLegend: Component = () => {
 			{/* Tab type colors */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Tab Types</label>
-				<p class={s.hint}>Background tint and bottom border color by tab type</p>
 				<div class={s.grid}>
 					<For each={TAB_TYPE_LEGEND}>
 						{(entry) => (
@@ -183,7 +196,6 @@ export const UiLegend: Component = () => {
 			{/* Panel colors */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Panels</label>
-				<p class={s.hint}>Right-side panel accent colors</p>
 				<div class={s.grid}>
 					<For each={PANEL_COLOR_LEGEND}>
 						{(entry) => (
@@ -200,12 +212,13 @@ export const UiLegend: Component = () => {
 			{/* Sidebar branch icons */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Sidebar Symbols</label>
-				<p class={s.hint}>The icon at the start of each sidebar row</p>
 				<div class={s.grid}>
 					<For each={SIDEBAR_SYMBOL_LEGEND}>
 						{(entry) => (
 							<div class={s.row}>
-								<span class={s.symbol}>{entry.icon()}</span>
+								<span class={s.symbol}>
+									<BranchIcon {...entry.icon} />
+								</span>
 								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>
@@ -214,15 +227,44 @@ export const UiLegend: Component = () => {
 				</div>
 			</div>
 
+			{/* Unmerged marker */}
+			<div class={s.group}>
+				<label class={s.groupLabel}>Branch Markers</label>
+				<div class={s.grid}>
+					<div class={s.row}>
+						<span class={s.symbol}>
+							<UnmergedMarker />
+						</span>
+						<span class={s.label}>Unmerged</span>
+						<span class={s.desc}>Commits not merged into the default branch. Not a dirty worktree</span>
+					</div>
+				</div>
+			</div>
+
 			{/* PR badges */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>PR Status Badges</label>
-				<p class={s.hint}>Shown next to branches with a pull request. Hover the marker for the state name</p>
 				<div class={s.grid}>
 					<For each={PR_BADGE_LEGEND}>
 						{(entry) => (
 							<div class={s.row}>
 								<PrStateBadge compact prNumber={42} {...entry.badge} />
+								<span class={s.label}>{entry.label}</span>
+								<span class={s.desc}>{entry.description}</span>
+							</div>
+						)}
+					</For>
+				</div>
+			</div>
+
+			{/* Toolbar ahead/behind */}
+			<div class={s.group}>
+				<label class={s.groupLabel}>Toolbar Branch Counts</label>
+				<div class={s.grid}>
+					<For each={TOOLBAR_COUNT_LEGEND}>
+						{(entry) => (
+							<div class={s.row}>
+								<span class={s.symbol}>{entry.symbol}</span>
 								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>

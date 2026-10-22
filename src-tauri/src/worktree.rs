@@ -6,7 +6,6 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "desktop")]
@@ -14,13 +13,101 @@ use tauri::State;
 
 pub(crate) use tuic_git::worktree::*;
 
-fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
-    let Some(url) = crate::git::read_remote_url(repo) else {
-        return false;
-    };
-    let Some((host, owner, name)) = crate::github_account::parse_remote_url(&url) else {
-        return false;
-    };
+/// Call only on a blocking thread; the domain callback stays synchronous.
+pub(crate) fn pr_proof(
+    state: Arc<AppState>,
+    rt: tokio::runtime::Handle,
+) -> impl Fn(&Path, &str, &str) -> bool {
+    move |repo, branch, tip| {
+        rt.block_on(query_merged_github_pr(&state, repo, branch, tip))
+            .unwrap_or(false)
+    }
+}
+
+/// Capture the runtime before a domain wrapper fans out to scoped OS threads.
+fn merged_github_pr_proves_tip(state: &Arc<AppState>) -> impl Fn(&Path, &str, &str) -> bool {
+    let proof = tokio::runtime::Handle::try_current()
+        .ok()
+        .map(|rt| pr_proof(Arc::clone(state), rt));
+    move |repo, branch, tip| proof.as_ref().is_some_and(|proof| proof(repo, branch, tip))
+}
+
+/// How long the sidebar refresh trusts a GitHub answer for one branch tip.
+const PR_PROOF_TTL: Duration = Duration::from_secs(300);
+
+static PR_PROOFS: std::sync::LazyLock<moka::sync::Cache<(PathBuf, String, String), bool>> =
+    std::sync::LazyLock::new(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(1024)
+            .time_to_live(PR_PROOF_TTL)
+            .build()
+    });
+
+/// Listing must not wait for GitHub behind the native CLI response deadline.
+/// A miss is unproven; normal monitoring may populate this same definitive cache.
+pub(crate) fn merged_github_pr_proves_tip_cached(repo: &Path, branch: &str, tip: &str) -> bool {
+    PR_PROOFS
+        .get(&(repo.to_path_buf(), branch.to_owned(), tip.to_owned()))
+        .unwrap_or(false)
+}
+
+/// Sidebar monitoring variant: every repository refresh asked GitHub about every
+/// unmerged branch (one paginated GraphQL lookup each), many times a minute under agent
+/// writes. A definitive answer is reused for `PR_PROOF_TTL`; a failed lookup is
+/// not remembered. Removal preflights keep the uncached function above.
+pub(crate) fn merged_github_pr_proves_tip_monitoring(
+    state: &Arc<AppState>,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> bool {
+    cached_pr_proof(&PR_PROOFS, repo, branch, tip, || {
+        let rt = tokio::runtime::Handle::try_current().ok()?;
+        rt.block_on(query_merged_github_pr(state, repo, branch, tip))
+    })
+}
+
+fn cached_pr_proof(
+    cache: &moka::sync::Cache<(PathBuf, String, String), bool>,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    lookup: impl FnOnce() -> Option<bool>,
+) -> bool {
+    let key = (repo.to_path_buf(), branch.to_owned(), tip.to_owned());
+    if let Some(answer) = cache.get(&key) {
+        return answer;
+    }
+    match lookup() {
+        Some(answer) => {
+            cache.insert(key, answer);
+            answer
+        }
+        None => false,
+    }
+}
+
+/// `None` when GitHub could not be asked or did not answer.
+async fn query_merged_github_pr(
+    state: &AppState,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> Option<bool> {
+    let api = crate::github_pr_api::RepoApi::resolve(state, repo.to_str()?)
+        .await
+        .ok()?;
+    let variables = serde_json::json!({"owner":api.owner, "name":api.repo, "branch":branch});
+    query_merged_github_pr_with(&api, variables, repo, branch, tip).await
+}
+
+async fn query_merged_github_pr_with(
+    api: &impl crate::github_pr_api::PrApi,
+    variables: serde_json::Value,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+) -> Option<bool> {
     let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
         pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED]) {
@@ -29,45 +116,31 @@ fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
         }
       }
     }"#;
-    let mut command = Command::new(crate::agent::resolve_cli("gh"));
-    command.current_dir(repo).args([
-        "api",
-        "graphql",
-        "--paginate",
-        "--slurp",
-        "--hostname",
-        host.as_str(),
-        "-f",
-        &format!("query={query}"),
-        "-f",
-        &format!("owner={owner}"),
-        "-f",
-        &format!("name={name}"),
-        "-f",
-        &format!("branch={branch}"),
-    ]);
-    crate::cli::apply_no_window(&mut command);
-    let Ok(output) = crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20))
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let Ok(pages) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return false;
-    };
-    tuic_git::worktree::merged_pr_proof_from_pages(repo, branch, tip, &pages)
+    const MAX_PAGES: usize = 100;
+    let pages = crate::github_pr_api::graphql_pages(
+        api,
+        query,
+        variables,
+        "/data/repository/pullRequests",
+        MAX_PAGES,
+    )
+    .await
+    .ok()?;
+    let pages = serde_json::Value::Array(pages);
+    Some(tuic_git::worktree::merged_pr_proof_from_pages(
+        repo, branch, tip, &pages,
+    ))
 }
 
 pub(crate) fn inspect_workspace_lifecycle(
+    state: &Arc<AppState>,
     base_repo: &Path,
     workspace_id: &str,
 ) -> WorkspaceLifecycleStatus {
     tuic_git::worktree::inspect_workspace_lifecycle_with_pr(
         base_repo,
         workspace_id,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
@@ -86,13 +159,101 @@ pub(crate) struct WorktreeLiveSession {
     pub name: String,
 }
 
+/// Durable tabs still own their checkout even though their PTY has ended.
+fn suspended_users_in(checkout: &Path) -> Result<Vec<WorktreeLiveSession>, String> {
+    let root = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    Ok(crate::suspended_sessions::list()?
+        .into_values()
+        .filter(|record| {
+            std::iter::once(Path::new(&record.cwd))
+                .chain(
+                    record
+                        .worktree
+                        .as_ref()
+                        .map(|worktree| worktree.path.as_path()),
+                )
+                .any(|path| {
+                    path.canonicalize()
+                        .unwrap_or_else(|_| path.to_path_buf())
+                        .starts_with(&root)
+                })
+        })
+        .map(|record| WorktreeLiveSession {
+            session_id: record.tuic_session.clone(),
+            name: format!(
+                "Suspended tab: {}",
+                record.name.as_deref().unwrap_or(&record.tuic_session)
+            ),
+        })
+        .collect())
+}
+
+/// Suspended tabs cannot be terminated by a live-session confirmation.
+fn guard_suspended_users(checkout: &Path) -> Result<(), String> {
+    let users = suspended_users_in(checkout)?;
+    if users.is_empty() {
+        Ok(())
+    } else {
+        Err(live_session_reason(&users))
+    }
+}
+
+pub(crate) fn guard_suspended_workspace(repo: &Path, workspace_id: &str) -> Result<(), String> {
+    if let Ok(workspace) = resolve_any_workspace(repo, workspace_id) {
+        guard_suspended_users(Path::new(&workspace.path))?;
+    }
+    Ok(())
+}
+
+/// Live sessions and durable suspended tabs inside `checkout`. The one source of
+/// "who is working in this checkout" for every removal guard.
+pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<WorktreeLiveSession> {
+    let root = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let mut live_sessions = Vec::new();
+    for entry in &state.session_maps.sessions {
+        let session = entry.value().lock();
+        let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+            session
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.path.clone())
+        });
+        if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+            live_sessions.push(WorktreeLiveSession {
+                session_id: entry.key().clone(),
+                name: session
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| entry.key().clone()),
+            });
+        }
+    }
+    match suspended_users_in(checkout) {
+        Ok(users) => live_sessions.extend(users),
+        Err(error) => {
+            // Unknown durable ownership must veto allocation and automatic cleanup.
+            tracing::error!(%error, "Cannot inspect suspended checkout users");
+            live_sessions.push(WorktreeLiveSession {
+                session_id: "suspended-storage-unavailable".into(),
+                name: format!("Suspended tabs unavailable: {error}"),
+            });
+        }
+    }
+    live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    live_sessions
+}
+
 pub(crate) fn inspect_worktree_removal(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: &Path,
     workspace_id: &str,
 ) -> WorktreeRemovalPreview {
-    let lifecycle = inspect_workspace_lifecycle(repo_path, workspace_id);
-    let worktree_path = resolve_any_workspace(repo_path, workspace_id)
+    let lifecycle = inspect_workspace_lifecycle(state, repo_path, workspace_id);
+    let worktree_path = tuic_git::worktree::resolve_removable_workspace(repo_path, workspace_id)
         .ok()
         .map(|workspace| PathBuf::from(workspace.path));
     let untracked_files = worktree_path.as_ref().and_then(|path| {
@@ -113,31 +274,10 @@ pub(crate) fn inspect_worktree_removal(
                     .count()
             })
     });
-    let mut live_sessions = Vec::new();
-    if let Some(worktree_path) = &worktree_path {
-        let root = worktree_path
-            .canonicalize()
-            .unwrap_or_else(|_| worktree_path.clone());
-        for entry in &state.session_maps.sessions {
-            let session = entry.value().lock();
-            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
-                session
-                    .worktree
-                    .as_ref()
-                    .map(|worktree| worktree.path.clone())
-            });
-            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
-                live_sessions.push(WorktreeLiveSession {
-                    session_id: entry.key().clone(),
-                    name: session
-                        .display_name
-                        .clone()
-                        .unwrap_or_else(|| entry.key().clone()),
-                });
-            }
-        }
-        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-    }
+    let live_sessions = worktree_path
+        .as_deref()
+        .map(|path| live_sessions_in(state, path))
+        .unwrap_or_default();
     let mut warnings = Vec::new();
     match lifecycle.commit_status {
         WorkspaceCommitStatus::InSync => {
@@ -148,6 +288,9 @@ pub(crate) fn inspect_worktree_removal(
         }
         WorkspaceCommitStatus::Unmerged => {
             warnings.push("This branch has unmerged commits".to_string())
+        }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            warnings.push("This branch is not merged, but all its commits are pushed".to_string())
         }
         WorkspaceCommitStatus::Unknown => {
             warnings.push("Branch history could not be verified".to_string())
@@ -172,7 +315,53 @@ pub(crate) fn inspect_worktree_removal(
     }
 }
 
+fn retain_finished_checkout(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+) -> Result<Option<RemoveWorktreeOutcome>, String> {
+    if force || !delete_branch {
+        return Ok(None);
+    }
+    let repo = Path::new(repo_path);
+    let status = inspect_workspace_lifecycle(state, repo, workspace_id);
+    if status.dirty_files != Some(0)
+        || !status.submodule_unpushed_commits.is_empty()
+        || !matches!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+        )
+    {
+        return Ok(None);
+    }
+    // A pooled checkout is already recycled; removal takes it from here.
+    let Ok(workspace) = resolve_any_workspace(repo, workspace_id) else {
+        return Ok(None);
+    };
+    let users = live_sessions_in(state, Path::new(&workspace.path));
+    if !users.is_empty() {
+        return Err(live_session_reason(&users));
+    }
+    if operation_head_branch(&workspace.path).is_some() {
+        return Err("Cannot recycle a checkout during a Git operation".into());
+    }
+    archive_worktree(repo, workspace_id, archive_script)?;
+    Ok(Some(RemoveWorktreeOutcome {
+        branch_delete_warning: None,
+        removal_rule: "recyclable".into(),
+        branch: workspace.branch,
+    }))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat safety-confirmation contract plus account state"
+)]
 pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
+    state: &Arc<AppState>,
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
@@ -181,6 +370,19 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    guard_suspended_workspace(Path::new(repo_path), workspace_id)?;
+    if expected_fingerprint.is_none()
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -189,11 +391,17 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
         force,
         override_lock,
         expected_fingerprint,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn remove_worktree_with_presence_confirmation(
+    state: &Arc<AppState>,
     repo_path: &str,
     workspace_id: &str,
     delete_branch: bool,
@@ -203,6 +411,20 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    guard_suspended_workspace(Path::new(repo_path), workspace_id)?;
+    if expected_fingerprint.is_none()
+        && !confirm_missing_checkout
+        && let Some(outcome) = retain_finished_checkout(
+            state,
+            repo_path,
+            workspace_id,
+            delete_branch,
+            archive_script,
+            force,
+        )?
+    {
+        return Ok(outcome);
+    }
     tuic_git::worktree::remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         repo_path,
         workspace_id,
@@ -212,18 +434,34 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
         override_lock,
         expected_fingerprint,
         Some(confirm_missing_checkout),
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
+pub(crate) fn branch_integration(
+    state: &Arc<AppState>,
+    repo: &Path,
+    branch: &str,
+) -> Result<BranchIntegration, String> {
+    tuic_git::worktree::branch_integration_with_pr(repo, branch, merged_github_pr_proves_tip(state))
+}
+
+pub(crate) fn branch_integrations(
+    state: &Arc<AppState>,
+    repo: &Path,
+) -> Result<Vec<BranchIntegration>, String> {
+    tuic_git::worktree::branch_integrations_with_pr(repo, merged_github_pr_proves_tip(state))
+}
+
 pub(crate) fn delete_integrated_local_branch(
+    state: &Arc<AppState>,
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<tuic_git::worktree::DeletedBranch, String> {
     tuic_git::worktree::delete_integrated_local_branch_with_pr(
         repo_path,
         branch_name,
-        merged_github_pr_proves_tip,
+        merged_github_pr_proves_tip(state),
     )
 }
 
@@ -310,6 +548,32 @@ pub(crate) fn resolve_worktree_dir_for_repo(repo_path: &Path, app_worktrees_dir:
     resolve_worktree_dir(repo_path, &strategy, app_worktrees_dir)
 }
 
+/// Shared allocation adapter for IPC and HTTP/MCP. Finished checkouts never
+/// bypass the live-session guard, including descendants of the checkout root.
+pub(crate) fn allocate_workspace(
+    state: &Arc<AppState>,
+    directory: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+) -> Result<(CreatedWorkspace, Option<serde_json::Value>), String> {
+    let (workspace, recycled) = create_workspace_recycling(directory, config, base_ref, |path| {
+        live_sessions_in(state, path).is_empty()
+    })?;
+    let rename = recycled.as_ref().map(|old| {
+        serde_json::json!({
+            "old_path": old.path, "new_path": workspace.path.to_string_lossy()
+        })
+    });
+    if let Some(old) = recycled {
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: config.base_repo.clone(),
+            workspace_id: workspace_id_of_worktree(&old.branch),
+            branch: old.branch,
+        });
+    }
+    Ok((workspace, rename))
+}
+
 /// Create a linked worktree without a PTY session.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -328,21 +592,37 @@ pub(crate) async fn create_worktree(
     };
     let worktrees_dir =
         resolve_worktree_dir_for_repo(Path::new(&config.base_repo), &state.worktrees_dir);
-    let workspace = tokio::task::spawn_blocking(move || {
-        create_workspace_unwarmed(&worktrees_dir, &config, base_ref.as_deref())
+    let allocation_state = Arc::clone(&state);
+    let (workspace, recycled) = tokio::task::spawn_blocking(move || {
+        allocate_workspace(
+            &allocation_state,
+            &worktrees_dir,
+            &config,
+            base_ref.as_deref(),
+        )
     })
     .await
     .map_err(|error| format!("Task panic: {error}"))??;
 
     let token = begin_warm(&workspace.path);
-    spawn_background_warm(
-        PathBuf::from(&base_repo),
-        workspace.path.clone(),
-        token,
-        crate::cow::warm_worktree,
-    );
+    if recycled.is_some() {
+        finish_warm(
+            &workspace.path,
+            token,
+            serde_json::json!({"status": "done"}),
+        );
+    } else {
+        spawn_background_warm(
+            PathBuf::from(&base_repo),
+            workspace.path.clone(),
+            token,
+            crate::cow::warm_worktree,
+        );
+    }
     state.invalidate_repo_caches(&base_repo);
-    Ok(ipc_worktree_response(&workspace, &base_repo))
+    let mut response = ipc_worktree_response(&workspace, &base_repo);
+    response["worktree_rename"] = serde_json::json!(recycled);
+    Ok(response)
 }
 
 /// Get worktrees directory path.
@@ -366,6 +646,11 @@ pub(crate) fn get_worktrees_dir(
 /// `delete_branch` defaults to `false` with force and `true` otherwise.
 #[cfg(feature = "desktop")]
 #[tauri::command]
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) async fn remove_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
@@ -396,8 +681,10 @@ pub(crate) async fn remove_worktree(
     let script = resolve_archive_script(&repo_path);
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
+    let proof_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
         remove_worktree_with_presence_confirmation(
+            &proof_state,
             &repo_path_clone,
             &workspace_id_clone,
             delete_branch,
@@ -460,6 +747,7 @@ pub(crate) async fn delete_local_branch(
         let branch_name = branch_name.clone();
         let workspace_id = workspace_id.clone();
         tokio::task::spawn_blocking(move || {
+            guard_suspended_workspace(Path::new(&repo_path), &workspace_id)?;
             delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)
         })
         .await
@@ -499,37 +787,65 @@ pub(crate) fn get_worktree_paths_cached(
     .clone()
 }
 
-/// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
-///
-/// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
-/// arbitrary directory deletion via a crafted path.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) fn remove_orphan_worktree(
-    state: State<'_, Arc<AppState>>,
-    repo_path: String,
-    worktree_path: String,
-    safe_only: Option<bool>,
+/// Remove an orphan checkout by path after the shared guard. Both the desktop
+/// command and the MCP `worktree_remove` call this.
+pub(crate) fn remove_orphan_checkout(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
 ) -> Result<(), String> {
-    validate_worktree_path(&repo_path, &worktree_path)?;
-    if safe_only.unwrap_or(false) {
-        tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
-    }
+    validate_worktree_path(repo_path, worktree_path)?;
+    orphan_removal_guard(
+        state,
+        repo_path,
+        worktree_path,
+        safe_only,
+        confirmed_sessions,
+    )?;
 
-    let base_repo = PathBuf::from(&repo_path);
-    let path = PathBuf::from(&worktree_path);
+    let path = PathBuf::from(worktree_path);
     let worktree = WorktreeInfo {
         name: path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| worktree_path.clone()),
+            .unwrap_or_else(|| worktree_path.to_string()),
         path,
         branch: None,
-        base_repo,
+        base_repo: PathBuf::from(repo_path),
     };
-    remove_worktree_internal(&worktree, false)?;
-    state.invalidate_repo_caches(&repo_path);
+    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
+    state.invalidate_repo_caches(repo_path);
     Ok(())
+}
+
+/// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+///
+/// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
+/// arbitrary directory deletion via a crafted path. Safety checks, git subprocesses,
+/// and recursive deletion run on the blocking pool, not the desktop IPC thread.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn remove_orphan_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    worktree_path: String,
+    safe_only: Option<bool>,
+    confirmed_sessions: Option<Vec<String>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        remove_orphan_checkout(
+            &state,
+            &repo_path,
+            &worktree_path,
+            safe_only.unwrap_or(false),
+            &confirmed_sessions.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 /// Result of switching the main worktree to a different branch.
@@ -706,7 +1022,7 @@ pub(crate) fn finalize_merged_worktree_impl(
 /// gate. Before the merge, an unmerged commit is expected; afterwards, only
 /// merged work may be cleaned up without an explicit confirmation.
 fn cleanup_needs_lifecycle_confirmation(
-    state: &AppState,
+    state: &Arc<AppState>,
     repo_path: &Path,
     workspace_id: &str,
     action: &str,
@@ -737,6 +1053,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
+    guard_suspended_workspace(&base_repo, &workspace_id)?;
 
     if let Some(expected) = expected_fingerprint {
         let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
@@ -796,6 +1113,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
         }
         "delete" => {
             let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                state,
                 &repo_path,
                 &workspace_id,
                 true,
@@ -890,6 +1208,11 @@ pub(crate) fn merge_and_archive_worktree_impl(
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -902,6 +1225,9 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = PathBuf::from(&repo_path);
+    if after_merge == "archive" || after_merge == "delete" {
+        guard_suspended_workspace(&base_repo, &workspace_id)?;
+    }
     if let Some(expected) = expected_fingerprint {
         let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
         if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
@@ -990,6 +1316,7 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
         }
         "delete" => {
             let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                state,
                 &repo_path,
                 &workspace_id,
                 true,
@@ -1033,7 +1360,12 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
 /// commits while its worktree is dirty. The frontend sets it after the user confirms.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn merge_and_archive_worktree(
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
+pub(crate) async fn merge_and_archive_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     branch_name: String,
@@ -1048,16 +1380,21 @@ pub(crate) fn merge_and_archive_worktree(
             "force requires expected_fingerprint from the confirmed lifecycle status".into(),
         );
     }
-    merge_and_archive_worktree_impl_with_confirmation(
-        state.inner(),
-        repo_path,
-        branch_name,
-        workspace_id,
-        target_branch,
-        after_merge,
-        force.unwrap_or(false),
-        expected_fingerprint.as_deref(),
-    )
+    let state = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        merge_and_archive_worktree_impl_with_confirmation(
+            &state,
+            repo_path,
+            branch_name,
+            workspace_id,
+            target_branch,
+            after_merge,
+            force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
 }
 
 // --- Tauri wrappers over tuic_git::worktree ---
@@ -1107,19 +1444,126 @@ pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<Str
     .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn assess_orphan_cleanup(
+/// A detached checkout's removal verdict, plus the sessions working in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OrphanCleanupReview {
+    #[serde(flatten)]
+    pub assessment: tuic_git::worktree::OrphanCleanupAssessment,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub live_sessions: Vec<WorktreeLiveSession>,
+}
+
+fn live_session_reason(sessions: &[WorktreeLiveSession]) -> String {
+    let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+    format!("live session: {}", names.join(", "))
+}
+
+/// Git safety plus the session registry: an orphan checkout a session still
+/// works in is never safe to remove without a human review. A checkout that
+/// is already gone holds no work, so its stale sessions do not block.
+pub(crate) fn orphan_cleanup_safety_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<(), String> {
+    tuic_git::worktree::orphan_cleanup_safety(repo_path, worktree_path)?;
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let live = live_sessions_in(state, path);
+    if live.is_empty() {
+        Ok(())
+    } else {
+        Err(live_session_reason(&live))
+    }
+}
+
+/// The removal guard both transports share. A safe-only removal needs the full
+/// verdict. A review-confirmed one (`safe_only` false) needs no sessions beyond
+/// those the user saw in the dialog: one that started since was never reviewed.
+pub(crate) fn orphan_removal_guard(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
+) -> Result<(), String> {
+    guard_suspended_users(Path::new(worktree_path))?;
+    if safe_only {
+        return orphan_cleanup_safety_with_sessions(state, repo_path, worktree_path);
+    }
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let unseen: Vec<WorktreeLiveSession> = live_sessions_in(state, path)
+        .into_iter()
+        .filter(|session| !confirmed_sessions.contains(&session.session_id))
+        .collect();
+    if unseen.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}; not part of the confirmed removal",
+            live_session_reason(&unseen)
+        ))
+    }
+}
+
+pub(crate) fn assess_orphan_cleanup_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    Ok(tuic_git::worktree::assess_orphan_worktrees(repo_path)?
+        .into_iter()
+        .map(|mut assessment| {
+            let live_sessions = if Path::new(&assessment.path).exists() {
+                live_sessions_in(state, Path::new(&assessment.path))
+            } else {
+                Vec::new()
+            };
+            if !live_sessions.is_empty() {
+                assessment.safe = false;
+                let live = live_session_reason(&live_sessions);
+                assessment.reason = Some(match assessment.reason.take() {
+                    Some(reason) => format!("{reason}; {live}"),
+                    None => live,
+                });
+            }
+            OrphanCleanupReview {
+                assessment,
+                live_sessions,
+            }
+        })
+        .collect())
+}
+
+pub(crate) async fn assess_orphan_cleanup_internal(
+    state: Arc<AppState>,
     repo_path: String,
-) -> Result<Vec<tuic_git::worktree::OrphanCleanupAssessment>, String> {
-    tokio::task::spawn_blocking(move || tuic_git::worktree::assess_orphan_worktrees(&repo_path))
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    tokio::task::spawn_blocking(move || assess_orphan_cleanup_with_sessions(&state, &repo_path))
         .await
         .map_err(|error| format!("orphan cleanup assessment task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn assess_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    assess_orphan_cleanup_internal(state.inner().clone(), repo_path).await
 }
 
 #[derive(Clone)]
 pub(crate) struct PendingOrphanCleanup {
     pub(crate) paths: Vec<String>,
     pub(crate) answer: Option<bool>,
+    /// The dialog has ended. A Keep stays readable for other clients that still
+    /// show it, but nothing is left to answer.
+    pub(crate) settled: bool,
 }
 
 pub(crate) fn begin_orphan_cleanup_internal(
@@ -1129,9 +1573,12 @@ pub(crate) fn begin_orphan_cleanup_internal(
 ) -> Result<(), String> {
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
-        || paths
-            .iter()
-            .any(|path| !current.iter().any(|entry| &entry.path == path))
+        || paths.iter().any(|path| {
+            !current.iter().any(|entry| {
+                tuic_core::path_spelling::portable_spelling(&entry.path)
+                    == tuic_core::path_spelling::portable_spelling(path)
+            })
+        })
     {
         return Err("Pending cleanup must list current orphan worktrees".into());
     }
@@ -1140,6 +1587,7 @@ pub(crate) fn begin_orphan_cleanup_internal(
         PendingOrphanCleanup {
             paths,
             answer: None,
+            settled: false,
         },
     );
     Ok(())
@@ -1153,12 +1601,13 @@ pub(crate) fn answer_orphan_cleanup_internal(
     let pending = state
         .pending_orphan_cleanup
         .get(repo_path)
+        .filter(|entry| !entry.settled)
         .ok_or("No pending orphan cleanup for this repository")?
         .paths
         .clone();
     if remove {
         for path in &pending {
-            tuic_git::worktree::orphan_cleanup_safety(repo_path, path)?;
+            orphan_cleanup_safety_with_sessions(state, repo_path, path)?;
         }
     }
     let mut current = state
@@ -1197,10 +1646,22 @@ pub(crate) fn pending_orphan_cleanup_answer(
         .and_then(|entry| entry.answer)
 }
 
+/// End a client's cleanup dialog. A Keep stays on the shared entry as `answer =
+/// Some(false)` so other clients polling it close their own dialog instead of
+/// counting down to a removal; anything else drops the entry.
+pub(crate) fn clear_orphan_cleanup_internal(state: &AppState, repo_path: &str, kept: bool) {
+    if kept && let Some(mut entry) = state.pending_orphan_cleanup.get_mut(repo_path) {
+        entry.answer = Some(false);
+        entry.settled = true;
+        return;
+    }
+    state.pending_orphan_cleanup.remove(repo_path);
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String) {
-    state.pending_orphan_cleanup.remove(&repo_path);
+pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String, kept: bool) {
+    clear_orphan_cleanup_internal(&state, &repo_path, kept);
 }
 
 #[cfg(feature = "desktop")]
@@ -1246,16 +1707,189 @@ mod tests {
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
 
+    // Catches: a cached proof for another branch/tip (or a miss) invents merged status.
+    #[test]
+    fn listing_pr_proof_requires_matching_definitive_cached_answer() {
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path();
+        assert!(!merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+        PR_PROOFS.insert((path.to_path_buf(), "branch".into(), "tip".into()), true);
+        assert!(merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+        assert!(!merged_github_pr_proves_tip_cached(path, "other", "tip"));
+        assert!(!merged_github_pr_proves_tip_cached(
+            path, "branch", "new-tip"
+        ));
+        PR_PROOFS.insert((path.to_path_buf(), "branch".into(), "tip".into()), false);
+        assert!(!merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+    }
+
+    // Catches: every sidebar refresh re-running `gh api graphql` per unmerged branch
+    // (answered definitively before), while a failed lookup must stay retryable.
+    #[test]
+    fn pr_proof_monitoring_reuses_definitive_answers_and_retries_failures_1491() {
+        let cache = moka::sync::Cache::builder().max_capacity(8).build();
+        let repo = Path::new("/repo");
+        let calls = std::cell::Cell::new(0);
+        let ask = |answer: Option<bool>| {
+            cached_pr_proof(&cache, repo, "branch", "tip", || {
+                calls.set(calls.get() + 1);
+                answer
+            })
+        };
+        assert!(!ask(None));
+        assert!(ask(Some(true)));
+        assert!(ask(None));
+        assert_eq!(calls.get(), 2, "the failure was retried, the answer reused");
+        assert!(!cached_pr_proof(
+            &cache,
+            repo,
+            "branch",
+            "newer-tip",
+            || Some(false)
+        ));
+    }
+
+    // Catches accepting an empty or unregistered orphan list after weakening
+    // the validation OR: neither request may create an actionable dialog.
+    #[test]
+    fn cleanup_rejects_empty_and_unknown_paths_1488() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let state = crate::state::tests_support::make_test_app_state();
+        let path = repo.path().to_string_lossy();
+        for paths in [
+            vec![],
+            vec![repo.path().join("unknown").to_string_lossy().into_owned()],
+        ] {
+            assert!(begin_orphan_cleanup_internal(&state, &path, paths).is_err());
+            assert!(state.pending_orphan_cleanup.get(path.as_ref()).is_none());
+        }
+    }
+
+    // Catches replacing a client's answer because the paths are unchanged:
+    // answer.is_some alone must forbid a second answer.
+    #[test]
+    fn cleanup_cannot_overwrite_an_existing_answer_1488() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        answer_orphan_cleanup_internal(&state, "/repo", false).unwrap();
+        assert!(answer_orphan_cleanup_internal(&state, "/repo", false).is_err());
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    fn pending_cleanup(state: &AppState, repo: &str) {
+        state.pending_orphan_cleanup.insert(
+            repo.to_string(),
+            PendingOrphanCleanup {
+                paths: vec!["/wt/a".into()],
+                answer: None,
+                settled: false,
+            },
+        );
+    }
+
+    fn pending_answer(state: &AppState, repo: &str) -> Option<bool> {
+        state
+            .pending_orphan_cleanup
+            .get(repo)
+            .and_then(|entry| entry.answer)
+    }
+
+    // Catches: clear deleting the entry after a Keep, so a second client that shows the
+    // same dialog polls null, keeps counting down and removes the worktree (1289-27f8).
+    #[test]
+    fn clearing_a_kept_cleanup_leaves_the_keep_visible_to_other_clients() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Catches: a Keep left on the shared entry turning every later answer into
+    // "changed while it was being answered", so an agent could never remove the
+    // orphan that had since become clean (orphan-dialog-repeats).
+    #[test]
+    fn answering_a_dialog_that_was_already_kept_reports_nothing_pending() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        let error = answer_orphan_cleanup_internal(&state, "/repo", true).unwrap_err();
+
+        assert_eq!(error, "No pending orphan cleanup for this repository");
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Catches: a non-Keep clear leaving a stale entry behind that answers later dialogs.
+    #[test]
+    fn clearing_a_finished_cleanup_removes_the_entry() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", false);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: a Keep for a dialog nobody registered must not invent a pending entry.
+    #[test]
+    fn keeping_without_a_pending_cleanup_creates_nothing() {
+        let state = crate::state::tests_support::make_test_app_state();
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: two clients both end in Keep; the second must not flip the answer back.
+    #[test]
+    fn keeping_twice_stays_kept() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Attack: a kept entry is per repo and a new dialog starts unanswered again.
+    #[test]
+    fn keep_does_not_leak_to_another_repo_or_to_the_next_dialog() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        pending_cleanup(&state, "/other");
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        assert_eq!(pending_answer(&state, "/other"), None);
+
+        pending_cleanup(&state, "/repo"); // what begin_orphan_cleanup does for a new dialog
+
+        assert_eq!(pending_answer(&state, "/repo"), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let worktree = worktree_with(repo.path(), "active-work", false);
         fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
         fs::write(worktree.join("README.md"), "changed").expect("modified file");
         fs::write(worktree.join("new-a.txt"), "a").expect("first untracked file");
         fs::write(worktree.join("new-b.txt"), "b").expect("second untracked file");
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::state::tests_support::insert_dummy_session(&state, "pty-active");
         crate::state::tests_support::set_session_cwd(
             &state,
@@ -1308,6 +1942,8 @@ mod tests {
     /// Execute froze the WebView for the length of every step. Their HTTP twins
     /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
     /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    /// Orphan removal has the same boundary: its safety checks and recursive
+    /// deletion must not block heartbeats while the desktop handles cleanup.
     #[test]
     fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
         let source = include_str!("worktree.rs");
@@ -1315,6 +1951,7 @@ mod tests {
             "switch_branch",
             "delete_local_branch",
             "finalize_merged_worktree",
+            "remove_orphan_worktree",
         ] {
             let signature = format!("pub(crate) async fn {command}(");
             let at = source.find(&signature).unwrap_or_else(|| {
@@ -1381,6 +2018,195 @@ mod tests {
         let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
         (dir, guard)
     }
+
+    // Catches: durable suspended cwd/placement bypassing destructive checkout consumers.
+    fn suspended_checkout_consumer(consumer: &str) {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let checkout = worktree_with(repo.path(), "suspended-work", true);
+        fs::create_dir(checkout.join("nested")).unwrap();
+        git_cmd(repo.path())
+            .args(["merge", "suspended-work", "--no-edit"])
+            .run()
+            .unwrap();
+        let record = crate::suspended_sessions::SuspendedSession {
+            tuic_session: "sleeping-tab".into(),
+            session_id: "old-pty".into(),
+            cwd: checkout.join("nested").to_string_lossy().into_owned(),
+            name: Some("Sleeping agent".into()),
+            ..Default::default()
+        };
+        crate::config::ConfigFile::new("suspended-sessions.json")
+            .save(&std::collections::BTreeMap::from([(
+                "sleeping-tab".to_string(),
+                record,
+            )]))
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.path().to_string_lossy().into_owned();
+        match consumer {
+            "preview" => {
+                let preview = inspect_worktree_removal(&state, repo.path(), "suspended-work");
+                assert!(
+                    preview
+                        .live_sessions
+                        .iter()
+                        .any(|user| user.name.contains("Sleeping agent"))
+                );
+            }
+            "finish" | "forced-remove" => {
+                let result = remove_worktree_by_workspace_id_with_confirmation(
+                    &state,
+                    &repo_path,
+                    "suspended-work",
+                    true,
+                    None,
+                    consumer == "forced-remove",
+                    false,
+                    None,
+                );
+                assert!(
+                    result
+                        .expect_err("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "allocate" => {
+                tuic_git::worktree::finish_worktree(repo.path(), &checkout).unwrap();
+                let config = WorktreeConfig {
+                    task_name: "replacement".into(),
+                    base_repo: repo_path.clone(),
+                    branch: Some("replacement".into()),
+                    create_branch: true,
+                };
+                let (_, renamed) =
+                    allocate_workspace(&state, checkout.parent().unwrap(), &config, None).unwrap();
+                assert!(renamed.is_none(), "suspended checkout was recycled");
+            }
+            "finalize" => {
+                let result = finalize_merged_worktree_impl(
+                    &state,
+                    repo_path,
+                    "suspended-work".into(),
+                    "archive".into(),
+                    true,
+                );
+                assert!(
+                    result
+                        .err()
+                        .expect("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "merge" => {
+                let result = merge_and_archive_worktree_impl(
+                    &state,
+                    repo_path,
+                    "suspended-work".into(),
+                    "suspended-work".into(),
+                    base_branch_of(repo.path()),
+                    "archive".into(),
+                    true,
+                );
+                assert!(
+                    result
+                        .err()
+                        .expect("suspended user must veto cleanup")
+                        .contains("Sleeping agent")
+                );
+            }
+            "orphan" => {
+                let error = orphan_removal_guard(
+                    &state,
+                    &repo_path,
+                    &checkout.to_string_lossy(),
+                    false,
+                    &["sleeping-tab".into()],
+                )
+                .unwrap_err();
+                assert!(error.contains("Sleeping agent"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            checkout.exists(),
+            "{consumer} removed the suspended checkout"
+        );
+        assert!(
+            crate::suspended_sessions::list()
+                .unwrap()
+                .contains_key("sleeping-tab")
+        );
+    }
+
+    // Catches: placement-only suspended ownership missed when the shell cwd is elsewhere,
+    // prefix siblings overmatched, or unreadable durable state treated as no users.
+    #[test]
+    fn suspended_checkout_placement_boundaries_and_unreadable_state() {
+        let (cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let checkout = worktree_with(repo.path(), "placement", false);
+        let sibling = worktree_with(repo.path(), "placement-sibling", false);
+        let record = crate::suspended_sessions::SuspendedSession {
+            tuic_session: "placed-tab".into(),
+            cwd: repo.path().to_string_lossy().into_owned(),
+            worktree: Some(WorktreeInfo {
+                name: "placement".into(),
+                path: checkout.clone(),
+                branch: Some("placement".into()),
+                base_repo: repo.path().into(),
+            }),
+            ..Default::default()
+        };
+        crate::config::ConfigFile::new("suspended-sessions.json")
+            .save(&std::collections::BTreeMap::from([(
+                "placed-tab".to_string(),
+                record,
+            )]))
+            .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        assert_eq!(
+            live_sessions_in(&state, &checkout)[0].session_id,
+            "placed-tab"
+        );
+        assert_eq!(
+            live_sessions_in(&state, &sibling),
+            [] as [crate::worktree::WorktreeLiveSession; 0]
+        );
+        assert!(guard_suspended_workspace(repo.path(), "placement-sibling").is_ok());
+        fs::write(cfg.path().join("suspended-sessions.json"), "not json").unwrap();
+        assert!(guard_suspended_workspace(repo.path(), "placement").is_err());
+        assert_ne!(
+            live_sessions_in(&state, &checkout),
+            [] as [crate::worktree::WorktreeLiveSession; 0]
+        );
+        assert_eq!(
+            fs::read_to_string(cfg.path().join("suspended-sessions.json")).unwrap(),
+            "not json"
+        );
+    }
+
+    macro_rules! suspended_checkout_test {
+        ($name:ident, $consumer:literal) => {
+            #[test]
+            fn $name() {
+                suspended_checkout_consumer($consumer);
+            }
+        };
+    }
+    suspended_checkout_test!(suspended_checkout_preview_names_the_tab, "preview");
+    suspended_checkout_test!(suspended_checkout_finish_refuses_the_tab, "finish");
+    suspended_checkout_test!(
+        suspended_checkout_forced_removal_refuses_the_tab,
+        "forced-remove"
+    );
+    suspended_checkout_test!(suspended_checkout_allocation_skips_the_tab, "allocate");
+    suspended_checkout_test!(suspended_checkout_finalize_refuses_the_tab, "finalize");
+    suspended_checkout_test!(suspended_checkout_merge_refuses_the_tab, "merge");
+    suspended_checkout_test!(
+        suspended_checkout_orphan_confirmation_cannot_forget_the_tab,
+        "orphan"
+    );
 
     #[test]
     fn merge_and_archive_asks_before_destroying_a_dirty_worktree_with_commits() {
@@ -1466,6 +2292,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
         let (_cfg, _guard) = isolated_config();
         for action in ["archive", "delete"] {
@@ -1699,6 +2526,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
@@ -1755,13 +2583,29 @@ mod tests {
 
         assert!(error.starts_with(tuic_git::worktree::LOCKED_WORKTREE_PREFIX));
         assert!(worktree.exists());
+        let listed = git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert!(listed.contains(&expected));
         assert!(
-            git_cmd(repo.path())
-                .args(["worktree", "list", "--porcelain"])
-                .run()
-                .unwrap()
-                .stdout
-                .contains(&worktree.to_string_lossy().to_string())
+            listed
+                .lines()
+                .filter_map(|line| line.strip_prefix("worktree "))
+                .any(|path| {
+                    Path::new(path).canonicalize().unwrap() == worktree.canonicalize().unwrap()
+                })
         );
     }
 
@@ -1853,4 +2697,396 @@ mod tests {
         );
         assert!(worktree.join("after-confirmation.txt").exists());
     }
+    #[cfg(unix)]
+    mod orphan_removal_guard_critic {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(
+            state: &AppState,
+            repo: &Path,
+            checkout: &Path,
+            confirmed: &[&str],
+        ) -> Result<(), String> {
+            let confirmed: Vec<String> = confirmed.iter().map(|s| s.to_string()).collect();
+            orphan_removal_guard(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+                false,
+                &confirmed,
+            )
+        }
+
+        // Catches: a session in a subdirectory of the checkout escaping the unreviewed-session
+        // check on the confirmed path (exact cwd match instead of prefix).
+        #[test]
+        fn refuses_an_unreviewed_session_in_a_subdirectory() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir_all(linked.join("sub/deeper")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(
+                &state,
+                "agent",
+                &linked.join("sub/deeper").to_string_lossy(),
+            );
+
+            assert!(guard(&state, repo.path(), &linked, &[]).is_err());
+            guard(&state, repo.path(), &linked, &["agent"]).expect("reviewed");
+        }
+
+        // Catches: a session in a sibling checkout whose name shares a string prefix
+        // ("linked" vs "linked-2") being counted as inside this checkout.
+        #[test]
+        fn a_sibling_with_a_shared_name_prefix_is_not_unreviewed() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let sibling = detached(repo.path(), "linked-2");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked, &[]).expect("sibling is outside");
+        }
+
+        // Catches: the refusal text hiding which session was not reviewed, so the caller cannot
+        // act on a 400.
+        #[test]
+        fn the_refusal_names_the_unreviewed_session_and_not_the_reviewed_one() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            for (id, name) in [("seen", "Seen Agent"), ("late", "Late Agent")] {
+                insert_dummy_session(&state, id);
+                set_session_cwd(&state, id, &linked.to_string_lossy());
+                state
+                    .session_maps
+                    .sessions
+                    .get(id)
+                    .unwrap()
+                    .lock()
+                    .display_name = Some(name.to_string());
+            }
+
+            let error = guard(&state, repo.path(), &linked, &["seen"]).unwrap_err();
+
+            assert!(error.contains("Late Agent"), "{error}");
+            assert!(!error.contains("Seen Agent"), "{error}");
+        }
+
+        // Catches: an already-removed checkout with stale sessions still refusing the
+        // confirmed removal (idempotent retry must succeed).
+        #[test]
+        fn a_missing_checkout_never_blocks() {
+            let repo = setup_test_repo();
+            let gone = repo.path().join("gone");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &gone.to_string_lossy());
+
+            guard(&state, repo.path(), &gone, &[]).expect("nothing left to protect");
+        }
+    }
+    #[cfg(unix)]
+    mod orphan_session_guard {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(state: &AppState, repo: &Path, checkout: &Path) -> Result<(), String> {
+            orphan_cleanup_safety_with_sessions(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+            )
+        }
+
+        // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.
+        #[test]
+        fn automatic_orphan_removal_rechecks_a_branch_restored_after_discovery() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "rescued-checkout");
+            let state = crate::state::tests_support::make_test_app_state();
+            let before =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                    .unwrap();
+            assert!(
+                before.iter().any(|row| {
+                    Path::new(&row.assessment.path) == linked && row.assessment.safe
+                })
+            );
+            let rescue = std::process::Command::new("git")
+                .current_dir(&linked)
+                .args(["branch", "rescued-active", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(rescue.status.success(), "{rescue:?}");
+            assert_eq!(
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy(),)
+                    .unwrap(),
+                [] as [crate::worktree::OrphanCleanupReview; 0]
+            );
+
+            let result = remove_orphan_checkout(
+                &state,
+                &repo.path().to_string_lossy(),
+                &linked.to_string_lossy(),
+                true,
+                &[],
+            );
+            assert!(
+                result.is_err(),
+                "rescued active checkout was removed: {result:?}"
+            );
+            assert!(linked.exists(), "rescued active checkout must survive");
+        }
+
+        // Catches: an equality or exact-match cwd test, so an agent whose shell sits
+        // in a subdirectory of the checkout is not seen and its checkout is removed.
+        #[test]
+        fn refuses_a_session_working_in_a_subdirectory_of_the_checkout() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir(linked.join("src")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.join("src").to_string_lossy());
+
+            let error = guard(&state, repo.path(), &linked).expect_err("live session");
+            assert!(error.contains("live session"), "{error}");
+        }
+
+        // Catches: a string-prefix cwd test, so a session in `wt-2` blocks the
+        // cleanup of `wt` for ever (or, inverted, `wt` hides a session of `wt-2`).
+        #[test]
+        fn ignores_a_sibling_directory_whose_name_extends_the_checkout_name() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "wt");
+            let sibling = repo.path().join("wt-2");
+            fs::create_dir(&sibling).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked)
+                .expect("sibling session is not inside the checkout");
+        }
+
+        // Catches: comparing raw cwd text, so a session that entered the checkout
+        // through a symlink is invisible to the guard.
+        #[test]
+        fn refuses_a_session_whose_cwd_reaches_the_checkout_through_a_symlink() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let alias = repo.path().join("alias");
+            std::os::unix::fs::symlink(&linked, &alias).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &alias.to_string_lossy());
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: reading only `cwd`, so a session created for a worktree but with
+        // no OSC 7 cwd report yet does not protect that worktree.
+        #[test]
+        fn falls_back_to_the_session_worktree_when_the_cwd_is_unknown() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            state
+                .session_maps
+                .sessions
+                .get("agent")
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
+                name: "linked".into(),
+                path: linked.clone(),
+                branch: None,
+                base_repo: repo.path().to_path_buf(),
+            });
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: treating a session with no location as "inside everything", which
+        // would block every orphan cleanup while any such session exists.
+        #[test]
+        fn a_session_with_no_cwd_and_no_worktree_blocks_nothing() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+
+            guard(&state, repo.path(), &linked).expect("no location, no claim on the checkout");
+        }
+
+        // Catches: a dead session left in the registry blocking the cleanup for
+        // ever — the exit path must drop it from what the guard reads.
+        #[test]
+        fn a_session_that_exited_no_longer_blocks_the_cleanup() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+            assert!(guard(&state, repo.path(), &linked).is_err());
+
+            crate::pty::mark_session_exited("agent", &state);
+
+            guard(&state, repo.path(), &linked).expect("exited session is gone");
+        }
+
+        // Catches: one live session flipping the verdict of every orphan in the
+        // repo (a shared flag instead of a per-checkout check).
+        #[test]
+        fn assessment_marks_only_the_orphan_a_session_works_in() {
+            let repo = setup_test_repo();
+            let idle = detached(repo.path(), "idle");
+            let busy = detached(repo.path(), "busy");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &busy.to_string_lossy());
+
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
+
+            let row_of = |dir: &Path| {
+                rows.iter()
+                    .find(|row| Path::new(&row.assessment.path).ends_with(dir.file_name().unwrap()))
+                    .expect("orphan listed")
+            };
+            assert!(row_of(&idle).assessment.safe);
+            assert_eq!(
+                row_of(&idle).live_sessions,
+                [] as [crate::worktree::WorktreeLiveSession; 0]
+            );
+            assert!(!row_of(&busy).assessment.safe);
+            assert_eq!(row_of(&busy).live_sessions.len(), 1);
+        }
+
+        // Catches: the live-session reason overwriting the git reason, so a dirty
+        // checkout with a session in it hides the uncommitted work from the dialog.
+        #[test]
+        fn assessment_keeps_the_git_reason_next_to_the_live_session() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::write(linked.join("scratch.txt"), "unsaved").unwrap();
+            let git_reason =
+                tuic_git::worktree::assess_orphan_worktrees(&repo.path().to_string_lossy())
+                    .unwrap()
+                    .remove(0)
+                    .reason
+                    .expect("untracked file is unsafe");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
+
+            let reason = rows[0].assessment.reason.clone().unwrap();
+            assert!(reason.contains(&git_reason), "{reason}");
+            assert!(reason.contains("live session"), "{reason}");
+        }
+    }
+
+    mod orphan_keep_settled_critic {
+        use super::*;
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        // Catches (critic-1367): the settled filter applied only to a "remove" answer, so a
+        // "keep" answer after a Keep still reports "changed while it was being answered".
+        #[test]
+        fn a_keep_answer_after_a_keep_reports_nothing_pending() {
+            let state = crate::state::tests_support::make_test_app_state();
+            pending_cleanup(&state, "/repo");
+            clear_orphan_cleanup_internal(&state, "/repo", true);
+
+            let error = answer_orphan_cleanup_internal(&state, "/repo", false).unwrap_err();
+
+            assert_eq!(error, "No pending orphan cleanup for this repository");
+        }
+
+        // Catches (critic-1367): a new dialog inheriting the settled flag (or the old
+        // Keep) from the entry it replaces, so after one Keep every later dialog is
+        // unanswerable by agents and closes at once on the stale Keep.
+        #[test]
+        fn a_dialog_begun_after_a_keep_is_pending_and_answerable_again() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let paths = vec![linked.to_string_lossy().to_string()];
+            let state = crate::state::tests_support::make_test_app_state();
+            begin_orphan_cleanup_internal(&state, &repo_path, paths.clone()).unwrap();
+            clear_orphan_cleanup_internal(&state, &repo_path, true);
+
+            begin_orphan_cleanup_internal(&state, &repo_path, paths).unwrap();
+
+            assert_eq!(pending_answer(&state, &repo_path), None);
+            answer_orphan_cleanup_internal(&state, &repo_path, false)
+                .expect("a fresh dialog is answerable");
+            assert_eq!(pending_answer(&state, &repo_path), Some(false));
+        }
+
+        // Catches (critic-1367): a confirmed removal that settles the entry like a Keep, or
+        // a Keep on a repo with no dialog creating a phantom entry that a later "remove"
+        // answer would then trip over.
+        #[test]
+        fn clearing_without_a_dialog_leaves_nothing_to_answer() {
+            let state = crate::state::tests_support::make_test_app_state();
+
+            clear_orphan_cleanup_internal(&state, "/repo", true);
+            clear_orphan_cleanup_internal(&state, "/repo", false);
+
+            let error = answer_orphan_cleanup_internal(&state, "/repo", true).unwrap_err();
+            assert_eq!(error, "No pending orphan cleanup for this repository");
+            assert_eq!(pending_answer(&state, "/repo"), None);
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "worktree_pr_proof_tests.rs"]
+mod pr_proof_tests;

@@ -379,6 +379,85 @@ describe("acpClient: talking to a session", () => {
 		expect(acpTranscript.entries(SESSION)).toEqual([]);
 	});
 
+	// Shape recorded from ego session 01a0dc79 (journal seq 4-53, ~/.ego/sessions):
+	// one finished glob, then an exec that asked for permission and was never
+	// decided — ToolCallStarted + PermissionRequested, no ToolCallCompleted, no
+	// TurnCompleted. ego's replay (serve.rs emit_attachment) projects it as
+	// tool_call, in_progress and ends with a session_info_update.
+	describe("replay of a session that ended mid-call", () => {
+		const update = (sequence: number, body: Record<string, unknown>) =>
+			streams.deliver({ ...frame(sequence), event: { kind: "sessionUpdate", update: body as never } });
+		const statuses = () =>
+			acpTranscript.entries(SESSION).flatMap((entry) => (entry.kind === "tool" ? [entry.call.status] : []));
+		const replay = async () => {
+			await client.connect(ROOT);
+			await client.loadSession(CONNECTION, SESSION, ROOT);
+			update(2, { sessionUpdate: "tool_call", toolCallId: "glob", title: "glob", status: "pending" });
+			update(3, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "in_progress" });
+			update(4, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "completed" });
+			update(5, { sessionUpdate: "tool_call", toolCallId: "exec", title: "exec", status: "pending" });
+			update(6, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+		};
+
+		// Catches: the replayed exec card keeps status in_progress forever, so its
+		// dot pulses (candidate 1 of story 1153).
+		it("settles the unfinished call when the replay ends, and only then", async () => {
+			await replay();
+			expect(statuses()).toEqual(["completed", "in_progress"]);
+
+			update(7, { sessionUpdate: "session_info_update", title: null });
+
+			expect(statuses()).toEqual(["completed", "failed"]);
+		});
+
+		// ego does not say on session/load whether a turn is still running, so the
+		// settle can hit a live call. Catches: a settled status that sticks over
+		// live data (failed instead of the call's real outcome).
+		it("lets a later update of the same call win over the settled status", async () => {
+			await replay();
+			update(7, { sessionUpdate: "session_info_update", title: null });
+
+			update(8, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+			expect(statuses()).toEqual(["completed", "in_progress"]);
+			update(9, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "completed" });
+			expect(statuses()).toEqual(["completed", "completed"]);
+		});
+
+		// Catches: a title update of a running session, long after the load,
+		// failing its live calls.
+		it("settles once per load", async () => {
+			await replay();
+			update(7, { sessionUpdate: "session_info_update", title: null });
+			update(8, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+
+			update(9, { sessionUpdate: "session_info_update", title: "renamed" });
+
+			expect(statuses()).toEqual(["completed", "in_progress"]);
+		});
+	});
+
+	// ego does not replay inherited history for a fork child, so the child's
+	// transcript is the parent's copy. The parent's own must stay untouched: it
+	// is still a live tab.
+	it("forks into a child that carries the parent's transcript and leaves the parent's intact", async () => {
+		await client.connect(ROOT);
+		acpTranscript.noteUserMessage(SESSION, "what was said before");
+		const CHILD = "01932d5e-0000-7000-8000-0000000000dd";
+		mockInvoke.mockImplementation(answering({ acp_session_fork: { sessionId: CHILD, state: "idle", cwd: ROOT } }));
+
+		const forked = await client.forkSession(CONNECTION, SESSION, ROOT);
+
+		expect(forked).toBe(CHILD);
+		expect(mockInvoke).toHaveBeenCalledWith("acp_session_fork", {
+			connectionId: CONNECTION,
+			sessionId: SESSION,
+			authority: { cwd: ROOT, additionalDirectories: [] },
+		});
+		const said = [expect.objectContaining({ kind: "user", text: "what was said before" })];
+		expect(acpTranscript.entries(CHILD)).toEqual(said);
+		expect(acpTranscript.entries(SESSION)).toEqual(said);
+	});
+
 	// The ids are the agent's. Answering with an Allow/Deny of this client's own
 	// invention would answer a question nobody asked.
 	it("answers a permission with one of the option ids the agent published", async () => {
@@ -547,4 +626,172 @@ describe("acpClient: letting go", () => {
 
 		expect(streams.opened).toHaveLength(1);
 	});
+});
+
+// Catches: atMessageId dropped and the child showing all four replies after a mid-history fork.
+it("forks from the second of four replies without changing the parent", async () => {
+	const streams = new FakeStreams();
+	const client = createAcpClient(streams.open);
+	await client.connect(ROOT);
+	for (let index = 1; index <= 4; index++) {
+		acpTranscript.noteUserMessage(SESSION, `prompt ${index}`);
+		acpTranscript.applyFrame({
+			...frame(index),
+			event: {
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					messageId: `reply-${index}`,
+					content: { type: "text", text: `reply ${index}` },
+				},
+			},
+		});
+	}
+	const child = "child";
+	mockInvoke.mockImplementation(answering({ acp_session_fork: { sessionId: child } }));
+	await client.forkSession(CONNECTION, SESSION, ROOT, "reply-2");
+	expect(mockInvoke).toHaveBeenCalledWith("acp_session_fork", {
+		connectionId: CONNECTION,
+		sessionId: SESSION,
+		authority: { cwd: ROOT, additionalDirectories: [] },
+		atMessageId: "reply-2",
+	});
+	expect(acpTranscript.entries(child).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"prompt 1",
+		"reply 1",
+		"prompt 2",
+		"reply 2",
+	]);
+	expect(acpTranscript.entries(SESSION)).toHaveLength(8);
+});
+
+describe("configured conversation replay", () => {
+	const launch = { executable: "/bin/ego", profile: "coordinator", workspace: "/observer", peerId: "peer" };
+	// Catches: reopening appends replayed history to the old projection instead of replacing it.
+	it("clears the old projection for a replay but retains it when already attached", async () => {
+		acpTranscript.noteUserMessage(SESSION, "old projection");
+		mockInvoke.mockImplementation(
+			answering({ acp_chat_open: { connection: snapshot(), sessionId: SESSION, launch, replayed: true } }),
+		);
+		await client.openConversation({ sessionId: SESSION });
+		expect(acpTranscript.entries(SESSION)).toEqual([]);
+		acpTranscript.noteUserMessage(SESSION, "current projection");
+		mockInvoke.mockImplementation(
+			answering({ acp_chat_open: { connection: snapshot(), sessionId: SESSION, launch, replayed: false } }),
+		);
+		await client.openConversation({ sessionId: SESSION });
+		expect(acpTranscript.entries(SESSION).map((entry) => (entry.kind === "user" ? entry.text : ""))).toEqual([
+			"current projection",
+		]);
+	});
+	// Catches: a failed custom conversation reopen destroys the transcript a user was reading.
+	it("restores the projection when the saved launch is refused", async () => {
+		acpTranscript.noteUserMessage(SESSION, "keep this history");
+		mockInvoke.mockRejectedValueOnce(new Error("launch refused"));
+		await expect(client.openConversation({ sessionId: SESSION })).rejects.toThrow("launch refused");
+		expect(acpTranscript.entries(SESSION).map((entry) => (entry.kind === "user" ? entry.text : ""))).toEqual([
+			"keep this history",
+		]);
+	});
+});
+
+// Catches: switching back to an attached custom chat erases response chunks received during the open request.
+it("retains live response chunks while reopening an already attached custom conversation", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let finishOpen!: (value: unknown) => void;
+	const pendingOpen = new Promise<unknown>((resolve) => {
+		finishOpen = resolve;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during tab switch" },
+			},
+		},
+	});
+	finishOpen({
+		connection: snapshot({ latestSequence: 2 }),
+		sessionId: SESSION,
+		launch: { executable: "/bin/ego", profile: "coordinator", workspace: "/observer", peerId: "peer" },
+		replayed: false,
+	});
+	await reopening;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during tab switch",
+	]);
+});
+
+// Catches: a rejected reopen restores stale history over chunks received on the live stream.
+it("retains live response chunks when custom conversation reopen is refused", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let refuseOpen!: (error: Error) => void;
+	const pendingOpen = new Promise<unknown>((_resolve, reject) => {
+		refuseOpen = reject;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	const rejected = expect(reopening).rejects.toThrow("launch refused");
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during refused reopen" },
+			},
+		},
+	});
+	refuseOpen(new Error("launch refused"));
+	await rejected;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during refused reopen",
+	]);
+});
+
+// Catches: the delete UI accidentally issuing session/close, which retains durable history.
+it("deletes durable history through the ACP delete command and refreshes attachments", async () => {
+	const deletedAttachment = {
+		sessionId: SESSION,
+		state: "idle" as const,
+		cwd: ROOT,
+		additionalDirectories: [],
+		configOptions: [],
+		usage: null,
+		activeTurn: null,
+		queuedPrompts: [],
+		pendingPermissionIds: [],
+		pendingElicitationIds: [],
+	};
+	const survivor = { ...deletedAttachment, sessionId: "01932d5e-0000-7000-8000-0000000000bb" };
+	acpStore.applySnapshot(snapshot({ attachments: [deletedAttachment, survivor] }));
+	mockInvoke.mockImplementation(answering({ acp_connection_snapshot: snapshot({ attachments: [survivor] }) }));
+	await client.deleteSession(CONNECTION, SESSION);
+	expect(mockInvoke).toHaveBeenCalledWith("acp_session_delete", { connectionId: CONNECTION, sessionId: SESSION });
+	expect(mockInvoke).toHaveBeenCalledWith("acp_connection_snapshot", { connectionId: CONNECTION });
+	expect(acpStore.attachments(CONNECTION)).toEqual([survivor]);
+	expect(acpStore.attachment(CONNECTION, SESSION)).toBeNull();
+});
+
+// Catches: a failed snapshot after accepted deletion leaves the deleted session open.
+it("keeps accepted deletion successful when its following snapshot fails", async () => {
+	const failure = vi.spyOn((await import("../../stores/appLogger")).appLogger, "warn").mockImplementation(() => {});
+	mockInvoke.mockImplementation(async (command: string) => {
+		if (command === "acp_connection_snapshot") throw new Error("snapshot disconnected");
+		return undefined;
+	});
+	try {
+		await expect(createAcpClient().deleteSession(CONNECTION, SESSION)).resolves.toBeUndefined();
+		expect(failure).toHaveBeenCalledWith("ai-chat", "refresh after conversation deletion failed", expect.any(Error));
+	} finally {
+		failure.mockRestore();
+	}
 });

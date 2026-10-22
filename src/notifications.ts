@@ -32,6 +32,9 @@ export interface NotificationConfig {
 	/** Mirror every toast into the toolbar bell, so a message that auto-dismissed
 	 *  while the user looked elsewhere is still readable afterwards. */
 	toasts_in_bell: boolean;
+	/** Send an OS notification when a PR becomes ready, fails CI, gets changes
+	 *  requested or is merged — the toolbar bell is invisible while another app is focused. */
+	pr_native_notifications: boolean;
 }
 
 /** Default notification configuration */
@@ -49,6 +52,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 	audio_device: null,
 	silence_remote_completions: true,
 	toasts_in_bell: true,
+	pr_native_notifications: true,
 };
 
 /** Notification manager — delegates audio playback to Rust via Tauri IPC.

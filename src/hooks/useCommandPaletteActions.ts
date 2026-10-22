@@ -4,7 +4,7 @@ import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
-import { designModeStore } from "../stores/designMode";
+import { designModeBrowsers, designModeStore } from "../stores/designMode";
 import { pluginStore } from "../stores/pluginStore";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
@@ -142,15 +142,23 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 		const designSessionId = designTarget?.agentType ? designTarget.sessionId : null;
 		if (designSessionId) {
 			const armed = designModeStore.isArmed(designSessionId);
-			entries.push({
-				id: armed ? "stop-design-mode" : "start-design-mode",
-				label: armed
-					? t("tabBar.stopDesignMode", "Stop Design Mode")
-					: t("tabBar.startDesignMode", "Start Design Mode"),
-				category: "Terminal",
-				keybinding: "",
-				execute: () => designModeStore.toggle(designSessionId),
-			});
+			if (armed)
+				entries.push({
+					id: "stop-design-mode",
+					label: t("tabBar.stopDesignMode", "Stop Design Mode"),
+					category: "Terminal",
+					keybinding: "",
+					execute: () => designModeStore.toggle(designSessionId),
+				});
+			if (!armed)
+				for (const browser of designModeBrowsers)
+					entries.push({
+						id: `start-design-mode-${browser.id}`,
+						label: `Start Design Mode in ${browser.label}`,
+						category: "Terminal",
+						keybinding: "",
+						execute: () => designModeStore.toggle(designSessionId, browser.id),
+					});
 		}
 		if (activeTermId) {
 			for (const worktree of options.gitOps.getWorktreeTargets(activeTermId)) {

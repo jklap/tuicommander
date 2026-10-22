@@ -6,8 +6,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
+import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
 	mockDetachPanel: vi.fn().mockResolvedValue(undefined),
@@ -15,7 +17,8 @@ const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => 
 	mockClosePanel: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
+const { mockWriteClipboard, mockOpenFile, mockOpenUrl, mockAddVirtual } = vi.hoisted(() => ({
+	mockAddVirtual: vi.fn(),
 	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 	mockOpenFile: vi.fn(),
 	mockOpenUrl: vi.fn(),
@@ -24,6 +27,8 @@ const { mockSetFolderRoot, mockShowFileBrowser } = vi.hoisted(() => ({
 	mockSetFolderRoot: vi.fn(),
 	mockShowFileBrowser: vi.fn(),
 }));
+
+vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: { addVirtual: mockAddVirtual } }));
 
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
@@ -57,6 +62,7 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
+		setAiChatPanelMeasuredWidth: vi.fn(),
 		setFileBrowserExternalRoot: mockSetFolderRoot,
 		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
@@ -65,6 +71,7 @@ vi.mock("../../stores/ui", () => ({
 vi.mock("../../transport", () => ({
 	isTauri: () => true,
 	owningConnectionFor: () => undefined,
+	rpc: vi.fn(async () => ({})),
 }));
 
 // Whether an ego binary is configured is the one setting this panel reads, and
@@ -72,23 +79,30 @@ vi.mock("../../transport", () => ({
 // empty string nobody checked.
 const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
 
-vi.mock("../../stores/settings", () => ({
-	settingsStore: {
-		state: settings,
-		isAiChatEnabled: () => true,
-		isAcpConfigured: () => settings.egoExecutable.trim().length > 0,
-	},
-}));
+vi.mock("../../stores/settings", async () => {
+	const { createSignal } = await import("solid-js");
+	const [executable, setExecutable] = createSignal(settings.egoExecutable);
+	Object.defineProperty(settings, "egoExecutable", { get: executable, set: setExecutable });
+	return {
+		settingsStore: {
+			state: settings,
+			isAiChatEnabled: () => true,
+			isAcpConfigured: () => settings.egoExecutable.trim().length > 0,
+		},
+	};
+});
 
 // The client is the IPC boundary and the only thing mocked below it: the store,
 // the transcript projection and every reducer between them are the real ones,
 // so a test that passes proves the panel reads what the wire actually carries.
 const client = vi.hoisted(() => ({
+	openConversation: vi.fn(),
 	connect: vi.fn(),
 	reconnect: vi.fn(),
 	disconnect: vi.fn(),
 	newSession: vi.fn(),
 	loadSession: vi.fn(),
+	closeSession: vi.fn(),
 	listSessions: vi.fn(),
 	prompt: vi.fn(),
 	cancel: vi.fn(),
@@ -100,6 +114,8 @@ const client = vi.hoisted(() => ({
 	pause: vi.fn(),
 	resumeTurn: vi.fn(),
 	compact: vi.fn(),
+	forkSession: vi.fn(),
+	deleteSession: vi.fn(),
 }));
 
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
@@ -107,30 +123,36 @@ vi.mock("../../services/acpClient", () => ({ acpClient: client }));
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
+import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
-import { resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
 	AcpConnectionSnapshot,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import { handleExternalLinkClick } from "../../utils/externalLinkClick";
 
 const ROOT = "/repo/tuicommander";
-const HOME = "/home/boss";
 /** Where every chat runs: the whole workspace, never one repository. */
-const CHAT_ROOT = "/home/boss/Gits";
+const CHAT_ROOT = "/srv/chat-workspace";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
 const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
 // A real 1x1 PNG admitted by ego's ACP prompt tests.
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 let supportsImages = false;
+let supportsFork = false;
+let supportsDelete = false;
+const CHILD_SESSION = "01932d5e-0000-7000-8000-0000000000dd";
 
 function pasteFile(textarea: HTMLTextAreaElement, file: File): Event {
 	const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -179,8 +201,8 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			load: true,
 			list: true,
 			resume: true,
-			fork: false,
-			delete: false,
+			fork: supportsFork,
+			delete: supportsDelete,
 			close: true,
 			additionalDirectories: true,
 			promptImage: supportsImages,
@@ -243,7 +265,9 @@ async function typeAndSend(container: HTMLElement, text: string): Promise<void> 
 	textarea.value = text;
 	textarea.dispatchEvent(new Event("input", { bubbles: true }));
 	(
-		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		[...container.querySelectorAll("button")].find(
+			(button) => button.getAttribute("aria-label") === "Send",
+		) as HTMLButtonElement
 	).click();
 	await settle();
 }
@@ -258,11 +282,13 @@ beforeEach(() => {
 	window.history.replaceState(null, "", "/");
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "load_config") return { ai_chat_sessions: {} };
-		if (command === "get_home_directory") return HOME;
+		if (command === "acp_workspace_root") return CHAT_ROOT;
 		return undefined;
 	});
 	sequence = 0;
 	supportsImages = false;
+	supportsFork = false;
+	supportsDelete = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
 	acpStore.reset();
 	acpTranscript.reset();
@@ -292,6 +318,7 @@ beforeEach(() => {
 	for (const method of [
 		"disconnect",
 		"loadSession",
+		"closeSession",
 		"cancel",
 		"cancelQueued",
 		"answerPermission",
@@ -307,7 +334,91 @@ beforeEach(() => {
 	client.prompt.mockResolvedValue("turn-1");
 });
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	cleanupToasts();
+});
+
+// Catches: replacing a refused push-linked conversation restores that same refused tab instead of opening a new one.
+it("starts a new chat after closing a refused push-linked conversation in a fresh document", async () => {
+	aiChatTabs.add("global", SECOND_SESSION);
+	client.loadSession.mockRejectedValueOnce(
+		new Error(
+			'RPC acp_session_load failed: 502 {"kind":"agent_error","message":"the session last run has an uncertain effect; close it with session/close and start a new chat","retryable":false}',
+		),
+	);
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.selectSession(SECOND_SESSION);
+		expect(chat.error()).toContain("uncertain effect");
+		await chat.closeFailed();
+		await chat.startSession();
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(chat.error()).toBeNull();
+	} finally {
+		dispose();
+	}
+});
+
+describe("AIChatPanel: repository profile warnings", () => {
+	// Catches an authoritative ego clamp silently discarded by the chat host.
+	it("shows recorded ego clamp warnings once for the attached conversation", async () => {
+		const recorded = JSON.parse(
+			readFileSync(resolve(process.cwd(), "src-tauri/tests/fixtures/acp/ego-profile-ceiling.json"), "utf8"),
+		);
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [
+						attachment({
+							profileWarnings: recorded._meta.ego.warnings,
+						}),
+					],
+				}),
+			);
+			return SESSION;
+		});
+		await renderPanel();
+		await settle();
+		expect(
+			toastsStore.toasts
+				.filter((toast) => toast.title === "Repository ego profile")
+				.map((toast) => ({ message: toast.message, level: toast.level })),
+		).toEqual([
+			{
+				message:
+					"mode yolo exceeds profile ceiling default; using default\nsandbox off exceeds profile ceiling workspace; using workspace",
+				level: "warn",
+			},
+		]);
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						profileWarnings: recorded._meta.ego.warnings,
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(1);
+	});
+
+	// Catches ordinary sessions getting a spurious profile warning.
+	it("keeps sessions without repository profile warnings quiet", async () => {
+		await renderPanel();
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
+	});
+});
 
 describe("AIChatPanel: the frame it keeps", () => {
 	// The panel keeps its slot, its id and its detach control across the engine
@@ -335,7 +446,8 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+	// Catches: orphan Copy controls reserving an empty full-width row beneath each reply.
+	it("anchors assistant Copy beside the reply, keeps user bubbles compact and tool counts on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -363,10 +475,15 @@ describe("AIChatPanel: transcript actions", () => {
 				},
 			});
 			await settle();
-			for (const label of ["Copy user message", "Copy assistant message"]) {
-				const button = container.querySelector(`button[aria-label="${label}"]`)!;
-				expect(getComputedStyle(button).minHeight, label).toBe("18px");
-			}
+			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
+			const actions = assistantCopy.parentElement!;
+			expect(getComputedStyle(actions).position).toBe("absolute");
+			expect(getComputedStyle(actions).left).toBe("0px");
+			expect(getComputedStyle(actions).top).toBe("100%");
+			// A user bubble hugs its text: its Copy sits outside the bubble instead of
+			// holding an invisible row that made "che model usi?" look two lines tall.
+			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
+			expect(getComputedStyle(userCopy).position).toBe("absolute");
 			const count = container.querySelector(".toolCallCount")!;
 			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
 		} finally {
@@ -487,7 +604,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -512,7 +629,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("keeps a file link's line and column when opening the resolved file", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path")
 				return { absolute_path: "/repo/tuicommander/src/main.ts", is_directory: false };
 			return undefined;
@@ -531,7 +648,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("reveals a resolved directory link in the file browser", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -551,7 +668,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -596,7 +713,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens web links externally and file links through the terminal file opener", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -620,10 +737,53 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
 
+	// Catches: a card rendered as plain assistant text, with no button.
+	it("renders a salience=card notice as a card with its action, and opens the result file from it", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/results/worker.md" };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Worker finished: RESULT" },
+				_meta: { ego: { salience: "card", action: { kind: "open_result", path: "results/worker.md" } } },
+			},
+		});
+		await settle();
+		const card = container.querySelector('[aria-label="Notice"]') as HTMLElement;
+		expect(card.textContent).toContain("Worker finished: RESULT");
+		expect(container.querySelector(".assistantMsg")).toBeNull();
+		// Catches: a dead action button.
+		const button = [...card.querySelectorAll("button")].find((item) => item.textContent === "Open result");
+		button?.click();
+		await settle();
+		expect(invoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: CHAT_ROOT, candidate: "results/worker.md" });
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/results/worker.md");
+	});
+
+	// Catches: breaking non-ego or older ego sessions.
+	it("renders an update without _meta as an assistant message, not a card", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "plain reply" } },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Notice"]')).toBeNull();
+		expect(container.querySelector(".assistantMsg")?.textContent).toContain("plain reply");
+	});
+
 	it("makes a bare source path clickable only after the backend resolves it", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -651,7 +811,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens links in a user message through the same URL and file handlers", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -667,10 +827,31 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
 
+	// Catches: the transcript's own onClick and the document-level handler both opening the same web link.
+	it("opens a web link in a user message exactly once when the document handler is installed", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		document.addEventListener("click", handleExternalLinkClick);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Open https://example.com/help" });
+			await settle();
+			container.querySelector<HTMLAnchorElement>(".userMsg a")?.click();
+			await settle();
+			expect(mockOpenUrl).toHaveBeenCalledTimes(1);
+		} finally {
+			document.removeEventListener("click", handleExternalLinkClick);
+		}
+	});
+
 	it("keeps a failed file lookup inside the panel without opening a path", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") throw new Error("resolver unavailable");
 			return undefined;
 		});
@@ -701,7 +882,9 @@ describe("AIChatPanel: one chat across repositories", () => {
 		textarea.value = text;
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		(
-			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+			[...container.querySelectorAll("button")].find(
+				(button) => button.getAttribute("aria-label") === "Send",
+			) as HTMLButtonElement
 		).click();
 		await settle();
 	}
@@ -729,6 +912,8 @@ describe("AIChatPanel: one chat across repositories", () => {
 		expect(client.prompt).toHaveBeenCalledTimes(1);
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
+		// Catches: removal of the duplicate bar action also removing the tab action.
+		expect(container.querySelector('button[aria-label="Start another conversation"]')).toBeNull();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
 		expect(client.newSession).toHaveBeenLastCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.connect).toHaveBeenCalledTimes(1);
@@ -759,7 +944,7 @@ describe("AIChatPanel: one chat across repositories", () => {
 	it("does not replay a conversation the running ego already has attached", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: SESSION } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.connect.mockImplementation(async () => {
@@ -791,6 +976,407 @@ describe("AIChatPanel: one chat across repositories", () => {
 });
 
 describe("AIChatPanel: parallel tabs", () => {
+	// Catches: selecting a restored tab without a binding never connects or replays.
+	it("restores two saved tabs and loads the second when selected without sending", async () => {
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.resetMemory();
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+			feed(
+				{
+					kind: "sessionUpdate",
+					update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Saved second answer" } },
+				},
+				session,
+			);
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(
+			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
+		).toBe("true");
+		expect(container.textContent).toContain("Saved second answer");
+		expect(container.textContent).toContain("Opus");
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	function restoreTabs(): void {
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.resetMemory();
+	}
+
+	function selectTab(container: HTMLElement, session: string): void {
+		(container.querySelector(`button[data-chat-session="${session}"]`) as HTMLButtonElement).click();
+	}
+
+	// Catches: an unattached saved tab looks idle and hides its model row during connect.
+	it("shows connecting until a saved tab attaches, then its model below the input", async () => {
+		restoreTabs();
+		let finish!: () => void;
+		client.loadSession.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("Connecting conversation…");
+		expect(container.querySelector("textarea")).toBeNull();
+		expect(
+			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
+		).toBe("true");
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] }));
+		finish();
+		await settle();
+		expect(container.textContent).toContain("Opus");
+		expect(container.textContent).not.toContain("Connecting conversation…");
+	});
+
+	// Catches: "Start new chat" after a refused load leaves the refused session open and
+	// selected, so the new chat reloads it or the dead tab stays.
+	it("closes the refused session on the agent and opens a new one in its place", async () => {
+		restoreTabs();
+		client.loadSession.mockRejectedValueOnce(new Error("uncertain effect"));
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.selectSession(SECOND_SESSION);
+			await settle();
+			expect(chat.error()).toContain("uncertain effect");
+			await chat.closeFailed();
+			expect(client.closeSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION);
+			expect(chat.error()).toBeNull();
+			expect(aiChatTabs.ids("global")).not.toContain(SECOND_SESSION);
+			await chat.startSession();
+			await settle();
+			expect(client.newSession).toHaveBeenCalledTimes(1);
+			expect(client.loadSession.mock.calls.filter((call) => call[1] === SECOND_SESSION)).toHaveLength(1);
+			expect(chat.error()).toBeNull();
+			dispose();
+		});
+	});
+
+	// Catches: Retry clears the error without reattaching the saved tab that failed.
+	it("retries the refused saved tab on its existing connection", async () => {
+		restoreTabs();
+		client.loadSession
+			.mockRejectedValueOnce(new Error("Saved conversation unavailable"))
+			.mockImplementation(async (_id, session) => {
+				acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+				acpTranscript.restore(session, [{ id: "saved-answer", kind: "agent", text: "Recovered second answer" }]);
+			});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("Saved conversation unavailable");
+		expect(container.textContent).toContain("The conversation could not be opened");
+		[...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")?.click();
+		await settle();
+		expect(container.textContent).toContain("Recovered second answer");
+		expect(container.textContent).toContain("Opus");
+		expect(client.loadSession.mock.calls.map((call) => call[1])).toEqual([SECOND_SESSION, SECOND_SESSION]);
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.reconnect).not.toHaveBeenCalled();
+	});
+
+	// Catches: rapid selections spawn two egos or let an older selection take focus.
+	it("shares a pending connection and keeps the latest saved tab selected", async () => {
+		restoreTabs();
+		let finish!: () => void;
+		client.connect.mockImplementation(
+			() =>
+				new Promise<AcpConnectionSnapshot>((resolve) => {
+					finish = () => {
+						const opened = snapshot();
+						acpStore.applySnapshot(opened);
+						acpStore.markStreaming(CONNECTION);
+						resolve(opened);
+					};
+				}),
+		);
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SESSION);
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		finish();
+		await settle();
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.loadSession).toHaveBeenCalledTimes(1);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(
+			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
+		).toBe("true");
+	});
+
+	// Catches: a slow failed load overwrites the current tab's successful state.
+	it("ignores a previous saved tab failure after another tab has attached", async () => {
+		restoreTabs();
+		let refuse!: () => void;
+		client.loadSession.mockImplementation(async (_id, session) => {
+			if (session === SECOND_SESSION)
+				return new Promise<void>((_resolve, reject) => {
+					refuse = () => reject(new Error("Previous tab failed"));
+				});
+			acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+			acpTranscript.restore(SESSION, [{ id: "current-answer", kind: "agent", text: "Current answer" }]);
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		selectTab(container, SESSION);
+		await settle();
+		refuse();
+		await settle();
+		expect(container.textContent).toContain("Current answer");
+		expect(container.textContent).not.toContain("Previous tab failed");
+		expect(container.textContent).not.toContain("Connecting conversation…");
+	});
+
+	// Catches: clicking an already attached saved tab loads it again and duplicates history.
+	it("adopts the existing attachment of a saved tab without replaying it", async () => {
+		restoreTabs();
+		client.connect.mockImplementation(async () => {
+			const opened = snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] });
+			acpStore.applySnapshot(opened);
+			acpStore.markStreaming(CONNECTION);
+			acpTranscript.restore(SECOND_SESSION, [{ id: "live-answer", kind: "agent", text: "Existing live answer" }]);
+			return opened;
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("Existing live answer");
+		expect(container.textContent).toContain("Opus");
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	// Catches: a missing load capability silently replaces saved conversations with a new one.
+	it("explains an unsupported saved-tab load without creating a replacement", async () => {
+		restoreTabs();
+		client.connect.mockImplementation(async () => {
+			const opened = snapshot();
+			if (opened.capabilities) opened.capabilities.load = false;
+			acpStore.applySnapshot(opened);
+			return opened;
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("This agent cannot load saved conversations.");
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	// Catches: restored tab labels use Chat N or an opaque UUID instead of conversation content.
+	it("names saved tabs and picker entries from titles or their first prompt", async () => {
+		restoreTabs();
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: SESSION },
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Release discussion" },
+			],
+		});
+		acpTranscript.restore(SESSION, [{ id: "first-question", kind: "user", text: "Review the saved tabs" }]);
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect([...container.querySelectorAll("[data-chat-session]")].map((tab) => tab.textContent)).toEqual([
+			"Review the saved tabs",
+			"Release discussion",
+		]);
+		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
+		expect([...picker.options].map((option) => option.textContent)).toEqual([
+			"Review the saved tabs",
+			"Release discussion",
+		]);
+		feed(
+			{ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Updated release discussion" } },
+			SECOND_SESSION,
+		);
+		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)?.textContent).toBe(
+			"Updated release discussion",
+		);
+	});
+
+	// Catches: a recorded pre-prompt offer leaves Session settings hidden.
+	it("reveals settings from the recorded async config offer before sending", async () => {
+		const { container } = await renderPanel();
+		const empty = snapshot({
+			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
+		});
+		acpStore.applySnapshot(empty);
+		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const offer = JSON.parse(recording.at(-1).raw).params.update;
+		const actual = await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+		let receive!: (frame: import("../../types/acp").AcpStreamFrame) => void;
+		const realClient = actual.createAcpClient(async (options) => {
+			receive = options.onFrame;
+			return { close() {} };
+		});
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "acp_connect") return empty;
+			if (command === "acp_pending_interactions") return [];
+			if (command === "acp_connection_snapshot")
+				return snapshot({
+					attachments: [attachment({ configOptions: offer.configOptions }), attachment({ sessionId: SECOND_SESSION })],
+				});
+			return undefined;
+		});
+		await realClient.connect(CHAT_ROOT);
+		receive({
+			kind: "event",
+			connectionId: CONNECTION,
+			generation: 1,
+			sequence: ++sequence,
+			sessionId: SESSION,
+			turnId: null,
+			event: { kind: "sessionUpdate", update: offer },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
+		expect(container.textContent).toContain("default");
+		expect(container.textContent).not.toContain("Model: pending");
+		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
+		expect(client.prompt).not.toHaveBeenCalled();
+		await realClient.disconnect(CONNECTION);
+	});
+
+	// Catches: an attached tab with late config options loses the entire model/mode row.
+	it.each<{ configOptions: AcpSessionConfigOption[] }>([
+		{ configOptions: [] },
+		{
+			configOptions: [
+				{
+					id: "effort",
+					name: "Effort",
+					type: "select",
+					currentValue: "high",
+					options: [{ value: "high", name: "High" }],
+				},
+			],
+		},
+	])("keeps model and mode pending until options arrive, starting with $configOptions", async ({ configOptions }) => {
+		const { container } = await renderPanel();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions })] }));
+		expect(container.textContent).toContain(configOptions.length ? "high" : "Model: pending · Mode: pending");
+		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+		expect(container.textContent).toContain("Opus");
+		expect(container.textContent).not.toContain("Model: pending");
+		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
+	});
+
+	// Catches: a late custom-launch failure replaces another tab's successful connection state.
+	it("ignores a previous custom tab failure after the default tab attaches", async () => {
+		restoreTabs();
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		let refuse!: () => void;
+		client.openConversation.mockImplementation(
+			() =>
+				new Promise((_resolve, reject) => {
+					refuse = () => reject(new Error("Previous custom tab failed"));
+				}),
+		);
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SESSION);
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		refuse();
+		await settle();
+		expect(container.textContent).toContain("Opus");
+		expect(container.textContent).not.toContain("Previous custom tab failed");
+	});
+
+	// Catches: switching from a saved custom tab to a saved default tab never starts its owner.
+	it("attaches saved custom and default tabs to their own connections", async () => {
+		restoreTabs();
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		const customConnection = "01932d5e-0000-7000-8000-0000000000c2";
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({ connectionId: customConnection, attachments: [attachment()] });
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(customConnection);
+			return { connection, sessionId: SESSION, launch };
+		});
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+		});
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SESSION);
+		await settle();
+		expect(client.openConversation).toHaveBeenCalledWith({ sessionId: SESSION });
+		expect(client.connect).not.toHaveBeenCalled();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		await typeAndSend(container, "Continue the default conversation");
+		expect(client.connect).toHaveBeenCalledWith(CHAT_ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SECOND_SESSION,
+			"Continue the default conversation",
+			[],
+			ROOT,
+		);
+		expect(client.newSession).not.toHaveBeenCalled();
+	});
+
 	it("keeps both tabs and transcripts when the panel is hidden and shown", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const [visible, setVisible] = createSignal(true);
@@ -890,7 +1476,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		textarea.dispatchEvent(shortcut);
 		expect(shortcut.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("");
-		expect(container.textContent).toContain("Parked draft");
+		expect(container.querySelector('button[aria-pressed="true"][aria-label$="parked draft"]')).not.toBeNull();
 		const repeated = new KeyboardEvent("keydown", {
 			key: "s",
 			ctrlKey: true,
@@ -904,7 +1490,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		await typeAndSend(container, "Quick interruption");
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Quick interruption", [], ROOT);
 		expect(textarea.value).toBe("Long-running thought");
-		expect(container.textContent).not.toContain("Parked draft");
+		expect(container.querySelector('button[aria-pressed="true"][aria-label$="parked draft"]')).toBeNull();
 	});
 	it("warns when browser storage cannot keep a parked draft across reload", async () => {
 		const { container } = await renderPanel();
@@ -937,7 +1523,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		first.unmount();
 		const second = render(() => <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />);
 		await settle();
-		expect(second.container.textContent).toContain("Parked draft");
+		expect(second.container.querySelector('button[aria-pressed="true"][aria-label$="parked draft"]')).not.toBeNull();
 		await typeAndSend(second.container, "Describe this image");
 		expect(client.prompt).toHaveBeenCalledWith(
 			CONNECTION,
@@ -960,19 +1546,153 @@ describe("AIChatPanel: parallel tabs", () => {
 		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
-		expect(container.textContent).not.toContain("Parked draft");
+		expect(container.querySelector('button[aria-pressed="true"][aria-label$="parked draft"]')).toBeNull();
 		(container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
 		await settle();
-		expect(container.textContent).toContain("Parked draft");
+		expect(container.querySelector('button[aria-pressed="true"][aria-label$="parked draft"]')).not.toBeNull();
 		await typeAndSend(container, "Short detour");
 		const restored = container.querySelector("textarea") as HTMLTextAreaElement;
 		expect(restored.value).toContain("[Pasted text #");
 		(
-			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+			[...container.querySelectorAll("button")].find(
+				(button) => button.getAttribute("aria-label") === "Send",
+			) as HTMLButtonElement
 		).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
+	it("middle-click closes the chosen tab — catches missing auxclick handling", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = await renderPanel();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		const tab = container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)!;
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		await settle();
+		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
+		expect((container.querySelector('select[aria-label="Conversation"]') as HTMLSelectElement).value).toBe(SESSION);
+		expect(container.querySelector('[role="tablist"]')).toBeNull();
+	});
+
+	it("Escape stops from composer and transcript without clearing drafts — catches missing Escape stop", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Start work");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		for (const target of [textarea, container.querySelector('[aria-label="Chat transcript"]')!]) {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+			await settle();
+		}
+		expect(client.cancel).toHaveBeenCalledTimes(2);
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape leaves idle drafts intact and closes Find before stopping a busy turn", async () => {
+		const { container } = await renderPanel();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		container
+			.querySelector('[aria-label="Find in chat"]')!
+			.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("Escape in the composer dismisses open Find before cancelling work — catches sibling search bypass", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Keep working");
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		await settle();
+		expect(container.querySelector('[aria-label="Find in chat"]')).not.toBeNull();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Next question";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await settle();
+		expect(client.cancel).not.toHaveBeenCalled();
+		expect(container.querySelector('[aria-label="Find in chat"]')).toBeNull();
+		expect(textarea.value).toBe("Next question");
+	});
+
+	it("middle-click does not reopen an uncertain-effect refusal or close it on the agent", async () => {
+		restoreTabs();
+		client.loadSession.mockRejectedValueOnce(
+			new Error('RPC acp_session_load failed: 502 {"message":"uncertain effect; start a new chat","retryable":false}'),
+		);
+		const { container } = renderIdlePanel();
+		await settle();
+		selectTab(container, SECOND_SESSION);
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		container
+			.querySelector(`[data-chat-session="${SESSION}"]`)!
+			.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+		await settle();
+		expect(container.textContent).toContain("uncertain effect");
+		expect(client.closeSession).not.toHaveBeenCalled();
+	});
+
+	it("pins per-conversation repository context without replacing draft parking", async () => {
+		const [repo, setRepo] = createSignal<string | null>(ROOT);
+		const { container } = render(() => <AIChatPanel visible={true} repoPath={repo()} onClose={() => {}} />);
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		(container.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement).click();
+		expect(container.querySelector('button[aria-label="Unpin repository"]')?.getAttribute("aria-pressed")).toBe("true");
+		setRepo("/other/repo");
+		await typeAndSend(container, "Pinned context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Pinned context", [], ROOT);
+		expect(container.querySelector('button[aria-label="Park draft"]')).not.toBeNull();
+		(container.querySelector('button[aria-label="Unpin repository"]') as HTMLButtonElement).click();
+		await typeAndSend(container, "Follow context");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "Follow context", [], "/other/repo");
+	});
+
 	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const { container } = await renderPanel();
@@ -983,7 +1703,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		textarea.value = "Second request";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		(
-			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+			[...container.querySelectorAll("button")].find(
+				(button) => button.getAttribute("aria-label") === "Send",
+			) as HTMLButtonElement
 		).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Second request", [], ROOT);
@@ -993,7 +1715,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		textarea.value = "First request";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		(
-			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+			[...container.querySelectorAll("button")].find(
+				(button) => button.getAttribute("aria-label") === "Send",
+			) as HTMLButtonElement
 		).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "First request", [], ROOT);
@@ -1087,7 +1811,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		(
 			[...second.container.querySelectorAll("button")].find(
-				(button) => button.textContent === "Send",
+				(button) => button.getAttribute("aria-label") === "Send",
 			) as HTMLButtonElement
 		).click();
 		await settle();
@@ -1131,14 +1855,111 @@ describe("AIChatPanel: without a configured binary", () => {
 	// An empty `ego_executable` is refused in Rust at connect. Saying so is the
 	// difference between a panel that explains itself and one that silently
 	// never starts.
-	it("explains that ACP is not configured and launches nothing", async () => {
+	it("rejects setup narration while retaining the configuration recovery action", async () => {
 		settings.egoExecutable = "";
-		const { container } = renderIdlePanel();
+		const { container, getByRole } = renderIdlePanel();
 		await settle();
 
-		expect(container.textContent).toContain("ACP is not configured");
+		expect(container.textContent).toContain("AI Chat is inactive because the ego executable is not configured");
+		expect(container.textContent).not.toContain("Select it in Settings");
+		expect(getByRole("button", { name: "Configure ego" })).not.toBeNull();
 		expect(client.connect).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).toBeNull();
+	});
+	// Catches: missing setup action leaves a fresh profile with no route to configure ego.
+	it("opens the ego settings section from the inactive panel", async () => {
+		settings.egoExecutable = "";
+		const [opened, setOpened] = createSignal("");
+		const view = render(() => (
+			<>
+				<AIChatPanel
+					visible={true}
+					repoPath={ROOT}
+					onClose={() => {}}
+					onOpenSettings={(tab, section) => setOpened(`${tab}/${section}`)}
+				/>
+				<div role="status">{opened()}</div>
+			</>
+		));
+		await settle();
+		view.getByRole("button", { name: "Configure ego" }).click();
+		expect(view.getByRole("status").textContent).toBe("general/settings-ego");
+		expect(client.connect).not.toHaveBeenCalled();
+	});
+
+	// Catches: the detached setup button changes only its own WebView and never opens main Settings.
+	it("routes detached ego setup to the main window", async () => {
+		settings.egoExecutable = "";
+		window.history.replaceState(null, "", "/?mode=panel");
+		const view = renderIdlePanel();
+		await settle();
+		view.getByRole("button", { name: "Configure ego" }).click();
+		await settle();
+		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+			panelId: "ai-chat",
+			action: "configure-ego",
+			data: {},
+		});
+		expect(invoke).toHaveBeenCalledWith("focus_main_window");
+	});
+
+	// Catches: setup completion leaves the inactive panel stuck until TUIC restarts.
+	it("activates the composer immediately after configuring ego", async () => {
+		settings.egoExecutable = "";
+		const view = renderIdlePanel();
+		await settle();
+		expect(view.queryByRole("textbox")).toBeNull();
+		settings.egoExecutable = "/usr/local/bin/ego";
+		await settle();
+		expect(view.queryByRole("button", { name: "Configure ego" })).toBeNull();
+		expect(view.container.querySelector("textarea")).not.toBeNull();
+		expect(client.connect).not.toHaveBeenCalled();
+	});
+});
+
+describe("AIChatPanel: composer height", () => {
+	const LINE_PX = 20;
+	const PANEL_PX = 500;
+	const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get");
+	const clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get");
+
+	beforeEach(() => {
+		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
+			return this.value.split("\n").length * LINE_PX + 16;
+		});
+		clientHeight.mockReturnValue(PANEL_PX);
+	});
+	afterEach(() => {
+		scrollHeight.mockReset();
+		clientHeight.mockReset();
+	});
+
+	async function typeLines(container: HTMLElement, lines: number): Promise<HTMLTextAreaElement> {
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n");
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		await settle();
+		return textarea;
+	}
+
+	it("grows with the text and scrolls only past 40% of the panel (catches a fixed height or a 150px cap)", async () => {
+		const { container } = await renderPanel();
+		const grown = await typeLines(container, 5);
+		expect(grown.style.height).toBe(`${5 * LINE_PX + 16}px`);
+		expect(grown.style.overflowY).toBe("hidden");
+		const capped = await typeLines(container, 40);
+		expect(capped.style.height).toBe(`${PANEL_PX * 0.4}px`);
+		expect(capped.style.overflowY).toBe("auto");
+	});
+
+	it("returns to one line after Send (catches a height kept from the previous message)", async () => {
+		const { container } = await renderPanel();
+		await typeLines(container, 8);
+		await typeAndSend(container, "short");
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(textarea.value).toBe("");
+		expect(textarea.style.height).toBe("36px");
 	});
 });
 
@@ -1207,7 +2028,7 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		expect(event.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("[Pasted text #1 +201 words]");
-		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, pasted, [], ROOT);
 	});
@@ -1237,7 +2058,7 @@ describe("AIChatPanel: a turn", () => {
 		textarea.dispatchEvent(event);
 		await settle();
 		expect(textarea.value).toBe("Before [Pasted text #1 +201 words]after");
-		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, `Before ${pasted}after`, [], ROOT);
 	});
@@ -1444,7 +2265,9 @@ describe("AIChatPanel: a turn", () => {
 		);
 		await settle();
 		expect(container.textContent).toContain("no capabilities are configured");
-		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Send")).toBe(true);
+		expect(
+			[...container.querySelectorAll("button")].some((button) => button.getAttribute("aria-label") === "Send"),
+		).toBe(true);
 	});
 
 	it("shows that a normally settled turn without an agent reply ended", async () => {
@@ -1491,7 +2314,7 @@ describe("AIChatPanel: a turn", () => {
 		textarea.value = "desktop next";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		await settle();
-		[...container.querySelectorAll("button")].find((button) => button.textContent === "Queue")?.click();
+		[...container.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "Queue")?.click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "desktop next", [], ROOT);
 	});
@@ -1508,7 +2331,7 @@ describe("AIChatPanel: a turn", () => {
 		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
 
 		expect(event.defaultPrevented).toBe(true);
-		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
+		[...container.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "Send")?.click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(
 			CONNECTION,
@@ -1577,7 +2400,7 @@ describe("AIChatPanel: a turn", () => {
 		textarea.value = "text only";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		await settle();
-		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
+		[...container.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "Send")?.click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "text only", [], ROOT);
 	});
@@ -1609,7 +2432,9 @@ describe("AIChatPanel: a turn", () => {
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		await settle();
 
-		const send = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send");
+		const send = [...container.querySelectorAll("button")].find(
+			(button) => button.getAttribute("aria-label") === "Send",
+		);
 		send?.click();
 		await settle();
 
@@ -1644,6 +2469,25 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	// Catches: the conversation picker left at the 36px default beside the 19px settings button in the control bar.
+	it("sizes the conversation picker compact like its control bar neighbours", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
+				{
+					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
+					cwd: CHAT_ROOT,
+					title: null,
+					updatedAt: "2026-09-26T09:00:00Z",
+				},
+			],
+			nextCursor: null,
+		});
+		const { container } = await renderPanel();
+		await settle();
+		expect(container.querySelector('select[title="Conversation"]')?.className).toMatch(/compact/);
+	});
+
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
@@ -1680,7 +2524,7 @@ describe("AIChatPanel: durable conversations", () => {
 		await settle();
 
 		expect(container.querySelector('select[title="Conversation"]')?.textContent).toContain("Review architecture");
-		expect(container.querySelector('[class*="headerLeft"]')?.textContent).toContain("Review architecture");
+		expect(container.querySelector('[class*="tidyHeader"]')?.textContent).toContain("Review architecture");
 	});
 
 	it("renders context occupancy and cost from one ACP usage update", async () => {
@@ -1761,9 +2605,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = container.querySelector<HTMLButtonElement>(
-			'button[aria-label="Start another conversation on this repository"]',
-		);
+		const next = container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -1774,7 +2616,7 @@ describe("AIChatPanel: durable conversations", () => {
 		const saved: Record<string, string> = {};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "save_config")
 				Object.assign(
 					saved,
@@ -1796,15 +2638,15 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).not.toHaveBeenCalled();
 	});
 
-	it("includes later ACP list pages before ordering the picker", async () => {
+	it("keeps the backend projection order across ACP list pages", async () => {
 		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
 			cursor
 				? {
-						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
 						nextCursor: null,
 					}
 				: {
-						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
 						nextCursor: "page-2",
 					},
 		);
@@ -1836,7 +2678,7 @@ describe("AIChatPanel: durable conversations", () => {
 	it("loads the saved conversation after a fresh document opens", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: "prior-session" } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.listSessions.mockResolvedValue({
@@ -1866,12 +2708,12 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(container.textContent).toContain("Earlier answer");
 	});
 
-	it("lists durable conversation titles in latest activity order", async () => {
+	it("renders durable conversation titles in the backend activity order", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
-				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
 				{ sessionId: "newest", cwd: CHAT_ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
@@ -1964,13 +2806,13 @@ describe("AIChatPanel: tool activity", () => {
 		for (let id = 1; id <= 7; id += 1) tool(id);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
-			summary.textContent?.includes("7 tool calls"),
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
+			summary.textContent?.includes("7 reads"),
 		);
 		expect(summaries).toHaveLength(1);
 		expect(summaries[0].textContent).toContain("Inspect file 1");
 		expect(summaries[0].textContent).toContain("Inspect file 2");
-		expect(summaries[0].textContent).toMatch(/\d+(?:\.\d+)?s/);
+		expect(summaries[0].textContent).not.toMatch(/s observed/);
 		expect((summaries[0].parentElement as HTMLDetailsElement).open).toBe(false);
 	});
 
@@ -1981,7 +2823,7 @@ describe("AIChatPanel: tool activity", () => {
 		await settle();
 
 		const activity = [...container.querySelectorAll("details")].find((details) =>
-			details.querySelector("summary")?.textContent?.includes("tool call"),
+			details.querySelector("summary")?.textContent?.includes("read"),
 		);
 		expect(activity).toBeDefined();
 		expect(activity?.open).toBe(false);
@@ -2002,8 +2844,8 @@ describe("AIChatPanel: tool activity", () => {
 		tool(2, "failed");
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
-			element.textContent?.includes("2 tool calls"),
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+			element.textContent?.includes("2 reads"),
 		);
 		expect(summary?.textContent).toContain("Failed");
 	});
@@ -2034,7 +2876,7 @@ describe("AIChatPanel: tool activity", () => {
 		await settle();
 
 		const activity = [...container.querySelectorAll("details")].find((details) =>
-			details.querySelector("summary")?.textContent?.includes("tool call"),
+			details.querySelector("summary")?.textContent?.includes("read"),
 		);
 		expect(activity?.open).toBe(false);
 		expect(container.textContent).toContain("Write file");
@@ -2062,12 +2904,12 @@ describe("AIChatPanel: tool activity", () => {
 		tool(3);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
-			summary.textContent?.includes("tool call"),
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
+			summary.textContent?.includes("read"),
 		);
 		expect(summaries).toHaveLength(2);
-		expect(summaries[0].textContent).toContain("2 tool calls");
-		expect(summaries[1].textContent).toContain("1 tool call");
+		expect(summaries[0].textContent).toContain("2 reads");
+		expect(summaries[1].textContent).toContain("1 read");
 	});
 
 	it("updates the collapsed line when an existing call later fails", async () => {
@@ -2081,8 +2923,8 @@ describe("AIChatPanel: tool activity", () => {
 		});
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
-			element.textContent?.includes("1 tool call"),
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+			element.textContent?.includes("1 read"),
 		);
 		expect(summary?.textContent).toContain("Failed");
 	});
@@ -2103,6 +2945,7 @@ describe("AIChatPanel: tool activity", () => {
 			const dots = () => [...activity.querySelectorAll("summary > span:first-child")];
 			expect(dots()).toHaveLength(2);
 			for (const dot of dots()) expect(dot.className).toContain("toolCallPending");
+			const pendingRowDot = dots()[1];
 
 			feed({
 				kind: "sessionUpdate",
@@ -2110,6 +2953,9 @@ describe("AIChatPanel: tool activity", () => {
 			});
 			await settle();
 
+			// WebKit keeps a running CSS animation when only the class of an element
+			// inside a closed <details> changes, so the row dot must be a new element.
+			expect(dots()[1]).not.toBe(pendingRowDot);
 			for (const dot of dots()) {
 				expect(dot.className).not.toContain("toolCallPending");
 				expect(dot.className).toContain(status === "failed" ? "toolCallFailure" : "toolCallSuccess");
@@ -2142,7 +2988,7 @@ describe("AIChatPanel: tool activity", () => {
 		}
 	});
 
-	it("extends observed duration when a later call joins an already completed activity", async () => {
+	it("keeps history untimed when a later call joins completed activity", async () => {
 		const realNow = performance.now.bind(performance);
 		const now = vi.spyOn(performance, "now");
 		let elapsed = 0;
@@ -2156,10 +3002,10 @@ describe("AIChatPanel: tool activity", () => {
 			tool(2);
 			await settle();
 
-			const summary = [...container.querySelectorAll("summary")].find((element) =>
-				element.textContent?.includes("2 tool calls"),
+			const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+				element.textContent?.includes("2 reads"),
 			);
-			expect(summary?.textContent).toMatch(/2\.5s observed|2\.6s observed/);
+			expect(summary?.textContent).not.toMatch(/s observed/);
 		} finally {
 			now.mockRestore();
 		}
@@ -2312,7 +3158,9 @@ describe("AIChatPanel: elicitation", () => {
 		feed({ kind: "turnFailed", message: "model unavailable", state: "idle" }, SESSION, "turn-1");
 		await settle();
 		expect(container.textContent).toContain("model unavailable");
-		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Send")).toBe(true);
+		expect(
+			[...container.querySelectorAll("button")].some((button) => button.getAttribute("aria-label") === "Send"),
+		).toBe(true);
 	});
 
 	it("renders a form and submits the values that were filled in", async () => {
@@ -2510,7 +3358,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 		await settle();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [grouped] })] }));
 		await settle();
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Mode: Automatic");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Automatic");
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Mode"]') as HTMLSelectElement;
 		expect(picker.querySelector("optgroup")?.label).toBe("Behavior");
@@ -2550,12 +3398,12 @@ describe("AIChatPanel: the session's own knobs", () => {
 		picker.dispatchEvent(new Event("change", { bubbles: true }));
 		await settle();
 		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", { value: "sonnet" });
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Opus");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Opus");
 		acpStore.applySnapshot(
 			snapshot({ attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }),
 		);
 		await settle();
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Sonnet");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Sonnet");
 	});
 
 	// Catches: a rejected choice appears accepted and its error is lost.
@@ -2573,56 +3421,92 @@ describe("AIChatPanel: the session's own knobs", () => {
 	});
 });
 
+describe("AIChatPanel: fork", () => {
+	const forkButton = (container: HTMLElement) =>
+		container.querySelector<HTMLButtonElement>('button[aria-label="Fork the conversation"]');
+
+	beforeEach(() => {
+		supportsFork = true;
+		// The real client attaches the child and refreshes the store before it returns.
+		client.forkSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: CHILD_SESSION })] }));
+			return CHILD_SESSION;
+		});
+	});
+
+	// Catches: fork replacing the parent binding instead of adding a tab.
+	it("opens the child in a new tab and keeps the parent tab", async () => {
+		const { container } = await renderPanel();
+		await settle();
+
+		forkButton(container)?.click();
+		await settle();
+
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION, CHILD_SESSION]);
+		expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+		expect(acpStore.attachment(CONNECTION, SESSION)).not.toBeNull();
+		// The fork already attached the child; a load would be refused as a duplicate.
+		expect(client.loadSession).not.toHaveBeenCalledWith(CONNECTION, CHILD_SESSION, expect.anything());
+	});
+
+	// Catches: a fork request hitting ego's busy refusal while a turn streams.
+	it("is disabled while a turn streams", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+
+		const button = forkButton(container);
+		expect(button?.disabled).toBe(true);
+		button?.click();
+		await settle();
+
+		expect(client.forkSession).not.toHaveBeenCalled();
+	});
+
+	// Catches: fork offered to an agent that cannot serve it.
+	it("shows no button when the agent lacks the fork capability", async () => {
+		supportsFork = false;
+		const { container } = await renderPanel();
+		await settle();
+
+		expect(forkButton(container)).toBeNull();
+	});
+});
+
 describe("AIChatPanel: pause, resume and compact", () => {
 	// Catches: text controls wrapping below a long model summary or icons losing accessible names.
-	it("keeps named icon controls on one row beside a short model summary", async () => {
-		const style = document.createElement("style");
-		style.textContent = readFileSync(
-			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
-			"utf8",
+	it("keeps former icon actions labelled inside the overflow menu — catches lost or unnamed menu actions", async () => {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current chat" }],
+			nextCursor: null,
+		});
+		const { container } = await renderPanel();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
+		expect(menu.open).toBe(false);
+		expect(menu.querySelector(":scope > summary svg")).not.toBeNull();
+		expect(container.querySelector('button[aria-label="New chat tab"] svg')).not.toBeNull();
+		expect(container.querySelector(".conversationLabel span + svg")).not.toBeNull();
+		menu.querySelector<HTMLElement>(":scope > summary")!.click();
+		expect(menu.open).toBe(true);
+		expect(menu.querySelectorAll(".menuSeparator")).toHaveLength(3);
+		expect(menu.querySelector(".actionsMenuItems > button")?.textContent).toContain("New conversation");
+		expect(menu.querySelector(".actionsMenuItems > .conversationList > summary")?.textContent).toBe(
+			"Delete conversation…",
 		);
-		document.head.append(style);
-		try {
-			const { container } = await renderPanel();
-			await settle();
-			acpStore.applySnapshot(
-				snapshot({
-					attachments: [
-						attachment({
-							state: "prompting",
-							configOptions: [
-								{
-									...MODEL_OPTION,
-									currentValue: "openai-codex/gpt-6-sol",
-									options: [{ value: "openai-codex/gpt-6-sol", name: "openai-codex/gpt-6-sol" }],
-								},
-							],
-						}),
-					],
-				}),
-			);
-			await settle();
-			const bar = container.querySelector<HTMLElement>(".controlBar")!;
-			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
-			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of [
-				"Pause the turn",
-				"Compact the conversation",
-				"Start another conversation on this repository",
-			]) {
-				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
-				expect(button.title).toBe(label);
-				expect(button.querySelector("svg")).not.toBeNull();
-				expect(button.textContent?.trim()).toBe("");
-			}
-			acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
-			await settle();
-			const resume = bar.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]')!;
-			expect(resume.title).toBe("Resume the turn");
-			expect(resume.querySelector("svg")).not.toBeNull();
-		} finally {
-			style.remove();
+		for (const label of ["Session settings", "Pause the turn", "Compact the conversation"]) {
+			const button = menu.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+			expect(button.textContent).toContain(label === "Compact the conversation" ? "Compact context" : label);
 		}
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+		await settle();
+		expect(menu.querySelector('button[aria-label="Resume the turn"]')?.textContent).toContain("Resume the turn");
+		menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect(menu.open).toBe(false);
 	});
 
 	it("pauses a running turn and resumes a held one", async () => {
@@ -2647,6 +3531,11 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("compacts the conversation", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
 		const { container } = await renderPanel();
 		await settle();
 
@@ -2655,6 +3544,87 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		await settle();
 
 		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+	});
+
+	it("opens the compacted successor session, which is where the conversation continues", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "sess-compacted", expect.anything());
+	});
+
+	it("reports a compaction ego did not publish instead of announcing success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "not_published", diagnostic: "checkpoint write refused" },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("checkpoint write refused");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	it("tells the person the conversation was compacted", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+	});
+
+	it("shows why a refused compaction did nothing, and does not claim success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockRejectedValueOnce(new Error("nothing to compact"));
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("nothing to compact");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+	});
+
+	it("draws an unavailable control-bar button visibly dimmed", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause the turn"]')!;
+			expect(pause.disabled).toBe(true);
+			expect(Number(getComputedStyle(pause).opacity)).toBeLessThan(1);
+			expect(getComputedStyle(pause).cursor).toBe("not-allowed");
+		} finally {
+			style.remove();
+		}
 	});
 
 	// An ego that did not advertise the extension gets no button, rather than a
@@ -2684,4 +3654,1030 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(container.querySelector('button[aria-label="Pause the turn"]')).toBeNull();
 		expect(container.querySelector('button[aria-label="Compact the conversation"]')).toBeNull();
 	});
+});
+
+describe("AIChatPanel: provider retry status", () => {
+	const CAUSE = "Our servers are currently overloaded. Please try again later.";
+	function retry(attempt: number | null) {
+		const providerRetry =
+			attempt === null
+				? null
+				: {
+						state: "waiting",
+						attempt,
+						limit: 6,
+						delayMs: 1000 * 2 ** (attempt - 1),
+						kind: "transient",
+						cause: CAUSE,
+						text: `${CAUSE} — connection problem, retrying in ${2 ** (attempt - 1)}s (attempt ${attempt}/6)`,
+					};
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "session_info_update", _meta: { ego: { providerRetry } } } as never,
+		});
+	}
+	const statusLines = (container: HTMLElement) => [...container.querySelectorAll("[class*=providerRetry]")];
+
+	async function retryingPanel() {
+		const view = await renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Audit terminali" } });
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+		return view;
+	}
+
+	// Catches: the prompt's pre-wrap leaking into Copy and wrapping its letters vertically.
+	it("keeps the user Copy action on one line", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			feed({ kind: "promptSent", text: "A real user prompt" });
+			const copy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]');
+			expect(copy).not.toBeNull();
+			expect(getComputedStyle(copy!).whiteSpace).toBe("nowrap");
+		} finally {
+			style.remove();
+		}
+	});
+
+	// Catches: the absolutely positioned user Copy collapsing to 7.9px and wrapping at a 500px panel.
+	// jsdom has no layout engine. Chromium measured the one-line label at 27.109375x16.5px;
+	// verify the production CSS preserves that intrinsic line and budgets enough transcript gutter.
+	it("keeps Copy within the transcript gutter at a 500px AI Chat panel", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await retryingPanel();
+			const panel = container.querySelector<HTMLElement>("#ai-chat-panel")!;
+			panel.style.width = "500px";
+			feed({ kind: "promptSent", text: "Question for geometry verification" });
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: "Assistant answer for geometry verification." },
+				},
+			});
+			await settle();
+			const transcript = container.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
+			const userCopy = container.querySelector<HTMLElement>('[aria-label="Copy user message"]')!;
+			const assistantCopy = container.querySelector<HTMLElement>('[aria-label="Copy assistant message"]')!;
+			expect(userCopy.textContent).toBe("Copy");
+			expect(assistantCopy.textContent).toBe("Copy");
+			const copy = getComputedStyle(userCopy);
+			const bubble = getComputedStyle(userCopy.parentElement!);
+			const list = getComputedStyle(transcript);
+			expect(copy.whiteSpace).toBe("nowrap");
+			expect(copy.position).toBe("absolute");
+			expect(copy.right).toBe("100%");
+			const rowWidth = 500 - parseFloat(list.paddingLeft) - parseFloat(list.paddingRight);
+			const gutter = rowWidth * (1 - parseFloat(bubble.maxWidth) / 100);
+			expect(gutter).toBeGreaterThanOrEqual(27.109375 + parseFloat(copy.marginRight));
+		} finally {
+			style.remove();
+		}
+	});
+
+	// Catches: retaining the provider's initial text instead of counting down from update arrival.
+	it("counts a recorded 12s provider retry down to 4s after 8s", async () => {
+		const { container } = await retryingPanel();
+		vi.useFakeTimers();
+		try {
+			feed({ kind: "sessionUpdate", update: recordedProviderRetry as never });
+			expect(statusLines(container)[0].textContent).toContain("retrying in 12s");
+			await vi.advanceTimersByTimeAsync(8000);
+			expect(statusLines(container)[0].textContent).toContain("retrying in 4s");
+			await vi.advanceTimersByTimeAsync(4000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now (attempt 1/6)");
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(statusLines(container)[0].textContent).toContain("retrying now");
+		} finally {
+			cleanup();
+			vi.useRealTimers();
+		}
+	});
+
+	// Catches: one line per retry, or a retry that never shows its n/6 counter.
+	it("shows one status line that a later attempt updates in place", async () => {
+		const { container } = await retryingPanel();
+		retry(1);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("connection problem");
+		expect(statusLines(container)[0].textContent).toContain("attempt 1/6");
+
+		retry(2);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("attempt 2/6");
+		expect(statusLines(container)[0].textContent).not.toContain("attempt 1/6");
+		// The retry patch carries no title, so the conversation keeps its name.
+		expect(acpTranscript.title(SESSION)).toBe("Audit terminali");
+	});
+
+	// Catches: a stale retry line left on screen after the provider recovered.
+	it("removes the line when ego clears the retry", async () => {
+		const { container } = await retryingPanel();
+		retry(3);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+
+		retry(null);
+		await settle();
+		expect(statusLines(container)).toHaveLength(0);
+	});
+
+	// Catches: the retry line surviving next to the final error once 6/6 failed.
+	it("replaces the line with the final error when the turn fails", async () => {
+		const { container } = await retryingPanel();
+		retry(6);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		feed({ kind: "turnFailed", message: "the turn failed: the provider returned HTTP 503", state: "idle" });
+		await settle();
+
+		expect(statusLines(container)).toHaveLength(0);
+		expect(container.textContent).toContain("the turn failed: the provider returned HTTP 503");
+	});
+});
+
+describe("AIChatPanel: fork at message", () => {
+	// Catches: offering a message fork to an agent that can only fork at its tip.
+	it("hides the per-reply fork without the at-message capability", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		await settle();
+		expect(container.querySelector('[aria-label="Fork from here"]')).toBeNull();
+	});
+	// Catches: the selected reply ID lost between the rendered action and the shared client.
+	it("passes the selected reply ID from the per-message button", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true } }),
+		);
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		client.forkSession.mockResolvedValue(CHILD_SESSION);
+		await settle();
+		container.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.click();
+		await settle();
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT, "reply-id");
+	});
+});
+
+// Catches: inherited replay shown as the child's own conversation or hidden entirely.
+it("renders inherited replay above a boundary and child turns below", async () => {
+	const { container } = await renderPanel();
+	await settle();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "user_message_chunk",
+			content: { type: "text", text: "Parent question" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: { type: "text", text: "Parent answer" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Child question" } },
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "child",
+			content: { type: "text", text: "Child answer" },
+		},
+	});
+	await settle();
+	const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+	const boundary = transcript.querySelector('[role="separator"][aria-label="Inherited history ends"]');
+	expect(boundary).not.toBeNull();
+	const content = transcript.textContent!;
+	expect(content.indexOf("Parent answer")).toBeLessThan(content.indexOf("This conversation"));
+	expect(content.indexOf("Child question")).toBeGreaterThan(content.indexOf("This conversation"));
+	expect(content).toContain("Child answer");
+});
+
+describe("AIChatPanel: lineage picker", () => {
+	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
+	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.newSession.mockResolvedValueOnce("grandchild");
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{
+					sessionId: "root",
+					cwd: CHAT_ROOT,
+					title: "Root",
+					updatedAt: "2026-01-01",
+					_meta: { tuicommander: { lineageDepth: 0 } },
+				},
+				{
+					sessionId: "deleted",
+					cwd: CHAT_ROOT,
+					title: "Deleted conversation",
+					_meta: { tuicommander: { lineageDepth: 1, deleted: true } },
+				},
+				{
+					sessionId: "grandchild",
+					cwd: CHAT_ROOT,
+					title: "Grandchild",
+					updatedAt: "2026-10-05",
+					_meta: {
+						ego: { lineage: { kind: "fork", sourceSessionId: "deleted", rootSessionId: "root", sourceDeleted: true } },
+						tuicommander: { lineageDepth: 2 },
+					},
+				},
+			],
+		});
+		const { container } = await renderPanel();
+		await settle();
+		const rows = [...container.querySelectorAll<HTMLOptionElement>('select[title="Conversation"] option')];
+		expect(rows.map((row) => row.value)).toEqual(["root", "deleted", "grandchild"]);
+		expect(rows[1].disabled).toBe(true);
+		expect(rows[2].textContent).toContain("    ");
+		expect(rows[2].textContent).toContain("Grandchild");
+	});
+});
+
+describe("conversation launch overrides", () => {
+	// Catches: creating a coordinator chat changes settings or sends its next turn through the daily connection.
+	it("opens options on a dedicated conversation and returns default chats to their connection", async () => {
+		const view = await renderPanel();
+		const customConnection = "01932d5e-0000-7000-8000-0000000000c2";
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {}, ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({
+				connectionId: customConnection,
+				attachments: [attachment({ sessionId: SECOND_SESSION })],
+			});
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(customConnection);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		(view.container.querySelector('button[aria-label="New conversation with options"]') as HTMLButtonElement).click();
+		await settle();
+		for (const [label, value] of [
+			["Ego profile", "coordinator"],
+			["Workspace", "/srv/observer"],
+			["Ego executable", "/opt/observer/ego"],
+		]) {
+			const input = view.container.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+			input.value = value;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		}
+		(
+			[...view.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Create",
+			) as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.openConversation).toHaveBeenCalledWith({
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			executable: "/opt/observer/ego",
+		});
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
+		await typeAndSend(view.container, "observe");
+		expect(client.prompt).toHaveBeenLastCalledWith(customConnection, SECOND_SESSION, "observe", [], ROOT);
+		(view.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		await typeAndSend(view.container, "daily");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "daily", [], ROOT);
+		expect(settings.egoExecutable).toBe("/usr/local/bin/ego");
+	});
+
+	// Catches: a webview reload restores a custom tab on the global connection and loses its launch options.
+	it("reopens a persisted custom tab without starting the default ego", async () => {
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		aiChatTabs.add("global", SECOND_SESSION);
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] });
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(CONNECTION);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		const view = renderIdlePanel();
+		await settle();
+		await typeAndSend(view.container, "resume observation");
+		expect(client.openConversation).toHaveBeenCalledWith({ sessionId: SECOND_SESSION });
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
+	});
+});
+
+describe("AIChatPanel: new chat after saved-tab selection", () => {
+	// Catches a failed saved selection swallowing the first prompt in a newly opened chat.
+	it("sends to the new chat after a saved tab fails to load", async () => {
+		const view = await renderPanel();
+		aiChatTabs.add("global", SECOND_SESSION);
+		client.loadSession.mockRejectedValue(new Error("Saved conversation unavailable"));
+		(view.container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(view.container.textContent).toContain("Saved conversation unavailable");
+
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: CHILD_SESSION })] }));
+			return CHILD_SESSION;
+		});
+		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		expect(view.container.querySelector(`[data-chat-session="${CHILD_SESSION}"]`)?.getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		await typeAndSend(view.container, "Work in this new conversation");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, CHILD_SESSION, "Work in this new conversation", [], ROOT);
+	});
+
+	// Catches an older saved-tab replay replacing the chat the user opened while it was loading.
+	it("keeps the new chat selected when the previous saved-tab replay completes", async () => {
+		const view = await renderPanel();
+		aiChatTabs.add("global", SECOND_SESSION);
+		let completeReplay!: () => void;
+		client.loadSession.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					completeReplay = resolve;
+				}),
+		);
+		(view.container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(view.container.textContent).toContain("Connecting conversation");
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: CHILD_SESSION })] }));
+			return CHILD_SESSION;
+		});
+		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		expect(view.container.querySelector(`[data-chat-session="${CHILD_SESSION}"]`)?.getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment(),
+					attachment({ sessionId: SECOND_SESSION }),
+					attachment({ sessionId: CHILD_SESSION }),
+				],
+			}),
+		);
+		completeReplay();
+		await settle();
+		expect(view.container.querySelector(`[data-chat-session="${CHILD_SESSION}"]`)?.getAttribute("aria-selected")).toBe(
+			"true",
+		);
+	});
+});
+
+describe("AIChatPanel: new chat during cold saved connection", () => {
+	// Catches New chat waiting for an older saved replay and aborting when that replay fails.
+	it("opens a usable new chat when the saved connection was still pending at the click", async () => {
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		let finishConnect!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			finishConnect = resolve;
+		});
+		client.connect.mockImplementation(async () => {
+			await waiting;
+			const opened = snapshot();
+			acpStore.applySnapshot(opened);
+			acpStore.markStreaming(CONNECTION);
+			return opened;
+		});
+		client.loadSession.mockRejectedValue(new Error("Saved conversation is unavailable"));
+		const view = renderIdlePanel();
+		await settle();
+		(view.container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		finishConnect();
+		await settle();
+		expect(view.container.querySelector(`[data-chat-session="${SESSION}"]`)?.getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		await typeAndSend(view.container, "Continue in the fresh conversation");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Continue in the fresh conversation", [], ROOT);
+	});
+});
+
+describe("desktop composer icon controls", () => {
+	it("keeps icon actions named and disabled for an empty draft, and marks parked drafts pressed", async () => {
+		// Catches: replacing text with SVG drops accessible names, enables empty sends, or hides parked state.
+		const view = await renderPanel();
+		const send = view.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+		const park = view.getByRole("button", { name: "Park draft" }) as HTMLButtonElement;
+		expect(send.title).toBe("Send");
+		expect(send.disabled).toBe(true);
+		expect(park.disabled).toBe(true);
+		expect(park.getAttribute("aria-pressed")).toBe("false");
+		expect(send.querySelector("svg")).not.toBeNull();
+		expect(park.querySelector("svg")).not.toBeNull();
+		expect(send.textContent).toBe("");
+		expect(park.textContent).toBe("");
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep this draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(send.disabled).toBe(false);
+		expect(park.disabled).toBe(false);
+		park.click();
+		expect(park.getAttribute("aria-label")).toBe("Restore parked draft");
+		expect(park.title).toBe("Restore parked draft");
+		expect(park.getAttribute("aria-pressed")).toBe("true");
+		expect(park.disabled).toBe(false);
+		expect(send.disabled).toBe(true);
+		textarea.value = "Next message";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(park.getAttribute("aria-label")).toBe("Swap parked draft");
+		expect(park.title).toBe("Swap parked draft");
+		expect(park.getAttribute("aria-pressed")).toBe("true");
+		expect(send.disabled).toBe(false);
+		park.click();
+		expect(textarea.value).toBe("Keep this draft");
+	});
+
+	it("names the busy play icon Queue and keeps empty prompts disabled", async () => {
+		// Catches: busy changes remove the icon name or allow an empty queued turn.
+		const view = await renderPanel();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: {
+							turnId: "running",
+							state: "running",
+							stopReason: null,
+							usage: null,
+						},
+					}),
+				],
+			}),
+		);
+		await settle();
+		const queue = view.getByRole("button", { name: "Queue" }) as HTMLButtonElement;
+		expect(queue.title).toBe("Queue");
+		expect(queue.disabled).toBe(true);
+		expect(queue.querySelector("svg")).not.toBeNull();
+		const park = view.getByRole("button", { name: "Park draft" }) as HTMLButtonElement;
+		expect(park.disabled).toBe(true);
+		expect(park.getAttribute("aria-pressed")).toBe("false");
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Queue this";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(queue.disabled).toBe(false);
+		expect(park.disabled).toBe(false);
+		queue.click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Queue this", [], ROOT);
+	});
+});
+
+describe("AI Chat shared image paste", () => {
+	it("connects before checking image support when a PNG is pasted into an unstarted chat", async () => {
+		// Catches: absent pre-connection capabilities are mistaken for explicit image refusal.
+		supportsImages = true;
+		const { container } = renderIdlePanel();
+		await settle();
+		expect(client.connect).not.toHaveBeenCalled();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = pasteFile(
+			textarea,
+			new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", { type: "image/png" }),
+		);
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		expect(client.connect).toHaveBeenCalled();
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+});
+
+describe("AI Chat clipboard precedence", () => {
+	function mixedPaste(textarea: HTMLTextAreaElement, text: string): Event {
+		const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", {
+			type: "image/png",
+		});
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: {
+				items: [
+					{ type: "text/plain", getAsFile: () => null },
+					{ type: "image/png", getAsFile: () => file },
+				],
+				getData: (type: string) => (type === "text/plain" ? text : ""),
+			},
+		});
+		textarea.dispatchEvent(event);
+		return event;
+	}
+
+	it("stages a PNG with an empty text flavor — catches empty text masking an image", async () => {
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const event = mixedPaste(container.querySelector("textarea") as HTMLTextAreaElement, "");
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+
+	it("attaches Finder image copies instead of sending their file-name text", async () => {
+		// Catches: shared text precedence rejects a Finder file-name plus image clipboard.
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const event = mixedPaste(
+			container.querySelector("textarea") as HTMLTextAreaElement,
+			"/Users/Boss/Pictures/clip.png",
+		);
+		expect(event.defaultPrevented).toBe(true);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
+	});
+
+	it("preserves normal text paste and gives substantive mixed clipboard text precedence", async () => {
+		// Catches: an incidental rendered image swallows spreadsheet text or bypasses compact-paste handling.
+		supportsImages = true;
+		const { container } = await renderPanel();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = mixedPaste(textarea, "copied spreadsheet cells");
+		expect(event.defaultPrevented).toBe(false);
+		await settle();
+		expect(container.querySelector('img[alt="Pasted image"]')).toBeNull();
+		const longText = Array.from({ length: 201 }, (_, index) => `word${index}`).join(" ");
+		const longPaste = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(longPaste, "clipboardData", { value: { items: [], getData: () => longText } });
+		textarea.dispatchEvent(longPaste);
+		expect(longPaste.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("[Pasted text #1 +201 words]");
+		(container.querySelector('button[aria-label="Send"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longText, [], ROOT);
+	});
+});
+
+// Catches: mobile Chat retains a separate Park button or loses the shared +/mic order.
+it("mobile plus Chat shares the control order and restores its parked text", async () => {
+	vi.stubGlobal("SpeechRecognition", class {});
+	const chat = createAcpChat(
+		() => ROOT,
+		() => true,
+		client,
+	);
+	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	await chat.ensureStarted();
+	await settle();
+	const plus = view.getByRole("button", { name: "More composer actions" });
+	const textarea = view.container.querySelector("textarea")!;
+	const mic = view.getByRole("button", { name: "Dictate into draft" });
+	expect(plus.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(textarea.parentElement?.contains(mic)).toBe(true);
+	expect(
+		textarea.compareDocumentPosition(view.getByRole("button", { name: "Send" })) & Node.DOCUMENT_POSITION_FOLLOWING,
+	).toBeTruthy();
+	expect(view.queryByRole("button", { name: "Park draft" })).toBeNull();
+	textarea.value = "Keep this mobile draft";
+	textarea.dispatchEvent(new Event("input", { bubbles: true }));
+	plus.click();
+	expect(view.queryByRole("menuitem", { name: "Commands (/)" })).toBeNull();
+	expect(view.queryByRole("menuitem", { name: "Queue" })).toBeNull();
+	view.getByRole("menuitem", { name: "Park draft" }).click();
+	expect(textarea.value).toBe("");
+	plus.click();
+	view.getByRole("menuitem", { name: "Restore parked draft" }).click();
+	expect(textarea.value).toBe("Keep this mobile draft");
+	expect(view.queryByRole("menu")).toBeNull();
+	vi.unstubAllGlobals();
+});
+
+// Catches: the moved Chat picker stages no image, or Queue sends through a different path.
+it("mobile plus Chat stages a captured image and queues it through ACP while busy", async () => {
+	supportsImages = true;
+	const chat = createAcpChat(
+		() => ROOT,
+		() => true,
+		client,
+	);
+	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	await chat.ensureStarted();
+	await settle();
+	acpStore.applySnapshot(
+		snapshot({
+			attachments: [
+				attachment({
+					state: "prompting",
+					activeTurn: { turnId: "running", state: "running", stopReason: null, usage: null },
+				}),
+			],
+		}),
+	);
+	const plus = view.getByRole("button", { name: "More composer actions" });
+	plus.click();
+	const camera = view.getByLabelText("Take photo") as HTMLInputElement;
+	const clickCamera = vi.spyOn(camera, "click");
+	view.getByRole("menuitem", { name: "Take photo" }).click();
+	expect(clickCamera).toHaveBeenCalledOnce();
+	const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "photo.png", {
+		type: "image/png",
+	});
+	Object.defineProperty(camera, "files", { value: [file], configurable: true });
+	camera.dispatchEvent(new Event("change", { bubbles: true }));
+	await vi.waitFor(() => expect(view.getByAltText("Pasted image")).toBeTruthy());
+	plus.click();
+	view.getByRole("menuitem", { name: "Queue" }).click();
+	await settle();
+	expect(client.prompt).toHaveBeenCalledWith(
+		CONNECTION,
+		SESSION,
+		"",
+		[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+		ROOT,
+	);
+	expect(view.queryByAltText("Pasted image")).toBeNull();
+});
+
+// Catches: Chat's new mic writes nowhere or appends stale recognition after manual typing.
+it("mobile plus Chat dictates into the visible draft and ignores speech after an edit", async () => {
+	class Recognition {
+		static current: Recognition;
+		onresult: ((event: { results: { 0: { transcript: string }; isFinal: boolean }[] }) => void) | null = null;
+		onend: (() => void) | null = null;
+		constructor() {
+			Recognition.current = this;
+		}
+		start() {}
+		stop() {}
+		abort() {
+			this.onend?.();
+		}
+		result(transcript: string) {
+			this.onresult?.({ results: [{ 0: { transcript }, isFinal: true }] });
+		}
+	}
+	vi.stubGlobal("SpeechRecognition", Recognition);
+	try {
+		let chat!: ReturnType<typeof createAcpChat>;
+		const view = render(() => {
+			chat = createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+			return <Composer chat={chat} mobileAttachments />;
+		});
+		await chat.ensureStarted();
+		await settle();
+		view.getByRole("button", { name: "Dictate into draft" }).click();
+		Recognition.current.result("Review this change");
+		const textarea = view.container.querySelector("textarea")!;
+		expect(textarea.value).toBe("Review this change");
+		textarea.value = "Review this change carefully";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		Recognition.current.result("stale words");
+		expect(textarea.value).toBe("Review this change carefully");
+		view.getByRole("button", { name: "Send" }).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Review this change carefully", [], ROOT);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+// Catches: the mounted mobile Chat textarea ignores the shared keyboard correction setting.
+it("mobile Chat updates keyboard correction without changing desktop attributes", () => {
+	const view = render(() => {
+		const chat = createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+		const correction = useKeyboardCorrection();
+		return (
+			<>
+				<button onClick={correction.toggle}>Toggle correction</button>
+				<Composer chat={chat} mobileAttachments />
+				<Composer chat={chat} />
+			</>
+		);
+	});
+	const [mobile, desktop] = view.container.querySelectorAll("textarea");
+	const expectAttributes = (enabled: boolean) => {
+		expect(mobile.getAttribute("autocorrect")).toBe(enabled ? "on" : "off");
+		expect(mobile.getAttribute("spellcheck")).toBe(String(enabled));
+		expect(mobile.getAttribute("autocapitalize")).toBe(enabled ? "sentences" : "off");
+		for (const attribute of ["autocorrect", "spellcheck", "autocapitalize"]) {
+			expect(desktop.hasAttribute(attribute)).toBe(false);
+		}
+	};
+	expectAttributes(true);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(false);
+	view.getByRole("button", { name: "Toggle correction" }).click();
+	expectAttributes(true);
+});
+
+// Catches: a delayed async-offer snapshot rolls back the model after a successful settings change.
+it("does not let a delayed async offer snapshot revert a confirmed model selection", async () => {
+	const { createAcpClient } =
+		await vi.importActual<typeof import("../../services/acpClient")>("../../services/acpClient");
+	let deliver: ((frame: import("../../types/acp").AcpStreamFrame) => void) | undefined;
+	const realClient = createAcpClient(async ({ onFrame }) => {
+		deliver = onFrame;
+		return { close() {} };
+	});
+	const offered = snapshot({ attachments: [attachment()] });
+	const selected = snapshot({
+		attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })],
+	});
+	let releaseOffer!: (value: AcpConnectionSnapshot) => void;
+	const delayedOffer = new Promise<AcpConnectionSnapshot>((resolve) => {
+		releaseOffer = resolve;
+	});
+	let selectionConfirmed = false;
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "acp_connect") return offered;
+		if (command === "acp_pending_interactions") return [];
+		if (command === "acp_connection_snapshot") return selectionConfirmed ? selected : delayedOffer;
+		if (command === "acp_session_set_config_option") {
+			selectionConfirmed = true;
+			return selected.attachments[0].configOptions;
+		}
+		return undefined;
+	});
+	await realClient.connect(ROOT);
+	deliver?.({
+		kind: "event",
+		connectionId: CONNECTION,
+		generation: 1,
+		sequence: 2,
+		sessionId: SESSION,
+		turnId: null,
+		event: {
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "config_option_update", configOptions: [MODEL_OPTION] },
+		},
+	});
+	await realClient.setConfigOption(CONNECTION, SESSION, "model", { value: "sonnet" });
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+	releaseOffer(offered);
+	await settle();
+	expect(acpStore.attachment(CONNECTION, SESSION)?.configOptions[0].currentValue).toBe("sonnet");
+});
+
+// Catches: finishing delete cleanup overwrites a newer explicit conversation selection.
+it("does not replace a newer selection while deleted conversation config cleanup is pending", async () => {
+	supportsDelete = true;
+	let dispose = () => {};
+	const chat = createRoot((cleanup) => {
+		dispose = cleanup;
+		return createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+	});
+	try {
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", CHILD_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		let releaseSave: (() => void) | undefined;
+		const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "save_config" && !releaseSave) {
+				await new Promise<void>((resolve) => {
+					releaseSave = resolve;
+				});
+				return undefined;
+			}
+			return originalInvoke(command, args);
+		});
+		const deleting = chat.deleteSession(SESSION);
+		await settle();
+		expect(releaseSave).toBeDefined();
+		const selecting = chat.selectSession(CHILD_SESSION);
+		await settle();
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		releaseSave!();
+		await Promise.all([deleting, selecting]);
+		expect(chat.sessionId()).toBe(CHILD_SESSION);
+		expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+	} finally {
+		dispose();
+	}
+});
+
+describe("AIChatPanel: delete conversation", () => {
+	async function listedPanel() {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Delete this chat" }],
+			nextCursor: null,
+		});
+		client.deleteSession.mockResolvedValue(undefined);
+		return renderPanel();
+	}
+
+	// Catches: deleting the selected last conversation leaves a tab pointing at a missing session.
+	it("deletes the selected last conversation and removes its tab and list entry", async () => {
+		const { container } = await listedPanel();
+		const button = container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]');
+		expect(button).not.toBeNull();
+		button?.click();
+		expect(container.textContent).toContain("Delete “Delete this chat”?");
+		expect(client.deleteSession).not.toHaveBeenCalled();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
+
+	// Catches: deletion of an inactive tab closes the selected live neighbor.
+	it("deletes an inactive conversation without changing the selected tab", async () => {
+		supportsDelete = true;
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		await chat.ensureStarted();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.deleteSession.mockResolvedValue(undefined);
+		await chat.deleteSession(SECOND_SESSION);
+		expect(client.deleteSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION);
+		expect(chat.sessionId()).toBe(SESSION);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		dispose();
+	});
+
+	// Catches: an ego refusal silently removes a still-running conversation.
+	it("keeps the conversation and tab and shows a refused delete", async () => {
+		const { container } = await listedPanel();
+		client.deleteSession.mockRejectedValueOnce(new Error("conversation is running"));
+		container.querySelector<HTMLButtonElement>('button[aria-label="Delete Delete this chat"]')?.click();
+		[...container.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "Delete")
+			?.click();
+		await settle();
+		expect(container.textContent).toContain("conversation is running");
+		expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).not.toBeNull();
+	});
+
+	// Catches: a destructive control offered without the advertised ACP capability.
+	it("hides deletion when the agent does not advertise it", async () => {
+		const { container } = await listedPanel();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, delete: false }, attachments: [attachment()] }),
+		);
+		await settle();
+		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
+	});
+});
+
+// Catches: replayed completed calls being timed from the panel mount (1958).
+it("does not invent observed execution time for loaded chat history", async () => {
+	const { container } = await renderPanel();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "tool_call",
+			toolCallId: "history-read",
+			title: "Read history",
+			kind: "read",
+			status: "completed",
+		},
+	});
+	await settle();
+	expect(container.querySelector("summary[class*=toolActivitySummary]")?.textContent).not.toMatch(/\d+\.\d+s observed/);
+});
+
+// Catches: the only tab retaining an unnecessary chrome row.
+it("shows the tab strip only for multiple open tabs", async () => {
+	const { container } = await renderPanel();
+	expect(container.querySelector('[role="tablist"]')).toBeNull();
+	client.newSession.mockImplementation(async () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: SECOND_SESSION })] }));
+		return SECOND_SESSION;
+	});
+	container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]')!.click();
+	await settle();
+	expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2);
+});
+
+// Catches: table documents opening in the detached WebView instead of the main document area.
+it("routes detached table documents to the main window with exact source", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	const source = "| A | B |\n| --- | --- |\n| first | second |";
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: source } },
+	});
+	await settle();
+	[...container.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Open as document")!
+		.click();
+	await settle();
+	expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+		panelId: "ai-chat",
+		action: "open-table",
+		data: { source },
+	});
+	expect(mockAddVirtual).not.toHaveBeenCalled();
+	aiChatPanelAdapter.handleAction?.("open-table", { source });
+	expect(mockAddVirtual).toHaveBeenCalledWith("AI Chat table", expect.stringContaining("aichat-table:"));
+});
+
+// Catches: tidy header dropping inline close or detached window actions.
+it("closes the inline panel from its header", () => {
+	const close = vi.fn();
+	const { container } = render(() => <AIChatPanel visible repoPath={ROOT} onClose={close} />);
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(close).toHaveBeenCalledOnce();
+});
+it("reattaches the detached panel from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Bring back to main window"]')!.click();
+	expect(mockReattachPanel).toHaveBeenCalledWith("ai-chat");
+});
+it("closes the detached window from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(mockClosePanel).toHaveBeenCalledWith("ai-chat");
 });

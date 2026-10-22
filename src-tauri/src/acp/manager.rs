@@ -108,6 +108,7 @@ struct ConnectionHandle {
     snapshot: AcpConnectionSnapshot,
     peer_id: Option<String>,
     root: PathBuf,
+    attachment_directories: HashMap<String, (PathBuf, String)>,
     commands: mpsc::Sender<Command>,
     journal: Arc<AcpEventJournal>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -353,6 +354,7 @@ impl AcpClientManager {
                 snapshot: snapshot.clone(),
                 peer_id,
                 root,
+                attachment_directories: HashMap::new(),
                 commands: commands_tx,
                 journal,
                 shutdown: Some(shutdown_tx),
@@ -421,6 +423,41 @@ impl AcpClientManager {
         let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
+            profiles: None,
+            reply,
+        })
+        .await
+    }
+
+    /// Apply a repository selection only with a machine ceiling. Ego owns the
+    /// policy merge; this host supplies names, never policy values.
+    pub async fn new_session_for_repo(
+        &self,
+        connection_id: AcpConnectionId,
+        authority: AcpSessionAuthority,
+        machine_profile: &str,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let cwd = canonical_root(&authority.cwd).await?;
+        let repo = tokio::task::spawn_blocking(move || {
+            crate::config::load_repo_local_config_from_path(&cwd)
+        })
+        .await
+        .map_err(|error| {
+            AcpClientError::invalid_input(format!("cannot read repo profile: {error}"))
+        })?;
+        let Some(profile) = repo.and_then(|config| config.ego_profile) else {
+            return self.new_session(connection_id, authority).await;
+        };
+        if machine_profile.is_empty() {
+            return Err(AcpClientError::invalid_input(
+                "a repository ego_profile requires an explicit machine ego profile in Settings",
+            ));
+        }
+        let profiles = serde_json::json!({"profile": profile, "ceilingProfile": machine_profile});
+        let authority = self.granted(authority);
+        self.dispatch(connection_id, |reply| Command::NewSession {
+            authority,
+            profiles: Some(profiles),
             reply,
         })
         .await
@@ -446,6 +483,7 @@ impl AcpClientManager {
         let authority = unattended(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
+            profiles: None,
             reply,
         })
         .await
@@ -462,8 +500,21 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        self.attach_at_message(connection_id, kind, session_id, authority, None)
+            .await
+    }
+
+    pub async fn attach_at_message(
+        &self,
+        connection_id: AcpConnectionId,
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+        at_message_id: Option<String>,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
         let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::Attach {
+            at_message_id,
             kind,
             session_id,
             authority,
@@ -478,23 +529,18 @@ impl AcpClientManager {
         kind: AcpDetachKind,
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
-        let cwd = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .find(|attachment| attachment.session_id == session_id)
-            .map(|attachment| attachment.cwd);
+        let attachment_id = session_id.to_string();
         self.dispatch(connection_id, |reply| Command::Detach {
             kind,
             session_id,
             reply,
         })
         .await?;
-        if let Some(cwd) = cwd {
-            crate::attachments::cleanup_old(
-                Path::new(&cwd),
-                crate::config::load_app_config().attachment_retention_days,
-            );
+        let mut connections = self.connections.lock();
+        if let Some(connection) = connections.get_mut(&connection_id)
+            && let Some((data_dir, key)) = connection.attachment_directories.remove(&attachment_id)
+        {
+            crate::attachments::cleanup_session(&data_dir, "acp", &key);
         }
         Ok(())
     }
@@ -509,6 +555,23 @@ impl AcpClientManager {
             reply,
         })
         .await
+    }
+
+    /// The picker needs the complete ancestry before it can order paginated rows.
+    pub async fn list_sessions_for_display(
+        &self,
+        connection_id: AcpConnectionId,
+        mut request: v1::ListSessionsRequest,
+    ) -> Result<v1::ListSessionsResponse, AcpClientError> {
+        let mut response = self.list_sessions(connection_id, request.clone()).await?;
+        while let Some(cursor) = response.next_cursor.take() {
+            request.cursor = Some(cursor);
+            let page = self.list_sessions(connection_id, request.clone()).await?;
+            response.sessions.extend(page.sessions);
+            response.next_cursor = page.next_cursor;
+        }
+        response.sessions = super::session_tree(response.sessions);
+        Ok(response)
     }
 
     /// Start a turn and get back its id, not its outcome.
@@ -556,8 +619,27 @@ impl AcpClientManager {
         connection_id: AcpConnectionId,
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
-        self.dispatch(connection_id, |reply| Command::Cancel { session_id, reply })
-            .await
+        self.dispatch(connection_id, |reply| Command::Cancel {
+            session_id,
+            expected_turn: None,
+            reply,
+        })
+        .await
+    }
+
+    /// A delayed external Stop must never cancel a replacement turn.
+    pub(crate) async fn cancel_turn(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        turn: AcpTurnId,
+    ) -> Result<(), AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::Cancel {
+            session_id,
+            expected_turn: Some(turn),
+            reply,
+        })
+        .await
     }
 
     pub async fn cancel_queued(
@@ -699,6 +781,80 @@ impl AcpClientManager {
         journal.subscribe(from)
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_peer_journal(&self, peer: &str) -> Arc<AcpEventJournal> {
+        let id = AcpConnectionId::new();
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let journal = Arc::new(AcpEventJournal::new(id, generation, self.notices.clone()));
+        let (commands, _) = mpsc::channel(1);
+        self.connections.lock().insert(
+            id,
+            ConnectionHandle {
+                snapshot: AcpConnectionSnapshot {
+                    connection_id: id,
+                    generation,
+                    state: AcpConnectionState::Ready,
+                    agent_info: None,
+                    capabilities: None,
+                    attachments: vec![],
+                    earliest_sequence: 1,
+                    latest_sequence: 0,
+                    settlement: None,
+                },
+                peer_id: Some(peer.into()),
+                root: crate::test_support::test_temp_root(),
+                attachment_directories: HashMap::new(),
+                commands,
+                journal: journal.clone(),
+                shutdown: None,
+                supervisor: None,
+            },
+        );
+        journal
+    }
+
+    /// Latest connected AI Chat wins only when Telegram has no explicit owner.
+    pub(crate) fn latest_live_peer(&self, peers: &[String]) -> Option<String> {
+        self.connections
+            .lock()
+            .values()
+            .filter(|connection| {
+                connection.snapshot.settlement.is_none()
+                    && connection.snapshot.state == AcpConnectionState::Ready
+                    && connection
+                        .peer_id
+                        .as_ref()
+                        .is_some_and(|peer| peers.contains(peer))
+            })
+            .max_by_key(|connection| connection.snapshot.generation)
+            .and_then(|connection| connection.peer_id.clone())
+    }
+
+    /// Observe only events accepted after this call for the peer's current connection.
+    pub(crate) fn subscribe_peer_tail(&self, peer: &str) -> Option<(AcpEventStream, bool)> {
+        let connections = self.connections.lock();
+        let connection = connections
+            .values()
+            .filter(|connection| {
+                connection.peer_id.as_deref() == Some(peer)
+                    && connection.snapshot.settlement.is_none()
+            })
+            .max_by_key(|connection| connection.snapshot.generation)?;
+        let (_, latest) = connection.journal.bounds();
+        let idle = connection
+            .snapshot
+            .attachments
+            .iter()
+            .all(|attachment| attachment.active_turn.is_none());
+        Some((
+            connection
+                .journal
+                .subscribe(latest.saturating_add(1))
+                .ok()?,
+            idle,
+        ))
+    }
+
     /// Hand one command to a connection's actor and wait for its answer.
     ///
     /// A connection this manager never had and one that has settled are
@@ -837,6 +993,38 @@ impl AcpClientManager {
             .map(|connection| connection.root.clone())
     }
 
+    /// Bind binary uploads to one attached conversation, including EOF cleanup.
+    pub(crate) fn attachment_directory(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: &str,
+        data_dir: &Path,
+    ) -> Result<PathBuf, String> {
+        use sha2::{Digest, Sha256};
+        let mut connections = self.connections.lock();
+        let connection = connections
+            .get_mut(&connection_id)
+            .filter(|connection| connection.snapshot.settlement.is_none())
+            .ok_or("ACP connection not found")?;
+        if !connection
+            .snapshot
+            .attachments
+            .iter()
+            .any(|attachment| attachment.session_id.to_string() == session_id)
+        {
+            return Err("ACP session is not attached".into());
+        }
+        let key = format!(
+            "{connection_id}-{}",
+            hex::encode(Sha256::digest(session_id.as_bytes()))
+        );
+        let directory = crate::attachments::prepare_session_directory(data_dir, "acp", &key)?;
+        connection
+            .attachment_directories
+            .insert(session_id.into(), (data_dir.into(), key));
+        Ok(directory)
+    }
+
     pub fn connection_root(&self, connection_id: AcpConnectionId) -> Option<PathBuf> {
         self.connections
             .lock()
@@ -865,12 +1053,6 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
-        let attachment_cwds: Vec<PathBuf> = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .map(|attachment| attachment.cwd)
-            .collect();
         let (shutdown, supervisor, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -898,11 +1080,6 @@ impl AcpClientManager {
             let _ = supervisor.await;
         }
 
-        let retention = crate::config::load_app_config().attachment_retention_days;
-        for cwd in attachment_cwds {
-            crate::attachments::cleanup_old(Path::new(&cwd), retention);
-        }
-
         self.snapshot(connection_id)?.settlement.ok_or_else(|| {
             AcpClientError::initialization_failed(
                 connection_id,
@@ -915,12 +1092,6 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
-        let attachment_cwds: Vec<PathBuf> = self
-            .snapshot(connection_id)?
-            .attachments
-            .into_iter()
-            .map(|attachment| attachment.cwd)
-            .collect();
         let (shutdown, supervisor, generation, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -941,10 +1112,7 @@ impl AcpClientManager {
             supervisor.abort();
             let _ = supervisor.await;
         }
-        let retention = crate::config::load_app_config().attachment_retention_days;
-        for cwd in attachment_cwds {
-            crate::attachments::cleanup_old(Path::new(&cwd), retention);
-        }
+
         drop(shutdown);
         settle_connection(
             &self.connections,
@@ -1316,6 +1484,10 @@ fn settle_connection(
         return;
     }
 
+    for (_, (data_dir, key)) in connection.attachment_directories.drain() {
+        crate::attachments::cleanup_session(&data_dir, "acp", &key);
+    }
+
     connection.snapshot.state = match reason {
         AcpConnectionSettlementReason::Disconnected => AcpConnectionState::Closed,
         AcpConnectionSettlementReason::Killed => AcpConnectionState::Killed,
@@ -1416,7 +1588,10 @@ mod tests {
         // The whole authority of this mode. A turn with nobody at the keyboard
         // cannot be given the server that drives terminals and repositories,
         // whatever the caller asked for.
-        assert!(unattended.mcp_servers.is_empty());
+        assert_eq!(
+            unattended.mcp_servers,
+            [] as [agent_client_protocol::schema::v1::McpServer; 0]
+        );
         // And nothing else moves: the directories are what the prompt runs on.
         assert_eq!(unattended.cwd, PathBuf::from("/repo"));
         assert_eq!(

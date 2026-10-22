@@ -22,6 +22,17 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use parking_lot::Mutex;
+
+/// Stop retrying a desktop that has not acknowledged three abandoned frames.
+pub const MAX_STUCK_BEFORE_PAUSE: u32 = 3;
+
+#[derive(Debug, Default)]
+struct Recovery {
+    received: u64,
+    abandoned: u32,
+}
+
 /// Hands out a fresh id to every subscription, process-wide.
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -74,7 +85,7 @@ pub enum FrameOrder {
     Stale,
 }
 
-/// Frame-delivery gate for one session. Cheap: two relaxed atomics, no lock.
+/// Frame-delivery gate for one session with real-receipt recovery accounting.
 #[derive(Debug)]
 pub struct GridGate {
     /// Identifies the subscription this gate belongs to. Acks name it, so a
@@ -88,6 +99,8 @@ pub struct GridGate {
     /// closed while the WebSocket transport kept receiving. See
     /// [`Self::note_missed`].
     missed: AtomicBool,
+    /// Real receipt progress must not be advanced by synthetic abandonment.
+    recovery: Mutex<Recovery>,
 }
 
 impl GridGate {
@@ -97,6 +110,7 @@ impl GridGate {
             sent: AtomicU64::new(0),
             acked: AtomicU64::new(0),
             missed: AtomicBool::new(false),
+            recovery: Mutex::new(Recovery::default()),
         }
     }
 
@@ -120,18 +134,25 @@ impl GridGate {
     /// Within the right epoch the value is monotonic and clamped, so a reordered
     /// or duplicated ack can neither rewind the gate nor open it for frames that
     /// were never sent.
-    pub fn ack(&self, epoch: u64, received: u64) {
+    pub fn ack(&self, epoch: u64, received: u64) -> bool {
         if epoch != self.epoch {
-            return;
+            return false;
         }
+        let mut recovery = self.recovery.lock();
         let sent = self.sent.load(Ordering::Relaxed);
         let bounded = received.min(sent);
         self.acked.fetch_max(bounded, Ordering::Relaxed);
+        let progressed = bounded > recovery.received;
+        if progressed {
+            recovery.received = bounded;
+            recovery.abandoned = 0;
+        }
+        progressed
     }
 
     /// True when no frame is outstanding, i.e. the ticker may send.
     pub fn is_open(&self) -> bool {
-        self.acked.load(Ordering::Relaxed) >= self.sent.load(Ordering::Relaxed)
+        !self.is_paused() && self.acked.load(Ordering::Relaxed) >= self.sent.load(Ordering::Relaxed)
     }
 
     /// Give up on every outstanding frame (the frontend missed its deadline).
@@ -139,6 +160,26 @@ impl GridGate {
     /// This is what makes a late ack harmless: the gate moves forward to what was
     /// actually sent, so the ack that arrives afterwards is stale by definition.
     pub fn abandon(&self) {
+        let mut recovery = self.recovery.lock();
+        let sent = self.sent.load(Ordering::Relaxed);
+        if self.acked.fetch_max(sent, Ordering::Relaxed) < sent {
+            recovery.abandoned = recovery.abandoned.saturating_add(1);
+        }
+    }
+
+    pub fn abandoned_count(&self) -> u32 {
+        self.recovery.lock().abandoned
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.abandoned_count() >= MAX_STUCK_BEFORE_PAUSE
+    }
+
+    /// A visible viewport explicitly requests authoritative state. Allow a new
+    /// delivery attempt without pretending that the frontend acknowledged one.
+    pub fn resume_for_full_frame(&self) {
+        let mut recovery = self.recovery.lock();
+        recovery.abandoned = 0;
         self.acked
             .fetch_max(self.sent.load(Ordering::Relaxed), Ordering::Relaxed);
     }
@@ -246,6 +287,22 @@ pub fn watch_dropped_frames(last_seq: u64, seq: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches synthetic abandonment being mistaken for real frontend progress:
+    /// the ticker's next open-gate tick used to reset its stall counter to zero.
+    #[test]
+    fn repeated_unacknowledged_frames_back_off() {
+        let gate = GridGate::new();
+        for _ in 0..3 {
+            assert!(gate.is_open());
+            gate.mark_sent();
+            gate.abandon();
+        }
+        assert!(
+            !gate.is_open(),
+            "three abandoned frames without a real ack must pause desktop emission"
+        );
+    }
 
     #[test]
     fn a_fresh_gate_is_open() {
@@ -465,7 +522,7 @@ mod tests {
             FrameOrder::Stale,
             "an order claimed by the other transport must still reject an older frame"
         );
-        assert!(tx.frame.is_empty());
+        assert_eq!(tx.frame, [] as [u8; 0]);
     }
 
     #[test]
@@ -510,18 +567,38 @@ mod tests {
         );
     }
 
-    /// A hidden terminal deliberately never acks (see CanvasTerminal.onFrame), so
-    /// the gate stays closed and the ticker's force-reset is the only thing that
-    /// moves it. That must keep working frame after frame, not wedge.
+    /// Catches a late real receipt being ignored after synthetic abandonment.
     #[test]
-    fn a_never_acking_frontend_still_gets_one_frame_per_force_reset() {
+    fn real_ack_resumes_paused_delivery_but_duplicates_do_not() {
         let gate = GridGate::new();
-        for _ in 0..10 {
-            assert!(gate.is_open());
+        for _ in 0..3 {
             gate.mark_sent();
-            assert!(!gate.is_open());
             gate.abandon();
         }
-        assert_eq!(gate.outstanding(), 0);
+        assert!(gate.is_paused());
+        assert!(!gate.ack(gate.epoch() + 1, 3));
+        assert!(gate.is_paused());
+        assert!(gate.ack(gate.epoch(), 1));
+        assert!(gate.is_open());
+        for _ in 0..3 {
+            gate.mark_sent();
+            gate.abandon();
+        }
+        assert!(!gate.ack(gate.epoch(), 1));
+        assert!(gate.is_paused());
+    }
+
+    /// Catches a show/full-frame request leaving a recovered viewport paused.
+    #[test]
+    fn full_frame_request_resumes_without_faking_real_receipt() {
+        let gate = GridGate::new();
+        for _ in 0..3 {
+            gate.mark_sent();
+            gate.abandon();
+        }
+        gate.resume_for_full_frame();
+        assert!(gate.is_open());
+        assert!(gate.ack(gate.epoch(), 1));
+        assert!(!gate.ack(gate.epoch(), 1));
     }
 }

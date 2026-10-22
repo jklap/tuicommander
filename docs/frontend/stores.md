@@ -1,5 +1,7 @@
 # Stores Reference
 
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
 All stores use SolidJS `createStore` for reactive state. Each store exposes a `state` getter and action methods.
 
 ## terminalsStore
@@ -44,6 +46,7 @@ interface TerminalData {
   currentTask: string | null;       // Current agent task from status-line parsing
   activeSubTasks: number;           // Count of running sub-agents from ›› status line
   isRemote: boolean;                // Created via HTTP/MCP (not locally by the UI)
+  exactAgentSessionId?: string | null; // Live, validated Codex hook binding; never persisted
   agentSessionId: string | null;    // Agent session ID for session-specific resume
   tuicSession: string | null;       // Stable tab UUID — injected as TUIC_SESSION env var
   suggestedActions: string[] | null; // Follow-up suggestions from suggest: token
@@ -226,6 +229,13 @@ checkout changes under the user's feet — resolve it late through
 **File:** `src/stores/settings.ts`
 
 Application settings: font, shell, IDE, theme, confirmations.
+
+Each hydrated window tracks its own normalized settings baseline. Debounced saves
+apply only preferences changed since that window's last successful save to a fresh
+config load, then submit the existing `base`/`config` pair through `updateAppConfig`.
+Unchanged preferences stay as loaded, including fields another settings window
+edited. Failed saves retain pending edits; edits made during a save remain pending
+for the next save. Hydration itself does not persist normalized defaults.
 
 ### State Fields
 
@@ -435,11 +445,19 @@ re-render cannot send a duplicate. Settlement closes the matching notification.
 
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
+Provider-retry patches retain the provider text and an arrival-based presentation
+deadline. `createRetryCountdown` owns one timer for the selected conversation;
+recovery, final failure, settlement or panel disposal stops it. Missing or invalid
+delays keep the provider text without starting a timer.
 `aiChatTabs` is the single per-root store for open chat session IDs and the
 selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
 The existing `ai_chat_sessions` app config value remains the last selected
 conversation for older documents and clients.
+`acpStore` replaces only the matching attachment's complete option set on
+`config_option_update`, including an empty set. It applies the published options
+directly, without a snapshot request that could arrive after a confirmed settings
+change. Explicit requests still refresh the authoritative backend snapshot.
 `acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
 on each `promptQueueChanged` event, so desktop and browser views share the
 same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host
@@ -456,10 +474,17 @@ settings panel renders.
 The backend crate split leaves its IPC and HTTP response shapes unchanged.
 `startRecording(source)` sends the same origin over IPC or HTTP. A native Fn
 release stops capture before the frontend's `stopRecording()` awaits the final
-transcription; blur releases a held hotkey if its key-up event was lost.
+transcription. DOM hotkeys release on blur if key-up was lost. Native macOS Fn
+keeps recording across focus loss while physically held; Rust detects its
+release outside the main window and sends the same `fn-key-up` event.
 `stopRecording()` stores the response's `skip_reason` as `lastSkipReason`, and
 `useDictation` shows that reason in the status. A final transcription gate's
 specific reason reaches both; an empty successful pass shows `no speech detected`.
+
+handsFreeListening reads and saves hands_free_listening the same way (`setHandsFreeListening`); `armHandsFree` passes it to `connectBrowserVoice` so a replies-only browser tab opens no microphone. spokenReplies reads and saves hands_free_spoken_replies through the existing
+load/base/delta configuration path. Browser clients refresh configuration when
+voice controls load; mobile Settings and conversation controls use the same
+store action. Rust owns enforcement and cool-down decisions.
 
 - `speechAssets` / `speechDownloads` — the installable languages and ONNX
   runtime, and a percent per asset **keyed by asset id**, because the runtime
@@ -484,6 +509,8 @@ specific reason reaches both; an empty successful pass shows `no speech detected
   `setSpeechLevelling` each save one field.
 - `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
   deliberately **one** command, because the dictation hotkey asks on every press.
+  Starting arm or disarm invalidates older status reads, so their late responses
+  cannot overwrite the new conversation state or close its browser audio.
   `handsFree.pendingText` is the unsent hands-free turn; push-to-talk's
   `partialText` is a separate recording. With an activation phrase,
   `handsFree.holdBackMs` is at least 5000 even if the saved setting is shorter.
@@ -492,8 +519,7 @@ specific reason reaches both; an empty successful pass shows `no speech detected
   moved since the last stored status. Only the client that owns the audio plays
   it, and the first status a client reads is only a baseline. `armHandsFree`
   primes the audio context inside the user's gesture, and reads
-  `hands_free_earcons` into `handsFreeEarcons` there, because `refreshConfig` is
-  desktop-only. `setHandsFreeEarcons(value)` saves it; off, nothing plays.
+  `hands_free_earcons` into `handsFreeEarcons` at each arm, including after another client saves. `setHandsFreeEarcons(value)` saves it; off, nothing plays.
 - `armHandsFree(sessionId)` sends `DESKTOP_AUDIO_OWNER` on the desktop and
   `browserAudioOwner` — a per-tab random id — in a browser. In browser mode it
   opens the audio socket (`utils/browserVoice.ts`) **before** arming, because
@@ -501,6 +527,14 @@ specific reason reaches both; an empty successful pass shows `no speech detected
   server's microphone. A refused arm closes that socket again in the `catch`, so
   a failure never leaves the device light on; `disarmHandsFree` closes it in a
   `finally`. The refusal is stored in `handsFreeError` rather than thrown.
+  Successful browser arming also owns the page's Media Session through
+  `browserVoiceMediaSession`: title **TUICommander hands-free**, Play/Pause use
+  `resumeSpeech`/`pauseSpeech` (capture remains active), and Stop uses
+  `disarmHandsFree` (capture and replies end). Speech responses and pushed reply
+  state keep `playbackState` current; listening is active, held replies are
+  paused. Disarm, including a polled backend disarm, clears metadata, handlers
+  and playback state and closes browser audio. Browsers without the API still
+  support hands-free; unsupported actions are logged and omitted.
 - `handsFreeStartNotice` — the saved start notice, `""` meaning the built-in
   text. `setHandsFreeStartNotice(value)` saves it trimmed,
   `resetHandsFreeStartNotice()` saves `""`, and
@@ -526,6 +560,8 @@ Active prompt overlay state and agent stats buffer.
 
 ### diffTabsStore (`diffTabs.ts`) / mdTabsStore (`mdTabs.ts`)
 Open diff and markdown tab management (identical API patterns).
+
+MCP native Markdown file tabs survive document reloads through a per-window `sessionStorage` snapshot. `initApp` restores their MCP identity, file target, repository/branch scope and pin state after terminal adoption. The store then saves relevant changes synchronously, including closes, pinning and selection, so native recovery does not depend on `beforeunload`. The unload handler also saves a final snapshot. Both automatic and explicit saves wait until initial restoration finishes, preserving the unread snapshot if another reload interrupts startup. Restoration consumes the prior snapshot only once per document and still runs if restoring the active repository branch fails. The selected document is selected again; background tabs remain inactive. A new MCP event received during startup takes precedence over the snapshot, including one that moves the identity to an editor tab. Snapshots are consumed before parsing so corrupt JSON is not replayed on the next initialization. Restoration indexes existing Markdown/editor identities once, accepts the first valid entry per identity, and appends the new tabs and their display order in one batch; duplicate-heavy snapshots do not rescan the growing tab collection. User-opened files and generated or iframe panels are not included. This is reload recovery, not backend persistence across app restarts.
 
 `mdTabsStore.openUiTab` treats URL and HTML content as alternatives. Updating an existing URL tab with HTML clears its URL; updating an HTML tab with a URL clears its HTML. Visibility is decided by the tab renderers, which unload hidden plugin and URL iframes.
 
@@ -696,7 +732,7 @@ wrote the same value, fired nothing, and left the other pane rendered underneath
 Pinned by `src/__tests__/stores/paneExclusivity.test.ts`.
 
 ### appLogger (`appLogger.ts`)
-Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`.
+Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`. The only mirrored debug records are source `dictation` messages starting with `Browser dictation lifecycle:`: at most six content-free records per take, in the diagnostic audience. Other debug entries remain local.
 
 ### debugRegistry (`debugRegistry.ts`)
 Dynamic snapshot registry for MCP `invoke_js` introspection. Stores self-register a snapshot function at init time, exposed on `window.__TUIC__` as `stores()` (list names) and `store(name)` (get snapshot).
@@ -709,3 +745,67 @@ import { registerDebugSnapshot } from "./debugRegistry";
 registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 ```
 Each store decides what to expose — no need to modify `debugGlobals.ts`.
+
+### remoteAcp (`remoteAcp.ts`)
+
+Keeps pending ACP permissions and elicitations scoped to their owning daemon.
+Only interaction, ready, and settled notices advance snapshot revisions; unrelated
+card notices leave in-flight permission refreshes valid. Settlement and disconnect
+invalidate obsolete responses before removing their pending requests.
+
+### automations
+
+`src/stores/automations.ts` exposes `automationsUi` for dialog visibility and
+`createAutomationsStore(adapter)` for dialog-scoped state. It keeps failed-write
+drafts, ignores obsolete previews and history replies, and reports Run now
+receipts without claiming that a skipped run started. Pause and Resume send only the definition id through atomic backend actions;
+they preserve both newer agent edits and an unsaved local prompt. Once stores
+a local wall-clock string and uses backend `preview_definition` for UTC
+occurrences and completion evidence. The backend owns validation, cron,
+capacity, execution and durable history; the adapter owns transport.
+Notice navigation reloads current definitions before exposing an editor; historical
+run snapshots are never saved as replacement definitions. Deleted definitions
+leave saved run details visible without an editable draft.
+
+Automation all-run history uses 20-row pages plus one backend lookahead row. `loadRuns` reads both backend summaries with the page and rejects stale replies. Definition deletion does not remove the all-history view. The transport adapter accepts an explicit remote connection so global history and summaries do not fall back to the local ledger.
+
+
+### Automatic agent toast cards (#1760-bab7)
+
+MCP toast notices show a transient card only while their origin terminal tab is active. Settings → Notifications → **Show cards from the active terminal** defaults on and is saved per client; turning it off restores urgent-only cards. Urgent notices always show a card, and notices without an origin session remain bell-only unless urgent. The listener reads `terminalsStore.state.activeId` at arrival; `notificationsStore.state.autoToastCards` is stored under `tui-commander-auto-toast-cards` in localStorage. Bell deduplication, sound and terminal navigation are preserved.
+### Transcript view preference
+
+`transcriptPreferences` stores the shared terminal Chat and AI Chat new-text indicator toggle in client localStorage (`tui-commander-new-text-indicator`, default on). Desktop Appearance → Chat and mobile Settings edit the same client preference. It does not write backend configuration. The Transcript compares entry identities and text lengths to detect arrivals while detached, clears unread state when content is replaced, and follows in-place streamed text while attached.
+
+Background entry uses `repositoriesStore.snapshotTerminals()` followed by
+`flushSave()` to await both the in-flight save and the newest queued snapshot.
+Only then does the main WebView acknowledge `snapshot-now`. A persistence error
+is logged and leaves the acknowledgement pending for the backend timeout.
+
+Tasks notice preferences use `uiStore.tasksViewPreferences`: a default-off policy and per-provider/account/item follow state with comment baselines. Existing detail refreshes send snapshots to Rust through `compare_work_item_comments`; native delivery reuses the PR notice service. No additional store or provider poller is created.
+
+The settings Voice picker combines `speechVoices` (installed) with the language-scoped voice entries in `speechAssets` (downloads); a configured missing catalogue voice remains visible.
+
+`TerminalData.providerRecovery` is an optional transient native-ego recovery
+snapshot. `useAgentPolling.applySessionState` applies it from both lifecycle
+catch-up and push snapshots; omission clears it. It never changes shell busy
+semantics, awaiting state, or turn completion.
+
+### Settings reload coordination
+
+`services/settingsRefresh.ts` owns one disposable settings-event subscription per window. Readers register a section and optional remote connection, plus separate read and non-saving apply functions. It coalesces same-turn hints, deduplicates each owner/section generation, invalidates older in-flight reads and refetches on SSE resync. Replacement reads wait for the invalidated operation to settle, crossing the IPC read-deduplication boundary. A remote-machine hint only reaches readers registered for that connection.
+
+App settings, notifications, preferences, repository defaults and overrides, registration metadata, agent configurations, prompts, pane layout, tunnels, connection metadata and upstream lists adopt reads without bootstrap migration. Mounted owner pages also refresh GitHub, ego, Telegram and plugin settings. Dirty form fields remain local; same-field conflicts produce a content-free notice. `createConfigDeltaWriter.adopt` advances the backend baseline. The existing save tail rebases queued edits onto that baseline: unrelated local changes still persist, while conflicting remote leaves are not overwritten automatically. Component-local launch-instruction drafts also survive incoming saved values until blur or explicit reset.
+
+Snapshot adoption merges object leaves. Arrays are atomic owner values: concurrent changes to the same list retain the local list and report a conflict instead of guessing an index-based merge. A remote disconnect cancels in-flight adoption; reconnect clears that owner's generation cursor and fetches a fresh snapshot. Successful daemon mirror stream subscriptions and owner-scoped lag notifications also trigger this resync, even when the health status stayed connected.
+
+## Startup workflow state versus Settings state
+
+[Settings startup workflows](../backend/settings-startup.md) separates device-login state, human confirmation, owner CAS revisions and process-local invalidation generations. A terminal command exiting is not authentication success. `services/egoLogin.ts` remains the UI login entry point. Schema-only consumers use the typed Ego owner `begin_login`/`login_status` workflow; status reads the configured credential owner after termination and provider refresh determines the displayed model state. The typed inspector blocks another write after partial/unknown persistence until authoritative readback, and retains a dirty draft's original CAS revision across incoming refreshes.
+
+The dictation store subscribes separately to `voice` configuration and
+`corrections` dictionary generations. Correction refresh calls
+`get_correction_map` without saving; the Voice page's new-entry text remains
+component-local and is not overwritten. Both subscriptions are disposed together.
+
+Terminal ownership and creation provenance are independent: `TerminalData.isRemote` reflects a configured remote `connection_id`; `isExternallyCreated` preserves the backend `is_remote` HTTP/MCP creation flag for worker-tab cleanup, decoration and completion policy. Local `session-created` events set only creation provenance; startup reconciliation derives ownership from the connection, not the launch transport. Both live creation and reconnect retain the backend-issued `tuic_session` as `tuicSession`. Caller-bound worktree declarations use this stable identity to place a newly spawned tab without changing its actual cwd.

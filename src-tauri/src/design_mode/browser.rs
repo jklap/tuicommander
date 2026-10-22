@@ -12,6 +12,13 @@ pub(crate) fn profile_dir(repo_root: &Path) -> PathBuf {
         .join(&key[..16])
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
 pub(crate) fn read_active_port(profile: &Path) -> Result<u16, String> {
     let text = std::fs::read_to_string(profile.join("DevToolsActivePort"))
         .map_err(|error| error.to_string())?;
@@ -50,6 +57,8 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
             "google-chrome",
             "chromium",
             "chromium-browser",
+            "microsoft-edge-stable",
+            "microsoft-edge",
         ] {
             for folder in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
                 paths.push(folder.join(binary));
@@ -65,51 +74,100 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
             if let Ok(output) = std::process::Command::new("reg")
                 .args(["query", &key, "/ve"])
                 .output()
+                && output.status.success()
             {
-                if output.status.success() {
-                    let listing = String::from_utf8_lossy(&output.stdout);
-                    for line in listing.lines() {
-                        if let Some((_, path)) = line.split_once("REG_SZ") {
-                            paths.push(PathBuf::from(path.trim()));
-                        }
+                let listing = String::from_utf8_lossy(&output.stdout);
+                for line in listing.lines() {
+                    if let Some((_, path)) = line.split_once("REG_SZ") {
+                        paths.push(PathBuf::from(path.trim()));
                     }
                 }
             }
         }
         for root in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
             if let Some(dir) = std::env::var_os(root) {
-                paths.push(PathBuf::from(dir).join("Google/Chrome/Application/chrome.exe"));
+                paths.push(PathBuf::from(&dir).join("Google/Chrome/Application/chrome.exe"));
+                paths.push(PathBuf::from(dir).join("Microsoft/Edge/Application/msedge.exe"));
             }
         }
     }
     paths
 }
 
+/// chromey's `DEFAULT_ARGS` (chromey-2.58.2 browser.rs:1578) minus `--enable-automation`
+/// (automation infobar) and `--disable-extensions` (blocks the Design Mode extension),
+/// plus the Design Mode additions. chromey cannot drop single defaults, so all are restated.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
+const BROWSER_ARGS: [&str; 25] = [
+    "--disable-background-networking",
+    "--enable-features=NetworkService,NetworkServiceInProcess",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-default-apps",
+    "--disable-dev-shm-usage",
+    "--disable-features=TranslateUI",
+    "--disable-hang-monitor",
+    "--disable-ipc-flooding-protection",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-renderer-backgrounding",
+    "--disable-sync",
+    "--force-color-profile=srgb",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--enable-blink-features=IdleDetection",
+    "--lang=en_US",
+    "--disable-blink-features=AutomationControlled",
+    "--no-default-browser-check",
+];
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+    )
+)]
+fn browser_config(chrome: PathBuf, profile: PathBuf) -> Result<BrowserConfig, String> {
+    BrowserConfig::builder()
+        .with_head()
+        .chrome_executable(chrome)
+        .user_data_dir(profile)
+        .port(0)
+        .disable_default_args()
+        .args(BROWSER_ARGS)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+#[expect(
+    dead_code,
+    reason = "Retained CDP path (design-mode-v2 sections 14/15)"
+)]
 pub(crate) async fn launch_or_attach(repo_root: &Path) -> Result<(Browser, Handler), String> {
     let profile = profile_dir(repo_root);
-    if let Ok(port) = read_active_port(&profile) {
-        if let Ok(attached) = Browser::connect(format!("http://127.0.0.1:{port}")).await {
-            return Ok(attached);
-        }
+    if let Ok(port) = read_active_port(&profile)
+        && let Ok(attached) = Browser::connect(format!("http://127.0.0.1:{port}")).await
+    {
+        return Ok(attached);
     }
     let chrome = chrome_candidates()
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| "No Chrome or Chromium executable found".to_string())?;
     std::fs::create_dir_all(&profile).map_err(|error| error.to_string())?;
-    let config = BrowserConfig::builder()
-        .with_head()
-        .chrome_executable(chrome)
-        .user_data_dir(profile)
-        .port(0)
-        .args([
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ])
-        .build()
-        .map_err(|error| error.to_string())?;
+    let config = browser_config(chrome, profile)?;
     Browser::launch(config)
         .await
         .map_err(|error| error.to_string())
@@ -121,6 +179,34 @@ mod tests {
     use chromiumoxide::cdp::browser_protocol::{dom, input, overlay};
     use chromiumoxide::{Browser, BrowserConfig};
     use futures_util::StreamExt;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launch_args_do_not_reenable_automation_or_disable_extensions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tuic-design-args-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("argv");
+        let script = dir.join("fake-chrome");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", out.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = browser_config(script, dir.join("profile")).unwrap();
+        config.launch().unwrap().wait().await.unwrap();
+        let argv = std::fs::read_to_string(&out).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let args: Vec<&str> = argv.lines().collect();
+        assert!(!args.contains(&"--enable-automation"), "{args:?}");
+        assert!(!args.contains(&"--disable-extensions"), "{args:?}");
+        assert!(args.contains(&"--no-first-run"), "{args:?}");
+        assert!(
+            args.iter().any(|a| a.starts_with("--user-data-dir=")),
+            "{args:?}"
+        );
+    }
 
     #[test]
     fn profile_directory_is_stable_and_repo_scoped() {

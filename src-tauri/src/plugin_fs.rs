@@ -1505,15 +1505,10 @@ fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<Ar
 /// matches the silent-drop behavior for invalid caller-supplied roots
 /// elsewhere in this module.
 fn registered_repo_roots() -> Vec<PathBuf> {
-    crate::config::load_repositories()
-        .get("repos")
-        .and_then(|r| r.as_object())
-        .map(|obj| {
-            obj.keys()
-                .filter_map(|p| PathBuf::from(p).canonicalize().ok())
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::config::registered_repo_paths()
+        .into_iter()
+        .filter_map(|p| PathBuf::from(p).canonicalize().ok())
+        .collect()
 }
 
 /// Canonicalize, authorize, sort, and deduplicate the requested roots. The
@@ -3333,7 +3328,10 @@ mod tests {
         let rule = matching_rule(".venv", &[]).unwrap();
 
         assert!(rule.trim.is_empty(), ".venv has no trim rules yet");
-        assert!(trim_targets(&repo.join(".venv"), rule).is_empty());
+        assert_eq!(
+            trim_targets(&repo.join(".venv"), rule),
+            [] as [std::path::PathBuf; 0]
+        );
     }
 
     // -- delete_build_artifact tests --

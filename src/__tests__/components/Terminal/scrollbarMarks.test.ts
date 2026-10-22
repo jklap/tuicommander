@@ -84,3 +84,22 @@ describe("buildScrollbarMarksHtml", () => {
 		expect(html).toContain("top:50px");
 	});
 });
+
+// Catches: stored markers moving to later rows, or evicted markers aliasing replacements.
+it("rebases retained block and prompt ticks and drops evicted ticks", () => {
+	const html = buildScrollbarMarksHtml(
+		input({
+			historyBase: 50,
+			blocks: [
+				{ promptLine: 49, exitCode: 0 },
+				{ promptLine: 100, exitCode: 1 },
+			],
+			promptLines: [49, 110],
+			matchRows: [],
+		}),
+	);
+	expect(countOf(html, OK)).toBe(0);
+	expect(html).toContain(`top:100px;background:${FAILED}`);
+	expect(html).toContain(`top:120px;background:${PROMPT}`);
+	expect(countOf(html, PROMPT)).toBe(1);
+});

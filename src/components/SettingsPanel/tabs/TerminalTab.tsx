@@ -6,6 +6,8 @@ import { getTerminalTheme, getThemeNames } from "../../../themes";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
+import w from "./WorkspaceTabs.module.css";
 
 interface PreviewSpan {
 	text: string;
@@ -285,147 +287,173 @@ const fontOptions = Object.keys(FONT_FAMILIES).map((value) => ({ value, label: v
 
 export const TerminalTab: Component = () => {
 	return (
-		<div class={s.section}>
-			<h3>{t("appearance.heading.theme", "Theme")}</h3>
-
-			<SettingSelect
-				label={t("appearance.label.terminalTheme", "Terminal Theme")}
-				value={settingsStore.state.theme}
-				onChange={(v) => settingsStore.setTheme(v)}
-				options={themeOptions()}
-				hint={t("appearance.hint.terminalTheme", "Color theme for terminal output and app chrome")}
-			/>
-
-			<h3>{t("general.heading.terminal", "Terminal")}</h3>
-
-			<ExpertSetting configKey="app.shell" value={settingsStore.state.shell}>
-				<SettingInput
-					label={t("general.label.shell", "Shell")}
-					value={settingsStore.state.shell ?? ""}
-					onInput={(v) => settingsStore.setShell(v)}
-					placeholder={t("general.placeholder.shell", "Default shell")}
-					hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
+		<div class={`${s.section} ${w.page}`}>
+			<SettingPageHeader title="Terminal" scope="Application defaults" breadcrumb="Workspace / Terminal" />
+			<SectionCard title={t("appearance.heading.theme", "Theme")}>
+				<SettingSelect
+					settingId="app.theme"
+					row
+					label={t("appearance.label.terminalTheme", "Terminal Theme")}
+					value={settingsStore.state.theme}
+					onChange={(v) => settingsStore.setTheme(v)}
+					options={themeOptions()}
+					hint={t("appearance.hint.terminalTheme", "Color theme for terminal output and app chrome")}
 				/>
-			</ExpertSetting>
-
-			<div class={s.terminalSplit}>
-				<div class={s.terminalControls}>
-					<SettingSelect
-						label={t("appearance.label.terminalFont", "Terminal Font")}
-						value={settingsStore.state.font}
-						onChange={(v) => settingsStore.setFont(v as FontType)}
-						options={fontOptions}
-						hint={t("appearance.hint.terminalFont", "Monospace font for terminals")}
+			</SectionCard>
+			<SectionCard title={t("general.heading.terminal", "Terminal")}>
+				<ExpertSetting configKey="app.shell" value={settingsStore.state.shell}>
+					<SettingInput
+						settingId="app.shell"
+						row
+						label={t("general.label.shell", "Shell")}
+						value={settingsStore.state.shell ?? ""}
+						onInput={(v) => settingsStore.setShell(v)}
+						placeholder={t("general.placeholder.shell", "Default shell")}
+						hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
 					/>
+				</ExpertSetting>
 
-					<SettingSlider
-						label={t("appearance.label.defaultFontSize", "Default Font Size")}
-						value={settingsStore.state.defaultFontSize}
-						onChange={(v) => settingsStore.setDefaultFontSize(v)}
-						min={8}
-						max={32}
-						suffix="px"
-						hint={t("appearance.hint.defaultFontSize", "Default font size for new terminals")}
-					/>
+				<div class={w.typography}>
+					<div>
+						<SettingSelect
+							settingId="app.font_family"
+							row
+							label={t("appearance.label.terminalFont", "Terminal Font")}
+							value={settingsStore.state.font}
+							onChange={(v) => settingsStore.setFont(v as FontType)}
+							options={fontOptions}
+							hint={t("appearance.hint.terminalFont", "Monospace font for terminals")}
+						/>
 
-					<ExpertSetting configKey="app.font_weight" value={settingsStore.state.fontWeight}>
 						<SettingSlider
-							label={t("appearance.label.fontWeight", "Font Weight")}
-							value={settingsStore.state.fontWeight}
-							onChange={(v) => settingsStore.setFontWeight(v)}
-							min={100}
-							max={900}
-							step={100}
+							settingId="app.default_font_size"
+							row
+							label={t("appearance.label.defaultFontSize", "Default Font Size")}
+							value={settingsStore.state.defaultFontSize}
+							onChange={(v) => settingsStore.setDefaultFontSize(v)}
+							min={8}
+							max={32}
+							suffix="px"
+							hint={t("appearance.hint.defaultFontSize", "Default font size for new terminals")}
+						/>
+
+						<ExpertSetting configKey="app.font_weight" value={settingsStore.state.fontWeight}>
+							<SettingSlider
+								settingId="app.font_weight"
+								row
+								label={t("appearance.label.fontWeight", "Font Weight")}
+								value={settingsStore.state.fontWeight}
+								onChange={(v) => settingsStore.setFontWeight(v)}
+								min={100}
+								max={900}
+								step={100}
+								hint={t(
+									"appearance.hint.fontWeight",
+									"Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)",
+								)}
+							/>
+						</ExpertSetting>
+
+						<SettingSelect
+							settingId="app.cursor_style"
+							row
+							label={t("appearance.label.cursorStyle", "Cursor Style")}
+							value={settingsStore.state.cursorStyle}
+							onChange={(v) => settingsStore.setCursorStyle(v as "bar" | "block" | "underline")}
+							options={[
+								{ value: "bar", label: t("appearance.cursorStyle.bar", "Bar") },
+								{ value: "block", label: t("appearance.cursorStyle.block", "Block") },
+								{ value: "underline", label: t("appearance.cursorStyle.underline", "Underline") },
+							]}
 							hint={t(
-								"appearance.hint.fontWeight",
-								"Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)",
+								"appearance.hint.cursorStyle",
+								"Shape of the terminal cursor. Applies immediately to all terminals.",
 							)}
 						/>
-					</ExpertSetting>
+					</div>
+				</div>
+			</SectionCard>
+			<SectionCard title="Preview">
+				<TerminalPreview />
+			</SectionCard>
+			<SectionCard title="Behavior">
+				<SettingToggle
+					settingId="app.copy_on_select"
+					row
+					checked={settingsStore.state.copyOnSelect}
+					onChange={(v) => settingsStore.setCopyOnSelect(v)}
+					label={t("general.toggle.copyOnSelect", "Copy on select")}
+					hint={t("general.hint.copyOnSelect", "Automatically copy selected text to clipboard")}
+				/>
 
-					<SettingSelect
-						label={t("appearance.label.cursorStyle", "Cursor Style")}
-						value={settingsStore.state.cursorStyle}
-						onChange={(v) => settingsStore.setCursorStyle(v as "bar" | "block" | "underline")}
-						options={[
-							{ value: "bar", label: t("appearance.cursorStyle.bar", "Bar") },
-							{ value: "block", label: t("appearance.cursorStyle.block", "Block") },
-							{ value: "underline", label: t("appearance.cursorStyle.underline", "Underline") },
-						]}
+				<ExpertSetting configKey="app.osc52_clipboard" value={settingsStore.state.osc52Clipboard}>
+					<SettingToggle
+						settingId="app.osc52_clipboard"
+						row
+						checked={settingsStore.state.osc52Clipboard}
+						onChange={(v) => settingsStore.setOsc52Clipboard(v)}
+						label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
 						hint={t(
-							"appearance.hint.cursorStyle",
-							"Shape of the terminal cursor. Applies immediately to all terminals.",
+							"general.hint.osc52Clipboard",
+							"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
 						)}
 					/>
-				</div>
+				</ExpertSetting>
 
-				<TerminalPreview />
-			</div>
-
-			<SettingToggle
-				checked={settingsStore.state.copyOnSelect}
-				onChange={(v) => settingsStore.setCopyOnSelect(v)}
-				label={t("general.toggle.copyOnSelect", "Copy on select")}
-				hint={t("general.hint.copyOnSelect", "Automatically copy selected text to clipboard")}
-			/>
-
-			<ExpertSetting configKey="app.osc52_clipboard" value={settingsStore.state.osc52Clipboard}>
 				<SettingToggle
-					checked={settingsStore.state.osc52Clipboard}
-					onChange={(v) => settingsStore.setOsc52Clipboard(v)}
-					label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
+					settingId="app.show_block_timestamps"
+					row
+					checked={settingsStore.state.showBlockTimestamps}
+					onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
+					label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
 					hint={t(
-						"general.hint.osc52Clipboard",
-						"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
+						"general.hint.showBlockTimestamps",
+						"While Ctrl+Cmd is held, label each command block with how long ago it started",
 					)}
 				/>
-			</ExpertSetting>
 
-			<SettingToggle
-				checked={settingsStore.state.showBlockTimestamps}
-				onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
-				label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
-				hint={t(
-					"general.hint.showBlockTimestamps",
-					"While Ctrl+Cmd is held, label each command block with how long ago it started",
-				)}
-			/>
+				<ExpertSetting configKey="app.block_folding_enabled" value={settingsStore.state.blockFoldingEnabled}>
+					<SettingToggle
+						settingId="app.block_folding_enabled"
+						row
+						checked={settingsStore.state.blockFoldingEnabled}
+						onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
+						label={t("general.toggle.blockFolding", "Block folding")}
+						hint={t(
+							"general.hint.blockFolding",
+							"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
+						)}
+					/>
+				</ExpertSetting>
 
-			<ExpertSetting configKey="app.block_folding_enabled" value={settingsStore.state.blockFoldingEnabled}>
-				<SettingToggle
-					checked={settingsStore.state.blockFoldingEnabled}
-					onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
-					label={t("general.toggle.blockFolding", "Block folding")}
-					hint={t(
-						"general.hint.blockFolding",
-						"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
-					)}
-				/>
-			</ExpertSetting>
+				<ExpertSetting configKey="app.show_scrollbar_marks" value={settingsStore.state.showScrollbarMarks}>
+					<SettingToggle
+						settingId="app.show_scrollbar_marks"
+						row
+						checked={settingsStore.state.showScrollbarMarks}
+						onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
+						label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
+						hint={t(
+							"general.hint.showScrollbarMarks",
+							"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
+						)}
+					/>
+				</ExpertSetting>
 
-			<ExpertSetting configKey="app.show_scrollbar_marks" value={settingsStore.state.showScrollbarMarks}>
-				<SettingToggle
-					checked={settingsStore.state.showScrollbarMarks}
-					onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
-					label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
-					hint={t(
-						"general.hint.showScrollbarMarks",
-						"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
-					)}
-				/>
-			</ExpertSetting>
-
-			<ExpertSetting configKey="app.scrollback_reflow" value={settingsStore.state.scrollbackReflow}>
-				<SettingToggle
-					checked={settingsStore.state.scrollbackReflow}
-					onChange={(v) => settingsStore.setScrollbackReflow(v)}
-					label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
-					hint={t(
-						"general.hint.scrollbackReflow",
-						"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
-					)}
-				/>
-			</ExpertSetting>
+				<ExpertSetting configKey="app.scrollback_reflow" value={settingsStore.state.scrollbackReflow}>
+					<SettingToggle
+						settingId="app.scrollback_reflow"
+						row
+						checked={settingsStore.state.scrollbackReflow}
+						onChange={(v) => settingsStore.setScrollbackReflow(v)}
+						label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
+						hint={t(
+							"general.hint.scrollbackReflow",
+							"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
+						)}
+					/>
+				</ExpertSetting>
+			</SectionCard>
 		</div>
 	);
 };

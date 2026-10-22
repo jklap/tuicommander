@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Represents a git worktree
@@ -208,6 +208,12 @@ pub fn create_worktree_internal(
     // rebase/bisect/`git checkout <sha>` on a worktree we created. Forcing cleanup there would
     // destroy an agent's in-progress work.
     if worktree_path.exists() {
+        if !worktree_path.join(".git").exists() {
+            return Err(format!(
+                "{STALE_DIR_PREFIX} directory '{}' is not a Git checkout",
+                worktree_path.display()
+            ));
+        }
         let actual_branch = crate::git::read_branch_from_head(&worktree_path);
         if let Some(ref expected) = config.branch
             && let Some(ref actual) = actual_branch
@@ -379,28 +385,22 @@ pub const MAIN_WORKTREE_PREFIX: &str = "worktree_is_main:";
 /// don't drift on the literal string.
 pub const STALE_DIR_PREFIX: &str = "STALE_DIR:";
 
-/// Force-remove a stale worktree directory.
-///
-/// Runs `git worktree remove --force` (cleans the registry entry) and then verifies
-/// the directory is gone, falling back to `fs::remove_dir_all` (async then blocking
-/// to handle file-locks on Windows / AV scanners). Returns `Ok(())` only when the
-/// path is verified absent. Synchronous wrapper used by callers that can't spawn a
-/// background task (PTY creation, MCP request handlers).
+/// Remove only an unregistered stale directory without a Git checkout.
+/// Registered worktrees and orphan Git repositories are preserved, even when clean.
 pub fn cleanup_stale_worktree_dir(base_repo: &str, stale_path: &Path) -> Result<(), String> {
-    if let Err(e) = git_cmd(&PathBuf::from(base_repo))
-        .args([
-            "worktree",
-            "remove",
-            "--force",
-            &stale_path.to_string_lossy(),
-        ])
+    let listed = git_cmd(Path::new(base_repo))
+        .args(["worktree", "list", "--porcelain"])
         .run()
+        .map_err(|error| format!("Cannot verify stale directory registration: {error}"))?;
+    if parse_worktree_entries(&listed.stdout)
+        .iter()
+        .any(|entry| warm_key(Path::new(&entry.path)) == warm_key(stale_path))
+        || stale_path.join(".git").exists()
     {
-        tracing::warn!(
-            source = "worktree",
-            stale = %stale_path.display(),
-            "cleanup_stale_worktree_dir: git worktree remove --force failed (falling back to fs removal): {e}"
-        );
+        return Err(format!(
+            "Cannot clean stale directory '{}': registered worktree or Git checkout",
+            stale_path.display()
+        ));
     }
 
     if stale_path.exists()
@@ -451,6 +451,9 @@ pub fn create_worktree_with_stale_recovery(
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceCommitStatus {
     Unmerged,
+    /// Not merged, but every commit exists on the branch's own remote-tracking
+    /// ref, so deleting the local branch loses nothing.
+    PushedUnmerged,
     /// HEAD is the default branch's tip: this workspace has no commits of its
     /// own, so it was never merged. Kept apart from `Merged` because both
     /// satisfy `merge-base --is-ancestor` and only one of them describes a
@@ -482,7 +485,7 @@ pub struct WorkspaceLifecycleStatus {
     pub submodule_unpushed_commits: Vec<SubmoduleUnpushedCommits>,
     pub commit_status: WorkspaceCommitStatus,
     #[serde(skip)]
-    merge_proof: Option<&'static str>,
+    merge_proof: Option<String>,
     pub removal_safety: WorkspaceRemovalSafety,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -502,7 +505,7 @@ fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
         .map_err(|e| format!("could not resolve {spec}: {e}"))
 }
 
-fn dirty_files_at(path: &Path) -> Result<usize, String> {
+pub(crate) fn dirty_files_at(path: &Path) -> Result<usize, String> {
     git_cmd(path)
         .args([
             "status",
@@ -607,6 +610,15 @@ fn initialized_main_submodule(base_repo: &Path, destination: &Path) -> bool {
     module_root == destination && superproject_root == base_repo && module_gitdir != base_gitdir
 }
 
+/// One path component of a preserved ref. A SHA-256 digest keeps it at 64 bytes
+/// however long the checkout path, submodule path or ref name is (a git ref
+/// component is capped at 255 bytes by the filesystem). Nothing decodes these
+/// components, so refs written under the old hex-of-input scheme stay reachable
+/// through the `refs/tuic/preserved` prefix unchanged.
+fn preserved_ref_component(input: &[u8]) -> String {
+    hex::encode(Sha256::digest(input))
+}
+
 fn preserve_submodule_refs(
     base_repo: &Path,
     worktree: &Path,
@@ -642,8 +654,8 @@ fn preserve_submodule_refs(
     }
     let namespace = format!(
         "refs/tuic/preserved/{}/{}/{}/",
-        hex::encode(worktree.to_string_lossy().as_bytes()),
-        hex::encode(submodule_path.as_bytes()),
+        preserved_ref_component(worktree.to_string_lossy().as_bytes()),
+        preserved_ref_component(submodule_path.as_bytes()),
         uuid::Uuid::new_v4().simple()
     );
     let mut args = vec![
@@ -657,7 +669,7 @@ fn preserve_submodule_refs(
         args.push(format!(
             "{oid}:{}{}",
             namespace,
-            hex::encode(name.as_bytes())
+            preserved_ref_component(name.as_bytes())
         ));
     }
     git_cmd(&destination)
@@ -846,15 +858,68 @@ pub fn merged_pr_proof_from_pages(
     false
 }
 
+/// Refs a branch is compared against: the default branch's upstream, which the
+/// local default branch routinely trails, and the local default branch itself
+/// (it may hold merges not yet pushed). Missing refs are skipped.
+fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
+    [
+        format!("refs/remotes/origin/{default_branch}"),
+        format!("refs/heads/{default_branch}"),
+        format!("refs/remotes/{default_branch}"),
+    ]
+    .into_iter()
+    .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
+    .collect()
+}
+
+/// Human-readable form of `integration_bases`, for messages.
+fn describe_bases(bases: &[String]) -> String {
+    bases
+        .iter()
+        .map(|base| {
+            base.strip_prefix("refs/heads/")
+                .or_else(|| base.strip_prefix("refs/remotes/"))
+                .unwrap_or(base)
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, String> {
+    for base in bases {
+        if is_ancestor(repo, tip, base)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A concrete remote-tracking ref preserves every commit up to `tip`.
+fn containing_remote_ref(repo: &Path, tip: &str) -> Result<Option<String>, String> {
+    let refs = git_cmd(repo)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("--contains={tip}"),
+            "refs/remotes/",
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect remote containment: {error}"))?;
+    Ok(refs.stdout.lines().next().map(str::to_owned))
+}
+
 fn classify_branch_merge(
     repo: &Path,
     branch: &str,
     tip: &str,
     default_branch: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
-) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
-    let default_tip = rev_at(repo, default_branch)?;
-    let merged = is_ancestor(repo, tip, &default_tip)?;
+) -> Result<MonitoringMerge, String> {
+    let bases = integration_bases(repo, default_branch);
+    if bases.is_empty() {
+        return Err(format!("default branch '{default_branch}' was not found"));
+    }
+    let merged = is_ancestor_of_any(repo, tip, &bases)?;
     // Ancestry alone cannot distinguish own commits from a branch that merely
     // followed the default branch. The branch reflog records both its source
     // and how its ref moved after creation.
@@ -904,17 +969,271 @@ fn classify_branch_merge(
     if merged && from_default && follows_default {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
-        Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
+        Ok((WorkspaceCommitStatus::Merged, Some("ancestry".into())))
     } else if is_ancestor(repo, tip, &rev_at(repo, "HEAD")?)? {
-        Ok((WorkspaceCommitStatus::Merged, Some("integration_ancestry")))
+        Ok((
+            WorkspaceCommitStatus::Merged,
+            Some("integration_ancestry".into()),
+        ))
+    } else if let Some(proof) = integrated_in_defaults(repo, &bases, tip)? {
+        let proof = if proof == "content_superset" && pr_proves_tip(repo, branch, tip) {
+            "github_pr"
+        } else {
+            proof
+        };
+        Ok((WorkspaceCommitStatus::Merged, Some(proof.into())))
     } else if pr_proves_tip(repo, branch, tip) {
-        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr".into())))
+    } else if let Some(remote) = containing_remote_ref(repo, tip)? {
+        Ok((WorkspaceCommitStatus::PushedUnmerged, Some(remote)))
     } else {
         Ok((WorkspaceCommitStatus::Unmerged, None))
     }
 }
 
-fn patches_integrated(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+/// Subjects alone never prove integration. Squash messages corroborate a
+/// structural no-op; context-free twins and content require a recovery ref.
+fn integrated_in_defaults(
+    repo: &Path,
+    bases: &[String],
+    tip: &str,
+) -> Result<Option<&'static str>, String> {
+    for base in bases {
+        let target = rev_at(repo, base)?;
+        if patches_integrated_in(repo, &target, tip)? {
+            return Ok(Some("patch_equivalence"));
+        }
+        let merged = git_cmd(repo)
+            .args(["merge-tree", "--write-tree", &target, tip])
+            .run();
+        let target_tree = rev_at(repo, &format!("{target}^{{tree}}"))?;
+        if merged.is_ok_and(|output| output.stdout.trim() == target_tree) {
+            let subjects = git_cmd(repo)
+                .args(["log", "--format=%s", &format!("{target}..{tip}")])
+                .run()
+                .map_err(|error| format!("could not inspect branch subjects: {error}"))?
+                .stdout;
+            let messages = git_cmd(repo)
+                .args(["log", "--format=%B%x00", &format!("{tip}..{target}")])
+                .run()
+                .map_err(|error| format!("could not inspect squash messages: {error}"))?
+                .stdout;
+            let squash = !subjects.trim().is_empty()
+                && messages.split('\0').any(|message| {
+                    subjects.lines().all(|subject| {
+                        message.lines().any(|line| {
+                            line.trim().strip_prefix("* ").unwrap_or(line.trim()) == subject
+                        })
+                    })
+                });
+            return Ok(Some(if squash {
+                "squash_message"
+            } else {
+                "noop_merge"
+            }));
+        }
+    }
+    for base in bases {
+        let target = rev_at(repo, base)?;
+        if same_subject_twins(repo, &target, tip)? || content_superset(repo, &target, tip)? {
+            return Ok(Some("content_superset"));
+        }
+    }
+    Ok(None)
+}
+
+/// The audit's "twin 0" rule: every unique non-merge commit must have a
+/// same-subject twin with exactly the same path, mode, added and removed lines.
+/// Only hunk coordinates and unchanged context are ignored. This is still a
+/// content heuristic, and must never authorize deletion without an archive.
+fn same_subject_twins(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+    let merges = git_cmd(repo)
+        .args(["rev-list", "--merges", &format!("{target}..{tip}")])
+        .run()
+        .map_err(|error| format!("could not inspect merge commits: {error}"))?;
+    if !merges.stdout.trim().is_empty() {
+        return Ok(false);
+    }
+    let cherry = git_cmd(repo)
+        .args(["cherry", target, tip])
+        .run()
+        .map_err(|error| format!("could not compare patches: {error}"))?;
+    let twins = git_cmd(repo)
+        .args([
+            "log",
+            "--no-merges",
+            "--format=%H%x09%s",
+            &format!("{tip}..{target}"),
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect twin subjects: {error}"))?
+        .stdout;
+    let mut found = false;
+    for line in cherry.stdout.lines().filter(|line| line.starts_with("+ ")) {
+        let sha = &line[2..];
+        let subject = git_cmd(repo)
+            .args(["show", "--no-patch", "--format=%s", sha])
+            .run()
+            .map_err(|error| format!("could not inspect commit subject: {error}"))?
+            .stdout;
+        let Some(patch) = context_free_patch(repo, sha)? else {
+            return Ok(false);
+        };
+        let mut matched = false;
+        for (twin, twin_subject) in twins.lines().filter_map(|line| line.split_once('\t')) {
+            if twin_subject == subject.trim()
+                && context_free_patch(repo, twin)?.as_ref() == Some(&patch)
+            {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return Ok(false);
+        }
+        found = true;
+    }
+    Ok(found)
+}
+
+fn context_free_patch(repo: &Path, sha: &str) -> Result<Option<Vec<String>>, String> {
+    let output = git_cmd(repo)
+        .args([
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--unified=0",
+            sha,
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect twin patch: {error}"))?;
+    let mut patch = Vec::new();
+    let mut in_hunk = false;
+    for line in output.stdout.lines() {
+        if line.starts_with("Binary files ") {
+            return Ok(None);
+        }
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+            patch.push(line.to_owned());
+        } else if line.starts_with("@@ ") {
+            in_hunk = true;
+        } else if (in_hunk && (line.starts_with(['+', '-', '\\'])))
+            || line.starts_with("old mode ")
+            || line.starts_with("new mode ")
+            || line.starts_with("new file mode ")
+            || line.starts_with("deleted file mode ")
+        {
+            patch.push(line.to_owned());
+        }
+    }
+    Ok(Some(patch))
+}
+
+/// A conservative heuristic for revised twins from the branch audit. Require
+/// 100% of added lines, with multiplicity, in the same regular file on target.
+/// Deletions, mode changes, binary files and unrelated histories are not guessed.
+fn content_superset(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+    let Ok(base) = git_cmd(repo).args(["merge-base", target, tip]).run() else {
+        return Ok(false);
+    };
+    let base = base.stdout.trim();
+    let changes = git_cmd(repo)
+        .args([
+            "diff",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            base,
+            tip,
+            "--",
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect changed paths: {error}"))?
+        .stdout;
+    let mut fields = changes.split('\0').filter(|field| !field.is_empty());
+    let mut found = false;
+    while let Some(status) = fields.next() {
+        let Some(path) = fields.next() else {
+            return Ok(false);
+        };
+        if !matches!(status, "A" | "M") {
+            return Ok(false);
+        }
+        let mode = |revision: &str| -> Option<String> {
+            let output = git_cmd(repo)
+                .args(["--literal-pathspecs", "ls-tree", revision, "--", path])
+                .run()
+                .ok()?;
+            output.stdout.split_whitespace().next().map(str::to_owned)
+        };
+        let tip_mode = mode(tip);
+        if !matches!(tip_mode.as_deref(), Some("100644" | "100755"))
+            || mode(target) != tip_mode
+            || (status == "M" && mode(base) != tip_mode)
+        {
+            return Ok(false);
+        }
+        let diff = git_cmd(repo)
+            .args([
+                "--literal-pathspecs",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--unified=0",
+                base,
+                tip,
+                "--",
+                path,
+            ])
+            .run()
+            .map_err(|error| format!("could not compare file changes: {error}"))?
+            .stdout;
+        let mut in_hunk = false;
+        let mut additions = Vec::new();
+        for line in diff.lines() {
+            if line.starts_with("Binary files ") || line.starts_with("\\ No newline") {
+                return Ok(false);
+            }
+            if line.starts_with("@@ ") {
+                in_hunk = true;
+                continue;
+            }
+            if !in_hunk {
+                continue;
+            }
+            if line.starts_with('-') {
+                return Ok(false);
+            }
+            if let Some(added) = line.strip_prefix('+') {
+                additions.push(added);
+            }
+        }
+        let content = git_cmd(repo)
+            .args(["show", &format!("{target}:{path}")])
+            .run()
+            .map_err(|error| format!("could not read integrated content: {error}"))?
+            .stdout;
+        let mut remaining = HashMap::<&str, usize>::new();
+        for line in content.lines() {
+            *remaining.entry(line).or_default() += 1;
+        }
+        for added in additions {
+            let count = remaining.entry(added).or_default();
+            if *count == 0 {
+                return Ok(false);
+            }
+            *count -= 1;
+            found |= !added.trim().is_empty();
+        }
+    }
+    Ok(found)
+}
+
+fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
     // `git cherry` omits merge commits and their resolution changes.
     let merges = git_cmd(repo)
         .args(["rev-list", "--merges", &format!("{target}..{tip}")])
@@ -930,22 +1249,559 @@ fn patches_integrated(repo: &Path, target: &str, tip: &str) -> Result<bool, Stri
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
+type MonitoringSignature = Option<(std::time::SystemTime, u64)>;
+
+fn monitoring_signature(path: &Path) -> MonitoringSignature {
+    #[cfg(test)]
+    MONITORING_SIGNATURE_READS.with(|reads| reads.set(reads.get() + 1));
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+#[derive(Clone)]
+struct MonitoringFile {
+    signature: MonitoringSignature,
+    digest: Vec<u8>,
+    symbolic: Option<String>,
+}
+
+#[derive(Default)]
+struct MonitoringRefs {
+    packed: MonitoringSignature,
+    initialized: bool,
+    watching: bool,
+    watch_registered: bool,
+    verify_files: bool,
+    changed_paths: std::collections::HashSet<PathBuf>,
+    targets: std::collections::BTreeMap<String, (String, Option<String>)>,
+    loose: HashMap<PathBuf, MonitoringSignature>,
+    directories: HashMap<PathBuf, (MonitoringSignature, Vec<(PathBuf, bool)>)>,
+    files: HashMap<PathBuf, MonitoringFile>,
+}
+
+// The mutex single-flights snapshots for this checkout, including standalone
+// callers outside the app's repository diff cache. Values retain hashes, not logs.
+static MONITORING_REFS: LazyLock<
+    moka::sync::Cache<PathBuf, Arc<std::sync::Mutex<MonitoringRefs>>>,
+> = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(64).build());
+
+/// Enable path-driven snapshots only after the app has armed its Git watches.
+/// Watch failures and stop transitions restore signature validation.
+pub fn set_monitoring_watch_active(repo: &Path, active: bool) {
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    if let Ok(mut snapshot) = cache.lock() {
+        snapshot.watch_registered = active;
+        // Some backends return from watch() before the stream is armed. Keep
+        // signature validation until a delivered event proves it is live.
+        snapshot.watching = false;
+        snapshot.initialized = false;
+        snapshot.verify_files = true;
+    }
+}
+
+/// Feed the existing repository watcher; never start a second recursive watcher.
+/// The snapshot lock serializes updates with refresh: events arriving during a
+/// refresh remain pending for the next coalesced refresh, not cleared mid-read.
+pub fn monitoring_paths_changed(repo: &Path, paths: &[PathBuf]) {
+    let Some(cache) = MONITORING_REFS.get(repo) else {
+        return;
+    };
+    if let Ok(mut snapshot) = cache.lock() {
+        let git = repo.join(".git");
+        let paths: Vec<_> = paths
+            .iter()
+            .filter(|path| {
+                *path == &git
+                    || *path == &git.join("HEAD")
+                    || *path == &git.join("config")
+                    || *path == &git.join("packed-refs")
+                    || path.starts_with(git.join("refs"))
+                    || path.starts_with(git.join("logs/refs/heads"))
+            })
+            .cloned()
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        if snapshot.watch_registered && !snapshot.watching {
+            snapshot.watching = true;
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+        }
+        if snapshot.changed_paths.len().saturating_add(paths.len()) > 4096 {
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+            snapshot.changed_paths.clear();
+        } else {
+            snapshot.changed_paths.extend(paths);
+        }
+    }
+}
+
+impl MonitoringRefs {
+    fn read_file(&mut self, path: &Path, required: bool) -> Result<MonitoringFile, String> {
+        if self.watching
+            && !self.verify_files
+            && !self.changed_paths.contains(path)
+            && let Some(file) = self.files.get(path)
+        {
+            return Ok(file.clone());
+        }
+        let signature = monitoring_signature(path);
+        if let Some(file) = self.files.get(path)
+            && file.signature == signature
+        {
+            return Ok(file.clone());
+        }
+        #[cfg(test)]
+        if required {
+            MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
+        } else {
+            MONITORING_LOG_READS.with(|reads| reads.set(reads.get() + 1));
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let file = MonitoringFile {
+            signature,
+            digest: Sha256::digest(&bytes).to_vec(),
+            symbolic: bytes
+                .strip_prefix(b"ref: ")
+                .map(|name| String::from_utf8_lossy(name).trim().to_owned()),
+        };
+        // A concurrent write must be checked again, not cached as a new generation.
+        if monitoring_signature(path) == signature {
+            self.files.insert(path.to_path_buf(), file.clone());
+        } else {
+            self.files.remove(path);
+        }
+        Ok(file)
+    }
+
+    fn loose_files(&mut self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        let signature = monitoring_signature(dir);
+        let cached = self
+            .directories
+            .get(dir)
+            .filter(|(old, _)| *old == signature);
+        let entries = if let Some((_, entries)) = cached {
+            entries.clone()
+        } else {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries
+                    .map(|entry| {
+                        let entry = entry?;
+                        Ok::<_, std::io::Error>((entry.path(), entry.file_type()?.is_dir()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error.to_string()),
+            };
+            self.directories
+                .insert(dir.to_path_buf(), (signature, entries.clone()));
+            entries
+        };
+        for (path, is_dir) in entries {
+            if is_dir {
+                self.loose_files(&path, files)?;
+            } else if path.extension().is_none_or(|extension| extension != "lock") {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh(&mut self, repo: &gix::Repository) -> Result<(), String> {
+        use gix::bstr::ByteSlice;
+        if self.watching && self.initialized {
+            let common = repo.common_dir();
+            let refs = common.join("refs");
+            let broad = self.changed_paths.iter().any(|path| {
+                path == common
+                    || path == &common.join("packed-refs")
+                    || (path.starts_with(&refs)
+                        && (path.is_dir()
+                            || self.targets.keys().any(|name| {
+                                common.join(name).starts_with(path) && common.join(name) != *path
+                            })))
+            });
+            if !broad {
+                let paths: Vec<_> = self
+                    .changed_paths
+                    .iter()
+                    .filter(|path| {
+                        path.starts_with(&refs)
+                            && path.extension().is_none_or(|extension| extension != "lock")
+                    })
+                    .cloned()
+                    .collect();
+                for path in paths {
+                    let name = path
+                        .strip_prefix(common)
+                        .map_err(|e| e.to_string())?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    match repo
+                        .try_find_reference(name.as_str())
+                        .map_err(|e| e.to_string())?
+                    {
+                        Some(reference) => {
+                            self.targets
+                                .insert(name.clone(), monitoring_target(&reference));
+                        }
+                        None => {
+                            self.targets.remove(&name);
+                        }
+                    }
+                    if let Some(branch) = name.strip_prefix("refs/heads/") {
+                        self.changed_paths
+                            .insert(common.join("logs/refs/heads").join(branch));
+                    }
+                }
+                return Ok(());
+            }
+            self.verify_files = true;
+        }
+        let packed = monitoring_signature(&repo.common_dir().join("packed-refs"));
+        let full = !self.initialized || packed != self.packed;
+        // Sample loose-file generations before reading targets. A write racing
+        // the snapshot then differs on the next refresh instead of being sealed
+        // into the cache with a newer signature than the value it describes.
+        let mut files = Vec::new();
+        self.loose_files(&repo.common_dir().join("refs"), &mut files)?;
+        let mut loose = HashMap::new();
+        for path in &files {
+            loose.insert(path.clone(), monitoring_signature(path));
+        }
+        if full {
+            let references = repo.references().map_err(|error| error.to_string())?;
+            #[cfg(test)]
+            MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(reads.get() + 1));
+            let mut targets = std::collections::BTreeMap::new();
+            for reference in references.all().map_err(|error| error.to_string())? {
+                let reference = reference.map_err(|error| error.to_string())?;
+                targets.insert(
+                    reference.name().as_bstr().to_str_lossy().into_owned(),
+                    monitoring_target(&reference),
+                );
+            }
+            self.targets = targets;
+        }
+        if !full {
+            let paths: std::collections::HashSet<_> =
+                loose.keys().chain(self.loose.keys()).collect();
+            for path in paths {
+                if self.loose.get(path) == loose.get(path) {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(repo.common_dir())
+                    .map_err(|e| e.to_string())?
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                match repo
+                    .try_find_reference(name.as_str())
+                    .map_err(|e| e.to_string())?
+                {
+                    Some(reference) => {
+                        self.targets.insert(name, monitoring_target(&reference));
+                    }
+                    None => {
+                        self.targets.remove(&name);
+                    }
+                }
+            }
+        }
+        self.loose = loose;
+        self.packed = packed;
+        self.initialized = true;
+        Ok(())
+    }
+}
+
+fn monitoring_target(reference: &gix::Reference<'_>) -> (String, Option<String>) {
+    use gix::bstr::ByteSlice;
+    let symbolic = match reference.target() {
+        gix::refs::TargetRef::Symbolic(target) => {
+            Some(target.as_bstr().to_str_lossy().into_owned())
+        }
+        gix::refs::TargetRef::Object(_) => None,
+    };
+    (format!("{:?}", reference.target()), symbolic)
+}
+
+/// Reuse unchanged ref and reflog pieces across sidebar refreshes. Metadata
+/// signatures also cover standalone callers that do not own an app watcher.
+pub fn monitoring_ref_keys(
+    repo: &Path,
+    branches: &[String],
+) -> Result<HashMap<String, String>, String> {
+    if branches.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let grepo = crate::git_reads::cached_repo(repo)?;
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    let mut snapshot = cache.lock().map_err(|error| error.to_string())?;
+    if let Err(error) = snapshot.refresh(&grepo) {
+        *snapshot = MonitoringRefs::default();
+        return Err(error);
+    }
+    let head = snapshot.read_file(&grepo.git_dir().join("HEAD"), true)?;
+    let config = snapshot.read_file(&grepo.common_dir().join("config"), true)?;
+    let mut common = Sha256::new();
+    // Any remote can prove containment; keep all remote dependencies without
+    // reopening their files on every local commit.
+    for (name, (target, _)) in &snapshot.targets {
+        if name.starts_with("refs/remotes/") {
+            common.update(format!("{name}={target}\0").as_bytes());
+        }
+    }
+    let origin_default = snapshot
+        .targets
+        .get("refs/remotes/origin/HEAD")
+        .and_then(|(_, symbolic)| symbolic.as_deref())
+        .and_then(|name| name.strip_prefix("refs/remotes/origin/"));
+    let mut defaults = vec!["main", "master"];
+    defaults.extend(origin_default);
+    defaults.sort_unstable();
+    defaults.dedup();
+    for branch in defaults {
+        let name = format!("refs/heads/{branch}");
+        common.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
+    }
+    common.update(head.digest);
+    // Resolve symbolic HEAD from the shared snapshot, not another ref-store read.
+    let mut symbolic = head.symbolic.as_deref();
+    for _ in 0..16 {
+        let Some(name) = symbolic else { break };
+        let target = snapshot.targets.get(name);
+        common.update(format!("{name}={target:?}\0").as_bytes());
+        symbolic = target.and_then(|(_, next)| next.as_deref());
+    }
+    common.update(config.digest);
+    let mut keys = HashMap::new();
+    for branch in branches {
+        let mut digest = common.clone();
+        let name = format!("refs/heads/{branch}");
+        digest.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
+        let log = snapshot.read_file(
+            &grepo.common_dir().join("logs/refs/heads").join(branch),
+            false,
+        )?;
+        digest.update(log.digest);
+        keys.insert(branch.clone(), hex::encode(digest.finalize()));
+    }
+    snapshot.changed_paths.clear();
+    snapshot.verify_files = false;
+    Ok(keys)
+}
+
+#[cfg(test)]
+thread_local! {
+    static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_REF_ENUMERATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_LOG_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_SIGNATURE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Standalone callers get the same dependency set as a batched sidebar refresh.
+pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
+    monitoring_ref_keys(repo, &[branch.to_owned()])?
+        .remove(branch)
+        .ok_or_else(|| "missing monitoring ref key".to_string())
+}
+
+type MonitoringMerge = (WorkspaceCommitStatus, Option<String>);
+type MonitoringLocalMerge = (MonitoringMerge, String);
+static MONITORING_MERGES: LazyLock<
+    moka::sync::Cache<(PathBuf, String, String), MonitoringLocalMerge>,
+> = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(1024).build());
+
+/// Cache only monitoring reads. Destructive preflights still classify freshly.
+/// A semantic ref key rather than TTL means file saves never run cherry/merge-tree.
+pub(crate) fn monitoring_branch_merge(
+    repo: &Path,
+    branch: &str,
+    ref_key: &str,
+    with_pr: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<MonitoringMerge, String> {
+    let (local, tip) = MONITORING_MERGES
+        .try_get_with((repo.to_path_buf(), branch.into(), ref_key.into()), || {
+            let default = get_remote_default_branch(&repo.to_string_lossy())?;
+            let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
+            let local = classify_branch_merge(repo, branch, &tip, &default, |_, _, _| false)?;
+            Ok::<_, String>((local, tip))
+        })
+        .map_err(|e: Arc<String>| (*e).clone())?;
+    // PR state changes independently of local refs. Reapply its current proof
+    // on the caller's existing refresh lifecycle, never cache it with local Git.
+    if with_pr
+        && (matches!(
+            local.0,
+            WorkspaceCommitStatus::Unmerged | WorkspaceCommitStatus::PushedUnmerged
+        ) || local.1.as_deref() == Some("content_superset"))
+        && pr_proves_tip(repo, branch, &tip)
+    {
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr".into())))
+    } else {
+        Ok(local)
+    }
+}
+
+/// The sidebar needs dirty/merged badges, not the removal fingerprint and
+/// recursive submodule recovery inventory. These are computed by the fresh
+/// lifecycle preflight only. The repository diff cache coalesces concurrent refreshes.
+pub fn inspect_workspace_monitoring_with_pr(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    let key = monitoring_ref_key(base_repo, &workspace.branch);
+    inspect_workspace_monitoring_with_key(
+        base_repo,
+        workspace,
+        key.as_deref().map_err(String::as_str),
+        pr_proves_tip,
+    )
+}
+
+/// Consume the shared snapshot instead of reopening its ref store per workspace.
+pub fn inspect_workspace_monitoring_with_key(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    let path = Path::new(&workspace.path);
+    let dirty = crate::git_reads::GixGitReads::dirty_files(path)
+        .map(Ok)
+        .unwrap_or_else(|| dirty_files_at(path));
+    inspect_workspace_monitoring_with_status(base_repo, workspace, ref_key, dirty, pr_proves_tip)
+}
+
+/// Monitoring alone may supply a shared status result; removal preflights stay fresh.
+pub fn inspect_workspace_monitoring_with_status(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    dirty: Result<usize, String>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
+        let dirty_files = dirty?;
+        let ref_key = ref_key.map_err(str::to_owned)?;
+        let (commit_status, merge_proof) =
+            monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
+        Ok(WorkspaceLifecycleStatus {
+            dirty_files: Some(dirty_files),
+            missing_checkout: false,
+            dirty_fingerprint: None,
+            submodule_unpushed_commits: Vec::new(),
+            commit_status,
+            merge_proof,
+            removal_safety: if dirty_files > 0 {
+                WorkspaceRemovalSafety::RequiresForce
+            } else {
+                WorkspaceRemovalSafety::Safe
+            },
+            error: None,
+        })
+    })();
+    result.unwrap_or_else(|error| WorkspaceLifecycleStatus {
+        dirty_files: None,
+        missing_checkout: false,
+        dirty_fingerprint: None,
+        submodule_unpushed_commits: Vec::new(),
+        commit_status: WorkspaceCommitStatus::Unknown,
+        merge_proof: None,
+        removal_safety: WorkspaceRemovalSafety::Unknown,
+        error: Some(error),
+    })
+}
+
 pub fn inspect_workspace_lifecycle_with_pr(
     base_repo: &Path,
     workspace_id: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        resolve_removable_workspace(base_repo, workspace_id),
+        false,
+        pr_proves_tip,
+    )
+}
+
+/// Listing already owns the inventory. Reuse unchanged integration proofs, but
+/// always read fresh checkout safety fields; removal preflights never use this cache.
+pub fn inspect_workspace_listing_with_pr(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        Ok(workspace.clone()),
+        true,
+        pr_proves_tip,
+    )
+}
+
+fn lifecycle_branch_merge(
+    base_repo: &Path,
+    branch: &str,
+    tip: &str,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<MonitoringMerge, String> {
+    // During rebase the checkout HEAD may differ from its branch ref. The
+    // monitoring cache classifies the ref, so retain fresh HEAD classification
+    // in that case rather than changing the lifecycle verdict.
+    let branch_matches_head = monitoring
+        && crate::git_reads::cached_repo(base_repo)
+            .ok()
+            .and_then(|repo| {
+                repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
+                    .ok()
+                    .map(|id| id == tip)
+            })
+            .unwrap_or(false);
+    if branch_matches_head {
+        let ref_key = monitoring_ref_key(base_repo, branch)?;
+        monitoring_branch_merge(base_repo, branch, &ref_key, true, pr_proves_tip)
+    } else {
+        let default = get_remote_default_branch(&base_repo.to_string_lossy())?;
+        classify_branch_merge(base_repo, branch, tip, &default, pr_proves_tip)
+    }
+}
+
+fn inspect_workspace_lifecycle_resolved_with_pr(
+    base_repo: &Path,
+    workspace: Result<WorkspaceWorktree, String>,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let workspace = resolve_any_workspace(base_repo, workspace_id)
-            .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))?;
+        let workspace = workspace?;
         if !Path::new(&workspace.path).exists() {
-            let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
             let tip = rev_at(base_repo, &format!("refs/heads/{}", workspace.branch))?;
-            let (commit_status, merge_proof) = classify_branch_merge(
+            let (commit_status, merge_proof) = lifecycle_branch_merge(
                 base_repo,
                 &workspace.branch,
                 &tip,
-                &default_branch,
+                monitoring,
                 pr_proves_tip,
             )?;
             return Ok(WorkspaceLifecycleStatus {
@@ -963,14 +1819,13 @@ pub fn inspect_workspace_lifecycle_with_pr(
         let (dirty_fingerprint, submodule_unpushed_commits) =
             dirty_fingerprint_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
-        let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let workspace_path = Path::new(&workspace.path);
         let tip = rev_at(workspace_path, "HEAD")?;
-        let (commit_status, merge_proof) = classify_branch_merge(
+        let (commit_status, merge_proof) = lifecycle_branch_merge(
             base_repo,
             &workspace.branch,
             &tip,
-            &default_branch,
+            monitoring,
             pr_proves_tip,
         )?;
         Ok(WorkspaceLifecycleStatus {
@@ -1018,6 +1873,36 @@ pub fn resolve_any_workspace(
                 base_repo.display()
             )
         })
+}
+
+/// A checkout parked in the recycling pool, addressed by the id of its branch.
+fn resolve_archived_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    let listed = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    map_archived_workspace_paths(&listed.stdout)
+        .remove(workspace_id)
+        .ok_or_else(|| {
+            format!(
+                "No workspace found for id '{workspace_id}' in '{}'",
+                base_repo.display()
+            )
+        })
+}
+
+/// Every checkout removal and its safety inspection may act on: a live
+/// workspace, a registered one whose directory vanished, or a pooled one.
+pub fn resolve_removable_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    resolve_any_workspace(base_repo, workspace_id)
+        .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))
+        .or_else(|_| resolve_archived_workspace(base_repo, workspace_id))
 }
 
 /// Removal alone may resolve a registered checkout whose directory disappeared.
@@ -1145,6 +2030,203 @@ impl CreatedWorkspace {
     }
 }
 
+/// Durable allocation state lives in Git's per-checkout administration directory,
+/// outside the source tree and independent of session discovery.
+fn allocation_marker(base_repo: &Path, checkout: &Path) -> Result<PathBuf, String> {
+    registered_worktree_admin_dir(base_repo, checkout)?
+        .map(|admin| admin.join("tuic-allocation"))
+        .ok_or_else(|| "Cannot reserve an unregistered checkout".into())
+}
+
+pub fn reserve_worktree(base_repo: &Path, checkout: &Path) -> Result<(), String> {
+    write_allocation(base_repo, checkout, "reserved")
+}
+
+fn write_allocation(base_repo: &Path, checkout: &Path, state: &str) -> Result<(), String> {
+    let marker = allocation_marker(base_repo, checkout)?;
+    let mut file = tempfile::NamedTempFile::new_in(marker.parent().unwrap())
+        .map_err(|error| format!("Cannot create allocation marker: {error}"))?;
+    use std::io::Write;
+    file.write_all(state.as_bytes())
+        .and_then(|()| file.as_file().sync_all())
+        .map_err(|error| format!("Cannot write allocation marker: {error}"))?;
+    file.persist(marker)
+        .map_err(|error| format!("Cannot publish allocation marker: {error}"))?;
+    Ok(())
+}
+
+/// Explicit archive/removal is the completion source; an ancestor tip alone is not.
+pub fn finish_worktree(base_repo: &Path, checkout: &Path) -> Result<(), String> {
+    write_allocation(base_repo, checkout, "finished")
+}
+
+/// Serialize create/recycle across processes; dropping the file releases the lock.
+fn allocation_guard(base_repo: &Path) -> Result<std::fs::File, String> {
+    let common = rev_at(base_repo, "--git-common-dir")?;
+    let lock = base_repo.join(common).join("tuic-allocation-lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock)
+        .map_err(|error| {
+            format!(
+                "Cannot open worktree allocation lock {}: {error}",
+                lock.display()
+            )
+        })?;
+    file.lock()
+        .map_err(|error| format!("Cannot acquire worktree allocation lock: {error}"))?;
+    Ok(file)
+}
+
+/// At the domain boundary the app supplies authoritative live-session exclusion.
+/// Completed checkouts are reused only after fresh Git safety evidence passes.
+pub fn create_workspace_recycling(
+    worktrees_dir: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+    available: impl Fn(&Path) -> bool,
+) -> Result<(CreatedWorkspace, Option<WorkspaceWorktree>), String> {
+    let repo = Path::new(&config.base_repo);
+    let _allocation = allocation_guard(repo)?;
+    let branch = config
+        .branch
+        .clone()
+        .unwrap_or_else(|| sanitize_name(&config.task_name));
+    ensure_branch_has_no_workspace(repo, &branch)?;
+    let destination = worktrees_dir.join(sanitize_name(&config.task_name));
+    // An existing destination or ref keeps the established creation semantics.
+    if config.create_branch
+        && !destination.exists()
+        && rev_at(repo, &format!("refs/heads/{branch}")).is_err()
+    {
+        let listed = git_cmd(repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .map_err(|error| format!("Cannot list recycling candidates: {error}"))?;
+        for entry in parse_worktree_entries(&listed.stdout) {
+            let Some(old_branch) = entry.branch else {
+                continue;
+            };
+            let old_path = PathBuf::from(&entry.path);
+            let Ok(marker) = allocation_marker(repo, &old_path) else {
+                continue;
+            };
+            if std::fs::read_to_string(&marker).ok().as_deref() != Some("finished")
+                || !available(&old_path)
+                || has_operation_in_progress(&entry.path)
+                || marker.parent().unwrap().join("locked").exists()
+                || warm_status(&old_path)["status"] == "pending"
+            {
+                continue;
+            }
+            let clean = dirty_files_at(&old_path).ok() == Some(0);
+            let submodules_safe =
+                dirty_fingerprint_at(&old_path).is_ok_and(|(_, modules)| modules.is_empty());
+            // The explicit finished marker permits recycling an empty checkout;
+            // that is allocation consent, not evidence of branch integration.
+            let integrated = branch_integration_with_pr(repo, &old_branch, |_, _, _| false)
+                .is_ok_and(|proof| {
+                    proof.integrated || proof.commit_status == WorkspaceCommitStatus::InSync
+                });
+            if !clean
+                || !submodules_safe
+                || !integrated
+                || rev_at(&old_path, "HEAD").ok()
+                    != rev_at(repo, &format!("refs/heads/{old_branch}")).ok()
+            {
+                continue;
+            }
+            let start = base_ref.unwrap_or("HEAD");
+            fetch_if_remote(&config.base_repo, start)?;
+            // The switch runs inside the old checkout, so resolve the ref here in the base repo.
+            let start_point = rev_at(repo, start)?;
+            // Reserve before touching Git or paths; failures cannot expose it to another caller.
+            std::fs::create_dir_all(worktrees_dir)
+                .map_err(|error| format!("Cannot create checkout parent: {error}"))?;
+            reserve_worktree(repo, &old_path)?;
+            let mut switched = false;
+            let previous_base = get_branch_base(&config.base_repo, &branch);
+            let recycled = (|| -> Result<(), String> {
+                move_registered_checkout(repo, &old_path, &destination)?;
+                git_cmd(&destination)
+                    .args(["switch", "-c", &branch, &start_point])
+                    .run()
+                    .map_err(|error| format!("Cannot switch recycled checkout: {error}"))?;
+                switched = true;
+                git_cmd(&destination)
+                    .args(["clean", "-fd"])
+                    .run()
+                    .map_err(|error| format!("Cannot clean recycled source: {error}"))?;
+                if let Some(base) = base_ref {
+                    set_branch_base(&config.base_repo, &branch, base)?;
+                }
+                record_worktree_rename(repo, &entry.path, &destination.to_string_lossy())
+            })();
+            if let Err(error) = recycled {
+                let rollback = (|| -> Result<(), String> {
+                    if destination.exists() {
+                        move_registered_checkout(repo, &destination, &old_path)?;
+                    }
+                    if switched {
+                        git_cmd(&old_path)
+                            .args(["switch", &old_branch])
+                            .run()
+                            .map_err(|error| format!("Cannot restore recycled branch: {error}"))?;
+                        git_cmd(repo)
+                            .args(["branch", "-D", &branch])
+                            .run()
+                            .map_err(|error| format!("Cannot remove recycled branch: {error}"))?;
+                        if let Some(base) = previous_base {
+                            set_branch_base(&config.base_repo, &branch, &base)?;
+                        }
+                    }
+                    finish_worktree(repo, &old_path)
+                })();
+                return Err(format!(
+                    "Cannot recycle checkout: {error}; rollback: {rollback:?}"
+                ));
+            }
+            let old = WorkspaceWorktree {
+                branch: old_branch,
+                path: entry.path,
+                kind: WorkspaceKind::Worktree,
+                warm_artifacts: None,
+                lifecycle_status: None,
+            };
+            clear_warm(&old_path);
+            let warnings = initialize_submodules(repo, &destination);
+            return Ok((
+                CreatedWorkspace {
+                    workspace_id: workspace_id_of_worktree(&branch),
+                    path: destination,
+                    branch,
+                    kind: WorkspaceKind::Worktree,
+                    warnings,
+                    warmed_directories: 0,
+                },
+                Some(old),
+            ));
+        }
+    }
+    let workspace = create_workspace_unwarmed(worktrees_dir, config, base_ref)?;
+    Ok((workspace, None))
+}
+
+fn record_worktree_rename(repo: &Path, old: &str, new: &str) -> Result<(), String> {
+    let common = repo.join(rev_at(repo, "--git-common-dir")?);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(common.join("tuic-worktree-renames.jsonl"))
+        .map_err(|error| format!("Cannot open checkout rename journal: {error}"))?;
+    use std::io::Write;
+    writeln!(file, "{}", serde_json::json!({"old": old, "new": new}))
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("Cannot record checkout rename: {error}"))
+}
+
 /// Create the registered worktree and its required local inputs, but defer the
 /// expensive cache warm to the caller.
 pub fn create_workspace_unwarmed(
@@ -1159,6 +2241,7 @@ pub fn create_workspace_unwarmed(
         .unwrap_or_else(|| sanitize_name(&config.task_name));
     ensure_branch_has_no_workspace(&src, &branch)?;
     let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
+    reserve_worktree(&src, &worktree.path)?;
     let branch = worktree.branch.unwrap_or(branch);
     let mut warnings = link_shared_stores(&src, &worktree.path);
     warnings.extend(initialize_submodules(&src, &worktree.path));
@@ -1260,7 +2343,7 @@ fn initialize_submodules_with_allowed_protocol(
         let url_key = format!("submodule.{name}.url");
         let local = git_cmd(dest).args(["config", &url_key, &src.join(path).to_string_lossy()]).run().and_then(|_| git_cmd(dest).args(["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", path]).run());
         if local.is_ok() { return None; }
-        let local_error = local.err().expect("failed above");
+        let local_error = local.expect_err("failed above");
         let _ = git_cmd(dest).args(["config", "--unset", &url_key]).run();
         let mut update = git_cmd(dest).args(["submodule", "update", "--init", "--", path]).timeout(FETCH_TIMEOUT);
         if let Some(protocol) = allowed_protocol {
@@ -1290,6 +2373,13 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
+/// Remove a detached orphan. A checkout whose directory is already gone holds
+/// nothing to lose, so dropping its registration is confirmed by the safety
+/// assessment instead of a `force` flag.
+pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
+    remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
+}
+
 pub fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
     remove_worktree_internal_with_lock(worktree, force, false, None, None)
 }
@@ -1324,17 +2414,47 @@ fn preserve_missing_worktree_modules(
         base_repo: &Path,
         worktree: &Path,
         path: &Path,
+        owner: &Path,
         names: &mut Vec<String>,
-        inside_repo: bool,
     ) -> Result<(), String> {
         if !path.is_dir() {
             return Ok(());
         }
         let is_repo = path.join("HEAD").is_file() && path.join("objects").is_dir();
         if is_repo {
-            let relative = names.join("/");
-            let destination = base_repo.join(&relative);
-            if !initialized_main_submodule(base_repo, &destination) {
+            let name = names.join("/");
+            let mapping = git_cmd(owner)
+                .args([
+                    "config",
+                    "--file",
+                    ".gitmodules",
+                    "--get-all",
+                    &format!("submodule.{name}.path"),
+                ])
+                .run()
+                .map_err(|error| {
+                    format!(
+                        "Cannot resolve missing worktree submodule {name} path from .gitmodules: {error}"
+                    )
+                })?;
+            let paths = mapping.stdout.lines().collect::<Vec<_>>();
+            let [relative] = paths.as_slice() else {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: expected one .gitmodules path"
+                ));
+            };
+            if relative.is_empty()
+                || tuic_core::path_spelling::is_absolute_on_any_platform(relative)
+                || !Path::new(relative)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: invalid .gitmodules path {relative:?}"
+                ));
+            }
+            let destination = owner.join(relative);
+            if !initialized_main_submodule(owner, &destination) {
                 return Err(format!(
                     "Cannot preserve missing worktree submodule {relative}: main module is not initialized"
                 ));
@@ -1399,8 +2519,8 @@ fn preserve_missing_worktree_modules(
                 .map_err(|e| format!("Cannot bundle missing submodule {relative}: {e}"))?;
             let namespace = format!(
                 "refs/tuic/preserved/{}/{}/{}/",
-                hex::encode(worktree.to_string_lossy().as_bytes()),
-                hex::encode(relative.as_bytes()),
+                preserved_ref_component(worktree.to_string_lossy().as_bytes()),
+                preserved_ref_component(relative.as_bytes()),
                 uuid::Uuid::new_v4().simple()
             );
             let mut args = vec![
@@ -1413,7 +2533,7 @@ fn preserve_missing_worktree_modules(
                     "{}:{}{}",
                     head.stdout.trim(),
                     namespace,
-                    hex::encode(b"HEAD")
+                    preserved_ref_component(b"HEAD")
                 ),
             ];
             for line in refs.stdout.lines() {
@@ -1423,14 +2543,14 @@ fn preserve_missing_worktree_modules(
                 args.push(format!(
                     "{oid}:{}{}",
                     namespace,
-                    hex::encode(name.as_bytes())
+                    preserved_ref_component(name.as_bytes())
                 ));
             }
             for oid in reflog.stdout.lines() {
                 args.push(format!(
                     "{oid}:{}{}",
                     namespace,
-                    hex::encode(format!("reflog/{oid}").as_bytes())
+                    preserved_ref_component(format!("reflog/{oid}").as_bytes())
                 ));
             }
             git_cmd(&destination)
@@ -1438,33 +2558,26 @@ fn preserve_missing_worktree_modules(
                 .timeout(Duration::from_secs(60))
                 .run()
                 .map_err(|e| format!("Cannot preserve missing submodule {relative}: {e}"))?;
+            // Nested modules have their own declarations and admin namespace.
+            // Never interpret Git's objects/refs/logs directories as module names.
+            return visit(
+                base_repo,
+                worktree,
+                &path.join("modules"),
+                &destination,
+                &mut Vec::new(),
+            );
         }
         for entry in std::fs::read_dir(path)
             .map_err(|e| format!("Cannot inspect module admin directory: {e}"))?
         {
             let entry = entry.map_err(|e| format!("Cannot inspect module admin entry: {e}"))?;
-            if !entry.path().is_dir()
-                || entry.file_name() == "objects"
-                || entry.file_name() == "refs"
-                || entry.file_name() == "logs"
-            {
+            if !entry.path().is_dir() {
                 continue;
             }
-            let component = entry.file_name().to_string_lossy().into_owned();
-            let structural_modules = component == "modules" && (inside_repo || is_repo);
-            if !structural_modules {
-                names.push(component.clone());
-            }
-            visit(
-                base_repo,
-                worktree,
-                &entry.path(),
-                names,
-                inside_repo || is_repo,
-            )?;
-            if !structural_modules {
-                names.pop();
-            }
+            names.push(entry.file_name().to_string_lossy().into_owned());
+            visit(base_repo, worktree, &entry.path(), owner, names)?;
+            names.pop();
         }
         Ok(())
     }
@@ -1472,8 +2585,8 @@ fn preserve_missing_worktree_modules(
         base_repo,
         worktree,
         &admin.join("modules"),
+        base_repo,
         &mut Vec::new(),
-        false,
     )
 }
 
@@ -1533,12 +2646,12 @@ fn remove_worktree_internal_with_lock(
             "{MAIN_WORKTREE_PREFIX}cannot remove the main worktree"
         ));
     }
-    if let Some(expected_missing) = expected_missing_checkout {
-        if expected_missing == path_entry_exists(&worktree.path)? {
-            return Err(
-                "Worktree presence changed since confirmation; review it before removal".into(),
-            );
-        }
+    if let Some(expected_missing) = expected_missing_checkout
+        && expected_missing == path_entry_exists(&worktree.path)?
+    {
+        return Err(
+            "Worktree presence changed since confirmation; review it before removal".into(),
+        );
     }
     let admin = registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?;
     if !path_entry_exists(&worktree.path)? {
@@ -1626,10 +2739,8 @@ fn remove_worktree_internal_with_lock(
         None
     };
 
-    if !force {
-        if dirty_files_at(&worktree.path)? != 0 {
-            return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
-        }
+    if !force && dirty_files_at(&worktree.path)? != 0 {
+        return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
     }
     if admin.is_some() {
         verify_submodules_at(&worktree.path, &worktree.base_repo, force)?;
@@ -1930,6 +3041,12 @@ pub fn remove_worktree_by_workspace_id_with_confirmation(
     )
 }
 
+// The flat removal boundary keeps each independently confirmed safety input explicit.
+// A parameter-count warning here does not justify changing the caller contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit removal confirmation boundary"
+)]
 pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
@@ -1955,6 +3072,12 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
 
 /// Transport-facing variant: `Some(true)` confirms a missing checkout, while
 /// `Some(false)` requires a live checkout and a fingerprint for force removal.
+// The flat removal boundary keeps each independently confirmed safety input explicit.
+// A parameter-count warning here does not justify changing the caller contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit removal confirmation boundary"
+)]
 pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
@@ -1968,7 +3091,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
 ) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
-    let mut removal_rule = if force { "force" } else { "kept_branch" };
+    let mut removal_rule = if force { "force" } else { "kept_branch" }.to_string();
 
     tracing::info!(
         source = "worktree",
@@ -1977,15 +3100,13 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         "remove_worktree_by_workspace_id: start"
     );
 
-    let workspace = resolve_any_workspace(&base_repo, workspace_id)
-        .or_else(|_| resolve_missing_registered_workspace(&base_repo, workspace_id))
-        .inspect_err(|_| {
-            tracing::error!(
-                source = "worktree",
-                workspace_id = %workspace_id,
-                "remove_worktree_by_workspace_id: no workspace found for id"
-            );
-        })?;
+    let workspace = resolve_removable_workspace(&base_repo, workspace_id).inspect_err(|_| {
+        tracing::error!(
+            source = "worktree",
+            workspace_id = %workspace_id,
+            "remove_worktree_by_workspace_id: no workspace found for id"
+        );
+    })?;
     // The branch to delete comes off the resolved record instead of duplicating
     // the workspace-id representation at the call site.
     let branch_name = workspace.branch.as_str();
@@ -2009,19 +3130,16 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     let branch_ref = format!("refs/heads/{branch_name}");
     let expected_branch_oid = rev_at(&base_repo, &branch_ref)?;
     let lifecycle = inspect_workspace_lifecycle_with_pr(&base_repo, workspace_id, pr_proves_tip);
-    if force && let Some(expected) = expected_fingerprint {
-        if lifecycle.dirty_fingerprint.as_deref() != Some(expected) {
-            return Err(
-                "Worktree state changed since confirmation; review it before removal".into(),
-            );
-        }
+    if force
+        && let Some(expected) = expected_fingerprint
+        && lifecycle.dirty_fingerprint.as_deref() != Some(expected)
+    {
+        return Err("Worktree state changed since confirmation; review it before removal".into());
     }
-    if !force {
-        if lifecycle.dirty_files != Some(0) {
-            return Err(lifecycle.error.clone().unwrap_or_else(|| {
-                format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
-            }));
-        }
+    if !force && lifecycle.dirty_files != Some(0) {
+        return Err(lifecycle.error.clone().unwrap_or_else(|| {
+            format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
+        }));
     }
     if has_operation_in_progress(&workspace.path) {
         return Err(format!(
@@ -2034,30 +3152,39 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
         ));
     }
     if delete_branch {
-        let branch_proof = (|| -> Result<&'static str, String> {
+        let branch_proof = (|| -> Result<String, String> {
             match lifecycle.commit_status {
                 WorkspaceCommitStatus::Unmerged => {
                     let default_branch = get_remote_default_branch(repo_path)?;
-                    if !patches_integrated(&base_repo, &default_branch, &expected_branch_oid)
-                        .map_err(|error| {
-                            format!("Cannot check patch equivalence for {branch_name}: {error}")
-                        })?
-                    {
-                        return Err(format!(
-                            "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                        ));
-                    }
-                    Ok("patch_equivalence")
+                    let bases = integration_bases(&base_repo, &default_branch);
+                    Err(format!(
+                        "Cannot remove {branch_name}: branch has unmerged commits (compared against {}). Merge it first, or remove the worktree while keeping the branch.",
+                        describe_bases(&bases)
+                    ))
                 }
+                WorkspaceCommitStatus::PushedUnmerged => lifecycle
+                    .merge_proof
+                    .clone()
+                    .ok_or_else(|| format!("Cannot verify remote commits for {branch_name}")),
                 WorkspaceCommitStatus::Unknown => {
                     Err(lifecycle.error.clone().unwrap_or_else(|| {
                         format!("Cannot verify whether {branch_name} can be safely removed")
                     }))
                 }
-                WorkspaceCommitStatus::InSync => Ok("in_sync"),
-                WorkspaceCommitStatus::Merged => lifecycle
-                    .merge_proof
-                    .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}")),
+                WorkspaceCommitStatus::InSync => Ok("in_sync".into()),
+                WorkspaceCommitStatus::Merged => {
+                    let proof = lifecycle
+                        .merge_proof
+                        .clone()
+                        .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}"))?;
+                    require_integration_archive(
+                        &base_repo,
+                        branch_name,
+                        &expected_branch_oid,
+                        &proof,
+                    )?;
+                    Ok(proof)
+                }
             }
         })();
         match branch_proof {
@@ -2103,7 +3230,21 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     // Compare-and-delete prevents an archive hook or another process from
     // advancing the branch after the safety proof.
     if delete_branch && branch_delete_warning.is_none() {
-        let deleted = {
+        let deleted = require_integration_archive(
+            &worktree.base_repo,
+            branch_name,
+            &expected_branch_oid,
+            &removal_rule,
+        )
+        .and_then(|()| {
+            if lifecycle.commit_status == WorkspaceCommitStatus::PushedUnmerged {
+                removal_rule = crate::git_ref_transaction::delete_remote_contained_branch(
+                    &worktree.base_repo,
+                    branch_name,
+                    &expected_branch_oid,
+                )?;
+                return Ok(());
+            }
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
@@ -2112,7 +3253,9 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                     &expected_branch_oid,
                 ])
                 .run()
-        };
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
         match deleted {
             Ok(_) => tracing::info!(
                 source = "worktree",
@@ -2139,7 +3282,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     );
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
-        removal_rule: removal_rule.to_string(),
+        removal_rule,
         branch: branch_name.to_string(),
     })
 }
@@ -2206,8 +3349,7 @@ pub fn delete_local_branch_impl(
     keep_worktree: bool,
 ) -> Result<(), String> {
     // Refuse to delete the default branch
-    let default_branch =
-        get_remote_default_branch(repo_path).unwrap_or_else(|_| "main".to_string());
+    let default_branch = get_remote_default_branch(repo_path)?;
     if branch_name == default_branch {
         return Err(format!("Refusing to delete default branch '{branch_name}'"));
     }
@@ -2264,11 +3406,206 @@ pub fn delete_local_branch_impl(
     Ok(())
 }
 
+/// Ref under which the coordinator preserves a retired branch tip.
+pub fn archive_ref_name(branch_name: &str) -> String {
+    format!("refs/archive/{branch_name}")
+}
+
+/// Archive refs that may hold `tip` of `branch`: the primary ref, then the one
+/// a reused branch name falls back to, named by the tip's short SHA.
+fn archive_refs_for_tip(branch: &str, tip: &str) -> [String; 2] {
+    let primary = archive_ref_name(branch);
+    let suffixed = format!("{primary}-{}", tip.get(..7).unwrap_or(tip));
+    [primary, suffixed]
+}
+
+/// Preserve a force-deleted branch tip without replacing an earlier archive.
+pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Result<(), String> {
+    git_cmd(repo)
+        .args(["check-ref-format", "--branch", branch])
+        .run()
+        .map_err(|error| format!("Invalid local branch name '{branch}': {error}"))?;
+    let listed = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot verify branch checkouts: {error}"))?;
+    if parse_worktree_entries(&listed.stdout)
+        .iter()
+        .any(|entry| entry.branch.as_deref() == Some(branch))
+    {
+        return Err(format!(
+            "Cannot delete '{branch}': checked out in a worktree"
+        ));
+    }
+    let branch_ref = format!("refs/heads/{branch}");
+    let tip = rev_at(repo, &branch_ref)?;
+    // A reused branch name collides with the earlier archive. The tip's short
+    // SHA names a second archive, so earlier work is never replaced and the new
+    // tip is still preserved.
+    let archives = archive_refs_for_tip(branch, &tip);
+    if archive_ref_at_tip(repo, branch, &tip).is_none() {
+        let mut failure = String::new();
+        let created = archives.iter().any(|archive| {
+            // An empty old value means the archive must not exist.
+            match git_cmd(repo).args(["update-ref", archive, &tip, ""]).run() {
+                Ok(_) => true,
+                Err(error) => {
+                    failure = error.to_string();
+                    false
+                }
+            }
+        });
+        if !created {
+            return Err(format!(
+                "Cannot preserve '{branch}' at {} or {}: {failure}",
+                archives[0], archives[1]
+            ));
+        }
+    }
+    git_cmd(repo)
+        .args(["update-ref", "-d", &branch_ref, &tip])
+        .run()
+        .map_err(|error| {
+            format!("Cannot delete '{branch}': local ref moved or deletion failed: {error}")
+        })?;
+    Ok(())
+}
+
+/// The archive ref that points at exactly `tip`: the branch's work is
+/// preserved. An archive taken before later commits does not qualify.
+fn archive_ref_at_tip(repo: &Path, branch_name: &str, tip: &str) -> Option<String> {
+    archive_refs_for_tip(branch_name, tip)
+        .into_iter()
+        .find(|archive| rev_at(repo, archive).is_ok_and(|archived| archived == tip))
+}
+
+fn archived_at_tip(repo: &Path, branch_name: &str, tip: &str) -> bool {
+    archive_ref_at_tip(repo, branch_name, tip).is_some()
+}
+
+fn require_integration_archive(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    proof: &str,
+) -> Result<(), String> {
+    if proof == "content_superset" && !archived_at_tip(repo, branch, tip) {
+        return Err(format!(
+            "Cannot delete '{branch}': content_superset requires {} at the current tip",
+            archive_ref_name(branch)
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct BranchIntegration {
+    pub branch: String,
+    pub tip: String,
+    pub default_branch: String,
+    pub commit_status: WorkspaceCommitStatus,
+    pub integrated: bool,
+    pub proof: Option<String>,
+    pub archive_required: bool,
+    pub archived: bool,
+    pub archive_ref: String,
+    pub worktree_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The query and lifecycle/delete consumers share classify_branch_merge.
+pub fn branch_integration_with_pr(
+    repo: &Path,
+    branch: &str,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<BranchIntegration, String> {
+    if branch.is_empty()
+        || git_cmd(repo)
+            .args(["check-ref-format", "--branch", branch])
+            .run_silent()
+            .is_none()
+    {
+        return Err(format!("Invalid local branch name '{branch}'"));
+    }
+    let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
+    let default_branch = get_remote_default_branch(&repo.to_string_lossy())?;
+    let (commit_status, proof, error) =
+        match classify_branch_merge(repo, branch, &tip, &default_branch, pr_proves_tip) {
+            Ok((status, proof)) => (status, proof, None),
+            Err(error) => (WorkspaceCommitStatus::Unknown, None, Some(error)),
+        };
+    let listed = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot list branch checkouts: {error}"))?;
+    let archive_ref = archive_ref_at_tip(repo, branch, &tip);
+    Ok(BranchIntegration {
+        branch: branch.into(),
+        archived: archive_ref.is_some(),
+        archive_ref: archive_ref.unwrap_or_else(|| archive_ref_name(branch)),
+        tip,
+        default_branch,
+        integrated: commit_status == WorkspaceCommitStatus::Merged,
+        commit_status,
+        archive_required: proof.as_deref() == Some("content_superset"),
+        proof,
+        worktree_paths: parse_worktree_entries(&listed.stdout)
+            .into_iter()
+            .filter(|entry| entry.branch.as_deref() == Some(branch))
+            .map(|entry| entry.path)
+            .collect(),
+        error,
+    })
+}
+
+/// Branches classified at once. Each one may wait on a GitHub lookup, so a
+/// sequential listing of dozens of unmerged branches outlasts the MCP timeout.
+const BRANCH_INTEGRATION_WORKERS: usize = 6;
+
+pub fn branch_integrations_with_pr(
+    repo: &Path,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool + Sync,
+) -> Result<Vec<BranchIntegration>, String> {
+    let listed = git_cmd(repo)
+        .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+        .run()
+        .map_err(|error| format!("Cannot list branches: {error}"))?;
+    let branches: Vec<&str> = listed.stdout.lines().collect();
+    let next = AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::with_capacity(branches.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..BRANCH_INTEGRATION_WORKERS.min(branches.len()) {
+            scope.spawn(|| {
+                while let Some(branch) = branches.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let result = branch_integration_with_pr(repo, branch, &pr_proves_tip);
+                    results
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((branch, result));
+                }
+            });
+        }
+    });
+    let mut results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    results.sort_by_key(|(branch, _)| branches.iter().position(|listed| listed == *branch));
+    results.into_iter().map(|(_, result)| result).collect()
+}
+
+/// Evidence captured by branch deletion before the local ref disappears.
+#[derive(Debug)]
+pub struct DeletedBranch {
+    pub proof: String,
+    pub archive_ref: Option<String>,
+}
+
 /// A linked checkout is never detached or removed by this operation.
 pub fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<DeletedBranch, String> {
     delete_integrated_local_branch_with_pr(repo_path, branch_name, |_, _, _| false)
 }
 
@@ -2276,7 +3613,7 @@ pub fn delete_integrated_local_branch_with_pr(
     repo_path: &str,
     branch_name: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
-) -> Result<&'static str, String> {
+) -> Result<DeletedBranch, String> {
     let repo = Path::new(repo_path);
     if branch_name.is_empty()
         || git_cmd(repo)
@@ -2320,29 +3657,45 @@ pub fn delete_integrated_local_branch_with_pr(
     let (status, merge_proof) =
         classify_branch_merge(repo, branch_name, &tip, &default_branch, pr_proves_tip)?;
     let proof = match status {
-        WorkspaceCommitStatus::InSync => "in_sync",
+        WorkspaceCommitStatus::InSync => "in_sync".to_string(),
         WorkspaceCommitStatus::Merged => merge_proof
             .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
         WorkspaceCommitStatus::Unmerged => {
-            if patches_integrated(repo, &default_branch, &tip)? {
-                "patch_equivalence"
+            if archived_at_tip(repo, branch_name, &tip) {
+                "archived".to_string()
             } else {
                 return Err(format!(
-                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch"
+                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
+                    describe_bases(&integration_bases(repo, &default_branch))
                 ));
             }
+        }
+        WorkspaceCommitStatus::PushedUnmerged if archived_at_tip(repo, branch_name, &tip) => {
+            "archived".to_string()
+        }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            return Err(format!(
+                "Cannot delete '{branch_name}': it is pushed but not merged into the default branch"
+            ));
         }
         WorkspaceCommitStatus::Unknown => {
             return Err(format!("Cannot verify merged commits for '{branch_name}'"));
         }
     };
+    require_integration_archive(repo, branch_name, &tip, &proof)?;
+    let archive_ref = archive_ref_at_tip(repo, branch_name, &tip);
+    if proof == "archived" && archive_ref.is_none() {
+        return Err(format!(
+            "Cannot delete '{branch_name}': archive no longer holds the captured tip"
+        ));
+    }
     git_cmd(repo)
         .args(["update-ref", "-d", &branch_ref, &tip])
         .run()
         .map_err(|error| {
             format!("Cannot delete '{branch_name}': local ref moved or deletion failed: {error}")
         })?;
-    Ok(proof)
+    Ok(DeletedBranch { proof, archive_ref })
 }
 
 /// One block of `git worktree list --porcelain` output.
@@ -2487,6 +3840,22 @@ pub fn workspace_id_of_worktree(branch: &str) -> String {
 /// no persisted key moves and no id is invented for data that already works.
 /// This is not a placeholder — it is the migration.
 fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
+    map_checkouts(porcelain, false)
+}
+
+/// Checkouts parked in `__archived/` by archive or recycling. They stay on their
+/// branch so a later create can reuse them by rename, which makes them a pool:
+/// not a workspace the sidebar lists, but still removable by id.
+fn map_archived_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
+    map_checkouts(porcelain, true)
+}
+
+/// Whether a checkout sits in the recycling pool: directly inside `__archived/`.
+pub(crate) fn is_archived_checkout(path: &Path) -> bool {
+    path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("__archived"))
+}
+
+fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
     for entry in parse_worktree_entries(porcelain) {
@@ -2497,8 +3866,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
             && Path::new(&entry.path).exists()
-            && Path::new(&entry.path).parent().and_then(Path::file_name)
-                != Some(std::ffi::OsStr::new("__archived"))
+            && is_archived_checkout(Path::new(&entry.path)) == archived
         {
             result.insert(
                 workspace_id_of_worktree(&branch),
@@ -2534,7 +3902,9 @@ pub fn get_worktree_paths_raw(
     Ok(map_worktree_workspace_paths(&output.stdout))
 }
 
-pub fn attach_warm_statuses(paths: &mut HashMap<String, WorkspaceWorktree>) {
+pub fn attach_warm_statuses<S: std::hash::BuildHasher>(
+    paths: &mut HashMap<String, WorkspaceWorktree, S>,
+) {
     for workspace in paths.values_mut() {
         workspace.warm_artifacts = Some(warm_status(Path::new(&workspace.path)));
     }
@@ -2584,6 +3954,36 @@ pub async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, S
         .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
+/// Validate an isolated branch checkout for launching work, without granting
+/// permission to remove it as a detached orphan.
+pub fn validate_branch_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let path = Path::new(worktree_path);
+    if !path.is_absolute() {
+        return Err("worktree_path must be an absolute path".into());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("resolve worktree: {error}"))?;
+    let repo = Path::new(repo_path)
+        .canonicalize()
+        .map_err(|error| format!("resolve repository: {error}"))?;
+    if canonical == repo {
+        return Err("worktree must be an isolated branch checkout".into());
+    }
+    let registered = get_worktree_paths_raw(repo_path)?;
+    if !registered.values().any(|worktree| {
+        Path::new(&worktree.path)
+            .canonicalize()
+            .is_ok_and(|registered| registered == canonical)
+    }) {
+        return Err("worktree is not a registered branch checkout".into());
+    }
+    if has_operation_in_progress(&canonical.to_string_lossy()) {
+        return Err("Cannot launch in worktree: a Git operation is in progress".into());
+    }
+    Ok(())
+}
+
 /// Validate that `worktree_path` is a detached orphan of the given repo, not a
 /// main or branch checkout or one with a Git operation in progress.
 pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
@@ -2599,7 +3999,10 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
 
     let entry = parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| entry.path == worktree_path)
+        .find(|entry| {
+            tuic_core::path_spelling::portable_spelling(&entry.path)
+                == tuic_core::path_spelling::portable_spelling(worktree_path)
+        })
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
@@ -2646,36 +4049,63 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
-/// Get the remote default branch for a repo.
-///
-/// Tries `git symbolic-ref refs/remotes/origin/HEAD` first, then falls back
-/// to checking if `main` or `master` exist as local branches.
+/// Resolve a verified integration branch without network access.
+/// Prefer the main checkout's configured base, main/master, origin/HEAD, then
+/// the main checkout's attached HEAD (never a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
-    // Try symbolic-ref first (cheapest, no network)
-    if let Some(out) = git_cmd(Path::new(repo_path))
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
-        .run_silent()
+    let repo = Path::new(repo_path);
+    let verified = |branch: &str| -> Option<String> {
+        for prefix in ["refs/heads/", "refs/remotes/"] {
+            let reference = if branch.starts_with("refs/") {
+                branch.to_string()
+            } else {
+                format!("{prefix}{branch}")
+            };
+            if rev_at(repo, &format!("{reference}^{{commit}}")).is_ok() {
+                return Some(
+                    reference
+                        .strip_prefix("refs/heads/")
+                        .or_else(|| reference.strip_prefix("refs/remotes/"))
+                        .unwrap_or(&reference)
+                        .to_string(),
+                );
+            }
+        }
+        None
+    };
+    let worktrees = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot resolve default branch: {error}"))?;
+    let main_branch = parse_worktree_entries(&worktrees.stdout)
+        .into_iter()
+        .next()
+        .and_then(|entry| entry.branch);
+    if let Some(branch) = main_branch.as_deref()
+        && let Some(base) = get_branch_base(repo_path, branch)
+        && let Some(reference) = verified(&base)
     {
-        let trimmed = out.stdout.trim().to_string();
-        // Output is like "refs/remotes/origin/main"
-        if let Some(branch) = trimmed.strip_prefix("refs/remotes/origin/")
-            && !branch.is_empty()
-        {
+        return Ok(reference);
+    }
+    for branch in ["main", "master"] {
+        if rev_at(repo, &format!("refs/heads/{branch}^{{commit}}")).is_ok() {
             return Ok(branch.to_string());
         }
     }
-
-    // Fallback: check if main or master branches exist locally
-    let branches = list_local_branches(repo_path.to_string()).unwrap_or_default();
-    if branches.iter().any(|b| b == "main") {
-        return Ok("main".to_string());
+    if let Some(out) = git_cmd(repo)
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .run_silent()
+        && let Some(branch) = out.stdout.trim().strip_prefix("refs/remotes/origin/")
+        && let Some(reference) = verified(&format!("refs/heads/{branch}"))
+            .or_else(|| verified(&format!("refs/remotes/origin/{branch}")))
+    {
+        return Ok(reference);
     }
-    if branches.iter().any(|b| b == "master") {
-        return Ok("master".to_string());
-    }
 
-    // Last resort: return "main"
-    Ok("main".to_string())
+    if let Some(reference) = main_branch.as_deref().and_then(verified) {
+        return Ok(reference);
+    }
+    Err("Cannot resolve default branch: no valid configured base, main/master, origin/HEAD, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
@@ -2829,6 +4259,9 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
             if short_name.ends_with("/HEAD") {
                 continue;
             }
+            if short_name == default_branch {
+                continue;
+            }
             remote_refs.push(BaseRefOption {
                 name: short_name,
                 kind: "remote".to_string(),
@@ -2844,8 +4277,13 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
     // Build result: default first, then local, then remote
     let mut result = Vec::with_capacity(1 + local_refs.len() + remote_refs.len());
     result.push(BaseRefOption {
+        kind: if local_names.contains(&default_branch) {
+            "local"
+        } else {
+            "remote"
+        }
+        .to_string(),
         name: default_branch,
-        kind: "local".to_string(),
         is_default: true,
     });
     result.extend(local_refs);
@@ -3038,6 +4476,55 @@ fn repair_archived_submodules(
     Ok(())
 }
 
+fn move_registered_checkout(
+    base_repo: &Path,
+    old: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let submodules = git_cmd(old)
+        .args(["submodule", "status", "--recursive"])
+        .run()
+        .map_err(|error| format!("Cannot inspect submodules before archive: {error}"))?;
+    let mut module_gitdirs = Vec::new();
+    for line in submodules.stdout.lines() {
+        if line.starts_with('-') {
+            continue;
+        }
+        let (_, description) = line[1..]
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule status before archive: {line}"))?;
+        let relative = description
+            .rsplit_once(" (")
+            .map_or(description, |(path, _)| path);
+        let module = old.join(relative);
+        module_gitdirs.push((relative.to_string(), rev_at(&module, "--absolute-git-dir")?));
+    }
+    std::fs::rename(old, destination)
+        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
+    let repaired = (|| -> Result<(), String> {
+        git_cmd(base_repo)
+            .args(["worktree", "repair", &destination.to_string_lossy()])
+            .run()
+            .map_err(|error| format!("Cannot repair archived worktree: {error}"))?;
+        repair_archived_submodules(base_repo, destination, &module_gitdirs)
+    })();
+    if let Err(error) = repaired {
+        let rollback = (|| -> Result<(), String> {
+            std::fs::rename(destination, old)
+                .map_err(|error| format!("Cannot move checkout back: {error}"))?;
+            git_cmd(base_repo)
+                .args(["worktree", "repair", &old.to_string_lossy()])
+                .run()
+                .map_err(|error| format!("Cannot restore worktree registration: {error}"))?;
+            repair_archived_submodules(base_repo, old, &module_gitdirs)
+        })();
+        return Err(format!(
+            "Failed to repair archived worktree: {error}; rollback: {rollback:?}"
+        ));
+    }
+    Ok(())
+}
+
 pub fn archive_worktree(
     base_repo: &Path,
     workspace_id: &str,
@@ -3067,53 +4554,36 @@ pub fn archive_worktree(
     {
         run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
-    let submodules = git_cmd(&wt_path)
-        .args(["submodule", "status", "--recursive"])
-        .run()
-        .map_err(|error| format!("Cannot inspect submodules before archive: {error}"))?;
-    let mut module_gitdirs = Vec::new();
-    for line in submodules.stdout.lines() {
-        if line.starts_with('-') {
-            continue;
-        }
-        let (_, description) = line[1..]
-            .split_once(' ')
-            .ok_or_else(|| format!("Cannot parse submodule status before archive: {line}"))?;
-        let relative = description
-            .rsplit_once(" (")
-            .map_or(description, |(path, _)| path);
-        let module = wt_path.join(relative);
-        module_gitdirs.push((relative.to_string(), rev_at(&module, "--absolute-git-dir")?));
-    }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(&workspace.branch);
     std::fs::create_dir_all(&archive_dir)
-        .map_err(|e| format!("Failed to create archive directory: {e}"))?;
-    // Keep the linked checkout and its Git administration intact. Never clobber
-    // an earlier archive of the same branch.
-    let archive_dest = free_archive_dest(&archive_dir, &sanitized);
-    std::fs::rename(&wt_path, &archive_dest)
-        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
-    let repaired = (|| -> Result<(), String> {
-        git_cmd(base_repo)
-            .args(["worktree", "repair", &archive_dest.to_string_lossy()])
-            .run()
-            .map_err(|error| format!("Cannot repair archived worktree: {error}"))?;
-        repair_archived_submodules(base_repo, &archive_dest, &module_gitdirs)
+        .map_err(|error| format!("Cannot create archive directory: {error}"))?;
+    let archive_dest = free_archive_dest(&archive_dir, &sanitize_name(&workspace.branch));
+    let marker = admin.join("tuic-allocation");
+    let previous_allocation = match std::fs::read(&marker) {
+        Ok(state) => Some(state),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("Cannot read allocation marker: {error}")),
+    };
+    move_registered_checkout(base_repo, &wt_path, &archive_dest)?;
+    let archived = (|| -> Result<(), String> {
+        finish_worktree(base_repo, &archive_dest)?;
+        record_worktree_rename(base_repo, &workspace.path, &archive_dest.to_string_lossy())
     })();
-    if let Err(error) = repaired {
+    if let Err(error) = archived {
         let rollback = (|| -> Result<(), String> {
-            std::fs::rename(&archive_dest, &wt_path)
-                .map_err(|error| format!("Cannot move checkout back: {error}"))?;
-            git_cmd(base_repo)
-                .args(["worktree", "repair", &wt_path.to_string_lossy()])
-                .run()
-                .map_err(|error| format!("Cannot restore worktree registration: {error}"))?;
-            repair_archived_submodules(base_repo, &wt_path, &module_gitdirs)
+            move_registered_checkout(base_repo, &archive_dest, &wt_path)?;
+            match previous_allocation {
+                Some(state) => std::fs::write(&marker, state),
+                None => match std::fs::remove_file(&marker) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                },
+            }
+            .map_err(|error| format!("Cannot restore allocation marker: {error}"))
         })();
         return Err(format!(
-            "Failed to repair archived worktree: {error}; rollback: {rollback:?}"
+            "Cannot archive checkout: {error}; rollback: {rollback:?}"
         ));
     }
     clear_warm(&wt_path);
@@ -3132,6 +4602,30 @@ pub fn archive_worktree(
 /// on it.
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// Keep cmd.exe's PATH below its environment-value limit, with the first
+/// spelling of each directory retained. Callers put the resolved Git dir first.
+#[cfg(any(windows, test))]
+fn windows_hook_path(path: &str) -> String {
+    let normalized = path.replace('/', "\\");
+    let mut seen = std::collections::HashSet::new();
+    let mut dirs = Vec::new();
+    let mut length = 0;
+    for dir in normalized.split(';') {
+        if !seen.insert(dir.trim_end_matches('\\').to_lowercase()) {
+            continue;
+        }
+        let added = dir.encode_utf16().count() + usize::from(!dirs.is_empty());
+        // cmd silently drops an inherited environment value over 8191 units.
+        // Keep whole directories in precedence order, never a partial last path.
+        if length + added > 8191 {
+            break;
+        }
+        length += added;
+        dirs.push(dir);
+    }
+    dirs.join(";")
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -3149,6 +4643,24 @@ fn run_shell_script(
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
+    let path = tuic_core::cli::enriched_path();
+    #[cfg(windows)]
+    let path = tuic_core::cli::which_cli("git")
+        .or_else(|| {
+            // Windows shell PATH lookup can miss the inherited Git installation.
+            // The filesystem fallback must include the executable extension.
+            let git = tuic_core::cli::resolve_cli("git.exe");
+            Path::new(&git).is_absolute().then_some(git)
+        })
+        .and_then(|git| {
+            Path::new(&git)
+                .parent()
+                .map(|dir| format!("{};{path}", dir.display()))
+        })
+        .unwrap_or(path);
+    #[cfg(windows)]
+    let path = windows_hook_path(&path);
+    cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
@@ -3205,6 +4717,733 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: a failed rename journal strands a recycled checkout at an unpublished path.
+    #[test]
+    fn recycling_journal_failure_restores_the_original_checkout() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        // An unopenable journal deterministically models an append I/O failure.
+        std::fs::create_dir(repo.path().join(".git/tuic-worktree-renames.jsonl")).unwrap();
+        let result = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            None,
+            |_| true,
+        );
+        assert!(result.is_err(), "journal failure must be reported");
+        assert!(
+            first.path.exists(),
+            "failed recycle left the original checkout path missing"
+        );
+        assert_eq!(
+            get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
+            first.path.to_string_lossy()
+        );
+        assert!(!directory.path().join("second").exists());
+        assert_eq!(
+            git_cmd(&first.path)
+                .args(["branch", "--show-current"])
+                .run()
+                .unwrap()
+                .stdout
+                .trim(),
+            "first"
+        );
+        assert!(rev_at(repo.path(), "refs/heads/second").is_err());
+        assert_eq!(
+            get_branch_base(&repo.path().to_string_lossy(), "second"),
+            None
+        );
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "finished"
+        );
+    }
+
+    // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
+    #[test]
+    fn orphan_validation_refuses_a_bare_repository_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let bare = repo.parent().unwrap().join("bare.git");
+        git_cmd(&repo)
+            .args([
+                "clone",
+                "--bare",
+                &repo.to_string_lossy(),
+                &bare.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&bare)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap();
+        assert!(
+            porcelain.stdout.lines().any(|line| line == "bare"),
+            "{}",
+            porcelain.stdout
+        );
+        let error =
+            validate_worktree_path(&bare.to_string_lossy(), &bare.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+        git_cmd(&bare)
+            .args(["cat-file", "-e", "HEAD"])
+            .run()
+            .unwrap();
+    }
+
+    // Catches: an unreadable allocation marker is treated as absent and the checkout is moved.
+    #[test]
+    fn archive_refuses_an_allocation_marker_that_is_a_directory() {
+        // DEFERRED (2026-10-20) — rollback remove_file failures need a deterministic real filesystem reproducer; this covers the initial read refusal only.
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "marker-directory");
+        let marker = allocation_marker(&repo, &path).unwrap();
+        assert!(!marker.exists());
+        fs::create_dir(&marker).unwrap();
+        let error = archive_worktree(&repo, "marker-directory", None).unwrap_err();
+        assert!(error.contains("Cannot read allocation marker"), "{error}");
+        assert!(path.join(".git").exists());
+        assert_eq!(
+            get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
+            path.to_string_lossy()
+        );
+    }
+
+    // Catches: a valid dirty-file confirmation is inverted or force is reinterpreted as non-force.
+    #[test]
+    fn confirmed_force_removal_discards_only_the_confirmed_dirty_checkout() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "confirmed-dirty");
+        fs::write(path.join("untracked.txt"), "confirmed discard\n").unwrap();
+        let lifecycle = inspect_workspace_lifecycle(&repo, "confirmed-dirty");
+        assert_eq!(lifecycle.dirty_files, Some(1));
+        remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "confirmed-dirty",
+            false,
+            None,
+            true,
+            false,
+            lifecycle.dirty_fingerprint.as_deref(),
+            Some(false),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert!(rev_at(&repo, "refs/heads/confirmed-dirty").is_ok());
+    }
+
+    // Catches: the final removal boundary accepts a stale fingerprint or refuses an unchanged one.
+    #[test]
+    fn removal_boundary_rechecks_the_confirmed_fingerprint() {
+        for changed in [false, true] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let path = add_worktree(&repo, "boundary-fingerprint");
+            let confirmed = dirty_fingerprint_at(&path).unwrap().0;
+            if changed {
+                fs::write(path.join("new.txt"), "not confirmed\n").unwrap();
+            }
+            let worktree = WorktreeInfo {
+                name: "boundary-fingerprint".into(),
+                path: path.clone(),
+                branch: Some("boundary-fingerprint".into()),
+                base_repo: repo,
+            };
+            let result = remove_worktree_internal_with_lock(
+                &worktree,
+                true,
+                false,
+                Some(&confirmed),
+                Some(false),
+            );
+            if changed {
+                let error = result.unwrap_err();
+                assert!(error.contains("changed since confirmation"), "{error}");
+                assert_eq!(
+                    fs::read_to_string(path.join("new.txt")).unwrap(),
+                    "not confirmed\n"
+                );
+            } else {
+                result.unwrap();
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    // Catches: generic Git deletion errors are reported as lock/main-worktree errors or cleanup success.
+    #[cfg(unix)]
+    #[test]
+    fn removal_keeps_a_generic_admin_permission_failure_distinct_from_confirmation_errors() {
+        // DEFERRED (2026-10-20) — late unregister/delete races and alternate Git error wording remain mutation survivors; do not synthesize stderr to claim coverage.
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "admin-permissions");
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "admin-permissions".into(),
+            path: path.clone(),
+            branch: Some("admin-permissions".into()),
+            base_repo: repo.clone(),
+        };
+        let original = fs::metadata(&admin).unwrap().permissions();
+        fs::set_permissions(&admin, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = remove_worktree_internal(&worktree, true);
+        fs::set_permissions(&admin, original).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.starts_with("Git worktree remove failed:"), "{error}");
+        assert!(
+            admin.exists(),
+            "Git failure must not silently prune the registration"
+        );
+    }
+
+    // Catches: force incorrectly refuses a changed submodule HEAD before preserving its local-only commit.
+    #[test]
+    fn forced_removal_preserves_a_changed_submodule_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "ignored-submodule-dirt");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "only-here.txt", "preserve this commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let status = git_cmd(&path).args(["submodule", "status"]).run().unwrap();
+        assert!(status.stdout.starts_with('+'), "{}", status.stdout);
+        let worktree = WorktreeInfo {
+            name: "ignored-submodule-dirt".into(),
+            path: path.clone(),
+            branch: Some("ignored-submodule-dirt".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!path.exists());
+        git_cmd(&repo.join("modules/local"))
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert_ne!(refs.stdout.trim(), "");
+    }
+
+    // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
+    #[test]
+    fn archive_journal_failure_restores_the_original_checkout() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        std::fs::create_dir(repo.path().join(".git/tuic-worktree-renames.jsonl")).unwrap();
+        let result = archive_worktree(repo.path(), "first", None);
+        assert!(result.is_err(), "journal failure must be reported");
+        assert!(
+            first.path.exists(),
+            "failed archive left the original checkout path missing"
+        );
+        assert_eq!(
+            get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
+            first.path.to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "reserved"
+        );
+    }
+
+    // Catches: overlapping agent spawns fail merely because another allocation is running.
+    #[test]
+    fn overlapping_workspace_creates_both_return_distinct_checkouts() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let first = create_workspace_unwarmed(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let second_config = recycle_config(repo.path(), "second");
+        let third_config = recycle_config(repo.path(), "third");
+        let directory_path = directory.path();
+        std::thread::scope(|scope| {
+            let second = scope.spawn(move || {
+                create_workspace_recycling(directory_path, &second_config, None, |_| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    true
+                })
+            });
+            entered_rx.recv().unwrap();
+            scope.spawn(move || {
+                result_tx
+                    .send(create_workspace_recycling(
+                        directory_path,
+                        &third_config,
+                        None,
+                        |_| true,
+                    ))
+                    .unwrap();
+            });
+            // This budget only releases our coordination gate; expiry never fails the test.
+            let early = result_rx.recv_timeout(Duration::from_millis(100));
+            release_tx.send(()).unwrap();
+            let third = early.unwrap_or_else(|_| result_rx.recv().unwrap());
+            let second = second.join().unwrap().unwrap().0;
+            let third = third
+                .expect("overlapping creation must not fail on the allocation lock")
+                .0;
+            assert_ne!(second.path, third.path);
+            assert!(second.path.exists());
+            assert!(third.path.exists());
+        });
+    }
+
+    fn recycle_config(repo: &Path, branch: &str) -> WorktreeConfig {
+        WorktreeConfig {
+            task_name: branch.into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some(branch.into()),
+            create_branch: true,
+        }
+    }
+
+    // Catches: a fresh ancestor branch recycled before its caller starts a session.
+    #[test]
+    fn recycling_reserved_fresh_ancestor_is_not_finished() {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let tip = rev_at(repo.path(), "HEAD").unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            Some(&tip),
+            |_| true,
+        )
+        .unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            Some(&tip),
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_none());
+        assert!(first.path.exists());
+        assert_ne!(first.path, second.path);
+        assert_eq!(
+            std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
+            "reserved"
+        );
+    }
+
+    // Catches: dirty, unmerged, locked or live finished worktrees recycled despite safety evidence.
+    #[test]
+    fn recycling_dirty_unmerged_locked_or_live_checkout_is_never_selected() {
+        for scenario in ["dirty", "unmerged", "locked", "live"] {
+            let repo = setup_test_repo();
+            let directory = tempfile::tempdir().unwrap();
+            let (first, _) = create_workspace_recycling(
+                directory.path(),
+                &recycle_config(repo.path(), "first"),
+                None,
+                |_| true,
+            )
+            .unwrap();
+            finish_worktree(repo.path(), &first.path).unwrap();
+            match scenario {
+                "dirty" => std::fs::write(first.path.join("scratch"), "keep").unwrap(),
+                "unmerged" => {
+                    std::fs::write(first.path.join("work"), "keep").unwrap();
+                    git_cmd(&first.path).args(["add", "work"]).run().unwrap();
+                    git_cmd(&first.path)
+                        .args(["commit", "-m", "work"])
+                        .run()
+                        .unwrap();
+                }
+                "locked" => {
+                    git_cmd(repo.path())
+                        .args(["worktree", "lock", &first.path.to_string_lossy()])
+                        .run()
+                        .unwrap();
+                }
+                _ => {}
+            }
+            let (_, reused) = create_workspace_recycling(
+                directory.path(),
+                &recycle_config(repo.path(), "second"),
+                None,
+                |_| scenario != "live",
+            )
+            .unwrap();
+            assert!(reused.is_none(), "{scenario}");
+            assert!(first.path.exists(), "{scenario}");
+        }
+    }
+
+    // Catches: stale Git paths after rename, discarded ignored artifacts, or double allocation of a recycled checkout.
+    #[test]
+    fn recycling_finished_checkout_keeps_artifacts_and_removes_stale_paths() {
+        let repo = setup_test_repo();
+        std::fs::write(repo.path().join(".gitignore"), "cache/\n").unwrap();
+        git_cmd(repo.path())
+            .args(["add", ".gitignore"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["commit", "-m", "ignore cache"])
+            .run()
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        std::fs::create_dir(first.path.join("cache")).unwrap();
+        std::fs::write(first.path.join("cache/artifact"), "retained").unwrap();
+        let archived = archive_worktree(repo.path(), "first", None).unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(reused.unwrap().path, archived);
+        assert!(!first.path.exists());
+        assert!(!Path::new(&archived).exists());
+        assert_eq!(
+            std::fs::read_to_string(second.path.join("cache/artifact")).unwrap(),
+            "retained"
+        );
+        let paths = get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap();
+        assert!(!paths.contains_key("first"));
+        assert_eq!(paths["second"].path, second.path.to_string_lossy());
+        assert_eq!(
+            rev_at(&second.path, "HEAD").unwrap(),
+            rev_at(repo.path(), "HEAD").unwrap()
+        );
+        let (_, reused_again) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "third"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused_again.is_none());
+    }
+
+    /// Recycle an integrated, finished checkout while the repository HEAD has moved on.
+    /// Returns (repo HEAD, old checkout HEAD, new branch tip, recorded branch base).
+    fn recycle_after_repo_head_advances(
+        base_ref: Option<&str>,
+    ) -> (String, String, String, Option<String>) {
+        let repo = setup_test_repo();
+        let directory = tempfile::tempdir().unwrap();
+        let (first, _) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "first"),
+            None,
+            |_| true,
+        )
+        .unwrap();
+        finish_worktree(repo.path(), &first.path).unwrap();
+        let old_head = rev_at(&first.path, "HEAD").unwrap();
+        std::fs::write(repo.path().join("advance"), "x").unwrap();
+        git_cmd(repo.path()).args(["add", "advance"]).run().unwrap();
+        git_cmd(repo.path())
+            .args(["commit", "-m", "advance"])
+            .run()
+            .unwrap();
+        let repo_head = rev_at(repo.path(), "HEAD").unwrap();
+        let (second, reused) = create_workspace_recycling(
+            directory.path(),
+            &recycle_config(repo.path(), "second"),
+            base_ref,
+            |_| true,
+        )
+        .unwrap();
+        assert!(reused.is_some(), "the finished checkout must be recycled");
+        let recorded = get_branch_base(&repo.path().to_string_lossy(), "second");
+        (
+            repo_head,
+            old_head,
+            rev_at(&second.path, "HEAD").unwrap(),
+            recorded,
+        )
+    }
+
+    // Catches: recycled create bases the new branch on the recycled checkout's HEAD instead of the repository HEAD.
+    #[test]
+    fn recycling_without_base_ref_branches_from_repository_head() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(None);
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, repo_head);
+        // The non-recycled path records no base when none was given.
+        assert_eq!(recorded, None);
+    }
+
+    // Catches: the default-start fix overriding an explicit base_ref.
+    #[test]
+    fn recycling_with_base_ref_still_branches_from_it() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(Some("first"));
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, old_head);
+        assert_eq!(recorded.as_deref(), Some("first"));
+    }
+
+    // Catches: a relative base_ref resolved inside the recycled checkout (invalid there) instead of the base repo.
+    #[test]
+    fn recycling_relative_base_ref_resolves_in_the_base_repository() {
+        let (repo_head, old_head, tip, recorded) = recycle_after_repo_head_advances(Some("HEAD~1"));
+        assert_ne!(repo_head, old_head);
+        assert_eq!(tip, old_head);
+        assert_eq!(recorded.as_deref(), Some("HEAD~1"));
+    }
+
+    // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
+    #[test]
+    fn windows_hook_path_keeps_git_first_and_bounds_long_duplicate_paths() {
+        let git = r"C:\Program Files\Git\cmd";
+        let repeated = r"c:/program files/git/cmd/;C:\Windows\System32";
+        let path = format!("{git};{}", vec![repeated; 400].join(";"));
+        assert!(path.encode_utf16().count() > 8191);
+        assert_eq!(
+            windows_hook_path(&path),
+            format!(r"{git};C:\Windows\System32")
+        );
+    }
+
+    // Catches: deduplication changing precedence or dropping distinct tool dirs.
+    #[test]
+    fn windows_hook_path_preserves_unique_directory_order() {
+        assert_eq!(
+            windows_hook_path(r"C:/Git/cmd;C:/Tools;D:\Tools;c:\TOOLS\"),
+            r"C:\Git\cmd;C:\Tools;D:\Tools"
+        );
+    }
+
+    // Catches: a long unique PATH exceeding cmd's limit or cutting a UTF-16 path.
+    #[test]
+    fn windows_hook_path_bounds_unique_entries_without_splitting_directories() {
+        let first = format!(r"C:\{}", "界".repeat(8187));
+        let path = format!(r"{first};D:\🦀;E:\Tools");
+        assert_eq!(windows_hook_path(&path), first);
+        assert!(windows_hook_path(&path).encode_utf16().count() <= 8191);
+    }
+
+    // Catches: lossy-name recovery deleting another branch's dirty or clean registered checkout.
+    #[test]
+    fn stale_recovery_preserves_registered_name_collisions_and_detached_head() {
+        for (first, second, dirty) in [("feat/x", "feat-x", true), ("Feat.X", "feat-x", false)] {
+            let repo = setup_test_repo();
+            let dir = repo.path().join("worktrees");
+            let mut config = WorktreeConfig {
+                task_name: first.to_owned(),
+                base_repo: repo.path().to_string_lossy().into_owned(),
+                branch: Some(first.to_owned()),
+                create_branch: true,
+            };
+            let original =
+                create_worktree_with_stale_recovery(&dir, &config, None).expect("first worktree");
+            if dirty {
+                fs::write(original.path.join("uncommitted.txt"), "keep me").expect("write");
+            }
+            config.task_name = second.to_owned();
+            config.branch = Some(second.to_owned());
+            assert!(
+                create_worktree_with_stale_recovery(&dir, &config, None).is_err(),
+                "{first} collides with {second}"
+            );
+            assert_eq!(
+                crate::git::read_branch_from_head(&original.path).as_deref(),
+                Some(first)
+            );
+            if dirty {
+                assert_eq!(
+                    fs::read_to_string(original.path.join("uncommitted.txt")).expect("preserved"),
+                    "keep me"
+                );
+            }
+            git_cmd(&original.path)
+                .args(["checkout", "--detach"])
+                .run()
+                .expect("detach");
+            create_worktree_with_stale_recovery(&dir, &config, None)
+                .expect("detached checkout preserved");
+            assert!(original.path.join(".git").is_file());
+            assert!(crate::git::read_branch_from_head(&original.path).is_none());
+            assert!(cleanup_stale_worktree_dir(&config.base_repo, &original.path).is_err());
+        }
+    }
+
+    // Catches: mistaking a non-Git orphan directory for an existing detached checkout.
+    #[test]
+    fn stale_recovery_recreates_plain_orphan_directory() {
+        let repo = setup_test_repo();
+        let dir = repo.path().join("worktrees");
+        let orphan = dir.join("orphan");
+        fs::create_dir_all(&orphan).expect("orphan dir");
+        let config = WorktreeConfig {
+            task_name: "orphan".to_owned(),
+            base_repo: repo.path().to_string_lossy().into_owned(),
+            branch: Some("orphan".to_owned()),
+            create_branch: true,
+        };
+        let recovered =
+            create_worktree_with_stale_recovery(&dir, &config, None).expect("recover orphan");
+        assert!(recovered.path.join(".git").is_file());
+        assert_eq!(
+            crate::git::read_branch_from_head(&recovered.path).as_deref(),
+            Some("orphan")
+        );
+    }
+
+    // Catches: recovery replacing a non-stale Git error with a cleanup error.
+    #[test]
+    fn non_stale_creation_failure_preserves_git_error_1437() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let config = WorktreeConfig {
+            task_name: "invalid-base".into(),
+            base_repo: repo.path().to_string_lossy().into_owned(),
+            branch: Some("invalid-base".into()),
+            create_branch: true,
+        };
+        let error = create_worktree_with_stale_recovery(
+            &repo.path().join("worktrees"),
+            &config,
+            Some("missing-ref-1437"),
+        )
+        .unwrap_err();
+        assert!(error.contains("missing-ref-1437"), "{error}");
+        assert!(!error.contains("cleanup"), "{error}");
+        assert!(!repo.path().join("worktrees/invalid-base").exists());
+    }
+
+    // Catches: stale cleanup returning success without deleting the orphan's contents.
+    #[test]
+    fn stale_cleanup_removes_directory_and_contents_1437() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let stale = repo.path().join("stale/nested");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("old.txt"), "stale artifact").unwrap();
+        let stale = stale.parent().unwrap();
+        cleanup_stale_worktree_dir(&repo.path().to_string_lossy(), stale).unwrap();
+        assert!(!stale.exists());
+    }
+
+    // Catches: a zero unpushed-commit count being reported as outstanding submodule work.
+    #[test]
+    fn clean_submodule_has_no_unpushed_commits_1437() {
+        let (_temp, repo, _) = workspace_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "zero-unpushed");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let status = inspect_workspace_lifecycle(&repo, "zero-unpushed");
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+        assert!(status.submodule_unpushed_commits.is_empty(), "{status:?}");
+    }
+
+    // Catches: an unsafe module name OR checkout path being accepted when the other is valid.
+    // This admin-path confinement invariant has no observable alternate public result:
+    // git submodule status itself rejects malformed declarations before removal reaches it.
+    #[test]
+    fn unsafe_submodule_declarations_cannot_escape_admin_root_1437() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let admin = repo.path().join(".git");
+        for (name, path) in [("../outside", "module"), ("module", "../outside")] {
+            git_cmd(repo.path())
+                .args([
+                    "config",
+                    "--file",
+                    ".gitmodules",
+                    &format!("submodule.{name}.path"),
+                    path,
+                ])
+                .run()
+                .unwrap();
+            assert!(submodule_admin_dir_at(repo.path(), &admin, Path::new(path)).is_err());
+            fs::remove_file(repo.path().join(".gitmodules")).unwrap();
+        }
+    }
 
     #[test]
     fn test_sanitize_name() {
@@ -3672,6 +5911,114 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn removing_a_worktree_with_an_unsearchable_ignored_directory_restores_access_before_descent() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "unsearchable-build-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        let blocked = path.join("target/repo/x");
+        fs::create_dir_all(blocked.join("nested")).unwrap();
+        fs::write(blocked.join("nested/result.txt"), "ignored output\n").unwrap();
+        let outside = temp.path().join("outside-store");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "external evidence\n").unwrap();
+        fs::set_permissions(outside.join("keep.txt"), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+        symlink(&outside, blocked.join("store-link")).unwrap();
+        symlink(outside.join("missing"), blocked.join("dangling-link")).unwrap();
+        // Recorded from the live failed checkout: repo/x is uid-owned mode 0644.
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o644)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "unsearchable-build-removal".into(),
+            path: path.clone(),
+            branch: Some("unsearchable-build-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        let outside_mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        let file_mode = fs::metadata(outside.join("keep.txt"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        // Restore only fixture paths so a failed assertion cannot strand scratch data.
+        if blocked.exists() {
+            fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(outside.join("keep.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "unsearchable worktree removal failed: {result:?}"
+        );
+        assert!(!path.exists(), "successful removal left a checkout remnant");
+        assert!(
+            registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            outside_mode, 0o555,
+            "removal chmodded a symlink target directory"
+        );
+        assert_eq!(file_mode, 0o444, "removal chmodded an external store file");
+        assert_eq!(
+            fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "external evidence\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_worktree_with_read_only_build_evidence_deletes_every_file_itview_067() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "readonly-evidence-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        // The shape a warm copy of agent2 target/ leaves: dr-xr-xr-x directories
+        // holding r--r--r-- files, one directory nested inside another.
+        let outer = path.join("target/exact/run");
+        let inner = outer.join("nested");
+        fs::create_dir_all(&inner).unwrap();
+        for dir in [&outer, &inner] {
+            fs::write(dir.join("evidence.txt"), "evidence\n").unwrap();
+            fs::set_permissions(dir.join("evidence.txt"), fs::Permissions::from_mode(0o444))
+                .unwrap();
+        }
+        fs::set_permissions(&inner, fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&outer, fs::Permissions::from_mode(0o555)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "readonly-evidence-removal".into(),
+            path: path.clone(),
+            branch: Some("readonly-evidence-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        let registered = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .is_some();
+        // Leave the tree deletable if the assertions below fail.
+        for dir in [&inner, &outer] {
+            if dir.exists() {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+
+        assert!(
+            result.is_ok(),
+            "read-only worktree removal failed: {result:?}"
+        );
+        assert!(!path.exists(), "removal left a worktree remnant");
+        assert!(!registered, "removal left Git registration");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unreadable_ignored_tree_refuses_removal_before_git_unregisters_it() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -4067,6 +6414,198 @@ mod tests {
         let first = generate_clone_branch_name("main", &[]);
         let second = generate_clone_branch_name("main", std::slice::from_ref(&first));
         assert_ne!(first, second, "Should generate unique names");
+    }
+
+    /// Catches a hard-coded main ref turning clean, integrated worktrees Unknown.
+    #[test]
+    fn worktree_lifecycle_without_main_uses_main_checkout_branch() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feat/macos-mvp"])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "worktree-agent-completed");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "worktree-agent-completed"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "worktree-agent-completed");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "{status:?}"
+        );
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+        assert_eq!(status.error, None);
+        // Calling from a linked checkout must not pick its own HEAD as the base.
+        assert_eq!(
+            get_remote_default_branch(&worktree.to_string_lossy()).unwrap(),
+            "feat/macos-mvp"
+        );
+    }
+
+    /// Catches a stale main branch hiding work already integrated into the configured trunk.
+    #[test]
+    fn worktree_lifecycle_stale_main_must_not_override_configured_develop() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["branch", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature/session"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/session", "develop").unwrap();
+        let worktree = add_worktree(&repo, "feature/integrated");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["branch", "-f", "develop", "feature/integrated"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "feature/integrated");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "integrated into configured develop, not stale main: {status:?}"
+        );
+    }
+
+    /// Catches remote HEAD overriding the conventional trunk without explicit configuration.
+    #[test]
+    fn default_branch_prefers_main_then_master_before_remote_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-m", "main"]).run().unwrap();
+        git_cmd(&repo).args(["branch", "master"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "integration"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/trunk",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "main"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-D", "master"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "origin/trunk"
+        );
+    }
+
+    /// Catches remote HEAD overriding an explicitly configured integration base.
+    #[test]
+    fn default_branch_prefers_verified_main_checkout_configured_base() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature/base"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["branch", "integration"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/base", "integration").unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "integration"
+        );
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/trunk",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "integration"
+        );
+        let options = list_base_ref_options(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(options[0].name, "integration");
+        assert_eq!(options[0].kind, "local");
+        assert_eq!(
+            options
+                .iter()
+                .filter(|item| item.name == "origin/trunk")
+                .count(),
+            1
+        );
+        assert_ne!(
+            integration_bases(&repo, "origin/trunk"),
+            [] as [std::string::String; 0]
+        );
+    }
+
+    /// Catches stale configuration hiding a valid master branch.
+    #[test]
+    fn default_branch_skips_missing_origin_and_configured_refs() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "master"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "master", "gone").unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/gone",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+    }
+
+    /// Catches detached main checkout falling back to an unrelated linked HEAD.
+    #[test]
+    fn default_branch_without_attached_main_checkout_returns_reason() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feat/macos-mvp"])
+            .run()
+            .unwrap();
+        let linked = add_worktree(&repo, "agent-unmerged");
+        git_cmd(&repo).args(["checkout", "--detach"]).run().unwrap();
+        let error = get_remote_default_branch(&linked.to_string_lossy()).unwrap_err();
+        assert!(error.contains("attached main checkout branch"), "{error}");
+        let status = inspect_workspace_lifecycle(&repo, "agent-unmerged");
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Unknown);
+        assert_eq!(status.error.as_deref(), Some(error.as_str()));
     }
 
     #[test]
@@ -4577,7 +7116,7 @@ branch refs/heads/feat
 
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
-        assert!(orphans.is_empty());
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -4594,7 +7133,7 @@ branch refs/heads/feat
             .await
             .expect("detect orphan worktrees");
 
-        assert!(orphans.is_empty());
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     /// Build a linked-worktree fixture: `<root>/wt` with a `.git` file pointing at
@@ -4816,7 +7355,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-auth")
@@ -4834,7 +7376,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-am")
@@ -5323,6 +7868,81 @@ branch refs/heads/feat
         for (name, base) in &bases {
             assert_eq!(get_branch_base(&path, name).as_ref(), Some(base));
         }
+    }
+
+    // Catches public command wrappers returning an empty/constant name or
+    // ignoring an existing collision instead of a valid new branch name.
+    #[test]
+    fn public_name_commands_return_valid_noncolliding_names_1450() {
+        let existing = vec!["xyzzy".to_string()];
+        let name = generate_worktree_name_cmd(existing.clone());
+        assert_ne!(name, "");
+        assert!(!existing.contains(&name));
+        assert!(name.rsplit('-').next().unwrap().parse::<u16>().unwrap() < 1000);
+        let clone = generate_clone_branch_name_cmd("feat/auth".into(), existing);
+        assert!(clone.starts_with("feat-auth--"), "{clone}");
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        for generated in [name, clone] {
+            git_cmd(repo.path())
+                .args(["check-ref-format", "--branch", &generated])
+                .run()
+                .unwrap();
+        }
+    }
+
+    // Catches splitting origin/main at the slash itself or dropping its fetch:
+    // the caller must observe a new upstream commit, not the stale tracking tip.
+    #[test]
+    fn fetch_remote_refreshes_the_requested_tracking_ref_1450() {
+        let (_temp, repo, _) = workspace_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let origin = add_origin(&repo);
+        let old = rev_at(&repo, "refs/remotes/origin/main").unwrap();
+        let writer = repo.parent().unwrap().join("writer");
+        git_cmd(repo.parent().unwrap())
+            .args([
+                "clone",
+                "--branch",
+                "main",
+                &origin.to_string_lossy(),
+                &writer.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&writer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&writer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(
+            &writer,
+            "remote.txt",
+            "new upstream
+",
+        );
+        git_cmd(&writer)
+            .args(["push", "origin", "main"])
+            .run()
+            .unwrap();
+        let expected = rev_at(&writer, "HEAD").unwrap();
+        assert_ne!(old, expected);
+        fetch_if_remote(&repo.to_string_lossy(), "origin/main").unwrap();
+        assert_eq!(rev_at(&repo, "refs/remotes/origin/main").unwrap(), expected);
     }
 
     #[test]
@@ -6404,6 +9024,53 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn preservation_succeeds_when_the_worktree_path_is_long() {
+        // Catches a ref component that grows with the checkout path: the old
+        // hex-of-path scheme doubled a 130-byte dir name past the 255-byte limit.
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let short_worktree = add_worktree(&repo, "long-path-module");
+        let worktree = repo.parent().unwrap().join("w".repeat(130));
+        git_cmd(&short_worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        // Initialize before moving: Git for Windows cannot clone a submodule
+        // through its fixed-size $GIT_DIR buffer at this depth.
+        let gitdir = rev_at(&short_worktree.join("modules/local"), "--absolute-git-dir").unwrap();
+        fs::rename(&short_worktree, &worktree).unwrap();
+        git_cmd(&repo)
+            .args(["worktree", "repair", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        repair_archived_submodules(&repo, &worktree, &[("modules/local".into(), gitdir)]).unwrap();
+        let head = rev_at(&worktree.join("modules/local"), "HEAD").unwrap();
+        preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &head,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert_ne!(refs.stdout.trim(), "");
+        assert!(
+            refs.stdout
+                .lines()
+                .all(|r| r.split('/').all(|c| c.len() <= 255))
+        );
+    }
+
+    #[test]
     fn repeated_preservation_keeps_refs_for_both_submodule_heads() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
@@ -6550,14 +9217,14 @@ branch refs/heads/feat
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
         assert!(error.contains("main checkout has no repository"), "{error}");
         assert!(path.exists());
-        assert!(
+        assert_eq!(
             git_cmd(&repo)
                 .args(["for-each-ref", "--format=%(refname)", "refs/tuic/preserved"])
                 .run()
                 .unwrap()
                 .stdout
-                .trim()
-                .is_empty()
+                .trim(),
+            ""
         );
     }
 
@@ -6798,9 +9465,15 @@ branch refs/heads/feat
             format!("gitdir: {}\n", repo.join(".git").display()),
         )
         .unwrap();
+        let reported = rev_at(&destination, "--absolute-git-dir").unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/.git", repo.canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!("{}/.git", repo.display().to_string().replace('\\', "/"));
+        assert_eq!(reported, expected);
         assert_eq!(
-            rev_at(&destination, "--absolute-git-dir").unwrap(),
-            repo.join(".git").to_string_lossy()
+            Path::new(&reported).canonicalize().unwrap(),
+            repo.join(".git").canonicalize().unwrap()
         );
 
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
@@ -6822,6 +9495,330 @@ branch refs/heads/feat
             git_cmd(&repo).args(["cat-file", "-e", &oid]).run().is_err(),
             "the module-only commit must not be fetched into the superproject"
         );
+    }
+
+    // Catches: an absent or malformed declaration falls back to an unrelated admin-name path.
+    #[test]
+    fn missing_checkout_refuses_missing_or_malformed_submodule_path_mapping() {
+        for mapping in [
+            None,
+            Some(""),
+            Some("../outside"),
+            Some("/outside"),
+            Some(r"C:\outside"),
+        ] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            add_populated_submodule(&repo);
+            let path = add_worktree(&repo, "invalid-missing-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/local");
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            let oid = rev_at(&module, "HEAD").unwrap();
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            let worktree = WorktreeInfo {
+                name: "invalid-missing-module".into(),
+                path: path.clone(),
+                branch: Some("invalid-missing-module".into()),
+                base_repo: repo.clone(),
+            };
+            fs::remove_dir_all(&path).unwrap();
+            if let Some(mapping) = mapping {
+                git_cmd(&repo)
+                    .args([
+                        "config",
+                        "--file",
+                        ".gitmodules",
+                        "submodule.modules/local.path",
+                        mapping,
+                    ])
+                    .run()
+                    .unwrap();
+            } else {
+                fs::remove_file(repo.join(".gitmodules")).unwrap();
+            }
+            let error = remove_worktree_internal(&worktree, true).unwrap_err();
+            assert!(
+                error.contains("Cannot resolve missing worktree submodule")
+                    && error.contains(".gitmodules"),
+                "{mapping:?}: {error}"
+            );
+            assert!(
+                admin.is_dir(),
+                "{mapping:?}: refusal must retain registration"
+            );
+            git_cmd(&repo)
+                .args([
+                    "--git-dir",
+                    &module_gitdir.to_string_lossy(),
+                    "--work-tree",
+                    &repo.to_string_lossy(),
+                    "cat-file",
+                    "-e",
+                    &oid,
+                ])
+                .run()
+                .expect("refusal must retain source module objects");
+        }
+    }
+
+    // Catches: nested module names are resolved against the root instead of their owning module.
+    #[test]
+    fn missing_checkout_preserves_nested_named_module_objects() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let leaf = repo.parent().unwrap().join("nested-leaf-source");
+        fs::create_dir(&leaf).unwrap();
+        git_cmd(&leaf).args(["init"]).run().unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&leaf, "leaf.txt", "base leaf\n");
+        let outer = repo.parent().unwrap().join("nested-outer-source");
+        fs::create_dir(&outer).unwrap();
+        git_cmd(&outer).args(["init"]).run().unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&outer, "outer.txt", "base outer\n");
+        git_cmd(&outer)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "nested-git-name",
+                &leaf.to_string_lossy(),
+                "nested/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&outer).args(["add", "."]).run().unwrap();
+        git_cmd(&outer)
+            .args(["commit", "-m", "add leaf"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "outer-git-name",
+                &outer.to_string_lossy(),
+                "modules/outer-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add outer"])
+            .run()
+            .unwrap();
+
+        let path = add_worktree(&repo, "missing-nested-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let outer_module = path.join("modules/outer-path");
+        let nested = outer_module.join("nested/checkout-path");
+        git_cmd(&nested)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&nested)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&nested, "local-only.txt", "nested local commit\n");
+        let oid = rev_at(&nested, "HEAD").unwrap();
+        let nested_gitdir = PathBuf::from(rev_at(&nested, "--absolute-git-dir").unwrap());
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let destination = repo.join("modules/outer-path/nested/checkout-path");
+        assert!(
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &oid])
+                .run()
+                .is_err()
+        );
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "missing-nested-module".into(),
+            path: path.clone(),
+            branch: Some("missing-nested-module".into()),
+            base_repo: repo.clone(),
+        };
+        fs::remove_dir_all(&path).unwrap();
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!admin.exists());
+        assert!(!nested_gitdir.exists());
+        git_cmd(&destination)
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&destination)
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(
+            !refs.stdout.trim().is_empty(),
+            "nested module-only commit needs a durable ref"
+        );
+    }
+
+    // Catches: missing-checkout cleanup treats a submodule admin name as its checkout path.
+    #[test]
+    fn missing_checkout_preserves_named_submodule_before_pruning() {
+        // Catches: an admin-name container called objects is mistaken for a Git repository.
+        for module_name in ["git-module-name", "bucket/objects/git-module-name"] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let source = repo.parent().unwrap().join("named-missing-module-source");
+            fs::create_dir(&source).unwrap();
+            git_cmd(&source).args(["init"]).run().unwrap();
+            git_cmd(&source)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&source)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&source, "module.txt", "base commit\n");
+            git_cmd(&repo)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "add",
+                    "--name",
+                    module_name,
+                    &source.to_string_lossy(),
+                    "modules/checkout-path",
+                ])
+                .run()
+                .unwrap();
+            git_cmd(&repo).args(["add", "."]).run().unwrap();
+            git_cmd(&repo)
+                .args(["commit", "-m", "add named submodule"])
+                .run()
+                .unwrap();
+            let path = add_worktree(&repo, "missing-named-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/checkout-path");
+            git_cmd(&module)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&module)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&module, "local-only.txt", "worktree-only commit\n");
+            let local_oid = rev_at(&module, "HEAD").unwrap();
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            assert_eq!(module_gitdir.file_name().unwrap(), "git-module-name");
+            let destination = repo.join("modules/checkout-path");
+            assert!(initialized_main_submodule(&repo, &destination));
+            assert!(!repo.join("git-module-name").exists());
+            assert!(
+                git_cmd(&destination)
+                    .args(["cat-file", "-e", &local_oid])
+                    .run()
+                    .is_err()
+            );
+            let worktree = WorktreeInfo {
+                name: "missing-named-module".into(),
+                path: path.clone(),
+                branch: Some("missing-named-module".into()),
+                base_repo: repo.clone(),
+            };
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            fs::remove_dir_all(&path).unwrap();
+            assert!(module_gitdir.is_dir());
+            remove_worktree_internal(&worktree, true).expect(
+                "initialized named destination must receive the missing checkout's objects",
+            );
+            assert!(
+                !admin.exists(),
+                "successful preservation permits registration pruning"
+            );
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .unwrap();
+            let refs = git_cmd(&destination)
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    &local_oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(
+                !refs.stdout.trim().is_empty(),
+                "the local-only commit needs a durable ref"
+            );
+        }
     }
 
     #[test]
@@ -7245,6 +10242,126 @@ branch refs/heads/feat
         assert!(gitdir.exists(), "local-only commit must stay reachable");
     }
 
+    /// A merged branch whose checkout was archived (still on its branch).
+    fn archived_merged_branch(branch: &str) -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _) = workspace_fixture();
+        let worktree = add_worktree(&repo, branch);
+        commit_file(&worktree, "feature.txt", "feature\n");
+        commit_file(&repo, "main.txt", "main\n");
+        git_cmd(&repo)
+            .args(["merge", "--no-ff", "-m", "merge", branch])
+            .run()
+            .expect("merge");
+        let archived = archive_worktree(&repo, branch, None).expect("archive");
+        (temp, repo, PathBuf::from(archived))
+    }
+
+    fn branch_exists(repo: &Path, branch: &str) -> bool {
+        !git_cmd(repo)
+            .args(["branch", "--list", branch])
+            .run()
+            .expect("branch list")
+            .stdout
+            .trim()
+            .is_empty()
+    }
+
+    // Catches: archived checkouts invisible to workspace lookup, so Remove on a
+    // recycled Merged branch answers "No workspace found" and nothing can delete it.
+    #[test]
+    fn removing_a_merged_branch_recycled_into_archive_removes_checkout_and_branch() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-agent-vm");
+        assert!(archived.exists());
+
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-agent-vm",
+            true,
+            None,
+            false,
+        )
+        .expect("a pooled checkout is removable by its branch id");
+
+        assert_eq!(outcome.branch, "feat-agent-vm");
+        assert!(!archived.exists(), "archived checkout removed");
+        assert!(!branch_exists(&repo, "feat-agent-vm"), "branch removed");
+    }
+
+    // Catches: removal of a pooled checkout skipping the dirty and unmerged guards.
+    #[test]
+    fn pooled_checkout_keeps_dirty_and_unmerged_guards() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-dirty");
+        fs::write(archived.join("scratch.txt"), "precious\n").unwrap();
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-dirty",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("uncommitted"), "{error}");
+        assert!(archived.join("scratch.txt").exists());
+
+        let (_temp, repo, _) = workspace_fixture();
+        let worktree = add_worktree(&repo, "feat-unmerged");
+        commit_file(&worktree, "only-here.txt", "x\n");
+        let archived = PathBuf::from(archive_worktree(&repo, "feat-unmerged", None).unwrap());
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "feat-unmerged",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("unmerged"), "{error}");
+        assert!(archived.exists());
+        assert!(branch_exists(&repo, "feat-unmerged"));
+    }
+
+    // Catches: a recycled branch still listed by the CLI worktree parser (parity with the gix adapter).
+    #[test]
+    fn worktree_listing_hides_branches_parked_in_archive() {
+        let (_temp, repo, _) = archived_merged_branch("feat-parked");
+
+        assert!(
+            !get_worktree_paths_raw(&repo.to_string_lossy())
+                .unwrap()
+                .contains_key("feat-parked")
+        );
+    }
+
+    // Catches: the sidebar reads workspaces through the routed (gix) adapter,
+    // which lists `__archived/` checkouts that the CLI parser skips, so a
+    // recycled branch stays a sidebar row (Phase 2 lifecycle marks it Merged).
+    #[test]
+    fn routed_workspace_listing_hides_checkouts_parked_in_archive() {
+        let (_temp, repo, archived) = archived_merged_branch("feat-pooled-row");
+        assert!(archived.exists());
+
+        let listed = crate::git_reads::git_reads().worktree_paths(&repo).unwrap();
+
+        assert!(!listed.contains_key("feat-pooled-row"), "{listed:#?}");
+    }
+
+    // Catches: hiding pooled branches from the merged list also makes the Git
+    // panel report a merged branch as unmerged.
+    #[test]
+    fn git_panel_still_reports_a_pooled_merged_branch_as_merged() {
+        let (_temp, repo, _) = archived_merged_branch("feat-pooled-panel");
+
+        let branches = crate::git_reads::git_reads()
+            .branches_detail(&repo)
+            .unwrap();
+
+        let pooled = branches
+            .iter()
+            .find(|b| b.name == "feat-pooled-panel" && !b.is_remote)
+            .expect("pooled branch listed");
+        assert!(pooled.is_merged, "{branches:#?}");
+    }
+
     fn commit_file(dir: &Path, name: &str, body: &str) {
         fs::write(dir.join(name), body).expect("write file");
         git_cmd(dir).args(["add", "."]).run().expect("git add");
@@ -7252,6 +10369,26 @@ branch refs/heads/feat
             .args(["commit", "-m", name])
             .run()
             .expect("git commit");
+    }
+
+    // Catches: a checkout HEAD changes after inventory, but listing reuses the
+    // branch-ref proof and reports that different checkout tip as unmerged.
+    #[test]
+    fn listing_lifecycle_does_not_reuse_branch_proof_for_detached_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        let base = rev_at(&repo, "HEAD").unwrap();
+        let checkout = add_worktree(&repo, "listing-head");
+        commit_file(&checkout, "feature.txt", "own commit\n");
+        let workspace = resolve_workspace(&repo, "listing-head").unwrap();
+        let before = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
+        git_cmd(&checkout)
+            .args(["checkout", "--detach", &base])
+            .run()
+            .unwrap();
+        let after = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::Merged);
+        assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
     /// A branch sitting exactly on the default branch's tip never merged
@@ -7269,6 +10406,433 @@ branch refs/heads/feat
         assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    // Catches: a shared HEAD/config read is repeated once per workspace on every refresh.
+    #[test]
+    fn monitoring_refresh_reads_shared_files_once_not_per_worktree() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..8).map(|i| format!("bounded-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "bounded.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        let reads = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        assert!(
+            reads <= 2,
+            "shared HEAD/config file opens after one commit: {reads}; limit 2, independent of 8 worktrees"
+        );
+    }
+
+    // Catches: one commit enumerates every ref and reopens every sibling reflog.
+    #[test]
+    fn monitoring_one_commit_reads_only_changed_ref_and_history() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("incremental-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "incremental.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(0));
+        MONITORING_LOG_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let common = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        let enumerations = MONITORING_REF_ENUMERATIONS.with(std::cell::Cell::get);
+        let logs = MONITORING_LOG_READS.with(std::cell::Cell::get);
+        assert!(
+            common == 0 && enumerations == 0 && logs <= 1,
+            "one commit: {common} unchanged common reads, {enumerations} full ref enumerations, {logs} reflog reads; expected 0, 0, at most 1"
+        );
+    }
+
+    // Catches: a branch-only event stats sibling refs/logs or forgets its own reflog.
+    #[test]
+    fn monitoring_path_update_does_not_probe_sibling_signatures() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("event-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        set_monitoring_watch_active(&repo, true);
+        monitoring_paths_changed(&repo, &[repo.join(".git")]);
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "event.txt", "changed\n");
+        // The adapter receives a real Git ref path, not a synthesized file format.
+        monitoring_paths_changed(&repo, &[repo.join(".git/refs/heads").join(&branches[0])]);
+        MONITORING_SIGNATURE_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let signatures = MONITORING_SIGNATURE_READS.with(std::cell::Cell::get);
+        assert!(
+            signatures <= 2,
+            "changed-branch reflog signatures: {signatures}; sibling signatures must not be probed"
+        );
+        // A failed/stopped watcher must not seal the cached generation forever.
+        set_monitoring_watch_active(&repo, false);
+        commit_file(Path::new(&checkout.path), "event.txt", "changed again\n");
+        let fallback = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(after[&branches[0]], fallback[&branches[0]]);
+    }
+
+    // Catches: batching misses packed refs, a moved remote, or the integration HEAD.
+    #[test]
+    fn monitoring_shared_snapshot_keeps_integration_dependencies_current() {
+        let (_temp, repo, _) = workspace_fixture();
+        let checkout = add_worktree(&repo, "snapshot-feature");
+        commit_file(&checkout, "feature.txt", "own work\n");
+        let branches = vec!["snapshot-feature".to_owned()];
+        let key = || {
+            monitoring_ref_keys(&repo, &branches)
+                .unwrap()
+                .remove(&branches[0])
+                .unwrap()
+        };
+        let workspace = resolve_any_workspace(&repo, "snapshot-feature").unwrap();
+        let status = || {
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false).commit_status
+        };
+        let initial = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Unmerged);
+        git_cmd(&repo)
+            .args(["pack-refs", "--all", "--prune"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            initial,
+            key(),
+            "packing unchanged refs must not change semantic keys"
+        );
+        git_cmd(&repo)
+            .args([
+                "update-ref",
+                "refs/remotes/other/topic",
+                "refs/heads/snapshot-feature",
+            ])
+            .run()
+            .unwrap();
+        let remote = key();
+        assert_eq!(status(), WorkspaceCommitStatus::PushedUnmerged);
+        assert_ne!(
+            initial, remote,
+            "a remote containment proof must invalidate the key"
+        );
+        commit_file(&repo, "default.txt", "main moved\n");
+        git_cmd(&repo)
+            .args([
+                "merge",
+                "--no-ff",
+                "snapshot-feature",
+                "-m",
+                "integrate feature",
+            ])
+            .run()
+            .unwrap();
+        let main = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
+        assert_ne!(
+            remote, main,
+            "main checkout ancestry must invalidate the key"
+        );
+        git_cmd(&repo)
+            .args(["config", "tuic.test", "changed"])
+            .run()
+            .unwrap();
+        assert_ne!(main, key(), "configuration must invalidate the key");
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
+        assert!(monitoring_ref_keys(&repo, &[]).unwrap().is_empty());
+    }
+
+    // Catches: a transient PR proof-provider failure permanently poisons the merged badge.
+    #[test]
+    fn critic_gitpoll_pr_lookup_recovery_refreshes_merged_badge_without_ref_move() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-pr-recovery";
+        let path = add_worktree(&repo, branch);
+        commit_file(&path, "feature.txt", "own work\n");
+        commit_file(&repo, "default.txt", "unrelated default work\n");
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo, branch).unwrap();
+        let first = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(first.commit_status, WorkspaceCommitStatus::Unmerged);
+        // The existing proof-provider boundary uses false for both no proof and lookup failure.
+        // No fake GitHub payload is involved: the provider is now able to prove this tip.
+        let fresh = inspect_workspace_lifecycle_with_pr(&repo, branch, |_, _, _| true);
+        assert_eq!(fresh.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(fresh.merge_proof.as_deref(), Some("github_pr"));
+        let next_key = monitoring_ref_key(&repo, branch).unwrap();
+        assert_eq!(key, next_key);
+        let recovered = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| true);
+        assert_eq!(recovered.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(recovered.merge_proof.as_deref(), Some("github_pr"));
+    }
+
+    // Catches: deduplicating by pathname collapses separate staged-deletion and untracked rows.
+    #[test]
+    fn critic_gitpoll_cached_removal_keeps_porcelain_dirty_badge_count() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-index-removal";
+        let path = add_worktree(&repo, branch);
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        git_cmd(&path)
+            .args(["rm", "--cached", "README.md"])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(porcelain.lines().any(|line| line == "D  README.md"));
+        assert!(porcelain.lines().any(|line| line == "?? README.md"));
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(status.dirty_files, Some(2));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+    }
+
+    // Catches: removal trusting a cached clean badge after an initialized submodule is edited.
+    #[test]
+    fn critic_gitpoll_removal_rechecks_submodule_after_clean_monitoring() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let branch = "critic-submodule-dirty";
+        let path = add_worktree(&repo, branch);
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let clean = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(clean.dirty_files, Some(0));
+        fs::write(
+            path.join("modules/local/module.txt"),
+            "unsaved module work\n",
+        )
+        .unwrap();
+        let dirty = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(dirty.dirty_files, Some(1));
+        let removal =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), branch, true, None, false);
+        let error = removal.expect_err("removal must refuse newly dirty submodule state");
+        assert!(
+            error.contains("uncommitted changes"),
+            "unexpected refusal: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("modules/local/module.txt")).unwrap(),
+            "unsaved module work\n",
+        );
+    }
+
+    // Catches file-save fan-out re-running destructive preflight and integration
+    // commands. Compare old and monitoring paths with identical real repositories.
+    #[test]
+    fn monitoring_gitpoll_eleven_writers_do_not_spawn_integration_processes() {
+        let (_temp, repo, _) = workspace_fixture();
+        let mut workspaces = Vec::new();
+        for i in 0..11 {
+            let branch = format!("writer-{i}");
+            let path = add_worktree(&repo, &branch);
+            commit_file(&path, &format!("feature-{i}.txt"), "own commit\n");
+            workspaces.push(WorkspaceWorktree {
+                branch,
+                path: path.to_string_lossy().into_owned(),
+                kind: WorkspaceKind::Worktree,
+                warm_artifacts: None,
+                lifecycle_status: None,
+            });
+        }
+        commit_file(&repo, "default.txt", "default advanced\n");
+        let ref_keys: Vec<_> = workspaces
+            .iter()
+            .map(|w| monitoring_ref_key(&repo, &w.branch).unwrap())
+            .collect();
+        for workspace in &workspaces {
+            inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
+        }
+        crate::git::get_merged_branches_impl(&repo).unwrap();
+        crate::git_cli::take_command_counts();
+        for round in 0..3 {
+            for workspace in &workspaces {
+                std::fs::write(
+                    Path::new(&workspace.path).join("active.txt"),
+                    format!("{round}"),
+                )
+                .unwrap();
+                let status = inspect_workspace_lifecycle(&repo, &workspace.branch);
+                assert_eq!(status.dirty_files, Some(1));
+            }
+        }
+        let before = crate::git_cli::take_command_counts();
+        for round in 0..3 {
+            for workspace in &workspaces {
+                std::fs::write(
+                    Path::new(&workspace.path).join("active.txt"),
+                    format!("after {round}"),
+                )
+                .unwrap();
+                assert_eq!(
+                    monitoring_ref_key(&repo, &workspace.branch).unwrap(),
+                    ref_keys[workspaces
+                        .iter()
+                        .position(|w| w.branch == workspace.branch)
+                        .unwrap()]
+                );
+                let status =
+                    inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
+                assert_eq!(status.dirty_files, Some(1));
+                assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+                assert!(status.dirty_fingerprint.is_none());
+                crate::git_reads::git_reads().diff_stats(Path::new(&workspace.path), None);
+            }
+            assert_eq!(
+                crate::git::get_merged_branches_impl(&repo).unwrap(),
+                [] as [std::string::String; 0]
+            );
+        }
+        let after = crate::git_cli::take_command_counts();
+        eprintln!("1491: 11 writers x 3 refreshes; before={before:?}; after={after:?}");
+        assert!(before.get("cherry").copied().unwrap_or_default() > 0);
+        assert_eq!(before.get("status"), Some(&66));
+        assert!(
+            after.is_empty(),
+            "file saves must spawn no Git CLI reads: {after:?}"
+        );
+    }
+
+    // Catches the repo-wide ref key: one agent commit in any worktree re-ran the whole
+    // integration classifier (cherry, merge-tree, reflog) for every sibling branch.
+    #[test]
+    fn monitoring_gitpoll_commit_in_one_branch_does_not_reclassify_siblings() {
+        let (_temp, repo, _) = workspace_fixture();
+        let mut workspaces = Vec::new();
+        for name in ["sibling-a", "sibling-b"] {
+            let path = add_worktree(&repo, name);
+            commit_file(&path, &format!("{name}.txt"), "own commit\n");
+            workspaces.push((path, resolve_any_workspace(&repo, name).unwrap()));
+        }
+        commit_file(&repo, "default.txt", "default advanced\n");
+        for (_, workspace) in &workspaces {
+            inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
+        }
+        let key_a = monitoring_ref_key(&repo, "sibling-a").unwrap();
+        let key_b = monitoring_ref_key(&repo, "sibling-b").unwrap();
+        commit_file(&workspaces[1].0, "more.txt", "second commit\n");
+        crate::git_cli::take_command_counts();
+        let a = inspect_workspace_monitoring_with_pr(&repo, &workspaces[0].1, |_, _, _| false);
+        let sibling_spawns = crate::git_cli::take_command_counts();
+        assert_eq!(a.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(monitoring_ref_key(&repo, "sibling-a").unwrap(), key_a);
+        assert!(
+            sibling_spawns.is_empty(),
+            "a commit in sibling-b re-ran Git for sibling-a: {sibling_spawns:?}"
+        );
+        assert_ne!(monitoring_ref_key(&repo, "sibling-b").unwrap(), key_b);
+        inspect_workspace_monitoring_with_pr(&repo, &workspaces[1].1, |_, _, _| false);
+        assert!(
+            !crate::git_cli::take_command_counts().is_empty(),
+            "the branch that moved must be reclassified"
+        );
+    }
+
+    // Catches cached unmerged badges surviving a main ref movement.
+    #[test]
+    fn monitoring_gitpoll_merge_refreshes_on_ref_move_and_keeps_dirty_badge() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "monitor-merge";
+        let path = add_worktree(&repo, branch);
+        commit_file(&path, "feature.txt", "own commit\n");
+        commit_file(&repo, "default.txt", "default advanced\n");
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo, branch).unwrap();
+        assert_eq!(
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false).commit_status,
+            WorkspaceCommitStatus::Unmerged
+        );
+        git_cmd(&repo)
+            .args(["merge", branch, "--no-edit"])
+            .run()
+            .unwrap();
+        std::fs::write(path.join("dirty.txt"), "keep me").unwrap();
+        let next = monitoring_ref_key(&repo, branch).unwrap();
+        assert_ne!(key, next);
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.dirty_files, Some(1));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+        assert!(
+            crate::git::get_merged_branches_impl(&repo)
+                .unwrap()
+                .contains(&branch.to_string())
+        );
+    }
+
+    // Catches double counting MM, stale dirty counts, rename and CLI fallback drift.
+    #[test]
+    fn monitoring_gitpoll_dirty_paths_match_fresh_porcelain() {
+        let (_temp, repo, _) = workspace_fixture();
+        let path = add_worktree(&repo, "monitor-dirty");
+        let workspace = resolve_any_workspace(&repo, "monitor-dirty").unwrap();
+        std::fs::write(path.join("README.md"), "staged\n").unwrap();
+        git_cmd(&path).args(["add", "README.md"]).run().unwrap();
+        std::fs::write(path.join("README.md"), "staged and modified\n").unwrap();
+        std::fs::create_dir_all(path.join("nested")).unwrap();
+        std::fs::write(path.join("nested/a.txt"), "untracked").unwrap();
+        std::fs::write(path.join("nested/b.txt"), "untracked").unwrap();
+        let read = || inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
+        assert_eq!(read().dirty_files, Some(3));
+        git_cmd(&path)
+            .args(["reset", "--hard", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&path).args(["clean", "-fd"]).run().unwrap();
+        git_cmd(&path)
+            .args(["mv", "README.md", "renamed.md"])
+            .run()
+            .unwrap();
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
+        git_cmd(&path)
+            .args(["reset", "--hard", "HEAD"])
+            .run()
+            .unwrap();
+        assert_eq!(read().dirty_files, Some(0));
+        // Force the established sparse-checkout fallback; no invented Git output.
+        git_cmd(&path)
+            .args(["config", "core.sparseCheckout", "true"])
+            .run()
+            .unwrap();
+        std::fs::write(path.join("fallback.txt"), "dirty").unwrap();
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
     }
 
     /// A branch created at an older main tip has no work of its own even after
@@ -7674,11 +11238,579 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&head));
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("github_pr"));
         commit_file(&upstream, "not-in-pr.txt", "newer\n");
         let stale_api_head = rev_at(&upstream, "HEAD").unwrap();
         let status =
             inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&stale_api_head));
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            status.merge_proof.as_deref(),
+            Some("refs/remotes/origin/pr-source")
+        );
+    }
+
+    // Audit cases: wiz POC-00168/170 landed together in squash 4a190ec8;
+    // tuic backup/worktree-v4 has revised twins; parked WIP has unique files.
+    fn integration_1295_fixture(message: bool, unique: bool) -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "audit-1295");
+        commit_file(&wt, "first.txt", "first landed change\n");
+        commit_file(&wt, "second.txt", "second landed change\n");
+        fs::write(repo.join("first.txt"), "first landed change\n").unwrap();
+        fs::write(repo.join("second.txt"), "second landed change\n").unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args([
+                "commit",
+                "-m",
+                if message {
+                    "release squash\n\nfirst.txt\nsecond.txt"
+                } else {
+                    "revised implementation"
+                },
+            ])
+            .run()
+            .unwrap();
+        if unique {
+            commit_file(&wt, "unique.txt", "unlanded work\n");
+        }
+        (temp, repo, wt)
+    }
+
+    #[test]
+    fn content_heuristic_rejects_partial_binary_and_deleted_changes_1295() {
+        let mut failures = Vec::new();
+        for (name, branch, target) in [
+            ("partial", "rule A\nrule B\nunique\n", "rule B\nrule A\n"),
+            ("duplicate", "rule A\nrule A\nrule B\n", "rule B\nrule A\n"),
+            ("binary", "rule A\0rule B\n", "rule B\0rule A\n"),
+            ("no-newline", "rule A\nrule B", "rule B\nrule A\n"),
+        ] {
+            let (_temp, repo, _) = workspace_fixture();
+            git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+            let wt = add_worktree(&repo, name);
+            commit_file(&wt, "rules.txt", branch);
+            commit_file(&repo, "rules.txt", target);
+            if branch_integration_with_pr(&repo, name, |_, _, _| false)
+                .unwrap()
+                .integrated
+            {
+                failures.push(name);
+            }
+        }
+        // Audit WIP: removing a base file is unique work even when added lines exist.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "deleted-1295");
+        fs::remove_file(wt.join("README.md")).unwrap();
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\n");
+        if branch_integration_with_pr(&repo, "deleted-1295", |_, _, _| false)
+            .unwrap()
+            .integrated
+        {
+            failures.push("deleted");
+        }
+        assert!(
+            failures.is_empty(),
+            "false integration proofs: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn literal_path_content_proof_preserves_tip_after_worktree_removal_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "literal-1295");
+        // Brackets are legal across platforms. Do not interpret them as a glob.
+        let name = "[literal].txt";
+        commit_file(&wt, name, "rule A\n++literal\nrule B\n");
+        commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
+        let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
+        assert_eq!(query.proof.as_deref(), Some("content_superset"));
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(query.worktree_paths, vec![expected]);
+        assert_eq!(
+            Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+            wt.canonicalize().unwrap()
+        );
+        git_cmd(&repo)
+            .args(["update-ref", &query.archive_ref, &query.tip])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "literal-1295",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "content_superset");
+        assert!(!wt.exists());
+        assert!(rev_at(&repo, "refs/heads/literal-1295").is_err());
+        assert_eq!(rev_at(&repo, &query.archive_ref).unwrap(), query.tip);
+    }
+
+    /// Catches: a tip archived at the tip-suffixed ref (reused branch name) reading
+    /// "not archived", which blocks the content-proof deletion of preserved work.
+    #[test]
+    fn tip_archived_at_the_suffixed_ref_counts_as_archived_1462() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "suffixed-1462");
+        let name = "[literal].txt";
+        commit_file(&wt, name, "rule A\n++literal\nrule B\n");
+        commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
+        let query = branch_integration_with_pr(&repo, "suffixed-1462", |_, _, _| false).unwrap();
+        assert_eq!(query.proof.as_deref(), Some("content_superset"));
+        assert!(!query.archived);
+        let suffixed = format!("{}-{}", query.archive_ref, &query.tip[..7]);
+        git_cmd(&repo)
+            .args(["update-ref", &suffixed, &query.tip])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["worktree", "remove", "--force", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        let after = branch_integration_with_pr(&repo, "suffixed-1462", |_, _, _| false).unwrap();
+        assert!(after.archived);
+        assert_eq!(after.archive_ref, suffixed);
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462")
+                .unwrap()
+                .proof
+                .as_str(),
+            "content_superset"
+        );
+        assert!(rev_at(&repo, "refs/heads/suffixed-1462").is_err());
+    }
+
+    /// Catches a branch filter that lists checkouts of other branches: those
+    /// paths feed removal and archive decisions.
+    #[test]
+    fn worktree_paths_list_only_checkouts_of_the_queried_branch_1327() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt_a = add_worktree(&repo, "alpha-1327");
+        let wt_b = add_worktree(&repo, "beta-1327");
+        for (branch, own) in [("alpha-1327", &wt_a), ("beta-1327", &wt_b)] {
+            let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
+            #[cfg(unix)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().canonicalize().unwrap().display()
+            );
+            #[cfg(windows)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().display().to_string().replace('\\', "/")
+            );
+            assert_eq!(query.worktree_paths, vec![expected]);
+            assert_eq!(
+                Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+                own.canonicalize().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn branch_panel_and_safe_ui_delete_use_squash_proof_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, false);
+        let merged = crate::git::get_merged_branches_impl(&repo).unwrap();
+        assert!(merged.contains(&"audit-1295".into()), "{merged:?}");
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(
+            crate::git::delete_branch_impl(&repo.to_string_lossy(), "audit-1295", false)
+                .unwrap()
+                .deleted
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn diff_header_like_unique_lines_are_not_ignored_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "header-lines-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n++unique unlanded line\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let query =
+            branch_integration_with_pr(&repo, "header-lines-1295", |_, _, _| false).unwrap();
+        assert!(!query.integrated, "{query:?}");
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "header-lines-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn archive_hook_cannot_remove_content_proof_recovery_ref_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "hook-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let tip = rev_at(&repo, "refs/heads/hook-1295").unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/hook-1295", &tip])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "hook-1295",
+            true,
+            Some("git update-ref -d refs/archive/hook-1295"),
+            false,
+        )
+        .unwrap();
+        assert!(outcome.branch_delete_warning.is_some(), "{outcome:?}");
+        assert_eq!(rev_at(&repo, "refs/heads/hook-1295").unwrap(), tip);
+    }
+
+    #[test]
+    fn audited_same_subject_twin_survives_later_refactoring_1295() {
+        // Reduced c6585c43e -> main twin from backup/worktree-v4-466eb71a.
+        // The audit compares added/deleted lines of same-subject commits,
+        // not just whether those lines still exist after main refactors.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        commit_file(&repo, "warm.rs", "old context\nold warmth\nlast context\n");
+        let wt = add_worktree(&repo, "twin-1295");
+        let subject = "fix(worktree): report pending warmth and serialize setup (closes #920-9947)";
+        commit_file(
+            &wt,
+            "warm.rs",
+            "old context\nuse std::sync::LazyLock;\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nlast context\n",
+        );
+        git_cmd(&wt)
+            .args(["commit", "--amend", "-m", subject])
+            .run()
+            .unwrap();
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nold warmth\nchanged context\n",
+        );
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nuse std::sync::LazyLock;\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nchanged context\n",
+        );
+        git_cmd(&repo)
+            .args(["commit", "--amend", "-m", subject])
+            .run()
+            .unwrap();
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nuse std::sync::LazyLock;\nchanged context\n",
+        );
+        let query = branch_integration_with_pr(&repo, "twin-1295", |_, _, _| false).unwrap();
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("content_superset"),
+            "{query:?}"
+        );
+        assert!(query.archive_required);
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "twin-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn content_superset_requires_current_archive_before_deletion_1295() {
+        // Audit: revised worktree twins have the same additions in new context.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "content-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let tip = rev_at(&repo, "refs/heads/content-1295").unwrap();
+        let status = inspect_workspace_lifecycle(&repo, "content-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("content_superset"));
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "content-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/content-1295").unwrap(), tip);
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/content-1295", "main"])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/content-1295").unwrap(), tip);
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/content-1295", &tip])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295")
+                .unwrap()
+                .proof
+                .as_str(),
+            "content_superset"
+        );
+        assert_eq!(rev_at(&repo, "refs/archive/content-1295").unwrap(), tip);
+    }
+
+    #[test]
+    fn github_squash_message_bullets_report_the_real_audit_proof_1295() {
+        // Verbatim excerpt of wiz 4a190ec8, PR #189 from the audit.
+        let (_temp, repo, wt) = integration_1295_fixture(false, false);
+        git_cmd(&wt)
+            .args([
+                "commit",
+                "--amend",
+                "-m",
+                "fix(hud): add Opus 4.7 to pricing table (#343-d76a)",
+            ])
+            .run()
+            .unwrap();
+        // A one-subject release still corroborates the structural no-op proof.
+        git_cmd(&repo).args(["commit", "--amend", "-m", "Poc 00170/wiz 5.0 pre (#189)\n\n* first.txt\n\n* fix(hud): add Opus 4.7 to pricing table (#343-d76a)"]).run().unwrap();
+        let query = branch_integration_with_pr(&repo, "audit-1295", |_, _, _| false).unwrap();
+        assert_eq!(query.proof.as_deref(), Some("squash_message"));
+    }
+
+    #[test]
+    fn branch_integrations_look_up_pull_requests_concurrently_in_listing_order_1295() {
+        // Catches: a sequential listing pays every GitHub lookup in turn, so a
+        // repo with dozens of unmerged branches outlasts the MCP timeout.
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        for n in 0..8 {
+            git_cmd(&repo)
+                .args(["branch", &format!("extra-1295-{n}"), "audit-1295"])
+                .run()
+                .unwrap();
+        }
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let listed = branch_integrations_with_pr(&repo, |_, _, _| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            false
+        })
+        .unwrap();
+        assert!(
+            peak.load(Ordering::SeqCst) > 1,
+            "pull request lookups ran one at a time"
+        );
+        let expected = git_cmd(&repo)
+            .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert_eq!(
+            listed
+                .iter()
+                .map(|entry| entry.branch.as_str())
+                .collect::<Vec<_>>(),
+            expected.lines().collect::<Vec<_>>()
+        );
+    }
+
+    fn add_extra_branches_1295(repo: &Path, count: usize) {
+        for n in 0..count {
+            git_cmd(repo)
+                .args(["branch", &format!("extra-1295-{n:02}"), "audit-1295"])
+                .run()
+                .unwrap();
+        }
+    }
+
+    fn listed_branches_1295(repo: &Path) -> Vec<String> {
+        git_cmd(repo)
+            .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+            .run()
+            .unwrap()
+            .stdout
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn branch_integrations_never_exceed_the_worker_bound_and_look_up_each_branch_once_1295() {
+        // Catches: one thread per branch (unbounded fan-out hammers `gh` and trips
+        // its rate limit), and a worker index race that skips or repeats a branch.
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 18);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let calls = std::sync::Mutex::new(Vec::<String>::new());
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            calls.lock().unwrap().push(branch.to_string());
+            std::thread::sleep(Duration::from_millis(60));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            false
+        })
+        .unwrap();
+        assert!(
+            peak.load(Ordering::SeqCst) <= BRANCH_INTEGRATION_WORKERS,
+            "more than {BRANCH_INTEGRATION_WORKERS} lookups in flight: {}",
+            peak.load(Ordering::SeqCst)
+        );
+        let mut calls = calls.into_inner().unwrap();
+        calls.sort();
+        let mut deduped = calls.clone();
+        deduped.dedup();
+        assert_eq!(calls, deduped, "a branch was looked up more than once");
+        for n in 0..18 {
+            assert!(
+                calls.contains(&format!("extra-1295-{n:02}")),
+                "extra-1295-{n:02} was never looked up"
+            );
+        }
+        assert_eq!(listed.len(), listed_branches_1295(&repo).len());
+    }
+
+    #[test]
+    fn branch_integrations_keep_listing_order_when_later_branches_finish_first_1295() {
+        // Catches: results returned in completion order instead of listing order
+        // (earlier-listed branches are made the slowest here).
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 12);
+        let expected = listed_branches_1295(&repo);
+        let total = expected.len() as u64;
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            let index = expected.iter().position(|b| b == branch).unwrap() as u64;
+            std::thread::sleep(Duration::from_millis((total - index) * 25));
+            false
+        })
+        .unwrap();
+        assert_eq!(
+            listed.iter().map(|e| e.branch.clone()).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn branch_integrations_attach_each_lookup_result_to_its_own_branch_1295() {
+        // Catches: a result paired with a neighbouring branch after the concurrent
+        // collect-and-sort (only extra-1295-05 is proven by a pull request).
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 10);
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            std::thread::sleep(Duration::from_millis(20));
+            branch == "extra-1295-05"
+        })
+        .unwrap();
+        for entry in &listed {
+            assert_eq!(
+                entry.proof.as_deref() == Some("github_pr"),
+                entry.branch == "extra-1295-05",
+                "wrong pull request proof on {}",
+                entry.branch
+            );
+            assert_eq!(
+                entry.tip,
+                rev_at(&repo, &format!("refs/heads/{}", entry.branch)).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn squash_merged_branch_is_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, false);
+        let status = inspect_workspace_lifecycle(&repo, "audit-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("squash_message"));
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
+                .unwrap()
+                .proof
+                .as_str(),
+            "squash_message"
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn noop_merge_branch_is_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(false, false);
+        let status = inspect_workspace_lifecycle(&repo, "audit-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("noop_merge"));
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
+                .unwrap()
+                .proof
+                .as_str(),
+            "noop_merge"
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn branch_with_unique_lines_is_not_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, true);
+        let tip = rev_at(&repo, "refs/heads/audit-1295").unwrap();
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "audit-1295").commit_status,
+            WorkspaceCommitStatus::Unmerged
+        );
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/audit-1295").unwrap(), tip);
     }
 
     #[test]
@@ -7976,6 +12108,38 @@ branch refs/heads/feat
         assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
     }
 
+    // Catches: applying Windows separator rewriting on Unix authorizes a
+    // different checkout when a registered directory contains a literal backslash.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_does_not_alias_literal_backslash_to_a_separator() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let parent = repo.parent().unwrap();
+        let registered = parent.join(r"literal\checkout");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &registered.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let different = parent.join("literal").join("checkout");
+        fs::create_dir_all(&different).unwrap();
+        fs::write(different.join("keep.txt"), "unregistered user work\n").unwrap();
+
+        validate_worktree_path(&repo.to_string_lossy(), &registered.to_string_lossy()).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &different.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+        assert_eq!(
+            fs::read_to_string(different.join("keep.txt")).unwrap(),
+            "unregistered user work\n"
+        );
+    }
+
     #[test]
     fn orphan_removal_refuses_a_detached_commit_without_a_durable_ref() {
         let (_temp, repo, _workspaces) = workspace_fixture();
@@ -8039,6 +12203,75 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    // Catches: launch validation accepts the main checkout or a directory from another repository.
+    #[test]
+    fn branch_worktree_validation_rejects_main_foreign_and_unregistered_paths() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "launch-branch");
+        let (_foreign_temp, foreign_repo, _) = workspace_fixture();
+        let foreign = add_worktree(&foreign_repo, "foreign-launch");
+        let unknown = repo.parent().unwrap().join("unregistered");
+        fs::create_dir(&unknown).unwrap();
+        let validate = |path: &Path| {
+            validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+        };
+        validate(&path).unwrap();
+        assert!(validate(&repo).unwrap_err().contains("isolated"));
+        for path in [&foreign, &unknown] {
+            assert!(validate(path).unwrap_err().contains("not a registered"));
+        }
+        assert!(
+            validate(Path::new("relative"))
+                .unwrap_err()
+                .contains("absolute")
+        );
+    }
+
+    // Catches: replacing the orphan guard lets workflow launch interrupt an unfinished Git operation.
+    #[test]
+    fn branch_worktree_validation_rejects_operations_and_detached_orphans() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "launch-operation");
+        let admin = worktree_admin_dir(&path.to_string_lossy()).unwrap();
+        fs::write(admin.join("MERGE_HEAD"), rev_at(&repo, "HEAD").unwrap()).unwrap();
+        let error = validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("operation"), "{error}");
+        fs::remove_file(admin.join("MERGE_HEAD")).unwrap();
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let error = validate_branch_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a registered"), "{error}");
+        assert!(path.exists());
+    }
+
+    // Catches: separator normalization authorizes a different directory on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn branch_worktree_validation_preserves_literal_backslash_paths() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let parent = repo.parent().unwrap();
+        let registered = parent.join(r"launch\checkout");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "literal-launch",
+                &registered.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let other = parent.join("launch").join("checkout");
+        fs::create_dir_all(&other).unwrap();
+        validate_branch_worktree_path(&repo.to_string_lossy(), &registered.to_string_lossy())
+            .unwrap();
+        assert!(
+            validate_branch_worktree_path(&repo.to_string_lossy(), &other.to_string_lossy())
+                .is_err()
+        );
+    }
+
     #[test]
     fn orphan_removal_refuses_an_attached_worktree_path() {
         let (_temp, repo, _workspaces) = workspace_fixture();
@@ -8048,6 +12281,142 @@ branch refs/heads/feat
             validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
         assert!(error.contains("not detached"), "{error}");
         assert!(path.exists());
+    }
+
+    // Catches: a detached HEAD being mistaken for a deleted active branch.
+    #[test]
+    fn active_detached_checkout_is_not_an_orphan() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "active-detached");
+        commit_file(&path, "active.txt", "recent branch work\n");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        assert_eq!(
+            rev_at(&path, "HEAD").unwrap(),
+            rev_at(&repo, "active-detached").unwrap()
+        );
+        assert_eq!(
+            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned()).unwrap(),
+            [] as [std::string::String; 0]
+        );
+        assert!(path.exists());
+        fs::write(path.join("unsaved.txt"), "work in progress\n").unwrap();
+        assert_eq!(
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
+        );
+        git_cmd(&repo)
+            .args(["branch", "-D", "active-detached"])
+            .run()
+            .unwrap();
+        let orphan = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+        assert_eq!(
+            orphan.len(),
+            1,
+            "deleted branch remains an orphan candidate"
+        );
+        assert!(!orphan[0].safe, "uncommitted work still prevents removal");
+    }
+
+    // Catches: equality with the default tip masquerading as positive merge proof.
+    #[test]
+    fn fresh_branch_without_commits_is_not_integrated() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        // Resolve the actual branch through Git, independent of the host default.
+        let main = git_cmd(&repo)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                &format!("refs/remotes/origin/{main}"),
+            ])
+            .run()
+            .unwrap();
+        let path = add_worktree(&repo, "fresh-active");
+        let verdict = branch_integration_with_pr(&repo, "fresh-active", |_, _, _| false).unwrap();
+        assert!(!verdict.integrated, "{verdict:?}");
+        assert!(verdict.proof.is_none());
+        assert!(path.exists());
+    }
+
+    // Catches: Keep cannot distinguish unchanged edits from new checkout state.
+    #[test]
+    fn orphan_assessment_fingerprint_follows_the_checkout_state() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-fingerprint");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "-D", "orphan-fingerprint"])
+            .run()
+            .unwrap();
+        let fingerprint = |repo: &Path| {
+            assess_orphan_worktrees(&repo.to_string_lossy())
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.path.ends_with("orphan-fingerprint"))
+                .expect("the orphan is listed")
+        };
+
+        let clean = fingerprint(&repo);
+        assert!(clean.safe, "{clean:?}");
+        fs::write(path.join("note.txt"), "one\n").unwrap();
+        let dirty = fingerprint(&repo);
+        assert!(!dirty.safe, "{dirty:?}");
+        assert_eq!(
+            dirty,
+            fingerprint(&repo),
+            "unchanged edits keep the fingerprint"
+        );
+        fs::write(path.join("second.txt"), "x\n").unwrap();
+        let grown = fingerprint(&repo);
+
+        assert!(clean.dirty_fingerprint.is_some());
+        assert_ne!(clean.dirty_fingerprint, dirty.dirty_fingerprint);
+        assert_ne!(dirty.dirty_fingerprint, grown.dirty_fingerprint);
+    }
+
+    /// The directory was moved away but git still lists the worktree. Spawning
+    /// git in the missing cwd used to surface as "Failed to spawn git".
+    #[test]
+    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-moved-away");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "-D", "orphan-moved-away"])
+            .run()
+            .unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+
+        let entry = assessments
+            .iter()
+            .find(|entry| entry.path.ends_with("orphan-moved-away"))
+            .expect("the tracked orphan is still listed");
+        assert!(entry.safe, "{entry:?}");
+        let reason = entry.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("already gone"), "{reason}");
+        assert!(!reason.contains("spawn"), "{reason}");
+
+        let worktree = WorktreeInfo {
+            name: "orphan-moved-away".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        remove_orphan_worktree_internal(&worktree).unwrap();
+        let listed = git_cmd(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains("orphan-moved-away"), "{listed}");
     }
 
     #[tokio::test]
@@ -8297,12 +12666,318 @@ branch refs/heads/feat
         assert!(!error.contains("No workspace found"), "{error}");
     }
 
+    /// A bare origin holding the repo's default branch, fetched so
+    /// `origin/<default>` exists locally.
+    fn add_origin(repo: &Path) -> PathBuf {
+        let origin = repo.parent().unwrap().join("origin.git");
+        git_cmd(repo.parent().unwrap())
+            .args(["init", "--bare", &origin.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo)
+            .args(["remote", "add", "origin", &origin.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo)
+            .args(["push", "origin", &base_branch_of(repo)])
+            .run()
+            .unwrap();
+        git_cmd(repo).args(["fetch", "origin"]).run().unwrap();
+        origin
+    }
+
+    // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
+    #[test]
+    fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
+        let (_temp, repo, _) = workspace_fixture();
+        let origin = add_origin(&repo);
+        let worktree = add_worktree(&repo, "pruned-proof");
+        commit_file(&worktree, "unique.txt", "preserve this commit\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:integration"])
+            .run()
+            .unwrap();
+        let tip = rev_at(&repo, "refs/heads/pruned-proof").unwrap();
+        // Another checkout deleted the remote branch; the local tracking ref is still stale.
+        git_cmd(&origin)
+            .args(["update-ref", "-d", "refs/heads/integration"])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "pruned-proof",
+            true,
+            Some("git fetch --prune origin"),
+            false,
+        );
+        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_err());
+        assert_eq!(
+            rev_at(&repo, "refs/heads/pruned-proof").ok(),
+            Some(tip),
+            "cleanup removed the remote proof: local work must survive; outcome={outcome:?}"
+        );
+        let outcome = outcome.unwrap();
+        assert!(outcome.branch_delete_warning.is_some());
+        assert!(!worktree.exists());
+    }
+
+    // Catches: fetch replaces the sole proof after recheck but before local ref deletion commits.
+    #[test]
+    #[cfg(unix)]
+    fn removal_keeps_local_branch_when_fetch_replaces_proof_during_ref_deletion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        let tip = rev_at(&repo, "refs/heads/remote-contained").unwrap();
+        let base = rev_at(&repo, &base_branch_of(&repo)).unwrap();
+        let origin = git_cmd(&repo)
+            .args(["remote", "get-url", "origin"])
+            .run()
+            .unwrap();
+        git_cmd(Path::new(origin.stdout.trim()))
+            .args(["update-ref", "refs/heads/integration", &base])
+            .run()
+            .unwrap();
+        // Git invokes this after locking the deletion ref, before committing it.
+        // Run a real fetch here to deterministically order the concurrent writer.
+        let hook = repo.join(".git/hooks/reference-transaction");
+        fs::write(
+            &hook,
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read -r old new ref; do\n  if [ \"$ref\" = refs/heads/remote-contained ]; then\n    git fetch --force origin >/dev/null 2>&1 || exit 1\n  fi\ndone\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "remote-contained",
+            true,
+            None,
+            false,
+        );
+        assert_eq!(
+            rev_at(&repo, "refs/heads/remote-contained").ok(),
+            Some(tip),
+            "fetch attempted to replace the sole proof: local work must survive; outcome={outcome:?}"
+        );
+        assert!(outcome.unwrap().branch_delete_warning.is_some());
+        assert!(!worktree.exists());
+    }
+
+    fn remote_contained_fixture() -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "remote-contained");
+        commit_file(&worktree, "feature.txt", "saved remotely\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:integration"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        (temp, repo, worktree)
+    }
+
+    // Catches: lifecycle and sidebar refusing commits saved under another remote branch.
+    #[test]
+    fn remote_contained_without_upstream_has_one_verdict() {
+        let (_temp, repo, _) = remote_contained_fixture();
+        let status = inspect_workspace_lifecycle(&repo, "remote-contained");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        let query = branch_integration_with_pr(&repo, "remote-contained", |_, _, _| false).unwrap();
+        assert_eq!(query.commit_status, status.commit_status);
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("refs/remotes/origin/integration")
+        );
+        let workspace = resolve_removable_workspace(&repo, "remote-contained").unwrap();
+        let monitoring = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(monitoring.commit_status, status.commit_status);
+    }
+
+    // Catches: removal refusing safe work instead of naming its containing ref.
+    #[test]
+    fn remote_contained_without_upstream_removes_with_proof() {
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "remote-contained",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "refs/remotes/origin/integration");
+        assert!(!worktree.exists());
+        assert!(rev_at(&repo, "refs/heads/remote-contained").is_err());
+        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_ok());
+    }
+
+    // Catches: containment being restricted to origin or requiring an exact tip match.
+    #[test]
+    fn remote_contained_by_non_origin_descendant_is_safe() {
+        let (_temp, repo, worktree) = remote_contained_fixture();
+        git_cmd(&repo)
+            .args(["remote", "rename", "origin", "backup"])
+            .run()
+            .unwrap();
+        commit_file(&worktree, "later.txt", "later remote work\n");
+        git_cmd(&worktree)
+            .args(["push", "backup", "HEAD:integration"])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args(["reset", "--hard", "HEAD~1"])
+            .run()
+            .unwrap();
+        let query = branch_integration_with_pr(&repo, "remote-contained", |_, _, _| false).unwrap();
+        assert_eq!(query.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            query.proof.as_deref(),
+            Some("refs/remotes/backup/integration")
+        );
+    }
+
+    // Catches: a fetch leaving the sidebar's cached unmerged verdict stale.
+    #[test]
+    fn remote_contained_fetch_invalidates_monitoring_key() {
+        let (_temp, repo, _) = remote_contained_fixture();
+        git_cmd(&repo)
+            .args(["update-ref", "-d", "refs/remotes/origin/integration"])
+            .run()
+            .unwrap();
+        let workspace = resolve_removable_workspace(&repo, "remote-contained").unwrap();
+        let before = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        let after = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        assert_eq!(
+            after.merge_proof.as_deref(),
+            Some("refs/remotes/origin/integration")
+        );
+    }
+
+    /// Local main is stale (10 behind origin/main in the field); the branch
+    /// was merged upstream. Comparing only the local default branch called it
+    /// unmerged and refused removal.
+    #[test]
+    fn branch_merged_into_upstream_default_while_local_default_is_stale_is_merged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "landed-upstream");
+        commit_file(&worktree, "feature.txt", "landed work\n");
+        let main = base_branch_of(&repo);
+        git_cmd(&worktree)
+            .args(["push", "origin", &format!("landed-upstream:{main}")])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "landed-upstream");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "landed-upstream",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "ancestry");
+        assert!(!worktree.exists());
+    }
+
+    /// Every commit is on origin/<branch>: deleting the local ref loses
+    /// nothing, so removal must not be refused as data loss.
+    #[test]
+    fn branch_fully_pushed_to_its_own_remote_is_pushed_unmerged_and_removable() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "pushed-only");
+        commit_file(&worktree, "feature.txt", "pushed work\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "pushed-only"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "pushed-only");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "pushed-only",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "refs/remotes/origin/pushed-only");
+        assert!(!worktree.exists());
+        let remaining = git_cmd(&repo)
+            .args(["branch", "--list", "pushed-only"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(remaining.trim().is_empty(), "{remaining}");
+        git_cmd(&repo)
+            .args(["cat-file", "-e", "refs/remotes/origin/pushed-only"])
+            .run()
+            .expect("the pushed commits stay reachable");
+    }
+
+    #[test]
+    fn branch_with_a_commit_missing_from_its_remote_stays_unmerged_and_refused() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "half-pushed");
+        commit_file(&worktree, "one.txt", "pushed\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "half-pushed"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        commit_file(&worktree, "two.txt", "local only\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "half-pushed");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "half-pushed",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("unmerged"), "{error}");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn unmerged_refusal_names_every_base_it_compared() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "unshared");
+        commit_file(&worktree, "feature.txt", "local only\n");
+        let main = base_branch_of(&repo);
+
+        let error =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "unshared", true, None, false)
+                .unwrap_err();
+
+        assert!(error.contains(&format!("origin/{main}")), "{error}");
+        assert!(error.contains(&format!("and {main}")), "{error}");
+    }
+
     /// The serialized spellings are the contract the sidebar's label table
     /// reads; renaming a variant silently turns a badge into dead code.
     #[test]
     fn commit_status_serializes_as_the_frontend_spells_it() {
         let spellings = [
             (WorkspaceCommitStatus::Unmerged, "unmerged"),
+            (WorkspaceCommitStatus::PushedUnmerged, "pushed_unmerged"),
             (WorkspaceCommitStatus::InSync, "in_sync"),
             (WorkspaceCommitStatus::Merged, "merged"),
             (WorkspaceCommitStatus::Unknown, "unknown"),
@@ -8616,6 +13291,152 @@ branch refs/heads/feat
             WorktreeDirtiness::Unknown(_)
         ));
     }
+
+    fn orphan_entry(repo: &Path, name: &str) -> OrphanCleanupAssessment {
+        assess_orphan_worktrees(&repo.to_string_lossy())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path.ends_with(name))
+            .unwrap_or_else(|| panic!("{name} is listed as an orphan"))
+    }
+
+    fn detached_orphan(repo: &Path, name: &str) -> PathBuf {
+        let path = add_worktree(repo, name);
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        git_cmd(repo).args(["branch", "-D", name]).run().unwrap();
+        path
+    }
+
+    // Catches (critic-1367): any form of unsaved work that `git status` reports being
+    // missed by the safety verdict, so ask mode now removes it without a dialog.
+    #[test]
+    fn orphan_assessment_is_unsafe_for_every_kind_of_unsaved_work() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let staged = detached_orphan(&repo, "orphan-staged");
+        fs::write(staged.join("new.txt"), "x\n").unwrap();
+        git_cmd(&staged).args(["add", "new.txt"]).run().unwrap();
+        let edited = detached_orphan(&repo, "orphan-edited");
+        fs::write(edited.join("README.md"), "changed\n").unwrap();
+        let deleted = detached_orphan(&repo, "orphan-deleted");
+        fs::remove_file(deleted.join("README.md")).unwrap();
+        let untracked = detached_orphan(&repo, "orphan-untracked");
+        fs::write(untracked.join("scratch.txt"), "x\n").unwrap();
+        detached_orphan(&repo, "orphan-clean");
+
+        for name in [
+            "orphan-staged",
+            "orphan-edited",
+            "orphan-deleted",
+            "orphan-untracked",
+        ] {
+            let entry = orphan_entry(&repo, name);
+            assert!(!entry.safe, "{name} holds unsaved work: {entry:?}");
+            assert!(entry.dirty_fingerprint.is_some(), "{name}: {entry:?}");
+        }
+        assert!(orphan_entry(&repo, "orphan-clean").safe);
+    }
+
+    // Catches (critic-1367): a fingerprint built from `status` alone, so a Keep on a
+    // clean checkout survives it being moved to another commit.
+    #[test]
+    fn orphan_assessment_fingerprint_changes_when_a_clean_checkout_moves_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        commit_file(&repo, "second.txt", "two\n");
+        let path = detached_orphan(&repo, "orphan-moves");
+
+        let before = orphan_entry(&repo, "orphan-moves");
+        assert_eq!(
+            before.dirty_fingerprint,
+            orphan_entry(&repo, "orphan-moves").dirty_fingerprint,
+            "an untouched checkout keeps its fingerprint"
+        );
+        git_cmd(&path)
+            .args(["checkout", "--detach", "HEAD~1"])
+            .run()
+            .unwrap();
+        let after = orphan_entry(&repo, "orphan-moves");
+
+        assert!(before.safe && after.safe, "{before:?} {after:?}");
+        assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
+    }
+
+    // Catches (critic-1367): a vanished checkout reported with a fingerprint, so a Keep
+    // would hold for a directory nobody can inspect any more.
+    #[test]
+    fn orphan_whose_directory_is_gone_has_no_fingerprint() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = detached_orphan(&repo, "orphan-vanished");
+        fs::remove_dir_all(&path).unwrap();
+
+        let entry = orphan_entry(&repo, "orphan-vanished");
+
+        assert!(entry.safe, "{entry:?}");
+        assert_eq!(entry.dirty_fingerprint, None);
+    }
+
+    // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"
+    // for a reason other than dirt, so such an orphan can never be remembered as kept;
+    // and a verdict that does not follow the branch that later protects its HEAD.
+    #[test]
+    fn clean_orphan_with_an_unreachable_head_is_unsafe_with_a_fingerprint_until_a_branch_holds_it()
+    {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = detached_orphan(&repo, "orphan-unreachable");
+        commit_file(&path, "only-here.txt", "x\n");
+
+        let before = orphan_entry(&repo, "orphan-unreachable");
+        assert!(!before.safe, "{before:?}");
+        assert!(
+            before
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unreachable"),
+            "{before:?}"
+        );
+        assert!(before.dirty_fingerprint.is_some(), "{before:?}");
+
+        let head = rev_at(&path, "HEAD").unwrap();
+        git_cmd(&repo)
+            .args(["branch", "rescue", &head])
+            .run()
+            .unwrap();
+        assert_eq!(
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
+        );
+        assert!(
+            path.exists(),
+            "a new rescue branch keeps the checkout out of cleanup"
+        );
+    }
+
+    // Catches (critic-1367): uncommitted edits inside a submodule being invisible to the
+    // verdict and the fingerprint, so a populated submodule's work is removed unasked.
+    #[test]
+    fn orphan_assessment_sees_edits_inside_a_populated_submodule() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = detached_orphan(&repo, "orphan-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let clean = orphan_entry(&repo, "orphan-module");
+        assert!(clean.safe, "{clean:?}");
+
+        fs::write(path.join("modules/local/module.txt"), "edited in module\n").unwrap();
+        let edited = orphan_entry(&repo, "orphan-module");
+
+        assert!(!edited.safe, "{edited:?}");
+        assert_ne!(clean.dirty_fingerprint, edited.dirty_fingerprint);
+    }
 }
 
 /// Blocking orphan scan; scheduling belongs to the app adapter.
@@ -8625,7 +13446,25 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
-    Ok(parse_orphan_worktrees(&out.stdout))
+    let mut default_branch = None;
+    let mut orphans = Vec::new();
+    for path in parse_orphan_worktrees(&out.stdout) {
+        // Detached describes HEAD, not branch lifetime. A non-default branch
+        // at this tip is evidence that the checkout still holds active work.
+        // Missing directories can only have their stale registration removed.
+        if Path::new(&path).exists() {
+            let head = rev_at(Path::new(&path), "HEAD")?;
+            let default_branch = match default_branch.as_ref() {
+                Some(branch) => branch,
+                None => default_branch.insert(get_remote_default_branch(&repo_path)?),
+            };
+            if non_default_local_branch_at_head(&repo_path, &head, default_branch)? {
+                continue;
+            }
+        }
+        orphans.push(path);
+    }
+    Ok(orphans)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -8634,6 +13473,11 @@ pub struct OrphanCleanupAssessment {
     pub safe: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Same fingerprint `worktree_lifecycle` reports (status + HEAD + submodules).
+    /// A remembered Keep holds only while it is unchanged. None when the
+    /// checkout is gone or cannot be inspected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty_fingerprint: Option<String>,
 }
 
 /// Assess each current detached worktree. Only a clean checkout whose HEAD is
@@ -8642,25 +13486,57 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
-            .map(|path| match orphan_cleanup_safety(repo_path, &path) {
-                Ok(()) => OrphanCleanupAssessment {
-                    path,
-                    safe: true,
-                    reason: None,
-                },
-                Err(reason) => OrphanCleanupAssessment {
-                    path,
-                    safe: false,
-                    reason: Some(reason),
-                },
+            .map(|path| {
+                let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
+                    .ok()
+                    .map(|(fingerprint, _)| fingerprint);
+                match orphan_cleanup_safety(repo_path, &path) {
+                    Ok(()) => OrphanCleanupAssessment {
+                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        path,
+                        safe: true,
+                        dirty_fingerprint,
+                    },
+                    Err(reason) => OrphanCleanupAssessment {
+                        path,
+                        safe: false,
+                        reason: Some(reason),
+                        dirty_fingerprint,
+                    },
+                }
             })
             .collect()
     })
 }
 
+fn non_default_local_branch_at_head(
+    repo_path: &str,
+    head: &str,
+    default_branch: &str,
+) -> Result<bool, String> {
+    let branches = git_cmd(Path::new(repo_path))
+        .args([
+            "for-each-ref",
+            &format!("--points-at={head}"),
+            "--format=%(refname)",
+            "refs/heads/",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect detached checkout branches: {error}"))?;
+    let default_ref = format!("refs/heads/{default_branch}");
+    Ok(branches.stdout.lines().any(|branch| branch != default_ref))
+}
+
+const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
+
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
+    // Nothing to inspect: git cannot run in a missing cwd, and there is no
+    // work left to lose.
+    if !worktree.exists() {
+        return Ok(());
+    }
     let status = git_cmd(worktree)
         .args([
             "status",
@@ -8678,6 +13554,10 @@ pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(),
     }
 
     let head = rev_at(worktree, "HEAD")?;
+    let default_branch = get_remote_default_branch(repo_path)?;
+    if non_default_local_branch_at_head(repo_path, &head, &default_branch)? {
+        return Err("HEAD is the tip of a non-default local branch".into());
+    }
     let containing = git_cmd(Path::new(repo_path))
         .args([
             "for-each-ref",

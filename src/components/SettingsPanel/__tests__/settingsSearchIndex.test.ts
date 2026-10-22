@@ -10,7 +10,11 @@ import { extractRenderedTabComponents, extractRenderedTabKeys, extractTab } from
  * so a label keeps the `<h3>` the DOM puts above it. A component nested inside
  * one of these (RemoteMachinesTab wraps RemoteMachinesPanel) is listed by hand;
  * the top-level ones are checked against `SettingsPanel` below. */
+// Catalogue fields are indexed dynamically, not extracted as static JSX labels.
+// allSettingsTab.test.tsx exercises every supported descriptor's real editor.
+const DYNAMIC_TAB_SOURCES: Record<string, string[]> = { "all-settings": ["AllSettingsTab.tsx"] };
 const TAB_SOURCES: Record<string, string[]> = {
+	telegram: ["tabs/TelegramTab.tsx"],
 	general: ["tabs/GeneralTab.tsx"],
 	appearance: ["tabs/AppearanceTab.tsx"],
 	notifications: ["tabs/NotificationsTab.tsx"],
@@ -23,8 +27,8 @@ const TAB_SOURCES: Record<string, string[]> = {
 	"remote-machines": ["tabs/RemoteMachinesTab.tsx", "tabs/services/RemoteMachinesPanel.tsx"],
 	plugins: ["tabs/PluginsTab.tsx"],
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
-	agents: ["tabs/AgentsTab.tsx"],
-	"ai-chat": ["tabs/AiChatTab.tsx"],
+	agents: ["tabs/AgentsTab.tsx", "tabs/LaunchModuleSettings.tsx"],
+	"ai-chat": ["tabs/EgoPerimeterSection.tsx", "tabs/AiChatTab.tsx"],
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -35,9 +39,12 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
+	// Recent event labels come from runtime state; polling summaries are not controls.
+	telegram: { dynamic: 1, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
-	notifications: { dynamic: 0, orphans: 0 },
+	// Notification sound row labels are runtime entries, not static search targets.
+	notifications: { dynamic: 1, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
@@ -47,24 +54,27 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	github: { dynamic: 0, orphans: 0 },
 	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
 	// text includes a runtime count.
-	mcp: { dynamic: 1, orphans: 0 },
+	mcp: { dynamic: 2, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteMachinesPanel: the SSH-host `<option label={`${host}…`}>` (a
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
 	// daemon alive" labels, whose text sits in a nested `<span>`.
-	"remote-machines": { dynamic: 3, orphans: 0 },
+	"remote-machines": { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
-	"smart-prompts": { dynamic: 4, orphans: 11 },
+	"smart-prompts": { dynamic: 3, orphans: 12 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
 	// "Accept workspace trust for managed spawns" toggles sit in runtime-rendered
-	// cards and have no static scroll target. Workspace trust appears only in the
+	// cards and have no static scroll target; their static captions are orphans. Workspace trust appears only in the
 	// expanded Claude and Codex cards, so a global search result could not open
 	// the right card or scroll to its control.
-	// The machine selector's "Configure agents on" label scopes the page. The
+	// The machine selector is indexed under the page header. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
-	agents: { dynamic: 10, orphans: 2 },
+	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
+	// The per-agent "Launch instructions for <agent>" editor names its agent at
+	// runtime, inside a collapsed card; the global editor is indexed.
+	agents: { dynamic: 2, orphans: 18 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -127,17 +137,20 @@ function componentFiles(): Map<string, string> {
 describe("settings search index — drift guard", () => {
 	it("indexes every tab SettingsPanel can open", () => {
 		const rendered = extractRenderedTabKeys(readTab("SettingsPanel.tsx")).sort();
-		expect(rendered).toEqual(Object.keys(TAB_SOURCES).sort());
+		expect(rendered).toEqual(Object.keys({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }).sort());
 	});
 
-	it.each(Object.keys(TAB_SOURCES))("extracts %s from every component the panel renders for it", (tab) => {
-		const files = componentFiles();
-		const rendered = extractRenderedTabComponents(readTab("SettingsPanel.tsx"))[tab] ?? [];
-		expect(rendered.length).toBeGreaterThan(0);
-		for (const component of rendered) {
-			expect(TAB_SOURCES[tab], component).toContain(files.get(component));
-		}
-	});
+	it.each(Object.keys({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }))(
+		"extracts %s from every component the panel renders for it",
+		(tab) => {
+			const files = componentFiles();
+			const rendered = extractRenderedTabComponents(readTab("SettingsPanel.tsx"))[tab] ?? [];
+			expect(rendered.length).toBeGreaterThan(0);
+			for (const component of rendered) {
+				expect({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }[tab], component).toContain(files.get(component));
+			}
+		},
+	);
 
 	it.each(Object.keys(TAB_SOURCES))("matches the settings rendered by %s", (tab) => {
 		const indexed = SETTINGS_SEARCH_INDEX.filter((entry) => entry.tab === tab);
@@ -152,9 +165,33 @@ describe("settings search index — drift guard", () => {
 		}).toEqual(UNINDEXABLE[tab]);
 	});
 
-	it("classifies only the machine selector and per-agent idle close as Agents orphans", () => {
+	it("keeps per-agent captions out of search and indexes the page-level machine selector", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
-		expect(orphans.map((setting) => setting.text)).toEqual(["Close idle managed child after", "Configure agents on"]);
+		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Arguments",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
+			"Usage Dashboard",
+			"Close idle managed child after",
+			"Enabled",
+			"Auto-retry on server errors",
+			"Prevent alternate screen",
+			"Accept workspace trust for managed spawns",
+			"Native status signals",
+			"Install hooks globally",
+			"Track agent intent",
+			"Collect progress",
+			"Show suggested follow-ups",
+		]);
+		expect(SETTINGS_SEARCH_INDEX).toContainEqual({
+			tab: "agents",
+			section: "Terminal agents",
+			label: "Configure agents on",
+		});
 	});
 
 	it("indexes no tab the panel cannot open", () => {
@@ -176,6 +213,16 @@ describe("searchSettings", () => {
 		expect(hits).toEqual([
 			expect.objectContaining({ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL" }),
 		]);
+	});
+
+	it.each(["Permissions", "Filesystem sandbox"])("does not lose the ego %s control from Settings search", (label) => {
+		for (const client of ["desktop", "browser"] as const) {
+			expect(searchSettings(label, ALL_TABS, client)).toContainEqual({
+				tab: "agents",
+				section: "ego permissions",
+				label,
+			});
+		}
 	});
 
 	it("matches case-insensitively on any word order", () => {
@@ -210,6 +257,7 @@ describe("searchSettings", () => {
 
 	it("offers a desktop-only control on the desktop and not in a browser", () => {
 		expect(searchSettings("global hotkey", ALL_TABS, "desktop")).toEqual([
+			expect.objectContaining({ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" }),
 			expect.objectContaining({ tab: "keyboard-shortcuts", label: "Global Hotkey (Toggle Window)" }),
 		]);
 		expect(searchSettings("global hotkey", ALL_TABS, "browser")).toEqual([]);

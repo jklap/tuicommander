@@ -186,6 +186,7 @@ pub(super) async fn sse_events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
     let client_guard = SseClientGuard::new(state.clone());
+    let watch = crate::background_mode::hidden::RemoteWatch::new(state.clone(), None);
     let initial_types: Option<Vec<String>> = query.types.map(|t| {
         t.split(',')
             .map(|s| s.trim().to_string())
@@ -206,6 +207,7 @@ pub(super) async fn sse_events(
 
     let stream = async_stream::stream! {
         let _client_guard = client_guard;
+        let _watch = watch;
         // Moved in so it lives exactly as long as the stream does.
         let _filter_guard = filter_guard;
         // Send retry directive as first event
@@ -278,6 +280,9 @@ pub(crate) fn event_type_name_for_test(event: &AppEvent) -> &str {
 
 fn event_type_name(event: &AppEvent) -> &str {
     match event {
+        AppEvent::WorkItemProviderRequest { .. } => "work-item-provider-request",
+        AppEvent::CloseDialog { .. } => "close-dialog",
+        AppEvent::BackgroundModeChanged { .. } => "background-mode-changed",
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
@@ -286,11 +291,16 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
+        AppEvent::ShellAbandoned { .. } => "shell-abandoned",
+        AppEvent::PtyTitle { .. } => "pty-title",
+        AppEvent::PtyBell { .. } => "pty-bell",
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
+        AppEvent::ChatViewChanged { .. } => "chat-view-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
+        AppEvent::SessionSuspended { .. } => "session-suspended",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
@@ -299,8 +309,11 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
+        AppEvent::SettingsChanged(_) => "settings-changed",
         AppEvent::RepositoriesChanged => "repositories-changed",
+        AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
+        AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
         AppEvent::WorktreeRemoved { .. } => "worktree-removed",
         AppEvent::PeerRegistered { .. } => "peer-registered",
@@ -312,6 +325,8 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::CloseHtmlTabs { .. } => "close-html-tabs",
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProgressRecorded { .. } => "progress-recorded",
+        AppEvent::WorkflowRunChanged { .. } => "workflow-run-changed",
+        AppEvent::AutomationRunChanged { .. } => "automation-run-changed",
         AppEvent::ReviewProgress { .. } => "review-progress",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
@@ -320,8 +335,11 @@ fn event_type_name(event: &AppEvent) -> &str {
         // event from a local one, and a `?types=` filter has to match the name
         // the client asked for.
         AppEvent::RemoteMirrored { event, .. } => event,
+        #[cfg(feature = "dictation")]
         AppEvent::DictationDownloadProgress { .. } => "dictation-download-progress",
+        #[cfg(feature = "dictation")]
         AppEvent::SpeechDownloadProgress { .. } => "speech-download-progress",
+        #[cfg(feature = "dictation")]
         AppEvent::SpeechUtterance { .. } => "speech-utterance",
     }
 }
@@ -339,6 +357,11 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::OpenMarkdownTabsChanged => serde_json::json!({}),
+        AppEvent::WorkItemProviderRequest {
+            request_id,
+            request,
+        } => serde_json::json!({"request_id":request_id,"request":request}),
         AppEvent::HeadChanged { repo_path, branch } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }
@@ -347,6 +370,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::SessionCreated {
             session_id,
+            tuic_session,
             cwd,
             agent_type,
             display_name,
@@ -354,6 +378,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({
                 "session_id": session_id,
+                "tuic_session": tuic_session,
                 "cwd": cwd,
                 "agent_type": agent_type,
                 "display_name": display_name,
@@ -375,6 +400,16 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyExit { session_id } => {
             serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::PtyTitle { session_id, title } => {
+            serde_json::json!({ "session_id": session_id, "title": title })
+        }
+        AppEvent::PtyBell { session_id } => serde_json::json!({ "session_id": session_id }),
+        AppEvent::ShellAbandoned {
+            session_id,
+            since_ms,
+        } => {
+            serde_json::json!({ "session_id": session_id, "since_ms": since_ms })
         }
         AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
@@ -398,6 +433,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::PluginWatcherLines { session_id, lines } => {
             serde_json::json!({ "session_id": session_id, "lines": lines })
         }
+        AppEvent::ChatViewChanged { session_id, seq } => {
+            serde_json::json!({ "session_id": session_id, "seq": seq })
+        }
         AppEvent::PtyDescriptionChanged {
             session_id,
             description,
@@ -411,6 +449,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
+        AppEvent::SessionSuspended { record } => serde_json::json!({"record": record}),
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })
         }
@@ -431,6 +470,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             message,
             level,
             sound,
+            urgency,
             origin_repo_path,
             origin_session_id,
         } => {
@@ -439,6 +479,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "message": message,
                 "level": level,
                 "sound": sound,
+                "urgency": urgency,
                 "origin_repo_path": origin_repo_path,
                 "origin_session_id": origin_session_id,
             })
@@ -468,6 +509,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         // `/acp` routes use, so a client needs no per-transport translation.
         AppEvent::AcpNotice(notice) => serde_json::json!(notice),
         // Payload-free: the receiver re-reads `repositories.json` itself.
+        AppEvent::SettingsChanged(notice) => serde_json::json!(notice),
         AppEvent::RepositoriesChanged => serde_json::json!({}),
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })
@@ -475,6 +517,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         // Forwarded whole, like `AcpNotice`: the desktop `emit` in
         // `notify_worktree_created`/`notify_worktree_removed` serializes this
         // same struct, so the two transports cannot spell a field differently.
+        AppEvent::SessionWorktreeDeclared(payload) => serde_json::json!(payload),
         AppEvent::WorktreeCreated(payload) => serde_json::json!(payload),
         AppEvent::WorktreeRemoved(payload) => serde_json::json!(payload),
         AppEvent::PeerRegistered { tuic_session, name } => {
@@ -518,6 +561,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::ConflictAssistStatus { repo_path, payload }
         | AppEvent::ProgressRecorded { repo_path, payload }
+        | AppEvent::WorkflowRunChanged { repo_path, payload }
         | AppEvent::ReviewProgress { repo_path, payload }
         | AppEvent::ProposalsReady { repo_path, payload } => {
             serde_json::json!({ "repo_path": repo_path, "payload": payload })
@@ -532,9 +576,13 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
         // The daemon's own body, untouched.
         AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
+        AppEvent::AutomationRunChanged { payload }
+        | AppEvent::CloseDialog { payload }
+        | AppEvent::BackgroundModeChanged { payload } => payload.clone(),
         // Built once by the producer and handed to both transports, for the
         // same reason as `SessionStateChanged` above: the frontend applies one
         // shape, and a pair built from separate code in separate files drifts.
+        #[cfg(feature = "dictation")]
         AppEvent::DictationDownloadProgress { payload }
         | AppEvent::SpeechDownloadProgress { payload }
         | AppEvent::SpeechUtterance { payload } => payload.clone(),
@@ -737,6 +785,7 @@ mod tests {
     fn session_created_preserves_stable_display_name() {
         let event = AppEvent::SessionCreated {
             session_id: "session-1".into(),
+            tuic_session: Some("stable-identity".into()),
             cwd: Some("/repo".into()),
             agent_type: Some("codex".into()),
             display_name: Some("linux-primary".into()),
@@ -751,6 +800,20 @@ mod tests {
         assert_eq!(body["display_name"], "linux-primary");
         // Browser clients tag sub-agent tabs from this field, as the desktop does.
         assert_eq!(body["parent_session"], "tuic-parent");
+    }
+
+    #[test]
+    fn pty_title_has_matching_sse_name_and_payload() {
+        let event = AppEvent::PtyTitle {
+            session_id: "session-1".into(),
+            title: "Claude Code".into(),
+        };
+
+        assert_eq!(event_type_name(&event), "pty-title");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "title": "Claude Code"})
+        );
     }
 
     #[test]
@@ -851,6 +914,22 @@ mod tests {
         assert_eq!(
             event_payload(&event),
             serde_json::json!({"repo_path":"/repo", "payload":payload})
+        );
+    }
+
+    #[test]
+    fn workflow_run_changed_is_a_cursor_wake_hint() {
+        let payload = serde_json::json!({ "runId": "run-1", "sequence": 7 });
+        let event = AppEvent::WorkflowRunChanged {
+            repo_path: "/repo".into(),
+            payload: payload.clone(),
+        };
+        assert_eq!(event_type_name(&event), "workflow-run-changed");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({
+                "repo_path": "/repo", "payload": payload,
+            })
         );
     }
 

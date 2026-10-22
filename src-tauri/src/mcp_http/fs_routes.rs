@@ -221,13 +221,9 @@ fn deny_unless_in_roots(path: &str, roots: &[String]) -> Option<Response> {
     None
 }
 
-/// Extract registered repository root paths from the opaque repos JSON.
+/// Registered repository root paths.
 fn registered_repo_roots() -> Vec<String> {
-    crate::config::load_repositories()
-        .get("repositories")
-        .and_then(|r| r.as_object())
-        .map(|obj| obj.keys().cloned().collect())
-        .unwrap_or_default()
+    crate::config::registered_repo_paths()
 }
 
 pub(super) async fn read_external_file_http(Query(q): Query<FsExternalFileQuery>) -> Response {
@@ -259,6 +255,19 @@ pub(super) async fn write_file_http(Json(body): Json<FsWriteFileRequest>) -> Res
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
+}
+
+/// `Ok(true)` body is `true` (written), `false` means the file changed on disk first.
+pub(super) async fn write_file_if_unchanged_http(
+    Json(body): Json<FsWriteIfUnchangedRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::fs::write_file_if_unchanged(body.repo_path, body.file, body.expected, body.content)
+            .await,
+    )
 }
 
 pub(super) async fn create_directory_http(Json(body): Json<FsDirCreateRequest>) -> Response {
@@ -412,6 +421,14 @@ pub(super) async fn fs_transfer_paths_http(Json(body): Json<FsTransferPathsReque
     ))
 }
 
+/// The existing router/auth middleware also owns this streaming binary RPC.
+pub(super) async fn upload_copy_http(
+    Query(q): Query<crate::remote_transfer::UploadQuery>,
+    body: axum::body::Body,
+) -> Response {
+    json_result(crate::remote_transfer::receive_copy(q, &registered_repo_roots(), body).await)
+}
+
 /// 403 response for an absolute path that escapes every registered repo root.
 fn access_denied() -> Response {
     (
@@ -433,6 +450,69 @@ fn deny_unless_both_in_roots(from: &str, to: &str) -> Option<Response> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// A `repositories.json` shaped exactly like the frontend writes it: the repo map
+    /// lives under `repos`, next to unrelated top-level keys.
+    fn write_real_shaped_repositories(config_dir: &Path, repo: &Path) {
+        let doc = serde_json::json!({
+            "activeRepoPath": repo.to_string_lossy(),
+            "groupOrder": [],
+            "groups": {},
+            "repoOrder": [repo.to_string_lossy()],
+            "repos": {
+                repo.to_string_lossy(): {"path": repo.to_string_lossy(), "displayName": "r", "branches": {}}
+            }
+        });
+        std::fs::write(config_dir.join("repositories.json"), doc.to_string()).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn registered_repo_roots_returns_the_keys_of_the_repos_map() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+        write_real_shaped_repositories(cfg.path(), Path::new("/Users/dev/project-a"));
+
+        assert_eq!(
+            registered_repo_roots(),
+            vec!["/Users/dev/project-a".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn read_external_serves_a_file_inside_a_registered_repo_and_refuses_one_outside() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+        let repo = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(repo.path().join("AGENTS.md"), "inside").unwrap();
+        std::fs::write(outside.path().join("secret.md"), "outside").unwrap();
+        write_real_shaped_repositories(cfg.path(), repo.path());
+
+        let get = |p: std::path::PathBuf| {
+            read_external_file_http(Query(FsExternalFileQuery {
+                path: p.to_string_lossy().into_owned(),
+            }))
+        };
+        assert_eq!(
+            get(repo.path().join("AGENTS.md")).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            get(outside.path().join("secret.md")).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn registered_repo_roots_is_empty_when_no_repositories_are_registered() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+
+        assert_eq!(registered_repo_roots(), [] as [std::string::String; 0]);
+    }
 
     #[test]
     fn within_repo_roots_match() {
@@ -534,4 +614,22 @@ mod tests {
                 .is_some()
         );
     }
+}
+
+/// HTTP twin of the Tasks brief builder, using the same input object as IPC.
+pub(super) async fn start_work_prompt_http(Json(body): Json<StartWorkPromptRequest>) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::work_items::start_work_prompt::build_start_work_prompt(body.repo_path, body.input)
+            .await,
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StartWorkPromptRequest {
+    repo_path: String,
+    input: crate::work_items::start_work_prompt::PromptInput,
 }

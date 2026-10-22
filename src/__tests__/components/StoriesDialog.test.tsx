@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError } from "../../transport";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
@@ -24,6 +25,32 @@ const story = {
 	revision: 1,
 	claimSession: null,
 	abandoned: false,
+};
+
+const graph = {
+	id: "root",
+	targetId: "s1",
+	completed: false,
+	definition: {
+		id: "flow-1",
+		revision: 2,
+		graph: {
+			nodes: [{ id: "pause", kind: { type: "pause" } }],
+			edges: [{ from: "judge", to: "pause", outcome: "uncertain" }],
+		},
+	},
+	activations: [{ id: "a3", nodeId: "pause", state: "paused", edgeIndex: null }],
+	decisions: [
+		{
+			activationId: "a2",
+			edgeIndex: 0,
+			evidence: { actor: "reviewer", reason: "Conflicting evidence", references: ["report:r2"] },
+		},
+	],
+	loops: [{ nodeId: "repair", repeats: 3 }],
+	pauses: [
+		{ activationId: "a3", resumeTo: "implement", evidence: { reason: "Operator decision needed" }, resolution: null },
+	],
 };
 
 beforeEach(() => {
@@ -303,7 +330,7 @@ describe("StoriesDialog", () => {
 	});
 
 	it("shows cancelled dependencies and waives only the direct cancelled edge", async () => {
-		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wontfix", abandoned: true };
+		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wont_fix", abandoned: true };
 		const intermediate = {
 			...story,
 			id: "s3",
@@ -365,5 +392,464 @@ describe("StoriesDialog", () => {
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText("All cancelled");
+	});
+
+	it("offers browser approval and sends the selected transition", async () => {
+		const environment = globalThis as Record<string, unknown>;
+		const priorShim = environment.__TAURI_SHIM__;
+		environment.__TAURI_SHIM__ = true;
+		try {
+			vi.mocked(invoke).mockImplementation(async (_command, args) => {
+				if (_command === "story_capabilities") return true;
+				const action = (args as { action: { action: string } }).action;
+				if (action.action === "list_plans") return { type: "plans", value: [plan] };
+				if (action.action === "plan_view")
+					return {
+						type: "plan_view",
+						value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false },
+					};
+				if (action.action === "transition") return { type: "story", value: { ...story, status: "done" } };
+				throw new Error(`unexpected action ${action.action}`);
+			});
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+			await waitFor(() =>
+				expect(invoke).toHaveBeenCalledWith("story_action_command", {
+					project: "/repo",
+					action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+				}),
+			);
+		} finally {
+			environment.__TAURI_SHIM__ = priorShim;
+		}
+	});
+
+	it("offers desktop review actions and sends the selected transition", async () => {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false },
+				};
+			if (action.action === "transition") return { type: "story", value: { ...story, status: "review" } };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("story_action_command", {
+				project: "/repo",
+				action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+			}),
+		);
+		await waitFor(() =>
+			expect((screen.getByRole("button", { name: "Request changes" }) as HTMLButtonElement).disabled).toBe(false),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("story_action_command", {
+				project: "/repo",
+				action: { action: "transition", story_id: "s1", expected_revision: 1, command: "reject_review" },
+			}),
+		);
+	});
+
+	it("opens the persisted run timeline for the selected plan", async () => {
+		const run = {
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 4,
+			startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [],
+		};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "story_capabilities") return true;
+			const action = (args as { action: { action: string; after_sequence?: number } }).action;
+			if (command === "workflow_run_action") {
+				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action.action === "get") return { type: "snapshot", value: run };
+				if (action.action === "events")
+					return {
+						type: "events",
+						value:
+							action.after_sequence === 4
+								? []
+								: action.after_sequence === 3
+									? [{ sequence: 4, atMs: 1_200, kind: { type: "resumed" } }]
+									: [
+											{ sequence: 1, atMs: 1_000, kind: { type: "started" } },
+											{ sequence: 3, atMs: 1_100, kind: { type: "paused" } },
+										],
+					};
+			}
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo/worktree" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		await screen.findByRole("region", { name: "Run timeline" });
+		await screen.findByText("started");
+		expect(screen.getAllByText("paused").length).toBeGreaterThan(0);
+		expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+			project: "/repo/worktree",
+			action: { action: "list_plan_runs", plan_id: "p1", limit: 20 },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+		await screen.findByText("resumed");
+		expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+			project: "/repo/worktree",
+			action: { action: "events", run_id: "r1", after_sequence: 3, limit: 100 },
+		});
+		const reads = vi
+			.mocked(invoke)
+			.mock.calls.filter(
+				([command, args]) =>
+					command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get",
+			).length;
+		workflowRunSignals.accept({ repo_path: "/repo", payload: { runId: "r1", sequence: 5 } });
+		await waitFor(() =>
+			expect(
+				vi
+					.mocked(invoke)
+					.mock.calls.filter(
+						([command, args]) =>
+							command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get",
+					).length,
+			).toBeGreaterThan(reads),
+		);
+	});
+
+	it("records a human answer to a paused workflow request", async () => {
+		const run = {
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 4,
+			startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [
+				{
+					id: "a1",
+					storyId: "s1",
+					nodeId: "implement",
+					state: "reported",
+					outcome: "needs_input",
+					inputAnswer: null,
+					report: { inputRequest: { question: "Use A or B?", options: ["A", "B"] } },
+				},
+			],
+		};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (command === "workflow_run_action") {
+				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action.action === "get") return { type: "snapshot", value: run };
+				if (action.action === "events") return { type: "events", value: [] };
+				if (action.action === "command") return { type: "receipt", value: { snapshot: run } };
+			}
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		await screen.findByText("Use A or B?");
+		fireEvent.input(screen.getByRole("textbox", { name: "Answer" }), { target: { value: "A" } });
+		fireEvent.click(screen.getByRole("button", { name: "Record answer" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "command",
+					run_id: "r1",
+					expected_sequence: 4,
+					command_id: expect.any(String),
+					command: { action: "answer_input", attempt_id: "a1", answer: "A" },
+				},
+			}),
+		);
+	});
+
+	it("resumes a graph pause with an explicit activation and resolution after input is answered", async () => {
+		// Catches: status-only Resume bypassing the graph pause target and resolution.
+		const run = {
+			graphExecutions: [graph],
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 5,
+			startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [
+				{
+					id: "a1",
+					storyId: "s1",
+					nodeId: "implement",
+					state: "reported",
+					outcome: "needs_input",
+					inputAnswer: "A",
+					report: { inputRequest: { question: "Use A or B?", options: [] } },
+				},
+			],
+		};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (command === "workflow_run_action") {
+				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action.action === "get") return { type: "snapshot", value: run };
+				if (action.action === "events") return { type: "events", value: [] };
+				if (action.action === "command")
+					return { type: "receipt", value: { snapshot: { ...run, status: "running", sequence: 6 } } };
+			}
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		const resume = await screen.findByRole("button", { name: "Resume run" });
+		expect((resume as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.change(screen.getByRole("combobox", { name: "Execution" }), { target: { value: "root" } });
+		fireEvent.change(screen.getByRole("combobox", { name: "Resume activation" }), { target: { value: "a3" } });
+		fireEvent.input(screen.getByRole("textbox", { name: "Resolution" }), { target: { value: "Use A" } });
+		fireEvent.click(resume);
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "command",
+					run_id: "r1",
+					expected_sequence: 5,
+					command_id: expect.any(String),
+					command: { action: "resume_graph", execution_id: "root", activation_id: "a3", resolution: "Use A" },
+				},
+			}),
+		);
+	});
+
+	it("starts only the selected published story revision and keeps plan start visibly unavailable", async () => {
+		// Catches: using an editable draft or manual story transition instead of daemon graph start.
+		const fallback = vi.mocked(invoke).getMockImplementation();
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			const action = (args as { action?: { action: string } } | undefined)?.action;
+			if (command === "workflow_definition_action")
+				return {
+					type: "drafts",
+					value: [
+						{ id: "flow-1", name: "Published delivery", kind: "story", latestPublishedRevision: 2 },
+						{ id: "unpublished", name: "Draft only", kind: "story", latestPublishedRevision: null },
+					],
+				};
+			if (command === "workflow_run_action") {
+				if (action?.action === "start_graph" || action?.action === "get")
+					return {
+						type: "snapshot",
+						value: {
+							id: "new-run",
+							planId: "p1",
+							status: "running",
+							sequence: 4,
+							startedMs: 1000,
+							stories: [],
+							attempts: [],
+							graphExecutions: [],
+						},
+					};
+				if (action?.action === "events") return { type: "events", value: [] };
+			}
+			return fallback?.(command, args);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		expect(
+			(screen.getByRole("button", { name: "Start plan workflow · unavailable" }) as HTMLButtonElement).disabled,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Start story workflow" }));
+		await screen.findByRole("button", { name: "Start published workflow" });
+		expect(screen.queryByRole("option", { name: /Draft only/ })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Start published workflow" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "start_graph",
+					target: { type: "story", id: "s1" },
+					expected_revision: 1,
+					definition_id: "flow-1",
+					definition_revision: 2,
+					request_id: expect.any(String),
+				},
+			}),
+		);
+		await screen.findByRole("region", { name: "Run timeline" });
+	});
+
+	it("history renders replayed decisions and waits and preserves later-page payloads", async () => {
+		// Catches: showing only 'graph' labels while hiding node, decision and pause evidence.
+		const run = {
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 102,
+			startedMs: 1000,
+			stories: [],
+			attempts: [],
+			graphExecutions: [graph],
+		};
+		const fallback = vi.mocked(invoke).getMockImplementation();
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			const action = (args as { action?: { action: string; after_sequence?: number } } | undefined)?.action;
+			if (command === "workflow_run_action") {
+				if (action?.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action?.action === "get") return { type: "snapshot", value: run };
+				if (action?.action === "events")
+					return {
+						type: "events",
+						value:
+							action.after_sequence === 100
+								? [
+										{
+											sequence: 102,
+											atMs: 1100,
+											kind: {
+												type: "graph",
+												event: {
+													type: "transition",
+													transition: {
+														action: "complete",
+														activationId: "a2",
+														outcome: "uncertain",
+														evidence: { actor: "reviewer", reason: "Later page evidence", references: ["report:r2"] },
+													},
+												},
+											},
+										},
+									]
+								: [{ sequence: 100, atMs: 1000, kind: { type: "paused" } }],
+					};
+				if (action?.action === "command")
+					return { type: "receipt", value: { snapshot: { ...run, status: "cancelled" } } };
+			}
+			return fallback?.(command, args);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		await screen.findByText(/Decision · a2 · uncertain · reviewer · Conflicting evidence/);
+		expect(screen.getByText(/Operator decision needed · resume to implement/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+		await screen.findByText(/Later page evidence/);
+		expect(screen.getAllByText("Event details")).toHaveLength(2);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "command",
+					run_id: "r1",
+					command_id: expect.any(String),
+					expected_sequence: 102,
+					command: { action: "cancel" },
+				},
+			}),
+		);
+	});
+
+	it("legacy history offers cancellation without graph or status-only resume", async () => {
+		// Catches: accidentally reviving pre-graph runs from history controls.
+		const run = {
+			id: "legacy",
+			planId: "p1",
+			status: "paused",
+			sequence: 2,
+			startedMs: 1000,
+			stories: [],
+			attempts: [],
+		};
+		const fallback = vi.mocked(invoke).getMockImplementation();
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			const action = (args as { action?: { action: string } } | undefined)?.action;
+			if (command === "workflow_run_action") {
+				if (action?.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action?.action === "get") return { type: "snapshot", value: run };
+				if (action?.action === "events") return { type: "events", value: [] };
+			}
+			return fallback?.(command, args);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		await screen.findByText("Legacy run · inspect or cancel only.");
+		expect(screen.queryByRole("button", { name: "Resume run" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Cancel run" })).toBeTruthy();
+	});
+
+	it("opens the project workflow designer", async () => {
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (command === "workflow_definition_action" && action.action === "list_drafts")
+				return {
+					type: "drafts",
+					value: [
+						{
+							id: "f1",
+							project: "/repo",
+							name: "Story delivery",
+							kind: "story",
+							graph: {
+								nodes: [
+									{ id: "start", kind: { type: "start" } },
+									{ id: "end", kind: { type: "end" } },
+								],
+								edges: [],
+							},
+							draftRevision: 1,
+							latestPublishedRevision: 1,
+							builtinKey: "story_delivery",
+						},
+					],
+				};
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Designer" }));
+		await screen.findByRole("heading", { name: "Workflow designer" });
+		expect(invoke).toHaveBeenCalledWith("workflow_definition_action", {
+			project: "/repo",
+			action: { action: "list_drafts" },
+		});
 	});
 });

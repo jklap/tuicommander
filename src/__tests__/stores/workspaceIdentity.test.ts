@@ -35,7 +35,7 @@ function legacyRepoRecord() {
 				additions: 0,
 				deletions: 0,
 				isMerged: false,
-				lastCommitTs: 1788000000,
+				lastCommitTs: 1788000000000,
 				savedTerminals: [{ id: "term-1", name: "zsh", cwd: "/Users/x/Gits/acme", fontSize: 13, agentType: null }],
 				tabsCollapsed: true,
 			},
@@ -49,7 +49,7 @@ function legacyRepoRecord() {
 				additions: 12,
 				deletions: 3,
 				isMerged: false,
-				lastCommitTs: 1788100000,
+				lastCommitTs: 1788100000000,
 				savedTerminals: [],
 				runCommand: "pnpm dev",
 			},
@@ -97,7 +97,7 @@ describe("workspace identity migration", () => {
 		]);
 		expect(main.lastActiveTerminal).toBe("term-1");
 		expect(main.tabsCollapsed).toBe(true);
-		expect(main.lastCommitTs).toBe(1788000000);
+		expect(main.lastCommitTs).toBe(1788000000000);
 
 		expect(workspaces["POC-000006"].ciAutoHeal).toEqual({ enabled: true, attempts: 2 });
 		expect(workspaces["POC-000006"].isMerged).toBe(true);

@@ -4,6 +4,7 @@ import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
 import { validateBranchName } from "../RenameBranchDialog/RenameBranchDialog";
 import d from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
 import s from "./CreateWorktreeDialog.module.css";
 
 /** Options returned when the user confirms worktree creation */
@@ -32,10 +33,10 @@ export interface CreateWorktreeDialogProps {
 
 /** Sanitize a branch name for use as a directory name (replace slashes with dashes) */
 function sanitizeForPath(name: string): string {
-	return name.replace(/\//g, "-");
+	return name.replaceAll("/", "-");
 }
 
-/** Custom styled dropdown replacing native <select>, with local/remote grouping */
+/** Custom styled dropdown replacing native select, with local/remote grouping */
 const BaseRefDropdown: Component<{
 	value: string;
 	options: BaseRefOption[];
@@ -231,7 +232,7 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 					</div>
 					<div class={d.body}>
 						<div class={s.inputRow}>
-							<input
+							<Input
 								ref={inputRef}
 								type="text"
 								value={branchName()}

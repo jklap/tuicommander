@@ -83,20 +83,121 @@ pub(super) fn save_story(
     Ok(())
 }
 
-pub(super) fn dependencies_done(conn: &Connection, story: &Story) -> Result<bool, String> {
-    for id in &story.dependencies {
-        if read_story(conn, id)?.status != StoryStatus::Done {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+/// Receipt probes and the persisted inputs they observed. Build this before
+/// acquiring either the store mutex or an SQLite write transaction.
+pub(super) struct DependencyPreflight {
+    plan_id: String,
+    revisions: Vec<(String, i64)>,
+    run_db: PathBuf,
+    run_sequences: Vec<(String, i64)>,
+    integrated: HashSet<(String, i64)>,
 }
 
-pub(super) fn promote_ready(tx: &Transaction<'_>, plan_id: &str) -> Result<(), String> {
+impl DependencyPreflight {
+    pub(super) fn prepare(store: &StoryStore, plan_id: &str) -> Result<Self, String> {
+        let stories = store.list_stories(plan_id)?;
+        let run_db = store
+            .db_path
+            .parent()
+            .ok_or("story store has no parent directory")?
+            .join("workflow_runs.sqlite3");
+        let run_sequences = crate::workflows::plan_run_sequences_in(&run_db, plan_id)?;
+        let mut integrated = HashSet::new();
+        if !run_sequences.is_empty() {
+            for story in &stories {
+                if story.status == StoryStatus::Done
+                    && crate::workflows::story_integrated_at_revision_in(
+                        &run_db,
+                        &story.id,
+                        story.revision,
+                    )?
+                {
+                    integrated.insert((story.id.clone(), story.revision));
+                }
+            }
+        }
+        Ok(Self {
+            plan_id: plan_id.into(),
+            revisions: story_revisions(&stories),
+            run_db,
+            run_sequences,
+            integrated,
+        })
+    }
+
+    pub(super) fn validate(&self, conn: &Connection) -> Result<(), String> {
+        if story_revisions(&read_plan_stories(conn, &self.plan_id)?) != self.revisions
+            || crate::workflows::plan_run_sequences_in(&self.run_db, &self.plan_id)?
+                != self.run_sequences
+        {
+            return Err(
+                "story or workflow revisions changed during dependency preflight; retry".into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn receipt_current(&self, story: &Story) -> bool {
+        self.run_sequences.is_empty()
+            || self
+                .integrated
+                .contains(&(story.id.clone(), story.revision))
+    }
+}
+
+pub(super) fn story_revisions(stories: &[Story]) -> Vec<(String, i64)> {
+    let mut revisions: Vec<_> = stories
+        .iter()
+        .map(|story| (story.id.clone(), story.revision))
+        .collect();
+    revisions.sort();
+    revisions
+}
+
+/// Dependencies that block a story, using already validated preflight receipts.
+pub(super) fn unmet_dependencies(
+    conn: &Connection,
+    story: &Story,
+    preflight: &DependencyPreflight,
+) -> Result<Vec<String>, String> {
+    if story.dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut unmet = Vec::new();
+    for id in &story.dependencies {
+        let dependency = read_story(conn, id)?;
+        if dependency.status != StoryStatus::Done || !preflight.receipt_current(&dependency) {
+            unmet.push(id.clone());
+        }
+    }
+    Ok(unmet)
+}
+
+pub(super) fn dependencies_integrated(
+    conn: &Connection,
+    story: &Story,
+    preflight: &DependencyPreflight,
+) -> Result<bool, String> {
+    Ok(unmet_dependencies(conn, story, preflight)?.is_empty())
+}
+
+pub(super) fn reconcile_ready(
+    tx: &Transaction<'_>,
+    plan_id: &str,
+    preflight: &DependencyPreflight,
+) -> Result<(), String> {
     for mut candidate in read_plan_stories(tx, plan_id)? {
-        if candidate.status == StoryStatus::Backlog && dependencies_done(tx, &candidate)? {
+        if !matches!(candidate.status, StoryStatus::Backlog | StoryStatus::Ready) {
+            continue;
+        }
+        let desired = if dependencies_integrated(tx, &candidate, preflight)? {
+            StoryStatus::Ready
+        } else {
+            StoryStatus::Backlog
+        };
+        if candidate.status != desired {
             let revision = candidate.revision;
-            candidate.status = StoryStatus::Ready;
+            candidate.status = desired;
             save_story(tx, &mut candidate, revision)?;
         }
     }

@@ -1,5 +1,16 @@
-import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from "solid-js";
-import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
+import {
+	type Component,
+	createEffect,
+	createSignal,
+	lazy,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+	untrack,
+} from "solid-js";
+import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
@@ -14,11 +25,14 @@ import { settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, isTauri, subscribePty, type Unsubscribe } from "../../transport";
+import { getSessionConnection } from "../../transportRuntime";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { safeUnlisten } from "../../utils/safeUnlisten";
+import { isSuspendingOrSuspended, resumeTerminal } from "../../utils/suspendTerminal";
+import type { TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
@@ -29,7 +43,9 @@ import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
+import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
+import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
 import { TerminalSearch } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,
@@ -79,15 +95,6 @@ type ParsedEvent =
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
 	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number };
-
-type BackendSessionState = {
-	shell_state?: "busy" | "idle";
-	agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
-	awaiting_input?: boolean;
-	question_confident?: boolean;
-	background_work?: boolean;
-	queued_commands?: number;
-};
 
 export interface TerminalProps {
 	id: string;
@@ -180,10 +187,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 	let sessionId: string | null = null;
 	const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
+	// Without a session there is nothing to read, so the grid (and its exit notice) stays on screen.
+	const chatActive = () => terminalsStore.get(props.id)?.viewMode === "chat" && _currentSessionId() !== null;
 	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
 	let pendingCanvasFocus = false;
+	let chatSearchRef: TranscriptSearchRef | undefined;
 
 	const {
 		visible: searchVisible,
@@ -197,10 +207,23 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// for this terminal, so send and Esc leave it open.
 	const [composePinned, setComposePinned] = createSignal(false);
 	const [composeFocusRequest, setComposeFocusRequest] = createSignal(0);
+	const [composeTextRequest, setComposeTextRequest] = createSignal(0);
+	// Chat owns its input slot without changing this tab's CLI Compose preferences.
+	const composeVisible = () => chatActive() || composeOpen();
+	const composeDocked = () => chatActive() || composePinned();
+	createEffect(
+		on(chatActive, (active) => {
+			closeSearchBar();
+			chatSearchRef?.close();
+			if (active) setComposeFocusRequest((n) => n + 1);
+		}),
+	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
-	const finishCompose = () => {
-		setPendingComposeText("");
-		if (composePinned()) return;
+	const finishCompose = (remainingDraft: string) => {
+		setPendingComposeText(remainingDraft);
+		// A different Compose instance may already be showing the same draft.
+		setComposeTextRequest((n) => n + 1);
+		if (composeDocked()) return;
 		setComposeOpen(false);
 		canvasTerminalRef()?.focus();
 	};
@@ -214,10 +237,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
 	let unlistenKitty: (() => unknown) | undefined;
-	let unlistenTitle: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
+
+	/** Stop listening to the current session; the three teardowns (reconnect failure,
+	 *  suspend, unmount) share it. */
+	const detachSessionListeners = () => {
+		safeUnlisten(unsubscribePty);
+		unsubscribePty = undefined;
+		safeUnlisten(unlistenParsed);
+		unlistenParsed = undefined;
+		safeUnlisten(unlistenKitty);
+		unlistenKitty = undefined;
+		safeUnlisten(unlistenClipboardStore);
+		unlistenClipboardStore = undefined;
+	};
 
 	const RETRY_DELAYS = [5_000, 15_000, 30_000];
 	let retryCount = 0;
@@ -277,10 +312,27 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}
 	});
 
+	trackQuestionReminder(props.id);
+
 	// Original tab name before any OSC title overwrote it
 	let originalName: string | null = null;
 
 	const pty = usePty();
+
+	// Launch readiness can arrive before or after command preparation. State
+	// snapshots also carry idle when the first prompt predates subscription.
+	createEffect(() => {
+		const terminal = terminalsStore.get(props.id);
+		const targetSessionId = terminal?.sessionId;
+		const command = terminal?.pendingInitCommand;
+		if (disposed || !targetSessionId || !command || terminal.shellState !== "idle") return;
+		untrack(() => {
+			terminalsStore.update(props.id, { pendingInitCommand: null });
+			pty
+				.sendCommand(targetSessionId, command, null)
+				.catch((error) => appLogger.error("terminal", "Failed to write init command", { error: String(error) }));
+		});
+	});
 
 	/** Track PTY activity for the activity dashboard. CanvasTerminal handles
 	 *  rendering and plugin dispatch; this callback only updates store metadata.
@@ -303,6 +355,32 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		if (terminalsStore.state.activeId !== props.id && !activityFlagged) {
 			activityFlagged = true;
 			terminalsStore.update(props.id, { activity: true });
+		}
+	};
+
+	const handlePtyTitle = (title: string) => {
+		if (disposed) return;
+		const term = terminalsStore.get(props.id);
+		if (
+			!term ||
+			!shouldApplyOscTitle({
+				nameIsCustom: term.nameIsCustom,
+				nameFromSpawn: term.nameFromSpawn,
+				agentIntent: term.agentIntent,
+				intentTabTitle: settingsStore.state.intentTabTitle,
+			})
+		)
+			return;
+		if (!title) {
+			if (originalName) terminalsStore.update(props.id, { name: originalName });
+		} else {
+			const cleaned = cleanOscTitle(title);
+			if (cleaned) {
+				if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
+				terminalsStore.update(props.id, { name: cleaned });
+			} else if (originalName) {
+				terminalsStore.update(props.id, { name: originalName });
+			}
 		}
 	};
 
@@ -401,8 +479,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// Record the prompt row for the green scrollbar marker. line < 0 (the
 					// keystroke-reconstructed path) is ignored by the store.
 					terminalsStore.addUserPromptLine(props.id, parsed.line);
-					// Clear suggest bar, pending buffer, and mark dismissed
-					terminalsStore.update(props.id, { suggestDismissed: true, suggestedActions: null, activeSubTasks: 0 });
+					// A submitted prompt starts a new turn. Clear old choices and allow
+					// new ones even when busy was emitted before this input echo.
+					terminalsStore.update(props.id, { suggestDismissed: false, suggestedActions: null, activeSubTasks: 0 });
 					// User resumed typing — clear any stale error/question badge. See comment
 					// in stores/terminals.ts handleShellStateChange: error state should be
 					// cleared on explicit agent activity, user-input, or process exit.
@@ -500,10 +579,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "suggest":
-					// Backend guarantees `suggest` events only arrive once the shell has
-					// transitioned to IDLE (see `drain_pending_suggest` in pty.rs, gated
-					// on `SHELL_IDLE`). No frontend buffering needed: if the user hasn't
-					// dismissed the previous cycle's chips, show the new set directly.
+					// The backend publishes choices once the agent is ready, even
+					// while background descendants keep the shell busy. Completion
+					// remains separately gated; show this turn's choices directly.
 					if (settingsStore.state.suggestFollowups && parsed.items?.length) {
 						const t = terminalsStore.get(props.id);
 						if (t && !t.suggestDismissed) {
@@ -527,17 +605,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					if (parsed.state === "idle") {
 						// Idle arrives first; any parked `suggest:` items follow on a later
 						// silence-timer tick (backend-gated). No promotion logic needed here.
-						const pendingT = terminalsStore.get(props.id);
-						const initCmd = pendingT?.pendingInitCommand;
-						terminalsStore.update(props.id, {
-							shellState: parsed.state,
-							...(initCmd ? { pendingInitCommand: null } : {}),
-						});
-						if (initCmd && targetSessionId) {
-							pty
-								.sendCommand(targetSessionId, initCmd, null)
-								.catch((e) => appLogger.error("terminal", "Failed to write init command", { error: String(e) }));
-						}
+						terminalsStore.update(props.id, { shellState: parsed.state });
 						// Idle: detect agent immediately — only idle can clear a detected agent
 						detectAgentForTerminal(props.id, "idle").catch((err) =>
 							appLogger.warn("terminal", "[AgentDetect] unexpected error", { error: String(err), termId: props.id }),
@@ -594,6 +662,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			() => {},
 			() => {
 				if (disposed) return;
+				// Suspend closes the PTY on purpose and keeps the tab as it is.
+				if (isSuspendingOrSuspended(props.id)) return;
 				// Guard: terminal may have been removed from the store already
 				// (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
 				const stillExists = terminalsStore.get(props.id);
@@ -657,6 +727,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 			{
 				onActivity: handlePtyActivity,
+				onTitle: handlePtyTitle,
 				onReconnecting: (attempt, max) => setReconnecting({ attempt, max }),
 				onReconnected: () => setReconnecting(null),
 				// Browser mode: receive parsed events via WebSocket JSON frames
@@ -666,30 +737,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 				},
 				onStateChange: (snapshot) => {
-					const state = snapshot as BackendSessionState;
-					const wasAwaiting = terminalsStore.get(props.id)?.awaitingInput === "question";
-					const isAwaiting = state.awaiting_input === true;
-					terminalsStore.update(props.id, {
-						agentState: state.agent_state ?? null,
-						backgroundWork: state.background_work === true,
-						queuedCommands: state.queued_commands ?? 0,
-						awaitingInput: state.awaiting_input === true ? "question" : null,
-						awaitingInputConfident: state.question_confident === true,
-						...(state.shell_state ? { shellState: state.shell_state } : {}),
-					});
-					if (wasAwaiting !== isAwaiting) {
-						pluginRegistry.dispatchStructuredEvent(
-							"awaiting",
-							{ awaiting: isAwaiting, confident: state.question_confident === true },
-							targetSessionId,
-						);
-					}
+					if (disposed) return;
+					applySessionStateEvent({ session_id: targetSessionId, state: snapshot });
 				},
 			},
 		);
 
 		// Tauri-only listeners (kitty keyboard, shell state sync)
-		if (isTauri()) {
+		if (isTauri() && !getSessionConnection(targetSessionId)) {
 			const { listen } = await import("@tauri-apps/api/event");
 			unlistenParsed = await listen<ParsedEvent>(`pty-parsed-${targetSessionId}`, (event) => {
 				handleParsedEvent(event.payload);
@@ -717,42 +772,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// delivery had just installed, inventing one empty command block per
 			// prompt. `agent-block` above still feeds the same sink, but that is a
 			// different source for agents with no shell integration, not a copy.
-
-			// Listen for OSC 0/2 title changes from Rust (native renderer)
-			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
-				if (disposed) return;
-				const title = event.payload;
-				const term = terminalsStore.get(props.id);
-				if (
-					!term ||
-					!shouldApplyOscTitle({
-						nameIsCustom: term.nameIsCustom,
-						nameFromSpawn: term.nameFromSpawn,
-						agentIntent: term.agentIntent,
-						intentTabTitle: settingsStore.state.intentTabTitle,
-					})
-				)
-					return;
-				if (!title) {
-					if (originalName) terminalsStore.update(props.id, { name: originalName });
-				} else {
-					const cleaned = cleanOscTitle(title);
-					if (cleaned) {
-						if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
-						terminalsStore.update(props.id, { name: cleaned });
-					} else if (originalName) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
-				}
-			});
-			// Unmounting during the await above leaves this listener attached:
-			// onCleanup already ran and saw `unlistenTitle` still undefined. Every
-			// sibling listener has this guard; this one was missing it.
-			if (disposed) {
-				safeUnlisten(unlistenTitle);
-				unlistenTitle = undefined;
-				return;
-			}
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
@@ -814,6 +833,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	/** Initialize PTY session and event listeners */
 	const initSession = async () => {
 		if (sessionInitialized || !containerRef) return;
+		// A suspended tab has no PTY on purpose; resuming clears the flag and re-runs this.
+		if (terminalsStore.get(props.id)?.suspended) return;
 		sessionInitialized = true;
 		if (isPerfDebug()) {
 			const spawnMs = Math.round(performance.now() - mountedAt);
@@ -831,6 +852,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				try {
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
+					await attachSessionListeners(sessionId);
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
@@ -844,16 +866,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					);
 					sessionId = null;
 					setCurrentSessionId(null);
-					safeUnlisten(unsubscribePty);
-					unsubscribePty = undefined;
-					safeUnlisten(unlistenParsed);
-					unlistenParsed = undefined;
-					safeUnlisten(unlistenKitty);
-					unlistenKitty = undefined;
-					safeUnlisten(unlistenTitle);
-					unlistenTitle = undefined;
-					safeUnlisten(unlistenClipboardStore);
-					unlistenClipboardStore = undefined;
+					detachSessionListeners();
 				}
 			}
 			if (!reconnected) {
@@ -937,6 +950,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	createEffect(
 		on(isVisible, (visible) => {
 			if (!visible) return;
+			if (terminalsStore.get(props.id)?.suspended) {
+				void resumeTerminal(props.id);
+				return;
+			}
 			const containerIsSized = () => !!containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0;
 
 			rafHandle = requestAnimationFrame(() => {
@@ -963,7 +980,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// Never steal the caret from a field the user is typing in — the search
 				// bar and the compose panel live inside this same terminal wrapper.
 				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput(document.activeElement, props.id)) {
-					canvasTerminalRef()?.focus();
+					if (chatActive()) setComposeFocusRequest((n) => n + 1);
+					else canvasTerminalRef()?.focus();
 				}
 			});
 
@@ -974,6 +992,31 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				cancelSizeRetry = null;
 			});
 		}),
+	);
+
+	// Suspend detaches the PTY; resume attaches the replacement already opened by Rust.
+	createEffect(
+		on(
+			() => terminalsStore.get(props.id)?.suspended ?? false,
+			(suspended) => {
+				if (suspended) {
+					if (sessionId) pluginRegistry.removeSession(sessionId);
+					detachSessionListeners();
+					kittyFlags = 0;
+					sessionId = null;
+					setCurrentSessionId(null);
+					sessionInitialized = false;
+				} else {
+					sessionId = terminalsStore.get(props.id)?.sessionId ?? null;
+					setCurrentSessionId(sessionId);
+					if (isVisible())
+						initSession().catch((e) =>
+							appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
+						);
+				}
+			},
+			{ defer: true },
+		),
 	);
 
 	// Alt-screen recovery: when an agent exits without leaving alt-screen,
@@ -1002,16 +1045,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		clearTimeout(retryTimer);
 		clearTimeout(agentDetectTimer);
 		clearTimeout(questionDebounceTimer);
-		safeUnlisten(unsubscribePty);
-		unsubscribePty = undefined;
-		safeUnlisten(unlistenParsed);
-		unlistenParsed = undefined;
-		safeUnlisten(unlistenKitty);
-		unlistenKitty = undefined;
-		safeUnlisten(unlistenTitle);
-		unlistenTitle = undefined;
-		safeUnlisten(unlistenClipboardStore);
-		unlistenClipboardStore = undefined;
+		detachSessionListeners();
 		kittyFlags = 0;
 
 		if (sessionId) pluginRegistry.removeSession(sessionId);
@@ -1042,14 +1076,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		refresh: () => canvasTerminalRef()?.refresh(),
 		focus: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			const ref = canvasTerminalRef();
 			if (ref) ref.focus();
 			else pendingCanvasFocus = true;
 		},
 		getSessionId: () => sessionId,
-		openSearch: () => openSearchBar(),
-		closeSearch: () => closeSearchBar(),
+		openSearch: () => {
+			if (chatActive()) chatSearchRef?.open();
+			else openSearchBar();
+		},
+		closeSearch: () => {
+			closeSearchBar();
+			chatSearchRef?.close();
+		},
 		toggleCompose: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			if (composePinned()) {
 				// Pinned stays open: the shortcut moves the caret between the two inputs.
 				if (focusIsInsideOwnInput(document.activeElement, props.id)) canvasTerminalRef()?.focus();
@@ -1074,7 +1122,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		openComposeWithText: (text: string) => {
 			setPendingComposeText(text);
-			setComposeOpen(true);
+			if (!chatActive()) setComposeOpen(true);
+			setComposeTextRequest((n) => n + 1);
 		},
 		searchBuffer: (query: string) => {
 			if (!sessionId) return [];
@@ -1221,9 +1270,23 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		const path = e.dataTransfer?.getData("application/x-tuic-path");
 		if (!path || !sessionId) return;
 		e.preventDefault();
-		const quoted = `'${path.replace(/'/g, "'\\''")}' `;
+		const quoted = `'${path.replaceAll("'", "'\\''")}' `;
 		pty.write(sessionId, quoted);
 		canvasTerminalRef()?.focus();
+	};
+
+	// The switch floats over the top-right corner of both views and is a sibling of each, so a wheel
+	// landing on it reaches neither scroller: the scroll stalls while the pointer crosses it.
+	const handleToggleWheel = (e: WheelEvent) => {
+		e.preventDefault();
+		if (!chatActive()) {
+			canvasTerminalRef()?.wheel(e);
+			return;
+		}
+		const transcript = (e.currentTarget as HTMLElement)
+			.closest("[data-terminal-id]")
+			?.querySelector("[data-terminal-chat]");
+		transcript?.scrollBy({ top: e.deltaY, left: e.deltaX });
 	};
 
 	return (
@@ -1243,6 +1306,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					canvasTerminalRef()?.focus();
 				}}
 			/>
+			<ViewModeToggle terminalId={props.id} onWheel={handleToggleWheel} />
+			<ChatViewFallbackBanner terminalId={props.id} />
 			<Show
 				when={
 					settingsStore.state.showLastPrompt &&
@@ -1286,7 +1351,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					</button>
 				</div>
 			</Show>
-			<div ref={containerRef} class={s.content}>
+			{/* Chat mode HIDES the grid (display:none, the background-tab path) and never
+			    unmounts it: a disposed CanvasTerminal under a queued frame event froze the UI. */}
+			<div ref={containerRef} class={s.content} classList={{ [s.contentHidden]: chatActive() }}>
 				{/* keyed: pass sessionId as a stable string value, NOT the Show's reactive
 				    accessor. CanvasTerminal's onFrame (and ~35 other async IPC handlers) re-read
 				    props.sessionId on every backend frame. With a non-keyed Show, props.sessionId
@@ -1307,17 +1374,40 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						<Show
 							when={spawnError()}
 							fallback={
-								<Show when={sessionEnded()}>
-									<div class={s.exitedNotice} data-testid="terminal-exited-notice">
-										<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
-										<span class={s.exitedHint}>
-											{t(
-												"terminal.exited.hint",
-												"The process exited and its output was released. Close this tab to remove it.",
-											)}
-										</span>
-									</div>
-								</Show>
+								<>
+									<Show when={terminalsStore.get(props.id)?.suspended}>
+										<div class={s.exitedNotice} data-testid="terminal-suspended-notice">
+											<span class={s.exitedTitle}>{t("terminal.suspended.title", "Suspended")}</span>
+											<span class={s.exitedHint}>
+												{t(
+													"terminal.suspended.hint",
+													"The process was ended to free memory and CPU. Resume opens a new session in the same folder.",
+												)}
+											</span>
+											<Show when={resumeContext()}>
+												{(ctx) => (
+													<span class={s.resumeContext} title={ctx()}>
+														{ctx()}
+													</span>
+												)}
+											</Show>
+											<button class={s.resumeButton} type="button" onClick={() => void resumeTerminal(props.id)}>
+												{t("terminal.suspended.resume", "Resume")}
+											</button>
+										</div>
+									</Show>
+									<Show when={sessionEnded()}>
+										<div class={s.exitedNotice} data-testid="terminal-exited-notice">
+											<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
+											<span class={s.exitedHint}>
+												{t(
+													"terminal.exited.hint",
+													"The process exited and its output was released. Close this tab to remove it.",
+												)}
+											</span>
+										</div>
+									</Show>
+								</>
 							}
 						>
 							<div class={s.exitedNotice} role="alert">
@@ -1357,7 +1447,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					)}
 				</Show>
 			</div>
-			<Show when={!composeOpen()}>
+			<Show keyed when={chatActive() ? _currentSessionId() : null}>
+				{(sid) => (
+					<TerminalChatView
+						terminalId={props.id}
+						sessionId={sid}
+						onSearchRef={(ref) => {
+							chatSearchRef = ref;
+						}}
+					/>
+				)}
+			</Show>
+			<Show when={!composeOpen() && !chatActive()}>
 				<div
 					class={s.composeHint}
 					onClick={() => setComposeOpen(true)}
@@ -1375,13 +1476,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<Show when={composeOpen()}>
+			<Show when={composeVisible()}>
 				<Suspense>
 					<ComposePanel
-						isOpen={composeOpen}
+						isOpen={composeVisible}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
-						pinned={composePinned}
+						onSubmitted={finishCompose}
+						pinned={composeDocked}
+						persistent={chatActive}
 						onTogglePin={() => setComposePinned(!composePinned())}
 						onDismiss={() => {
 							setComposePinned(false);
@@ -1389,6 +1492,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							canvasTerminalRef()?.focus();
 						}}
 						focusRequest={composeFocusRequest}
+						textRequest={composeTextRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {
@@ -1428,17 +1532,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								// lifecycle poll — the badge must react to the click.
 								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
 							});
-							finishCompose();
 						}}
 						onClose={() => {
-							if (!composePinned()) setComposeOpen(false);
+							if (chatActive()) terminalsStore.setViewMode(props.id, "cli");
+							else if (!composePinned()) setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {
 							await submitCompose("send", sessionId, (id) =>
 								pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
 							);
-							finishCompose();
 						}}
 					/>
 				</Suspense>

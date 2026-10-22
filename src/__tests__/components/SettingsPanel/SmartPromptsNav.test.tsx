@@ -54,7 +54,7 @@ vi.mock("../../../stores/agentConfigs", () => ({
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		isAiChatEnabled: () => false,
 		isAcpConfigured: () => false,
 	},
@@ -104,7 +104,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		clickNav(container, "Smart Prompts");
 
-		const heading = container.querySelector(".section h3");
+		const heading = container.querySelector(".section h2");
 		expect(heading?.textContent).toBe("Smart Prompts");
 		expect(container.textContent).toContain("Test Smart Prompt");
 	});
@@ -113,15 +113,15 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
 		const active = container.querySelector(".navItem.active");
 		expect(active?.textContent).toBe("Smart Prompts");
-		expect(container.querySelector(".section h3")?.textContent).toBe("Smart Prompts");
+		expect(container.querySelector(".section h2")?.textContent).toBe("Smart Prompts");
 	});
 
 	it("exposes editable Execution Mode and Auto-execute controls in the expanded editor", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="smart-prompts" />);
 
 		// Expand the prompt row to reveal the editor
-		const header = Array.from(container.querySelectorAll('[role="button"]')).find((el) =>
-			el.textContent?.includes("Test Smart Prompt"),
+		const header = Array.from(container.querySelectorAll("button[aria-expanded]")).find((el) =>
+			el.getAttribute("aria-label")?.includes("Test Smart Prompt"),
 		);
 		expect(header).toBeTruthy();
 		fireEvent.click(header!);

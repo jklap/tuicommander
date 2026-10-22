@@ -71,8 +71,18 @@ pub enum PrTransition {
     },
 }
 
+/// The "ready" verdict of the shared readiness function (`src/utils/prReadiness.ts`): the OS
+/// notice must never say "ready to merge" while the badge says Comments or CI Running. Keep the
+/// two in step.
 fn is_ready(pr: &BranchPrStatus) -> bool {
-    pr.mergeable == "MERGEABLE" && pr.review_decision == "APPROVED" && pr.checks.failed == 0
+    !pr.is_draft
+        && pr.conflict_state == crate::github::ConflictState::Clear
+        && pr.mergeable == "MERGEABLE"
+        && pr.review_decision == "APPROVED"
+        && pr.checks.failed == 0
+        && pr.checks.pending == 0
+        && pr.unresolved_threads == 0
+        && !pr.unresolved_threads_truncated
 }
 
 pub fn detect_transitions(
@@ -249,6 +259,8 @@ mod tests {
             merge_commit_allowed: true,
             squash_merge_allowed: true,
             rebase_merge_allowed: true,
+            unresolved_threads: 0,
+            unresolved_threads_truncated: false,
         }
     }
 
@@ -406,5 +418,82 @@ mod tests {
         let new = make_pr("OPEN", "UNKNOWN", "", 0, 3);
         let t = detect_transitions("/repo", &old, &new);
         assert!(t.is_empty());
+    }
+
+    /// Catches: the OS notification "PR ready to merge" firing for a PR the badge and
+    /// panel show as "Comments" (unresolved review threads) or "CI Running" — two
+    /// readiness verdicts for the same PR (story 1347: one shared verdict).
+    #[test]
+    fn ready_transition_waits_for_unresolved_threads_and_pending_checks() {
+        let old = make_pr("OPEN", "UNKNOWN", "", 1, 0);
+
+        let mut open_threads = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 0);
+        open_threads.unresolved_threads = 2;
+        let t = detect_transitions("/repo", &old, &open_threads);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "unresolved threads must not notify ready: {t:?}"
+        );
+
+        let mut truncated = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 0);
+        truncated.unresolved_threads_truncated = true;
+        let t = detect_transitions("/repo", &old, &truncated);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "a truncated thread page must not notify ready: {t:?}"
+        );
+
+        let pending = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 3);
+        let t = detect_transitions("/repo", &old, &pending);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "pending checks must not notify ready: {t:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod critic3_tests {
+    use super::*;
+    use crate::github::ConflictState;
+
+    fn base(unresolved: u32) -> BranchPrStatus {
+        // MERGEABLE + CLEAN + APPROVED, no checks: ready unless a blocker is set below.
+        let open: Vec<serde_json::Value> = (0..unresolved)
+            .map(|_| serde_json::json!({"isResolved": false}))
+            .collect();
+        crate::github::parse_pr_node(&serde_json::json!({
+            "number": 42, "headRefName": "feat/test", "state": "OPEN",
+            "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "reviewThreads": {"nodes": open}
+        }))
+        .expect("PR node parses")
+    }
+
+    fn fires_ready(old: &BranchPrStatus, new: &BranchPrStatus) -> bool {
+        detect_transitions("/repo", old, new)
+            .iter()
+            .any(|x| matches!(x, PrTransition::Ready { .. }))
+    }
+
+    /// Catches: the last blocker (open threads) being resolved while everything else is
+    /// green never notifying, because ready is only evaluated on review/check edges.
+    #[test]
+    fn resolving_the_last_thread_fires_ready() {
+        assert!(fires_ready(&base(2), &base(0)));
+    }
+
+    /// Catches: is_ready ignoring the draft flag or a recomputing conflict state, so a draft
+    /// or a "checking" PR is announced as ready to merge while the badge says Draft/Checking.
+    #[test]
+    fn draft_or_checking_pr_never_fires_ready() {
+        let old = base(1);
+        let mut draft = base(0);
+        draft.is_draft = true;
+        assert!(!fires_ready(&old, &draft), "draft");
+        let mut checking = base(0);
+        checking.conflict_state = ConflictState::Checking;
+        assert!(!fires_ready(&old, &checking), "checking");
     }
 }

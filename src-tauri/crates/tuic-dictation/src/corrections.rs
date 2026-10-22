@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// Dictionary-based text corrector for common speech recognition errors.
 /// Applies case-insensitive string replacements, sorted by length (longest first)
 /// to avoid partial matches. The replacement value is always used as-is.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TextCorrector {
     replacements: HashMap<String, String>,
     /// Cached sorted keys (longest first) for correct replacement order
@@ -15,10 +15,7 @@ pub struct TextCorrector {
 
 impl TextCorrector {
     pub fn new() -> Self {
-        Self {
-            replacements: HashMap::new(),
-            sorted_keys: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn from_map(replacements: HashMap<String, String>) -> Self {
@@ -115,16 +112,66 @@ impl TextCorrector {
         Ok(Self::from_map(replacements))
     }
 
-    pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {e}"))?;
+    /// Validate before either transport persists a replacement map.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.replacements.keys().any(String::is_empty) {
+            return Err("Invalid correction map".into());
         }
-        let content = serde_json::to_string_pretty(&self.replacements)
-            .map_err(|e| format!("Failed to serialize corrections: {e}"))?;
-        std::fs::write(path, content)
-            .map_err(|e| format!("Failed to write corrections file: {e}"))?;
         Ok(())
+    }
+
+    pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
+        use std::io::Write;
+        self.validate()?;
+        let parent = path.parent().ok_or("Corrections path has no parent")?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
+        let content = serde_json::to_vec_pretty(&self.replacements)
+            .map_err(|e| format!("Failed to serialize corrections: {e}"))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| format!("Failed to create corrections file: {e}"))?;
+        file.write_all(&content)
+            .and_then(|()| file.as_file().sync_all())
+            .map_err(|e| format!("Failed to write corrections: {e}"))?;
+        file.persist(path)
+            .map_err(|e| format!("Failed to persist corrections: {e}"))?;
+        Ok(())
+    }
+
+    /// Strict read/modify/write under the same cross-process lock for every writer.
+    /// A missing file uses the same initial dictionary as the dictation runtime.
+    pub fn update_file<R>(
+        path: &Path,
+        update: impl FnOnce(&mut Self) -> Result<(R, bool), String>,
+    ) -> Result<R, String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut lock_path = path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(PathBuf::from(lock_path))
+            .map_err(|e| e.to_string())?;
+        lock.lock().map_err(|e| e.to_string())?;
+        let mut latest = match std::fs::metadata(path) {
+            Ok(_) => Self::load_from_file(path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::initial(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let (result, changed) = update(&mut latest)?;
+        if changed {
+            latest.save_to_file(path)?;
+        }
+        Ok(result)
+    }
+
+    fn initial() -> Self {
+        let mut corrector = Self::new();
+        corrector.add("Cloud Code".into(), "Claude Code".into());
+        corrector.add("Cloude Code".into(), "Claude Code".into());
+        corrector
     }
 
     /// Try to load from default path, returning empty corrector if file doesn't exist.
@@ -133,12 +180,7 @@ impl TextCorrector {
         if path.exists() {
             Self::load_from_file(&path).unwrap_or_else(|_| Self::new())
         } else {
-            // Create with some sensible defaults for speech recognition.
-            // Matching is case-insensitive, so one entry covers all case variants.
-            let mut corrector = Self::new();
-            corrector.add("Cloud Code".to_string(), "Claude Code".to_string());
-            corrector.add("Cloude Code".to_string(), "Claude Code".to_string());
-            corrector
+            Self::initial()
         }
     }
 }

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
@@ -1138,6 +1138,93 @@ fn grep_file_with_cancel(
     Ok(stopped_by_cancel)
 }
 
+#[cfg(test)]
+thread_local! {
+    static FILENAME_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Path-only inventories are shared by both transports. Per-repo locking
+/// coalesces cold queries; invalidation never waits for a blocking tree walk.
+#[derive(Default)]
+struct FilenameInventorySlot {
+    generation: std::sync::atomic::AtomicU64,
+    inventory: parking_lot::Mutex<Option<FilenameInventory>>,
+}
+
+struct FilenameInventory {
+    generation: u64,
+    built_at: std::time::Instant,
+    paths: Arc<Vec<(String, String)>>,
+}
+
+static FILENAME_INVENTORIES: std::sync::LazyLock<
+    moka::sync::Cache<PathBuf, Arc<FilenameInventorySlot>>,
+> = std::sync::LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(8)
+        .time_to_idle(std::time::Duration::from_secs(10 * 60))
+        .build()
+});
+
+pub(crate) fn invalidate_filename_inventory(repo_path: &str) {
+    if let Ok(repo) = std::fs::canonicalize(repo_path)
+        && let Some(slot) = FILENAME_INVENTORIES.get(&repo)
+    {
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn invalidate_all_filename_inventories() {
+    for (_, slot) in FILENAME_INVENTORIES.iter() {
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn filename_inventory(repo: &Path) -> Arc<Vec<(String, String)>> {
+    let slot = FILENAME_INVENTORIES.get_with(repo.to_path_buf(), || {
+        Arc::new(FilenameInventorySlot::default())
+    });
+    let mut inventory = slot.inventory.lock();
+    let generation = slot.generation.load(Ordering::Acquire);
+    if let Some(current) = inventory.as_ref()
+        && current.generation == generation
+        && current.built_at.elapsed() < std::time::Duration::from_secs(60)
+    {
+        return Arc::clone(&current.paths);
+    }
+    #[cfg(test)]
+    FILENAME_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let paths = Arc::new(
+        ignore::WalkBuilder::new(repo)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .filter_entry(|e| !is_always_excluded_dir(e))
+            .build()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .filter_map(|e| {
+                let relative = e
+                    .path()
+                    .strip_prefix(repo)
+                    .ok()?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                Some((e.file_name().to_string_lossy().into_owned(), relative))
+            })
+            .collect(),
+    );
+    // Keep the generation sampled BEFORE the walk. An event during traversal
+    // makes the next query rebuild, rather than publishing that walk as current.
+    *inventory = Some(FilenameInventory {
+        generation,
+        built_at: std::time::Instant::now(),
+        paths: Arc::clone(&paths),
+    });
+    paths
+}
+
 pub(crate) fn search_files_impl(
     repo_path: String,
     query: String,
@@ -1153,45 +1240,20 @@ pub(crate) fn search_files_impl(
 
     let mut results = Vec::new();
 
-    // Walk using the `ignore` crate: respects .gitignore, .git/info/exclude,
-    // global gitignore — skips ignored directories entirely during traversal.
-    let walker = ignore::WalkBuilder::new(&canonical_repo)
-        .hidden(false) // show dotfiles (except .git which is always skipped)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .filter_entry(|e| !is_always_excluded_dir(e))
-        .build();
-
-    for entry in walker {
+    if max_results == 0 {
+        return Ok(results);
+    }
+    let paths = filename_inventory(&canonical_repo);
+    for (name, relative) in paths.iter() {
         if results.len() >= max_results {
             break;
         }
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let is_file = entry.file_type().is_some_and(|ft| ft.is_file());
-        if !is_file {
+        if !pattern.is_match(name) && !pattern.is_match(relative) {
             continue;
         }
-
-        let relative = match entry.path().strip_prefix(&canonical_repo) {
-            Ok(p) => p.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Match against file name or relative path
-        if !pattern.is_match(&name) && !pattern.is_match(&relative) {
-            continue;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
+        let metadata = match std::fs::metadata(canonical_repo.join(relative)) {
+            Ok(m) if m.is_file() => m,
+            _ => continue,
         };
 
         let modified_at = metadata
@@ -1201,8 +1263,8 @@ pub(crate) fn search_files_impl(
             .map_or(0, |d| d.as_secs());
 
         results.push(DirEntry {
-            name,
-            path: relative,
+            name: name.clone(),
+            path: relative.clone(),
             is_dir: false,
             size: metadata.len(),
             modified_at,
@@ -1503,6 +1565,37 @@ fn write_file_impl(repo_path: String, file: String, content: String) -> Result<(
 
     atomic_write(&canonical_target, content.as_bytes())
         .map_err(|e| format!("Failed to write file: {e}"))
+}
+
+/// Write `content` only when the file on disk still equals `expected`, the text
+/// the caller rendered its edit from. `Ok(false)` means the file changed in the
+/// meantime and nothing was written, so a stale view never overwrites newer bytes.
+/// The compare and the atomic rename are not one critical section: a writer that
+/// lands between them still loses, but the window is that of a local read.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn write_file_if_unchanged(
+    repo_path: String,
+    file: String,
+    expected: String,
+    content: String,
+) -> Result<bool, String> {
+    spawn_blocking_fs(move || write_file_if_unchanged_impl(repo_path, file, expected, content))
+        .await
+}
+
+fn write_file_if_unchanged_impl(
+    repo_path: String,
+    file: String,
+    expected: String,
+    content: String,
+) -> Result<bool, String> {
+    let (_canonical_repo, canonical_target) = validate_path(&repo_path, &file)?;
+    if crate::read_file_impl(repo_path, file)? != expected {
+        return Ok(false);
+    }
+    atomic_write(&canonical_target, content.as_bytes())
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(true)
 }
 
 /// Create a directory (and parents) within a repository.
@@ -1987,7 +2080,9 @@ pub enum MarkdownLinkTarget {
         open_path: String,
         is_directory: bool,
         same_document: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         line: Option<usize>,
     },
     Missing {
@@ -2031,6 +2126,28 @@ fn is_unc_markdown_path(path: &str) -> bool {
 }
 
 fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> MarkdownLinkTarget {
+    resolve_markdown_link_with_home(root, current_file, href, dirs::home_dir().as_deref())
+}
+
+/// `~/rest` under `home`, or `None` when the path has no `~/` prefix or `rest` would not stay
+/// under home. Leading separators are trimmed (`~//x` must not join as an absolute path) and a
+/// drive-prefixed rest (`~/C:\x`) is refused: on Windows `join` would replace home with it.
+fn expand_home_prefix(path: &str, home: &Path) -> Option<String> {
+    let rest = path.strip_prefix("~/")?.trim_start_matches(['/', '\\']);
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return None;
+    }
+    Some(home.join(rest).to_string_lossy().into_owned())
+}
+
+/// `~/` in a link names the home directory, as it does in the terminal paths.
+fn resolve_markdown_link_with_home(
+    root: &str,
+    current_file: &str,
+    href: &str,
+    home: Option<&Path>,
+) -> MarkdownLinkTarget {
     let (raw_path, raw_anchor) = href.split_once('#').unwrap_or((href, ""));
     let raw_path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
     let Some(mut path) = decode_markdown_link_part(raw_path) else {
@@ -2047,6 +2164,9 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
         return MarkdownLinkTarget::Blocked {
             reason: "Network paths are not supported in Markdown links".into(),
         };
+    }
+    if let Some(expanded) = home.and_then(|home| expand_home_prefix(&path, home)) {
+        path = expanded;
     }
     let mut line = anchor
         .strip_prefix('L')
@@ -2255,6 +2375,33 @@ mod tests {
         };
         let wire = serde_json::to_value(&batch).unwrap();
         assert_eq!(wire["search_id"], "cs-7");
+    }
+
+    /// The frontend takes the Markdown-viewer branch only when `line` is absent;
+    /// a serialised `null` once sent every .md link to the text editor.
+    #[test]
+    fn markdown_file_link_omits_absent_anchor_and_line() {
+        let target = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: None,
+            line: None,
+        };
+        let wire = serde_json::to_value(&target).unwrap();
+        assert!(wire.get("anchor").is_none() && wire.get("line").is_none());
+        let with = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: Some("x".into()),
+            line: Some(3),
+        };
+        let wire = serde_json::to_value(&with).unwrap();
+        assert_eq!(wire["anchor"], "x");
+        assert_eq!(wire["line"], 3);
     }
 
     /// IPC and HTTP are two transports for one backend, and the browser store
@@ -2604,6 +2751,73 @@ mod tests {
     }
 
     #[test]
+    fn write_file_if_unchanged_refuses_when_disk_content_differs() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "- [ ] a\n").unwrap();
+
+        // Matching expectation: written.
+        assert!(
+            write_file_if_unchanged_impl(
+                repo_path.clone(),
+                "note.md".to_string(),
+                "- [ ] a\n".to_string(),
+                "- [x] a\n".to_string(),
+            )
+            .unwrap()
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "- [x] a\n");
+
+        // Another writer edited the file after the caller read it: nothing is written.
+        fs::write(&target, "- [x] a\nnew line from desktop\n").unwrap();
+        assert!(
+            !write_file_if_unchanged_impl(
+                repo_path,
+                "note.md".to_string(),
+                "- [x] a\n".to_string(),
+                "- [ ] a\n".to_string(),
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "- [x] a\nnew line from desktop\n"
+        );
+    }
+
+    #[test]
+    fn write_file_if_unchanged_rejects_traversal_and_missing_file() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let outside = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join("outside-if-unchanged.txt");
+        fs::write(&outside, "x").unwrap();
+
+        let traversal = write_file_if_unchanged_impl(
+            repo_path.clone(),
+            "../outside-if-unchanged.txt".to_string(),
+            "x".to_string(),
+            "bad".to_string(),
+        );
+        assert!(traversal.is_err());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "x");
+        fs::remove_file(&outside).unwrap();
+
+        let missing = write_file_if_unchanged_impl(
+            repo_path,
+            "gone.md".to_string(),
+            String::new(),
+            "created".to_string(),
+        );
+        assert!(missing.is_err());
+        assert!(!dir.path().join("gone.md").exists());
+    }
+
+    #[test]
     fn test_write_file_path_traversal_rejected() {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
@@ -2830,6 +3044,126 @@ mod tests {
     }
 
     // --- search_files tests ---
+
+    /// Catches a fresh repository traversal for every selective/no-match query.
+    /// The second query must filter the inventory already collected by the first.
+    #[test]
+    fn test_search_files_reuses_inventory_for_no_match_queries() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        assert!(
+            search_files_impl(repo.clone(), "absent-needle-one".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            search_files_impl(repo, "absent-needle-two".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        FILENAME_WALKS.with(|walks| {
+            assert_eq!(
+                walks.get(),
+                1,
+                "no-match queries must share one inventory walk"
+            )
+        });
+    }
+
+    /// Catches inventory reuse after file membership or ignore rules change,
+    /// and stale result metadata being returned from the path-only cache.
+    #[test]
+    fn test_search_files_inventory_invalidation_and_fresh_metadata() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        assert!(
+            search_files_impl(repo.clone(), "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        fs::write(dir.path().join("new-needle.txt"), "one").unwrap();
+        invalidate_filename_inventory(&repo);
+        let first = search_files_impl(repo.clone(), "new-needle".into(), None).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].size, 3);
+        fs::write(dir.path().join("new-needle.txt"), "a longer payload").unwrap();
+        let updated = search_files_impl(repo.clone(), "new-needle".into(), None).unwrap();
+        assert_eq!(updated[0].size, 16, "metadata is not cached with names");
+        fs::write(dir.path().join(".gitignore"), "new-needle.txt\n").unwrap();
+        invalidate_filename_inventory(&repo);
+        assert!(
+            search_files_impl(repo.clone(), "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        fs::remove_file(dir.path().join("new-needle.txt")).unwrap();
+        invalidate_filename_inventory(&repo);
+        assert!(
+            search_files_impl(repo, "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Catches a zero-limit request performing a cold walk, or a stale
+    /// generation remaining valid until TTL despite an explicit invalidation.
+    #[test]
+    fn test_search_files_zero_limit_and_inventory_expiry() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        let canonical = dir.path().canonicalize().unwrap();
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        assert!(
+            search_files_impl(repo.clone(), "needle".into(), Some(0))
+                .unwrap()
+                .is_empty()
+        );
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 0));
+        let first = filename_inventory(&canonical);
+        let slot = FILENAME_INVENTORIES.get(&canonical).unwrap();
+        slot.inventory.lock().as_mut().unwrap().built_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(60);
+        let second = filename_inventory(&canonical);
+        assert!(!Arc::ptr_eq(&first, &second));
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+        let third = filename_inventory(&canonical);
+        assert!(!Arc::ptr_eq(&second, &third));
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 3));
+    }
+
+    /// Explicit corpus measurement; also catches a warm lookup rebuilding the
+    /// measured cold inventory instead of reusing its allocation.
+    #[test]
+    #[ignore = "benchmark: requires TUIC_FILENAME_INVENTORY_REPO pointing at an authorized corpus"]
+    fn filename_inventory_cold_walk_measurement_2099() {
+        let repo = PathBuf::from(
+            std::env::var("TUIC_FILENAME_INVENTORY_REPO").expect("authorized corpus path"),
+        )
+        .canonicalize()
+        .unwrap();
+        FILENAME_INVENTORIES.invalidate(&repo);
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        let start = std::time::Instant::now();
+        let paths = filename_inventory(&repo);
+        let elapsed = start.elapsed();
+        let capacity_bytes = std::mem::size_of_val(paths.as_ref())
+            + paths.capacity() * std::mem::size_of::<(String, String)>()
+            + paths
+                .iter()
+                .map(|(name, relative)| name.capacity() + relative.capacity())
+                .sum::<usize>();
+        println!(
+            "{}",
+            serde_json::json!({
+                "repo": repo, "files": paths.len(), "elapsed_micros": elapsed.as_micros(),
+                "retained_vector_and_string_capacity_bytes": capacity_bytes,
+                "excludes": "allocator headers, Arc headers, slot and cache-map overhead"
+            })
+        );
+        assert!(Arc::ptr_eq(&paths, &filename_inventory(&repo)));
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 1));
+    }
 
     #[test]
     fn test_search_files_basic() {
@@ -3439,6 +3773,40 @@ mod tests {
         }
     }
 
+    /// Wire contract through the real resolver: an .md link without anchor or line
+    /// must reach the frontend with neither key (a `null` line routes to the editor).
+    #[test]
+    fn resolved_markdown_links_serialize_without_null_anchor_or_line() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("review.md"), "").unwrap();
+        fs::write(dir.path().join("next.md"), "").unwrap();
+        let root = dir.path().to_string_lossy();
+        let absolute = dir.path().join("next.md").to_string_lossy().into_owned();
+        for href in ["next.md", "./next.md", absolute.as_str(), "next.md#"] {
+            let wire =
+                serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", href)).unwrap();
+            assert_eq!(wire["kind"], "file", "{href}");
+            assert!(wire.get("line").is_none(), "{href}: {wire}");
+            assert!(wire.get("anchor").is_none(), "{href}: {wire}");
+        }
+        let wire = serde_json::to_value(resolve_markdown_link_impl(
+            &root,
+            "review.md",
+            "next.md#intro",
+        ))
+        .unwrap();
+        assert_eq!(wire["anchor"], "intro");
+        assert!(wire.get("line").is_none());
+        let wire =
+            serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", "next.md#L9"))
+                .unwrap();
+        assert_eq!(wire["line"], 9);
+        assert!(
+            wire.get("anchor").is_none(),
+            "an L-anchor is a line, not a heading: {wire}"
+        );
+    }
+
     #[test]
     fn markdown_link_resolution_decodes_paths_and_keeps_encoded_hashes() {
         let dir = TempDir::new().unwrap();
@@ -3486,6 +3854,366 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn markdown_link_expands_home_prefix_and_keeps_line_suffix() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().display().to_string().replace('\\', "/")
+        );
+        for (href, line) in [
+            ("~/notes/design.md", None),
+            ("~/notes/design.md:7", Some(7)),
+        ] {
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                href,
+                Some(home.path()),
+            );
+            assert!(
+                matches!(
+                    &target,
+                    MarkdownLinkTarget::File { absolute_path, open_path, line: actual, .. }
+                        if absolute_path == &expected && open_path == &expected && *actual == line
+                ),
+                "{href}"
+            );
+            let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                unreachable!()
+            };
+            assert_eq!(
+                Path::new(&absolute_path).canonicalize().unwrap(),
+                home.path().join("notes/design.md").canonicalize().unwrap()
+            );
+        }
+        assert!(matches!(
+            resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                "~/notes/gone.md",
+                Some(home.path())
+            ),
+            MarkdownLinkTarget::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn critic_markdown_link_home_prefix_with_doubled_slash_stays_under_home() {
+        // Catches: `Path::join` with an absolute remainder replaces the home
+        // dir, so `~//etc/hosts` resolved to `/etc/hosts` instead of `$HOME/etc/hosts`.
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().display().to_string().replace('\\', "/")
+        );
+        let target = resolve_markdown_link_with_home(
+            "/repo",
+            "/repo/review.md",
+            "~//notes/design.md",
+            Some(home.path()),
+        );
+        assert!(
+            matches!(
+                &target,
+                MarkdownLinkTarget::File { absolute_path, .. } if absolute_path == &expected
+            ),
+            "~//notes/design.md must resolve inside home"
+        );
+        let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+            unreachable!()
+        };
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            home.path().join("notes/design.md").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn critic_markdown_link_home_prefix_alone_is_the_home_directory() {
+        // Catches: a bare `~/` treated as a relative path next to the file.
+        let home = TempDir::new().unwrap();
+        #[cfg(unix)]
+        let canonical = home.path().canonicalize().unwrap().display().to_string();
+        #[cfg(windows)]
+        let canonical = home.path().display().to_string().replace('\\', "/");
+        let target =
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path()));
+        assert!(matches!(
+            &target,
+            MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == &canonical
+        ));
+        let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+            unreachable!()
+        };
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            home.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn critic_markdown_link_bare_tilde_and_unknown_home_stay_relative() {
+        // Catches: `~user/x` or a missing home dir panicking or expanding to the wrong root.
+        let dir = TempDir::new().unwrap();
+        let review = dir.path().join("review.md");
+        fs::write(&review, "").unwrap();
+        for (href, home) in [("~user/x.md", Some(dir.path())), ("~/x.md", None)] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        dir.path().to_str().unwrap(),
+                        review.to_str().unwrap(),
+                        href,
+                        home
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic2_markdown_link_home_prefix_into_tcc_dir_is_blocked() {
+        // Catches: `~/Library/x.md` bypassing the TCC guard (the guard must see the
+        // expanded path, including when `..` reaches the protected dir).
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/Library/x.md",
+            "~/Desktop/x.md",
+            "~/notes/../Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic2_markdown_link_home_prefix_keeps_heading_anchor() {
+        // Catches: expansion running before the anchor split, losing `#L9` / `#heading`.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#L9", Some(home.path())),
+            MarkdownLinkTarget::File {
+                line: Some(9),
+                anchor: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#intro", Some(home.path())),
+            MarkdownLinkTarget::File { anchor: Some(a), .. } if a == "intro"
+        ));
+    }
+
+    #[test]
+    fn critic2_markdown_link_percent_encoded_tilde_expands_like_literal() {
+        // Catches: expansion on the raw href so `%7E/a.md` resolves next to the file instead of home.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "%7E/a.md", Some(home.path())),
+            MarkdownLinkTarget::File { .. }
+        ));
+    }
+
+    #[test]
+    fn home_prefix_expansion_never_escapes_home() {
+        let home = Path::new("/home/boss");
+        assert_eq!(
+            expand_home_prefix("~/a/b.md", home).as_deref(),
+            Some(if cfg!(windows) {
+                r"/home/boss\a/b.md"
+            } else {
+                "/home/boss/a/b.md"
+            })
+        );
+        assert_eq!(
+            expand_home_prefix("~//a.md", home).as_deref(),
+            Some(if cfg!(windows) {
+                r"/home/boss\a.md"
+            } else {
+                "/home/boss/a.md"
+            })
+        );
+        // A drive-prefixed rest would replace home in a Windows join.
+        assert_eq!(expand_home_prefix("~/C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~/c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("notes/a.md", home), None);
+
+        let fixture = TempDir::new().unwrap();
+        fs::create_dir_all(fixture.path().join("a")).unwrap();
+        fs::write(fixture.path().join("a/b.md"), "nested").unwrap();
+        fs::write(fixture.path().join("a.md"), "flat").unwrap();
+        for (href, relative) in [("~/a/b.md", "a/b.md"), ("~//a.md", "a.md")] {
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                href,
+                Some(fixture.path()),
+            );
+            let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                panic!("{href}: {target:?}")
+            };
+            assert_eq!(
+                Path::new(&absolute_path).canonicalize().unwrap(),
+                fixture.path().join(relative).canonicalize().unwrap()
+            );
+        }
+        for href in ["~/C:\\x.md", "~/c:/x.md", "notes/a.md"] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        "/repo",
+                        "/repo/review.md",
+                        href,
+                        Some(fixture.path())
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic3_expand_home_prefix_edges() {
+        // Catches: a drive hidden behind leading separators (`~/\\C:\x`) slipping past the
+        // guard because the trim ran after the check; a multibyte first char panicking the
+        // byte probe; a 2-letter `CD:x` first segment refused as a drive.
+        let home = Path::new("/home/boss");
+        assert_eq!(expand_home_prefix("~/\\C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~//c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("~/C:", home), None);
+        assert_eq!(
+            expand_home_prefix("~/é:x", home).as_deref(),
+            Some(if cfg!(windows) {
+                r"/home/boss\é:x"
+            } else {
+                "/home/boss/é:x"
+            })
+        );
+        assert_eq!(
+            expand_home_prefix("~/CD:x", home).as_deref(),
+            Some(if cfg!(windows) {
+                r"/home/boss\CD:x"
+            } else {
+                "/home/boss/CD:x"
+            })
+        );
+        assert_eq!(
+            expand_home_prefix("~/", home).as_deref(),
+            Some(if cfg!(windows) {
+                r"/home/boss\"
+            } else {
+                "/home/boss/"
+            })
+        );
+        assert_eq!(expand_home_prefix("~", home), None);
+        assert_eq!(expand_home_prefix("~user/a", home), None);
+
+        let fixture = TempDir::new().unwrap();
+        for href in ["~/\\C:\\x.md", "~//c:/x.md", "~/C:", "~", "~user/a"] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        "/repo",
+                        "/repo/review.md",
+                        href,
+                        Some(fixture.path())
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+        for name in ["é:x", "CD:x"] {
+            // These are literal Unix filenames; Windows forbids colons in a filename.
+            #[cfg(unix)]
+            fs::write(fixture.path().join(name), "literal colon").unwrap();
+            let href = format!("~/{name}");
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                &href,
+                Some(fixture.path()),
+            );
+            #[cfg(unix)]
+            {
+                let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                    panic!("{href}: {target:?}")
+                };
+                assert_eq!(
+                    Path::new(&absolute_path).canonicalize().unwrap(),
+                    fixture.path().join(name).canonicalize().unwrap()
+                );
+            }
+            #[cfg(windows)]
+            assert!(
+                matches!(target, MarkdownLinkTarget::Missing { .. }),
+                "{href}: {target:?}"
+            );
+        }
+        let target =
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(fixture.path()));
+        let MarkdownLinkTarget::File {
+            absolute_path,
+            is_directory,
+            ..
+        } = target
+        else {
+            panic!("{target:?}")
+        };
+        assert!(is_directory);
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            fixture.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn critic3_markdown_link_home_prefix_with_dot_segments_into_tcc_dir_is_blocked() {
+        // Catches: `~/./Desktop/x.md` or `~//Library/x.md` reaching a TCC dir because the
+        // expansion left a `.`/doubled separator the guard does not normalise.
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/./Desktop/x.md",
+            "~//Library/x.md",
+            "~/%2E/Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
     }
 
     #[test]
@@ -4021,7 +4749,7 @@ mod tests {
 
         assert_eq!(res.moved, 1);
         assert_eq!(res.skipped, 1);
-        assert!(res.errors.is_empty());
+        assert_eq!(res.errors, [] as [std::string::String; 0]);
     }
 
     // --- Cross-repo content search (search_content_all_impl) ---

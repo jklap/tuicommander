@@ -51,7 +51,7 @@ Reference for all UI/CSS/layout work. Every visual change MUST follow this guide
 
 ## Color Palette
 
-Values shown are the `:root` defaults of `global.css` (the former VS Code Dark palette, in effect until a theme loads). The app supports **13 bundled themes** (Commander is the default and the fallback) — all core colors are CSS custom properties overridden at runtime by `applyAppTheme()` in `themes.ts`, which also sets `html[data-theme="<key>"]` so a theme can carry typography rules in `global.css` (only `clean` does: neutral gray `--tab-*-rgb` tints so typed tabs do not each bring their own hue). Font smoothing is global: `html` forces `-webkit-font-smoothing: antialiased` and 0.01em tracking, the rasterization every native-looking macOS app uses. When writing CSS, always use variables, never hardcode core palette values.
+Values shown are the `:root` defaults of `global.css` (the former VS Code Dark palette, in effect until a theme loads). The app supports **13 bundled themes** (Commander is the default and the fallback) — all core colors are CSS custom properties overridden at runtime by `applyAppTheme()` in `themes.ts`, which also sets `html[data-theme="<key>"]` so a theme can carry typography rules in `global.css` (only `clean` does: neutral gray `--tab-*-rgb` tints so typed tabs do not each bring their own hue). Font smoothing is global: `html` forces `-webkit-font-smoothing: antialiased` and 0.01em tracking, the rasterization every native-looking macOS app uses. The native window and webview backing layers also use `bgPrimary`: Rust resolves the saved theme before window creation, and `applyAppTheme()` synchronizes both layers on theme changes and hot reload. When writing CSS, always use variables, never hardcode core palette values.
 
 **Theme gallery (dev only).** With `make dev` running, open `http://127.0.0.1:1421/theme-gallery.html` (`src/dev/themeGallery.tsx`). It renders one row per bundled theme: the shipped theme on the left and, on the right, the edit proposed in `src/dev/themeProposals.ts` (a partial override merged over the JSON; empty when nothing is under review). Each card mounts the real `Toolbar`, `Sidebar`, `TabBar` and `StatusBar` components over stores seeded once in the page (a fake `__TAURI_INTERNALS__` in `theme-gallery.html` answers every `invoke`), so a component or stylesheet edit repaints every theme through HMR and a theme JSON edit shows up within a second. Only the terminal body and the dialog are stand-ins; never hand-copy component markup into the gallery, a copy drifts within a session (the page polls `/__tuic_themes`, a serve-only Vite middleware in `vite.config.ts`). Use it to check a palette change against every theme at once before touching the live app. A static snapshot of the 2026-09-22 review, taken before its edits were applied, is in `docs/design/theme-gallery-2026-09-22/`. It is not a build input and never ships. To show it as a TUIC `ui` tab inside a dev build, use `http://localhost:1421/...`: the dev app is served from `127.0.0.1:1421`, and `PluginPanel` blanks a same-origin iframe (`guardSameOriginNav`).
 
@@ -73,7 +73,8 @@ Values shown are the `:root` defaults of `global.css` (the former VS Code Dark p
 | `--warning` | `#dcdcaa` | Caution, pending, main branch icon (yellow) |
 | `--attention` | `#e8984c` | Actionable alerts, confirmation prompts (orange) |
 | `--error` | `#f48771` | Errors, failures, closed PRs (coral) |
-| `--merged` | `#a371f7` | PR merged badge (purple) |
+| `--merged` | `#ae83ff` | PR merged marker and badge background (purple; Paper uses `#7540b0`) |
+| `--text-on-merged` | `#000000` | Filled merged badge label (Paper uses `#ffffff`); independent of accent action foreground |
 | `--unseen` | `#c084fc` | Terminal completed while user wasn't viewing (purple, clears on view) |
 | `--diff-del` | `--error` mixed 25% with white | Deleted-line counts in the sidebar stats badge. Lighter than `--error` so a negative diff does not read as an alarm; `vscode-light` resets it to `--error` |
 | `--border` | `#3e3e42` | All borders and dividers |
@@ -162,7 +163,7 @@ Use `gap` on flex containers, not margins between children.
 | `--radius-lg` | 6px | Larger controls — dropdowns, add-repo button, form inputs |
 | `--radius-xl` | 8px | Modals, panels, dialogs |
 | `--radius-pill` | 12px | PR badges, status pills |
-| `--radius-full` | 50% | Circles — toggle thumbs, repo initials avatar |
+| `--radius-full` | 9999px | Pills; square elements stay circular — toggle thumbs, repo initials avatar |
 
 ## Shadows
 
@@ -238,7 +239,7 @@ Always use `ease` timing. Respect `prefers-reduced-motion`. Never `transition: a
 - Flex row, `gap: 6px`, `padding: 6px 12px 3px`
 - Repo initials: 28×28px circle, `--accent` bg, `--text-on-accent` text, `--font-xs`, semibold
 - Repo name: `--font-sm`, semibold, uppercase, `--fg-secondary`, truncated with ellipsis
-- Chevron: the shared `ChevronIcon` (`src/components/ui/ChevronIcon.tsx`, 12px SVG), `--fg-secondary`, rotates 0→90° on expand (150ms ease). Group headers, repo headers and GitHub panel sections use the same component and the same CSS block, so every disclosure arrow in the sidebar has one shape and one size. Branch rows carry no chevron column: the branch icon is the agents toggle and swaps to the chevron on hover or focus inside its own 14px box, so the row gives up no width and every badge keeps one right edge. The row click only opens the branch.
+- Chevron: the shared `ChevronIcon` (`src/components/ui/ChevronIcon.tsx`, 12px SVG), `--fg-secondary`, rotates 0→90° on expand (150ms ease). Branch rows use a separate, always-visible disclosure button beside the status icon. The collapsed count stays beside the chevron; the status icon and row only select the branch.
 - Actions (⋯, +): hidden by default (`opacity: 0`), shown on repo-header hover
 
 **Branch item** (the most complex sidebar element):
@@ -332,7 +333,7 @@ Three sections: left (zoom, status info, CWD, agent badge, ticker), center (PR +
 **Agent badge** (`.agentBadge`): `--font-mono`, `--font-sm`, weight 500, `1px 6px` padding, `--radius-sm`, `--bg-tertiary` bg. Usage-dependent color classes:
 - `.agentUsage` — `--fg-secondary` text (normal usage)
 - `.agentUsageWarning` — `#dcdcaa` text (usage >=70%)
-- `.agentUsageCritical` — `#f48771` text + `pulse-opacity` animation (usage >=90%)
+- `.agentUsageCritical` — `#f48771` text + `pulse-opacity` animation (usage >=96%)
 - `.agentRateLimited` — `#f44747` text + `pulse-opacity` animation
 
 **Ticker message** (`.tickerMessage`): `--font-mono`, `--font-sm`, `--fg-muted`, max-width 300px, `--radius-sm`. Warning priority (>=80): `#ffd700` text, gold bg at 0.1 alpha. `.tickerClickable` adds cursor pointer and hover effect.
@@ -423,24 +424,23 @@ All follow the same structure:
 **Primary button**: `background: var(--accent); color: var(--text-on-accent); padding: 8px 16px; border-radius: var(--radius-lg);`
 **Secondary button**: `background: var(--bg-tertiary); color: var(--fg-secondary); same padding/radius.`
 **Danger button**: `background: var(--error); color: var(--text-on-error);`
+**Ready action** (Send, Save): set `data-ready="true"` on the button while it can act (unsaved changes, agent selected). `global.css` gives `button[data-ready]:not(:disabled)` the accent border, text and a faint accent tint; clean or disabled stays neutral. Never hand-roll a per-component "dirty" colour.
 
 ### Form Controls
 
-```css
-input, select, textarea {
-  height: 36px;                        /* standard height */
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  color: var(--fg-primary);
-  font-size: var(--font-md);
-  padding: 0 8px;
-}
-input:focus, select:focus, textarea:focus {
-  border-color: var(--accent);
-  outline: none;
-}
-```
+Use `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
+They forward native attributes, refs, options and events. `Input` is for text,
+numeric and date fields; toggles, ranges, colour and file pickers keep their
+specialised controls. `FormControls.module.css` owns their presentation:
+`--control-height` (36px), `--control-padding-x` (8px), theme colours,
+`--radius-lg` and `--font-md`. Containers own width and alignment, never
+control height, padding, borders or colours. Textareas resize vertically;
+multiple selects keep native listbox behavior. At widths up to 600px,
+controls have a 44px minimum height and 16px text to prevent iOS zoom.
+
+`SegmentedControl` is the shared view switch. It uses a named tablist, one
+keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an
+enabled choice. Tasks uses it for List, Board and Roadmap.
 
 **Toggle switch**: 36×20px track, `--radius-full` (10px), off=`--bg-tertiary`, on=`--accent`. White thumb slides with 0.2s transition.
 
@@ -448,11 +448,22 @@ input:focus, select:focus, textarea:focus {
 
 ### Settings Panel
 
-Full-screen overlay. Inner panel: `--bg-secondary`, 700px max-width, 80vh max-height.
-- Left sidebar with tabs (General, Notifications, Dictation, Terminal, Agents)
-- Right content area with sections
-- Section heading: `<h3>`, `--font-lg`, bold, `margin-bottom: 12px`
-- Settings row: flex space-between, label left, control right, `padding: 8px 0`
+Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `height: 80vh`, independently scrolling navigation and content, and existing theme tokens. This width replaces the previous 700px guide after the 2026-10-16 mock approval. Never resize on tab selection or eagerly mount pages to avoid flashes.
+- Navigation: 232px default; retain saved user width and resize behavior. Content padding: 24px 32px.
+- `SettingPageHeader`: 20px title, optional subtitle, scope badge and optional source. Omit subtitles that only repeat card headings. A header without a subtitle or source reserves no subtitle space.
+- `SectionCard`: semantic `<h3>`, 15px heading, 16px padding/gap, 8px radius, `--bg-primary`.
+- `SettingRow`: persistent label/hint left, existing shared control right (up to 260px, 36px high), 12px vertical padding. Reuse `SettingField` IDs; errors go below the field and join `aria-describedby`.
+- `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
+- `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
+- `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.
+- Label/help pairs use the shared `.helpLabel` layout so stacked and grid fields reserve one cell for the pair; the badge remains beside wrapped label text.
+- Paper shades the shared success, attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
+- Agent color tiles use metadata-selected `--identity-on-light` or `--identity-on-dark`; identity fills do not change with the app theme.
+- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Settings accent actions retain the theme's `--text-on-accent` foreground.
+- Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
+- Card heading actions stay in the shared heading flex layout so descriptions cannot flow beneath an absolute action. Color targets do not shrink; compact color targets are 44px circles and wrap within the full-width control column.
+- Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.
+- Keep existing autosave/explicit-save boundaries and lazy mounting. Shared primitives never probe, save or infer service state.
 
 ## Status Badges Reference
 
@@ -462,7 +473,7 @@ Full-screen overlay. Inner panel: `--bg-secondary`, 700px max-width, 80vh max-he
 |-------|-----------|--------|------------|-------|
 | Open | `--success` | none | `--text-on-success` | — |
 | Draft | transparent | `1px dashed --fg-muted` | `--fg-muted` | — |
-| Merged | `#a371f7` | none | `--text-on-accent` | — |
+| Merged | `--merged` | none | `--text-on-merged` | — |
 | Closed | `--error` | none | `--text-on-error` | — |
 | Conflict | `--error` | none | `--text-on-error` | pulse-opacity 1.5s |
 | CI Failed | `--error` | none | `--text-on-error` | bold |
@@ -487,7 +498,7 @@ All badges: `font-size: --font-xs`, `font-family: --font-mono`, `font-weight: 60
 | Agent running | Tab colored agent prefix | Tab has colored agent prefix badge |
 | Usage normal | `.agentUsage` | `--fg-secondary` text |
 | Usage ≥70% | `.agentUsageWarning` | `#dcdcaa` text (warning yellow) |
-| Usage ≥90% | `.agentUsageCritical` | `#f48771` text + pulse-opacity 2s |
+| Usage ≥96% | `.agentUsageCritical` | `#f48771` text + pulse-opacity 2s |
 | Rate limited | `.agentRateLimited` | `#f44747` text + pulse-opacity 2s |
 | Ticker warning (≥80 priority) | `.tickerWarning` | `#ffd700` text, gold bg at 0.1 alpha |
 | Update available | `.updateBadge` | `#4ec9b0` text, teal bg at 0.15 alpha |
@@ -593,12 +604,13 @@ The mobile PWA has its own standalone stylesheet at `src/mobile/mobile.css`, **c
 - Border radius scale (`--radius-sm` through `--radius-full`, excluding `--radius-xs`)
 - Shadow tokens (`--shadow-popup`, `--shadow-dropdown`)
 - ANSI terminal palette
+- Session Chat semantic prompt/answer colors and the font size scale, imported from `src/styles/chat-tokens.css` by both stylesheet entrypoints
 
 ### What differs
 | Property | Desktop (`global.css`) | Mobile (`mobile.css`) |
 |----------|----------------------|----------------------|
 | Font mono stack | JetBrains Mono, Fira Code, Hack, Cascadia, ... | SF Mono, Menlo, Consolas, DejaVu, ... |
-| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Not defined — components use explicit `px` values |
+| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Same shared scale; native inputs retain 16px text |
 | Layout variables | `--sidebar-width`, `--toolbar-height`, `--tab-bar-height`, `--status-height` | Not used — mobile uses flex-based layout |
 | User select | Disabled (`none`) | Enabled (`text`) |
 | Theme variables | `--activity`, `--merged`, `--unseen` | Not present (mobile has no terminal activity tracking yet) |
@@ -619,3 +631,36 @@ When updating core palette colors in `global.css`, **also update `mobile.css`** 
 - **No `!important`** — except terminal scrollbar overrides.
 - **No pixel values outside the spacing scale** unless component-specific dimension (like 28px repo initials).
 - **No inline styles for theming** — all colors and spacing via CSS variables (desktop: `global.css`, mobile: `mobile.css`).
+
+
+### Touch Sidebar Action Trays
+
+Keep branch actions hidden at rest on touch devices. A left swipe reveals a
+full-height tray with neutral More, accent Add, and error-coloured Remove
+buttons, with at least 44px width per action. Only removable linked worktrees
+show Remove. Keep native vertical scrolling with `touch-action: pan-y`.
+Use the existing palette and radius tokens, and disable slide transitions when
+reduced motion is requested. Mouse hover controls retain their existing layout.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.
+
+The mobile update banner sits below the app header to keep its small text away
+from the translucent iOS status edge. It uses `--mobile-update-foreground`:
+black on Commander's blue accent and white on Paper's darker blue. The pressed
+state changes the background to `--accent-hover` instead of fading the whole
+strip. Do not reuse Commander's shared white accent foreground here: at 13px,
+its 3.36:1 contrast does not meet WCAG AA.
+
+Paper mobile question-banner names use `--warning`; Input badge labels use
+`--fg-primary` over the existing attention tint. The Paper Input badge does not
+fade: whole-badge opacity would reduce small-text contrast below WCAG AA.
+Commander retains its urgent/attention foregrounds and pulse.
+
+### Constrained layouts and theme surfaces
+
+- Detached Files and Markdown panels fill their window; inline panels retain their docked width limits.
+- Dialog footer hints wrap as complete groups, with gaps between groups and actions. Action labels do not wrap letter by letter.
+- Task field labels align at the top when neighboring controls have different heights. Roadmap state labels use ellipsis inside short bars.
+- Native controls use the light color scheme on the Paper theme. Mobile bottom tabs and diff gutters use the existing application surface tokens.

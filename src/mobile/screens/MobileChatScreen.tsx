@@ -1,16 +1,27 @@
 import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Composer } from "../../components/AIChatPanel/Composer";
+import { chatErrorView } from "../../components/AIChatPanel/chatError";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { createAcpChat } from "../../components/AIChatPanel/useAcpChat";
+import { ContentRenderer } from "../../components/ui/ContentRenderer";
+import { Select } from "../../components/ui/Select";
 import { acpTranscript } from "../../stores/acpTranscript";
+import { appLogger } from "../../stores/appLogger";
+import { registerModal } from "../../stores/modalStack";
 import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
+import { writeClipboard } from "../../utils/clipboard";
+import { mobileChatReadingStyle } from "../mobileFontSize";
 import styles from "./MobileChatScreen.module.css";
 
-export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: string) => void }) {
+export function MobileChatScreen(props: {
+	recoveryRevision?: number;
+	onOpenFile?: (candidate: string, cwd: string) => void;
+}) {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
+	const [tableDocument, setTableDocument] = createSignal<string | null>(null);
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
 	const [linkError, setLinkError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
@@ -20,6 +31,12 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 	);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
+	const [settingsReady, setSettingsReady] = createSignal(false);
+	createEffect(() => {
+		props.recoveryRevision;
+		if (!settingsReady())
+			void settingsStore.hydrate({ notifyOnError: false }).then((loaded) => setSettingsReady(loaded !== false));
+	});
 
 	// The chat is global and ego starts on the first message, so a push link
 	// selects its conversation at once; sending is what loads it.
@@ -54,7 +71,6 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				}
 			})();
 		}
-		void settingsStore.hydrate();
 	});
 
 	async function answerOnce(requestId: AcpHostRequestId, action: () => Promise<void>): Promise<void> {
@@ -72,6 +88,11 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 		setLinkError(null);
 		props.onOpenFile(candidate, cwd);
 	};
+
+	async function startNewChat(): Promise<void> {
+		await chat.closeFailed();
+		await chat.startSession();
+	}
 
 	return (
 		<section class={styles.screen} aria-label="AI Chat">
@@ -103,14 +124,24 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				)}
 			</Show>
 			<Show when={chat.error()}>
-				{(message) => (
-					<div class={styles.banner}>
-						{message()}{" "}
-						<button type="button" onClick={() => void chat.recover()}>
-							Retry
-						</button>
-					</div>
-				)}
+				{(message) => {
+					const view = () => chatErrorView(message());
+					return (
+						<div class={styles.banner} role="alert">
+							{view().text}{" "}
+							<Show when={view().retryable}>
+								<button type="button" onClick={() => void chat.recover()}>
+									Retry
+								</button>
+							</Show>
+							<Show when={view().startNew}>
+								<button type="button" onClick={() => void startNewChat()}>
+									Start new chat
+								</button>
+							</Show>
+						</div>
+					);
+				}}
 			</Show>
 			<Show when={chat.phase() === "live" && !chat.isStreaming()}>
 				<div class={styles.banner}>Not receiving updates.</div>
@@ -119,7 +150,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				<div class={styles.controls}>
 					<label>
 						Conversation
-						<select
+						<Select
 							aria-label="Conversation"
 							value={chat.sessionId() ?? ""}
 							onChange={(event) => void chat.selectSession(event.currentTarget.value)}
@@ -131,41 +162,49 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 									</option>
 								)}
 							</For>
-						</select>
+						</Select>
 					</label>
 					<button type="button" onClick={() => void chat.startSession()}>
 						New
 					</button>
 				</div>
 			</Show>
-			<Transcript
-				entries={chat.entries}
-				busy={chat.busy}
-				onOpenFile={openFile}
-				onSuggestion={(text) => void chat.send(text)}
-				emptyMessage={
-					chat.phase() === "unconfigured"
-						? "Configure ego in desktop Settings to start a conversation."
-						: "Ask ego about any repository."
-				}
-			>
-				<Interactions
-					interactions={chat.interactions}
-					onPermission={(requestId, optionId) =>
-						void answerOnce(requestId, () => chat.answerPermission(requestId, optionId))
+			<div class={styles.reading} data-mobile-reading style={mobileChatReadingStyle()}>
+				<Transcript
+					mobile
+					entries={chat.entries}
+					muteIntermediate={settingsStore.state.chatMuteIntermediateText}
+					busy={chat.busy}
+					onOpenFile={openFile}
+					observeToolDuration={false}
+					onOpenTable={setTableDocument}
+					onSuggestion={(text) => void chat.send(text)}
+					emptyMessage={
+						!settingsReady()
+							? "Chat settings are unavailable. Waiting for the server…"
+							: chat.phase() === "unconfigured"
+								? "Configure ego in desktop Settings to start a conversation."
+								: "Ask ego about any repository."
 					}
-					onPermissionDismissed={(requestId) => void answerOnce(requestId, () => chat.cancelPermission(requestId))}
-					onElicitationAccepted={(requestId, content) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "accept", content }))
-					}
-					onElicitationDeclined={(requestId) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "decline" }))
-					}
-					onElicitationCancelled={(requestId) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "cancel" }))
-					}
-				/>
-			</Transcript>
+				>
+					<Interactions
+						interactions={chat.interactions}
+						onPermission={(requestId, optionId) =>
+							void answerOnce(requestId, () => chat.answerPermission(requestId, optionId))
+						}
+						onPermissionDismissed={(requestId) => void answerOnce(requestId, () => chat.cancelPermission(requestId))}
+						onElicitationAccepted={(requestId, content) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "accept", content }))
+						}
+						onElicitationDeclined={(requestId) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "decline" }))
+						}
+						onElicitationCancelled={(requestId) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "cancel" }))
+						}
+					/>
+				</Transcript>
+			</div>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer
 					chat={chat}
@@ -173,6 +212,28 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 					sharedFile={sharedFile()}
 					onSharedFileConsumed={() => setSharedFile(null)}
 				/>
+			</Show>
+			<Show when={tableDocument()}>
+				{(source) => {
+					registerModal(() => setTableDocument(null));
+					return (
+						<section class={styles.tableDocument} role="dialog" aria-modal="true" aria-label="AI Chat table">
+							<header class={styles.header}>
+								<strong>AI Chat table</strong>
+								<button type="button" onClick={() => setTableDocument(null)}>
+									Back to Chat
+								</button>
+							</header>
+							<ContentRenderer
+								content={source()}
+								tableActions={{
+									copy: (text) =>
+										void writeClipboard(text).catch((error) => appLogger.error("ai-chat", "Copy failed", error)),
+								}}
+							/>
+						</section>
+					);
+				}}
 			</Show>
 		</section>
 	);

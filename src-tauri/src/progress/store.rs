@@ -16,6 +16,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// project cannot take a journal with it.
 const STORE_FILE: &str = "progress.sqlite3";
 
+/// How many terminals the list names for the filter: the most recently active.
+/// Unbounded, the page grew with the journal (1704 ids was 67 KB beside 8 entries).
+const PTY_IDS_LIMIT: i64 = 32;
+
 #[derive(Clone, Debug)]
 pub struct ProgressStore {
     db_path: PathBuf,
@@ -489,9 +493,9 @@ impl ProgressStore {
         entries.truncate(limit);
         let next_cursor = has_more.then(|| entries.last().expect("nonempty page").id);
         let pty_ids = conn
-            .prepare("SELECT DISTINCT pty_id FROM entries WHERE project = ?1 AND pty_id IS NOT NULL ORDER BY pty_id")
+            .prepare("SELECT pty_id FROM (SELECT pty_id FROM entries WHERE project = ?1 AND pty_id IS NOT NULL GROUP BY pty_id ORDER BY MAX(id) DESC LIMIT ?2) ORDER BY pty_id")
             .map_err(db_error("prepare the terminal list"))?
-            .query_map(params![project], |row| row.get::<_, String>(0))
+            .query_map(params![project, PTY_IDS_LIMIT], |row| row.get::<_, String>(0))
             .map_err(db_error("read the terminal list"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error("read a terminal identity"))?;
@@ -879,12 +883,57 @@ mod tests {
             vec![second.id, first.id, old.id]
         );
         assert_eq!(aggregate.entries[2].pty_id, None);
+        assert_eq!(
+            store.list("/other", &Default::default()).unwrap().pty_ids,
+            [] as [std::string::String; 0]
+        );
+    }
+
+    #[test]
+    fn progress_list_pty_ids_stay_bounded_with_many_ptys() {
+        let (_guard, store, _dir) = isolated_store();
+        // This tests list bounds, not per-entry durability. Seed the real database
+        // in one transaction instead of reopening, syncing and checkpointing it
+        // for each of the 1,704 terminals on the shared build machine.
+        let mut conn = store.connect().unwrap();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO entries (project, created_at_ms, kind, text, pty_id)
+                     VALUES ('/p', 1, 'done', ?1, ?2)",
+                )
+                .unwrap();
+            for index in 0..1704 {
+                insert
+                    .execute(params![
+                        format!("event {index}"),
+                        format!("{index:08x}-0000-4000-8000-000000000000"),
+                    ])
+                    .unwrap();
+            }
+        }
+        tx.commit().unwrap();
+        drop(conn);
+        let page = store.list("/p", &ProgressListInput::default()).unwrap();
+        assert_eq!(page.total, 1704);
+        assert_eq!(page.pty_ids.len(), PTY_IDS_LIMIT as usize);
+        let wire = serde_json::to_string(&page).unwrap();
         assert!(
-            store
-                .list("/other", &Default::default())
-                .unwrap()
+            wire.len() < 16384,
+            "the default page serialized to {} B",
+            wire.len()
+        );
+        // The filter keeps the newest terminals with history: the last one written is listed.
+        assert!(
+            page.pty_ids
+                .contains(&format!("{:08x}-0000-4000-8000-000000000000", 1703))
+        );
+        // The oldest terminal's entries stay reachable through the aggregate list; only its filter slot is dropped.
+        assert!(
+            !page
                 .pty_ids
-                .is_empty()
+                .contains(&"00000000-0000-4000-8000-000000000000".to_string())
         );
     }
 
@@ -899,7 +948,7 @@ mod tests {
         let page = store.list("/p", &ProgressListInput::default()).unwrap();
         let wire = serde_json::to_value(&page).unwrap();
         assert_eq!(wire["total"], 75);
-        assert_eq!(page.entries.len(), 10, "default response must be bounded");
+        assert_eq!(page.entries.len(), 8, "default response must be bounded");
         assert!(
             wire["nextCursor"].is_number(),
             "remaining history needs a cursor"
@@ -1286,7 +1335,7 @@ mod tests {
 
         let first = store.list("/p", &ProgressListInput::default()).unwrap();
         assert_eq!(first.total, 12);
-        assert_eq!(first.entries.len(), 10);
+        assert_eq!(first.entries.len(), 8);
         let older = store
             .list(
                 "/p",
@@ -1302,7 +1351,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),
-            vec!["known 1", "known 0"]
+            vec!["known 3", "known 2", "known 1", "known 0"]
         );
         assert_eq!(older.next_cursor, None);
     }

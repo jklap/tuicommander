@@ -9,6 +9,26 @@ describe("githubOpsStore", () => {
 		store = (await import("../../stores/githubOps")).githubOpsStore;
 	});
 
+	it("rejects remote ops that would overwrite a local or other daemon repository with the same path", async () => {
+		const { setRepoConnectionLookup } = await import("../../transportRuntime");
+		const envelope = {
+			repo_path: "/shared",
+			payload: { pr_number: 7, done: true },
+			__tuic_origin: { connection: "mint" },
+		};
+		setRepoConnectionLookup(() => undefined);
+		store.handleEvent("review-progress", envelope);
+		expect(store.getState("/shared").reviews).toEqual({});
+		setRepoConnectionLookup(() => "vps");
+		store.handleEvent("review-progress", envelope);
+		expect(store.getState("/shared").reviews).toEqual({});
+		setRepoConnectionLookup(() => "mint");
+		store.handleEvent("review-progress", envelope);
+		expect(store.getState("/shared").reviews[7].done).toBe(true);
+		store.handleEvent("review-progress", { repo_path: "/shared", payload: { pr_number: 7, done: false } });
+		expect(store.getState("/shared").reviews[7].done).toBe(true);
+	});
+
 	it("returns a clean default for an unknown repo", () => {
 		testInScope(() => {
 			expect(store.getState("/nope").conflicts).toEqual({});

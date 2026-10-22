@@ -224,6 +224,7 @@ impl UpstreamEntry {
 pub(crate) struct UpstreamRegistry {
     /// `upstream_name` → entry
     entries: DashMap<String, Arc<UpstreamEntry>>,
+    pub(crate) settings_publisher: parking_lot::RwLock<crate::settings::changes::Publisher>,
     /// Broadcast bus for emitting upstream status change events (optional).
     event_bus: parking_lot::RwLock<Option<tokio::sync::broadcast::Sender<crate::state::AppEvent>>>,
     /// MCP tools_changed signal — fired when upstream tool availability changes.
@@ -245,6 +246,7 @@ impl UpstreamRegistry {
     pub(crate) fn new() -> Self {
         Self {
             entries: DashMap::new(),
+            settings_publisher: Default::default(),
             event_bus: parking_lot::RwLock::new(None),
             mcp_tools_tx: parking_lot::RwLock::new(None),
             oauth_flow: parking_lot::RwLock::new(None),
@@ -271,6 +273,7 @@ impl UpstreamRegistry {
             },
             enabled: true,
             timeout_secs: 10,
+            headers: vec![],
             tool_filter: None,
             auth: None,
         };
@@ -733,7 +736,7 @@ impl UpstreamRegistry {
             ));
         }
 
-        let client = build_client(&name, &config)?;
+        let client = build_client(&name, &config, self.settings_publisher.read().clone())?;
         let entry = Arc::new(UpstreamEntry::new(config.clone(), client));
         self.entries.insert(name.clone(), Arc::clone(&entry));
 
@@ -805,6 +808,29 @@ impl UpstreamRegistry {
         self.emit_status_change(name, "disconnected");
 
         Ok(())
+    }
+
+    /// `(name, tool count)` of every `Ready` upstream, sorted by name and
+    /// restricted to `allowed` when a per-repo allowlist applies. Counts the
+    /// tools that survive the upstream's own filter, like `aggregated_tools`.
+    pub(crate) fn ready_upstreams(&self, allowed: Option<&[String]>) -> Vec<(String, usize)> {
+        let mut result: Vec<(String, usize)> = self
+            .entries
+            .iter()
+            .filter(|e| *e.value().status.read() == UpstreamStatus::Ready)
+            .filter(|e| allowed.is_none_or(|a| a.iter().any(|n| n == &e.value().config.name)))
+            .map(|e| {
+                let entry = e.value();
+                let tools = entry.tools.read();
+                let n = tools
+                    .iter()
+                    .filter(|t| apply_filter(&t.original_name, &entry.config))
+                    .count();
+                (entry.config.name.clone(), n)
+            })
+            .collect();
+        result.sort();
+        result
     }
 
     /// Names of all registered upstreams.
@@ -898,27 +924,9 @@ impl UpstreamRegistry {
         for (id, old_server) in &old_by_id {
             let should_disconnect = match new_by_id.get(id) {
                 None => true, // removed
-                Some(new_server) => {
-                    old_server.name != new_server.name
-                        || old_server.transport != new_server.transport
-                        || old_server.enabled != new_server.enabled
-                        || old_server.timeout_secs != new_server.timeout_secs
-                        || old_server.tool_filter != new_server.tool_filter
-                        || old_server.auth != new_server.auth
-                }
+                Some(new_server) => server_config_changed(old_server, new_server),
             };
             if should_disconnect {
-                // When only the transport URL changed, any DCR-obtained client_id
-                // is bound to the old AS and must not survive the reconnect.
-                if let Some(new_server) = new_by_id.get(id)
-                    && old_server.transport != new_server.transport
-                    && new_server.auth == old_server.auth
-                    && old_server.auth.is_some()
-                    && let Err(e) =
-                        crate::mcp_upstream_config::clear_upstream_auth(&new_server.name)
-                {
-                    tracing::warn!(source = "mcp_registry", name = %new_server.name, "Failed to clear stale auth: {e}");
-                }
                 let _ = self.disconnect_upstream(&old_server.name);
             }
         }
@@ -928,14 +936,7 @@ impl UpstreamRegistry {
             let old = old_by_id.get(new_server.id.as_str());
             let should_connect = match old {
                 None => true, // new
-                Some(old_server) => {
-                    old_server.name != new_server.name
-                        || old_server.transport != new_server.transport
-                        || old_server.enabled != new_server.enabled
-                        || old_server.timeout_secs != new_server.timeout_secs
-                        || old_server.tool_filter != new_server.tool_filter
-                        || old_server.auth != new_server.auth
-                }
+                Some(old_server) => server_config_changed(old_server, new_server),
             };
             if should_connect
                 && let Err(e) = self
@@ -977,8 +978,24 @@ impl UpstreamRegistry {
 // Helpers (module-private)
 // ---------------------------------------------------------------------------
 
+/// Whether a config edit needs the live client rebuilt. Every field that
+/// `build_client` reads belongs here, or the edit stays invisible until restart.
+fn server_config_changed(old: &UpstreamMcpServer, new: &UpstreamMcpServer) -> bool {
+    old.name != new.name
+        || old.transport != new.transport
+        || old.enabled != new.enabled
+        || old.timeout_secs != new.timeout_secs
+        || old.tool_filter != new.tool_filter
+        || old.auth != new.auth
+        || old.headers != new.headers
+}
+
 /// Build the appropriate client variant from the upstream config.
-fn build_client(name: &str, config: &UpstreamMcpServer) -> Result<UpstreamClient, String> {
+fn build_client(
+    name: &str,
+    config: &UpstreamMcpServer,
+    publisher: crate::settings::changes::Publisher,
+) -> Result<UpstreamClient, String> {
     match &config.transport {
         UpstreamTransport::Http { .. } => {
             let client = HttpMcpClient::from_config(
@@ -987,7 +1004,9 @@ fn build_client(name: &str, config: &UpstreamMcpServer) -> Result<UpstreamClient
                 config.timeout_secs,
                 config.auth.is_some(),
             )
-            .ok_or_else(|| format!("Failed to build HTTP client for '{name}'"))?;
+            .ok_or_else(|| format!("Failed to build HTTP client for '{name}'"))?
+            .with_headers(config.headers.clone())
+            .with_settings_publisher(publisher);
             Ok(UpstreamClient::Http(Box::new(tokio::sync::RwLock::new(
                 client,
             ))))
@@ -1141,11 +1160,7 @@ async fn initialize_entry_with_oauth(
             // flow), ensure the client knows to include it. The client may have
             // been built with has_auth=false when the upstream config had no
             // explicit `auth` section (OAuth was discovered via 401 challenge).
-            if crate::mcp_upstream_credentials::read_stored_credential(name)
-                .ok()
-                .flatten()
-                .is_some()
-            {
+            if crate::mcp_upstream_credentials::has_upstream_credential(name).unwrap_or(false) {
                 guard.enable_auth();
             }
             guard.initialize().await
@@ -1197,6 +1212,8 @@ async fn initialize_entry_with_oauth(
             // help either, since the stale token would just be reused).
             if let Err(e) = crate::mcp_upstream_credentials::delete_upstream_credential(name) {
                 tracing::warn!(source = "mcp_registry", %name, "Failed to clear rejected OAuth token: {e}");
+            } else if let Some(manager) = &flow_mgr {
+                manager.settings_publisher.read().publish("upstreams", true);
             }
             tracing::info!(
                 source = "mcp_registry",
@@ -1398,6 +1415,7 @@ mod tests {
             },
             enabled: true,
             timeout_secs: 10,
+            headers: vec![],
             tool_filter: None,
             auth: None,
         }
@@ -1446,6 +1464,7 @@ mod tests {
             },
             enabled: true,
             timeout_secs: 10,
+            headers: vec![],
             tool_filter: Some(ToolFilter {
                 mode,
                 patterns: patterns.iter().map(|s| s.to_string()).collect(),
@@ -1518,7 +1537,7 @@ mod tests {
     #[test]
     fn aggregated_tools_empty_when_no_upstreams() {
         let registry = UpstreamRegistry::new();
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1575,7 +1594,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::CircuitOpen;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1943,7 +1962,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::Authenticating;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]
@@ -2189,7 +2208,7 @@ mod tests {
 
         let allowed: Vec<String> = vec![];
         let tools = registry.aggregated_tools_for_repo(Some(&allowed));
-        assert!(tools.is_empty());
+        assert_eq!(tools, [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]

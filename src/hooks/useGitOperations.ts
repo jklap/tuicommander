@@ -12,9 +12,10 @@ import { terminalsStore } from "../stores/terminals";
 import { isTauri, rpc } from "../transport";
 import type { RepoInfo } from "../types";
 import { openDialog as open } from "../utils/nativeDialog";
+import { reportActionError } from "../utils/reportActionError";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
-import { createRepositoryRefreshCoordinator } from "./git/createRepositoryRefreshCoordinator";
+import { createRepositoryRefreshCoordinator, type OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
 import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
@@ -112,9 +113,19 @@ export interface GitOperationsDeps {
 		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
-		clearOrphanCleanup: (repoPath: string) => Promise<void>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
-		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
+		removeOrphanWorktree: (
+			repoPath: string,
+			worktreePath: string,
+			safeOnly?: boolean,
+			confirmedSessions?: string[],
+		) => Promise<void>;
+		mergePrViaGithub: (
+			repoPath: string,
+			prNumber: number,
+			mergeMethod: string,
+			expectedHeadSha: string,
+		) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
@@ -142,7 +153,7 @@ export interface GitOperationsDeps {
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (
 			repoPath: string,
-			assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+			assessments: OrphanAssessment[],
 			countdownSeconds: number,
 		) => Promise<boolean>;
 		answerOrphanCleanup?: (repoPath: string, remove: boolean) => void;
@@ -155,7 +166,7 @@ export interface GitOperationsDeps {
 		) => Promise<boolean>;
 		/** Surface a git failure in a dialog with the full output; returns true if the user chose Retry. */
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
-		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
+		/** Browser mode only: browse the serving machine for a repo path */
 		promptRepoPath?: () => Promise<string | null>;
 		/**
 		 * Browse a connected machine's filesystem and return an absolute path on it.
@@ -234,7 +245,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setStatusInfo: deps.setStatusInfo,
 	});
 
-	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner } =
+	const { handleAddTerminalToWorkspace, handleBranchSelect, handleBranchSelectInner, resumeAgentTabsAfterUpdate } =
 		createBranchSelectionCoordinator({
 			repo: deps.repo,
 			pty: deps.pty,
@@ -328,7 +339,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await deps.repo.renameBranch(branch.repoPath, oldName, newName);
 		} catch (err) {
 			appLogger.error("git", "Failed to rename branch", err);
-			deps.setStatusInfo(`Failed to rename branch: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to rename branch: ${err}`);
 			return;
 		}
 
@@ -408,10 +419,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			// because nothing claimed its cwd. Now something does.
 			reconcileTerminalOwnership();
 
-			await refreshAllBranchStats();
+			await refreshAllBranchStats(info.path, { immediate: true });
 		} catch (err) {
 			appLogger.error("git", "Failed to add repository", err);
-			deps.setStatusInfo(`Failed to add repo: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to add repo: ${err}`);
 		}
 	};
 
@@ -428,7 +439,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			if (!selected) return;
 			path = typeof selected === "string" ? selected : selected[0];
 		} else {
-			// Browser mode: no native file picker — use in-app text input dialog
+			// Browser mode: browse the server through the in-app directory picker
 			const input = await deps.dialogs.promptRepoPath?.();
 			if (!input?.trim()) return;
 			path = input.trim();
@@ -480,7 +491,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			repositoriesStore.setActive(info.path);
 		} catch (err) {
 			appLogger.error("git", `Failed to add remote repo from ${connectionId}`, err);
-			deps.setStatusInfo(`Failed to add remote repo: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to add remote repo: ${err}`);
 		}
 	};
 
@@ -505,6 +516,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 	} = createWorktreeWorkflowCoordinator({
 		repo: deps.repo,
 		closeTerminal: deps.closeTerminal,
@@ -517,7 +529,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,
 		setupNewWorktree,
-		refreshAllBranchStats,
+		refreshAllBranchStats: (repoPath) => refreshAllBranchStats(repoPath, { immediate: true }),
 	});
 
 	/**
@@ -673,8 +685,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	// Compose branch stats + branch list refresh into a single function
-	const refreshAllBranchStatsAndLists = async (scopeRepoPath?: string) => {
-		await refreshAllBranchStats(scopeRepoPath);
+	const refreshAllBranchStatsAndLists = async (scopeRepoPath?: string, options: { immediate?: boolean } = {}) => {
+		await refreshAllBranchStats(scopeRepoPath, options);
 		await refreshBranchLists(scopeRepoPath);
 	};
 
@@ -711,7 +723,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			for (const termId of branch.terminals) {
 				const term = terminalsStore.get(termId);
 				if (term?.shellState === "busy") {
-					deps.setStatusInfo(`Cannot switch branch: terminal "${term.name || termId}" has a running process`);
+					reportActionError(
+						deps.setStatusInfo,
+						`Cannot switch branch: terminal "${term.name || termId}" has a running process`,
+					);
 					return;
 				}
 			}
@@ -722,7 +737,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const result = await deps.repo.switchBranch(repoPath, branchName, { stash: true });
 			deps.setStatusInfo(`Switched to ${result.new_branch} (changes stashed)`);
 			migrateMainWorktreeBranches(repoPath, result.new_branch);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 		};
 
 		try {
@@ -731,7 +746,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				result.stashed ? `Switched to ${result.new_branch} (changes stashed)` : `Switched to ${result.new_branch}`,
 			);
 			migrateMainWorktreeBranches(repoPath, result.new_branch);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 		} catch (err) {
 			const errMsg = String(err);
 			if (errMsg === "dirty" || errMsg.includes("dirty")) {
@@ -768,11 +783,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await deps.repo.checkoutRemoteBranch(repoPath, branchName);
 			deps.setStatusInfo(`Checked out ${branchName}`);
 			migrateMainWorktreeBranches(repoPath, branchName);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 			await handleBranchSelectInner(repoPath, branchName);
 		} catch (err) {
 			appLogger.error("git", "Failed to checkout remote branch", { error: String(err) });
-			deps.setStatusInfo(`Checkout failed: ${err}`);
+			reportActionError(deps.setStatusInfo, `Checkout failed: ${err}`);
 		}
 	};
 
@@ -791,6 +806,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setBranchToRename,
 		refreshAllBranchStats: refreshAllBranchStatsAndLists,
 		handleBranchSelect,
+		resumeAgentTabsAfterUpdate,
 		handleAddTerminalToWorkspace,
 		handleRemoveRepo,
 		handleRemoveWorkspace,
@@ -811,6 +827,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
 		mergePendingCtx,
 		dismissMergePending,
 		closeTerminalsForBranch,

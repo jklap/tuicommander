@@ -334,6 +334,10 @@ impl TermDamageState {
 }
 
 pub struct Term<T> {
+    // Consecutive whole-row erases, in top-to-bottom viewport order.
+    viewport_erased_rows: usize,
+    // Generation and history position of the last explicit full viewport erase.
+    viewport_clear: (usize, usize),
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
@@ -470,6 +474,47 @@ pub enum Osc52 {
 }
 
 impl<T> Term<T> {
+    /// Generation and total-scrolled position at the last explicit viewport wipe.
+    /// A resize or an unrelated in-place edit never advances this generation.
+    pub fn viewport_clear(&self) -> (usize, usize) {
+        self.viewport_clear
+    }
+
+    /// Erase a cell range, resetting row provenance only for a complete replacement.
+    fn erase_row_cells(&mut self, line: Line, start: Column, end: Column) {
+        let columns = self.columns();
+        if start == Column(0) && end == Column(columns) {
+            let next = line.0 as usize;
+            self.viewport_erased_rows = if next == 0 {
+                1
+            } else if next == self.viewport_erased_rows {
+                next + 1
+            } else {
+                0
+            };
+            if self.viewport_erased_rows == self.screen_lines()
+                && !self.mode.contains(TermMode::ALT_SCREEN)
+            {
+                self.viewport_clear = (
+                    self.viewport_clear.0.wrapping_add(1),
+                    self.grid.total_scrolled(),
+                );
+                self.viewport_erased_rows = 0;
+            }
+        } else {
+            self.viewport_erased_rows = 0;
+        }
+        let template: Cell = self.grid.cursor.template.bg.into();
+        let row = &mut self.grid[line];
+        if start == Column(0) && end == Column(columns) {
+            row.reset(&template);
+        } else {
+            for cell in &mut row[start..end] {
+                *cell = template.clone();
+            }
+        }
+    }
+
     #[inline]
     pub fn scroll_display(&mut self, scroll: Scroll)
     where
@@ -508,6 +553,8 @@ impl<T> Term<T> {
         let damage = TermDamageState::new(num_cols, num_lines);
 
         Term {
+            viewport_erased_rows: 0,
+            viewport_clear: (0, 0),
             inactive_grid,
             scroll_region,
             event_proxy,
@@ -803,6 +850,16 @@ impl<T> Term<T> {
         }
     }
 
+    /// Primary-screen origin, including rows evicted from bounded history.
+    #[inline]
+    pub fn primary_total_scrolled(&self) -> usize {
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.total_scrolled()
+        } else {
+            self.grid.total_scrolled()
+        }
+    }
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         self.resize_reflow(size, crate::grid::ReflowMode::All);
@@ -815,6 +872,7 @@ impl<T> Term<T> {
     /// `ReflowMode::HistoryOnly` — reflow scrollback but leave visible screen
     /// untouched, preserving cursor-addressed TUI positioning.
     pub fn resize_reflow<S: Dimensions>(&mut self, size: S, reflow: crate::grid::ReflowMode) {
+        self.viewport_erased_rows = 0;
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
 
@@ -1342,6 +1400,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        self.viewport_erased_rows = 0;
         // Number of cells the char will occupy.
         let width = match c.width() {
             Some(width) => width,
@@ -1460,9 +1519,11 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("Decalnning");
 
         for line in (0..self.screen_lines()).map(Line::from) {
-            for column in 0..self.columns() {
-                let cell = &mut self.grid[line][Column(column)];
-                *cell = Cell::default();
+            // DECALN replaces the entire row, including its origin provenance.
+            // Its cells use the default background rather than the cursor template.
+            let row = &mut self.grid[line];
+            row.reset(&Cell::default());
+            for cell in row {
                 cell.c = 'E';
             }
         }
@@ -1526,6 +1587,10 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage
             .damage_line(line.0 as usize, 0, self.columns() - 1);
 
+        if source == Column(0) && count == self.columns() {
+            self.erase_row_cells(line, Column(0), Column(self.columns()));
+            return;
+        }
         let row = &mut self.grid[line][..];
 
         for offset in (0..num_cells).rev() {
@@ -1922,14 +1987,9 @@ impl<T: EventListener> Handler for Term<T> {
         let start = cursor.point.column;
         let end = cmp::min(start + count, Column(self.columns()));
 
-        // Cleared cells have current background color set.
-        let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
         self.damage.damage_line(line.0 as usize, start.0, end.0);
-        let row = &mut self.grid[line];
-        for cell in &mut row[start..end] {
-            *cell = bg.into();
-        }
+        self.erase_row_cells(line, start, end);
     }
 
     #[inline]
@@ -1953,6 +2013,10 @@ impl<T: EventListener> Handler for Term<T> {
         let line = cursor.point.line;
         self.damage
             .damage_line(line.0 as usize, 0, self.columns() - 1);
+        if start == 0 && removed == columns {
+            self.erase_row_cells(line, Column(0), Column(columns));
+            return;
+        }
         let row = &mut self.grid[line][..];
 
         for offset in 0..shifted {
@@ -2040,7 +2104,6 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("Clearing line: {mode:?}");
 
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
         let point = cursor.point;
 
         let (left, right) = match mode {
@@ -2053,10 +2116,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage
             .damage_line(point.line.0 as usize, left.0, right.0 - 1);
 
-        let row = &mut self.grid[point.line];
-        for cell in &mut row[left..right] {
-            *cell = bg.into();
-        }
+        self.erase_row_cells(point.line, left, right);
 
         let range = self.grid.cursor.point.line..=self.grid.cursor.point.line;
         self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -2155,25 +2215,21 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
         trace!("Clearing screen: {mode:?}");
-        let bg = self.grid.cursor.template.bg;
-
         let screen_lines = self.screen_lines();
 
         match mode {
             ansi::ClearMode::Above => {
                 let cursor = self.grid.cursor.point;
 
-                // If clearing more than one line.
-                if cursor.line > 1 {
+                // Upstream's > 1 guard skips row zero when the cursor is on row one.
+                if cursor.line > 0 {
                     // Fully clear all lines before the current line.
                     self.grid.reset_region(..cursor.line);
                 }
 
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
-                for cell in &mut self.grid[cursor.line][..end] {
-                    *cell = bg.into();
-                }
+                self.erase_row_cells(cursor.line, Column(0), end);
 
                 let range = Line(0)..=cursor.line;
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -2184,9 +2240,7 @@ impl<T: EventListener> Handler for Term<T> {
                 // so the last cell of the current line is not in range. Same
                 // reasoning as the `LineClearMode::Right` guard in `clear_line`.
                 if !self.grid.cursor.input_needs_wrap {
-                    for cell in &mut self.grid[cursor.line][cursor.column..] {
-                        *cell = bg.into();
-                    }
+                    self.erase_row_cells(cursor.line, cursor.column, Column(self.columns()));
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {
@@ -2710,8 +2764,8 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
         self.grid.cursor.template.cell_type = cell_type;
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
         self.event_proxy.send_event(Event::Osc133 {
             command,
             params: params.to_owned(),
@@ -2726,8 +2780,8 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn osc7770(&mut self, verb: &str, payload: &str) {
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
         self.event_proxy.send_event(Event::Tuic {
             verb: verb.to_owned(),
             payload: payload.to_owned(),

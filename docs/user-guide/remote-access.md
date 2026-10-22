@@ -24,6 +24,10 @@ Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+If local IP discovery fails, the settings controls and QR dialog remain open. The
+network address area shows the error and a **Retry** action. Retry repeats address
+discovery without changing the saved remote-access configuration.
+
 ## What Works Remotely
 
 The browser client provides the same UI as the desktop app:
@@ -53,13 +57,13 @@ exact framing is in
 
 ## Security
 
-- **Authentication** — Basic Auth with bcrypt-hashed passwords
+- **Authentication** — QR URL token, session cookie or Basic Auth with bcrypt-hashed passwords. HTTP requires credentials even from this computer or the LAN; the old LAN authentication bypass no longer applies. Local CLI/MCP IPC remains available without HTTP credentials.
 - **Secret storage** — Session tokens, relay bearer tokens, and push VAPID
   private keys are stored in the OS keyring-backed credential vault; config
   files and `/config` responses expose only non-secret settings and existence
   flags
 - **Local network only** — The server binds to your machine's IP; it's not exposed to the internet unless you configure port forwarding (don't do this without a VPN)
-- **CORS** — When remote access is enabled, any origin is allowed (necessary for browser access from different IPs)
+- **Browser request protection** — The HTTP listener rejects foreign Origin headers and unknown Host names before authentication. Use its literal IP or detected Tailscale FQDN; browser/PWA requests from that same server and bundled/development WebViews remain supported. CORS does not allow arbitrary websites.
 
 ## MCP HTTP Server
 
@@ -84,7 +88,17 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 2. Navigate to `http://<your-ip>:<port>/mobile` from your phone
 3. Log in with your credentials
 
+Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
+
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+
+After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
+
+In **Sessions → New session**, the Agent picker lists installed CLI agents from the shared registry, including ego. Git and direct API entries are excluded. The first installed agent is selected. Creation stays disabled while detection runs or when no agents are installed; detection failures show an error instead of a fallback list.
+
 ### Add to Home Screen
+
+The terminal composer keeps the bottom safe-area inset inside its background so its controls stay above the Home Indicator. Shell height and position still follow `visualViewport.height` and `visualViewport.offsetTop` when the keyboard opens. This padding change does not establish the cause of a separate empty band below the shell; capture a full-screen device screenshot before reloading if that band occurs.
 
 The mobile UI supports PWA (Progressive Web App) installation:
 
@@ -93,12 +107,42 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
-In a mobile terminal, tap the paperclip to choose a photo or file. The upload
+**The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+
+At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
+Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
+headers keep these controls directly in the bar. Tap the session name for details.
+
+A choice answer stays bound to the terminal that showed the question, even if you
+leave the detail screen while its keys are being sent. A failed send shows an error
+and enables the choice buttons again. Send and Queue also keep their original terminal.
+
+For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
+clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
+and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
+for long lines rather than wrapping coloured terminal rows. Switch back with
+**CLI** for permission prompts. Startup trust, external-file imports, permission
+prompts and selection lists keep their option rows and interaction footer. Edit excerpts are bounded to 20,000 characters
+per version; an ellipsis marks a truncated excerpt. A failed tool card describes
+a proposed edit, not a successful file change.
+
+
+In a terminal, a down-arrow appears to the right of **Send** while CLI or Chat
+output is scrolled back. Tap it to return to the latest output. It does not send
+terminal input or cover the key-bar controls.
+
+Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
 In mobile AI Chat, images join the image draft and other files appear as file
 chips until Send. Android Chrome can also share a file into the installed PWA;
 the shared file opens as an AI Chat draft. iOS Safari currently requires the
-paperclip because it does not support Web Share Target.
+**+ → Attach file** because it does not support Web Share Target.
+The + menu also offers **Queue** in terminals, **Commands (/)** in agent terminals, and **Park draft / Restore parked draft / Swap parked
+draft** in AI Chat. Chat shows **Queue** and **Stop** while a turn is running.
+Terminal long-press on Send still opens Queue. Terminal parking is not offered:
+the existing parked-draft store belongs to AI Chat. Tap outside the menu or
+press Escape to close it. Desktop AI Chat and Ctrl+S retain their controls.
+
 See [Chrome's Share Target guide](https://developer.chrome.com/docs/capabilities/web-apis/web-share-target)
 and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593).
 
@@ -127,14 +171,55 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
 The question is encrypted to the phone's Web Push subscription. It does not
 pass through TUICommander's content-blind cloud relay. TUICommander sends at
 most one question or completion push per session every 30 seconds.
+Session notices use the session display name, or the agent and repository when no name is set. Progress notices show the progress message, not the tool arguments.
 Notifications from different sessions remain separate. A newer notification
 for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
 
+### Keyboard correction
+
+Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. It enables autocorrect, spellcheck and sentence capitalization in the terminal prompt composer. Turn it off for literal command entry. The choice stays in this browser or installed PWA across reloads. File and code editors keep spellcheck off. Keyboard suggestions still depend on your phone keyboard settings.
+
+### Connection loss and recovery
+
+If the server cannot be reached, the mobile app shows one connection banner with **Retry now**. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
+
+### Automatic mobile resume diagnostics
+
+The mobile app saves up to 30 recent lifecycle snapshots in per-tab
+`sessionStorage`. Snapshots include visibility, pagehide/pageshow and their
+`persisted` flags, freeze/resume, root child count, shell geometry, visual
+viewport, CSS app height/top, and the mobile terminal connection phase. The
+recorder does not depend on animation frames, reload the page, or change the UI.
+It does not store terminal output, WebSocket URLs, query tokens or credentials.
+
+On the next boot, a prior document without a clean pagehide, or one that ended
+hidden, sends its saved trail automatically to the backend log ring as a warning
+with source `app` and message `Mobile previous document lifecycle trail`.
+A failed upload stays pending and retries on online/resume or another boot.
+The pending report is removed after the log API acknowledges it. This is evidence
+of the prior lifecycle, not proof of a crash: a normal reload after hiding can
+also produce a report. Session storage does not survive every form of browser
+storage eviction or a closed tab. No manual copy action is needed.
+
+The existing `Mobile resume has an empty or off-screen shell` warning still
+checks the resumed shell after an animation frame. A missing warning does not
+prove that the document or compositor was healthy. The reported iPhone grey
+screen still needs evidence from the failing device; these diagnostics do not
+claim to fix it.
+
 ### Mobile Features
+Tap the attachment icon to the left of the session input to choose a photo or file. The
+file name appears while uploading, then its path is added to the draft. Queue
+is unavailable until the upload finishes. Smaller mic and Send controls sit inside the input border on the right.
+
+Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
+
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
-- **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input
+- **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
+- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available.
+- **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
 - **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
@@ -328,6 +413,12 @@ For a development build, build the headless binary with
 desktop-feature sibling is a stub. The preview names that cause and command.
 
 Direct updates stream the binary over the authenticated connection. The daemon
+accepts only the session cookie for binary and file uploads, and the update
+client sends it in the `Cookie` header; credentials never appear in the upload
+URL. A daemon from this release rejects an update from an older desktop with
+401, and a newer desktop cannot update an older daemon that still expects the
+URL token. Update desktop and daemon from the same release, or deploy the older
+daemon over SSH. The daemon
 verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
 count, stages it in its own install directory, then starts the new build. SSH
 updates use the existing SCP deployment path. TUICommander waits for `/health`
@@ -416,10 +507,20 @@ dialog update without moving the journal to the local machine.
 Once a remote connection is configured:
 
 - **Add remote repo** — Select a connection and browse from that machine's home directory. If a directory cannot be read, the picker explains the error and still allows entering a path or moving to its parent. The repo appears in the sidebar with a remote badge
-- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection shows a persistent error toast
+- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection, a missing initial frame after 15 seconds, or an unreadable compressed frame shows a persistent error toast. The client retries the stream and replays the current viewport on reconnect; the toast remains until dismissed. An idle terminal whose viewport or explicit empty replay has arrived is not treated as stalled
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
+
+#### Remote agent notices
+
+An agent's MCP toast on a connected machine appears in the desktop notification
+bell under **Messages**, with `[connection name]` before its title. It keeps the
+requested level and sound. **Open terminal** switches to the originating remote
+tab when it is still open; an unknown or closed session leaves focus unchanged.
+Notices from a disconnected machine are not queued or replayed on reconnect.
+Connections with the same display name retain separate notices. Malformed remote
+notice text is discarded.
 
 #### What runs on which machine
 
@@ -464,6 +565,8 @@ its arguments, its environment and the `CC_ENV_FLAGS` that reach the PTY. The sa
 covers the agent hook toggles (`hook_instrumentation`, `native_status_signals`) and the
 upstream MCP servers, which are dialled by the backend that holds them.
 
+Adding an upstream MCP server saves its configuration and credentials on the selected machine. A rejected duplicate name preserves that machine’s existing credentials. Use the existing server’s Edit form to replace a credential.
+
 The frontend keeps one copy per machine, read the first time that machine is needed and
 dropped whenever its connection changes state — a daemon that went away and came back may
 have been reconfigured, or be a different box behind the same name. A local repository
@@ -479,6 +582,11 @@ sent to a daemon, including when every registered repository is remote.
 **Settings edits the machine you pick.** The Agents tab and the upstream-MCP panel carry a
 machine selector; it defaults to the machine of the repository the settings nav is standing
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
+
+Authenticated Settings actions are available on the headless daemon through the same
+`POST /settings/action` contract as the desktop server. The daemon also serves the
+authenticated `/config` snapshot used to load and refresh browser Settings. Successful durable edits publish
+`settings-changed` over SSE so connected Settings readers can refresh without saving.
 
 Three things stay local even while a remote machine is selected, because they cannot work
 anywhere else: installing or removing the TUIC MCP bridge (`install_agent_mcp`), opening an
@@ -498,7 +606,9 @@ A standalone headless daemon for running TUICommander on a Linux server without 
 
 Download the `tuic-remote` binary **and** the `tuic-bridge` binary for your
 platform from the [GitHub Releases](https://github.com/sstraus/tuicommander/releases)
-page. Both are published for every platform below.
+page. Both are published for every platform below. Tagged releases carry the
+stable build; the rolling [`nightly`](https://github.com/sstraus/tuicommander/releases/tag/nightly)
+release carries the same four targets, rebuilt on every push to `main`.
 
 | Platform | Daemon | MCP bridge |
 |----------|--------|------------|
@@ -509,7 +619,7 @@ page. Both are published for every platform below.
 
 ```bash
 # Example: Linux x64
-BASE=https://github.com/sstraus/tuicommander/releases/latest/download
+BASE=https://github.com/sstraus/tuicommander/releases/latest/download   # nightly: .../releases/download/nightly
 curl -fsSL -o tuic-remote "$BASE/tuic-remote-x86_64-unknown-linux-gnu"
 curl -fsSL -o tuic-bridge "$BASE/tuic-bridge-x86_64-unknown-linux-gnu"
 chmod +x tuic-remote tuic-bridge
@@ -675,7 +785,7 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Runs headless | No | Yes |
 | Tauri dependency | Yes | No |
 | Default port | 9876 | 9877 |
-| LAN auth bypass | Configurable | Always disabled |
+| LAN auth bypass | Disabled | Disabled |
 | Signal handling | N/A | Graceful SIGINT/SIGTERM/SIGHUP |
 | MCP bridge for local agents | Bundled sidecar | Downloaded next to the daemon |
 | Embedded assistant (watchers, scheduler) | Yes | No |
@@ -683,6 +793,8 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 ### Status
 
 **Beta** — the core HTTP/WebSocket API is stable, but the standalone daemon is new and may have rough edges. Report issues on GitHub.
+
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
 
 ## Troubleshooting
 
@@ -692,3 +804,84 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Connection refused | Verify the port isn't blocked by a firewall. The settings panel includes a reachability check. |
 | Authentication fails | Re-enter the password in settings — the stored bcrypt hash may be from a different password. |
 | Terminals not responding | WebSocket connection may have dropped. Refresh the browser page. |
+
+## Private secret entry on a phone
+
+A desktop secret request shows a one-time entry path in its private window.
+Open that path on your trusted TUICommander server address and enter only the
+requested fields. Entry uses the existing server authentication and transport;
+use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
+See [Private secret forms](secrets.md).
+
+## Address remote terminals and peers from desktop MCP
+
+Use `session action=list` to discover connected remote terminals. Their
+`connection_id` identifies the saved remote connection. Pass that field with
+`session_id`, or use the returned `address`, for output and semantic submit.
+Use `agent action=list_peers` to find remote peer addresses, then send mail to
+`<connection_id>/<peer-id>`. Replies to `local/<peer-id>` return through the
+desktop hub. Daemons can also address peers on another configured connection.
+All traffic follows the configured daemon connection and credentials.
+
+Both desktop and daemon need a version supporting remote peer mail. Local daemon
+mail remains usable if the desktop disconnects. A cross-host error is explicit;
+a timeout with uncertain delivery is not permission to resend the body.
+
+The read-only reproduction harness is `scripts/test-remote-mcp.py`. Run
+`python3 scripts/test-remote-mcp.py --connection <id> --session <alias-or-id>`
+against the desktop MCP. `--exercise` submits and sends mail and must target a
+disposable idle agent; `--second-connection` and `--second-session` check a
+remote-to-remote reply through the same hub.
+
+For a local protocol fixture, build a test-support headless binary and run
+`python3 scripts/test-remote-mcp.py --fixture-bin <binary> --fixture-launcher scripts/run-remote-fixture.sh`.
+This launches three actual isolated daemons, exercises the hub MCP, remote-to-remote
+mail and replies, semantic shell rejection, then verifies intrahost mail with the hub
+stopped. It does not claim to test a real agent composer; use `--exercise` for that.
+
+Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. MCP confirmation dialogs appear on the desktop and close when another client answers. AI Chat shows remote questions separately, with their ACP connection identity. Completing an earlier answer preserves questions announced by newer notices. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
+
+MCP terminal output can be read in retained pages without running a command again.
+Follow the response's `continuation` instructions and `next_cursor` while
+`has_more` is true. Raw pages use byte positions; text pages use scrollback rows.
+The same paging works through a connected remote daemon. Buffer eviction can
+remove old output, and the response reports the resulting gap.
+
+Remote desktop terminal tabs consume the daemon's detected agent identity and
+OSC title updates, with the same custom-name and spawn-name protection as local
+tabs. Grid output streams over WebSocket; the text/log view batches rows at
+200 ms. Loopback timings do not establish latency on an SSH or Tailscale link.
+
+### Claude session CLI / Chat
+
+On a Claude session, select **Chat** in the session header to read the conversation.
+Use the same input below to reply. Select **CLI** for permission prompts or questions
+that are not in the transcript. If the backend cannot bind the transcript, the view
+returns to CLI and shows the reason. CLI returns to the latest output; its stream
+stays connected while Chat is open. Chat reads pause while the page is hidden.
+
+### Recovering a short Direct host name
+
+If DNS cannot resolve a short Direct host name, TUIC checks the advertised
+Tailscale peers. With exactly one matching peer, it retries once with that
+peer's full DNS name. Only the URL host changes; the scheme, port, path and TLS
+certificate checks stay unchanged. SSH aliases, IP addresses, full DNS names,
+and errors other than DNS failures do not use this fallback.
+
+A successful recovery uses the resolved endpoint for the current session.
+Remote Machines shows the effective address and **Save resolved address**.
+Select that action to update the saved connection without disconnecting it.
+Leaving the action alone keeps the original saved address.
+
+## Remote Settings startup limits
+
+The shared Settings HTTP endpoint retains local-or-authenticated access; MCP mutation remains loopback-only. A local request does not implicitly target a remote daemon. Select the owner explicitly, keep its read revision, and never treat a remote invalidation cursor as a local CAS token. [Startup workflows](../backend/settings-startup.md) covers confirmation, device-login state and readback after uncertain or partial persistence. Secrets remain write-only.
+
+Typed Ego startup login returns a session on the explicitly selected daemon.
+Open that session in the owning client's terminal view to authenticate, then
+request status and refresh providers on that same daemon. Never read a local
+credential owner to infer the result of remote authentication.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.

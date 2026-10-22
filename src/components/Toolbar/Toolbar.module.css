@@ -50,10 +50,6 @@
   display: block;
 }
 
-.appNameShort {
-  display: none;
-}
-
 /* Embossed wordmark, derived from the theme so it holds on light backgrounds
    too. On a dark toolbar these resolve close to the original fixed greys
    (#060606 shadow, #3e3e3e rim, #909090 -> #5a5a5a face); on a light one the
@@ -76,14 +72,6 @@
 
 .nameGradEnd {
   stop-color: color-mix(in srgb, var(--fg-muted) 70%, var(--bg-primary));
-}
-
-.narrowSidebar .appNameFull {
-  display: none;
-}
-
-.narrowSidebar .appNameShort {
-  display: block;
 }
 
 :global(.platform-macos) .left {
@@ -137,12 +125,34 @@
   color: var(--fg-primary);
 }
 
+.filterToggle:disabled,
+.filterToggle:disabled:hover {
+  background: transparent;
+  color: var(--fg-secondary);
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* Repo filter icon — loud accent state when "active only" is engaged so it is
    obvious repos are being filtered. */
 .filterToggleActive,
 .filterToggleActive:hover {
   background: var(--accent);
   color: var(--text-on-accent);
+}
+
+/* Density toggle: icon plus a one-letter mode (A, C, R). The mode must be readable
+   without hover; the letter alone marks auto, which forces nothing. */
+.densityToggle {
+  width: auto;
+  padding: 0 6px;
+  gap: 3px;
+}
+
+.densityLabel {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 /* Branch button */

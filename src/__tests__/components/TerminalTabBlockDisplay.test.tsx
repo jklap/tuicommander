@@ -18,14 +18,12 @@ vi.mock("../../stores/appLogger", () => ({
 import { TerminalTab } from "../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../stores/settings";
 
-/** A `SettingToggle` renders `<div class=toggle><input type=checkbox><span>{label}</span></div>`,
- * so the checkbox is found through the label text — index-based lookup would
- * silently follow whichever toggle a later edit inserts above it. */
-function toggleFor(container: HTMLElement, label: string): HTMLInputElement {
-	const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
-	const input = span?.parentElement?.querySelector("input[type=checkbox]");
-	if (!input) throw new Error(`toggle "${label}" not found`);
-	return input as HTMLInputElement;
+/** Follow the visible label association, not the layout around the switch. */
+function toggleFor(container: HTMLElement, text: string): HTMLInputElement {
+	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === text);
+	const input = label ? container.querySelector<HTMLInputElement>(`#${label.htmlFor}`) : null;
+	if (!input) throw new Error(`toggle "${text}" not found`);
+	return input;
 }
 
 const TIMESTAMPS = "Show block timestamps";
@@ -71,15 +69,15 @@ describe("TerminalTab block display toggles", () => {
 		vi.useRealTimers();
 	});
 
-	it("renders every toggle under the Terminal heading", async () => {
+	it("renders every display toggle under the Behavior heading", async () => {
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
 
-		const terminalHeading = Array.from(container.querySelectorAll("h3")).find((h) => h.textContent === "Terminal");
+		const terminalHeading = Array.from(container.querySelectorAll("h3")).find((h) => h.textContent === "Behavior");
 		expect(terminalHeading).toBeDefined();
 
 		for (const { label } of DEFAULT_ON) {
-			const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
+			const span = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === label);
 			expect(span, `no toggle labelled "${label}"`).toBeDefined();
 			// Under the Terminal heading, not merely somewhere on the tab.
 			expect(

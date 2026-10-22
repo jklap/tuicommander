@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
     about = "TUICommander CLI — editor, multiplexer, orchestrator"
 )]
 struct Cli {
+    /// Select an isolated application instance (overrides TUIC_APP_INSTANCE)
+    #[arg(long, global = true)]
+    instance: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 
@@ -47,6 +51,10 @@ enum Command {
         #[arg(required = true, last = true)]
         command: Vec<String>,
     },
+    /// Apply a shared automation action (JSON object, or - for stdin)
+    Automations { arguments: Option<String> },
+    /// Apply a typed workflow action (JSON object, or - for stdin)
+    Workflow { arguments: Option<String> },
     /// Call a server-owned MCP tool with JSON arguments
     Mcp {
         /// MCP tool name (for example agent or session)
@@ -358,10 +366,12 @@ fn main() {
         .unwrap_or_default();
 
     if argv0 == "tmux" {
+        select_instance(None);
         return tmux_compat();
     }
 
     let cli = Cli::parse();
+    select_instance(cli.instance.as_deref());
 
     let result = match cli.command {
         Some(cmd) => dispatch(cmd),
@@ -386,6 +396,17 @@ fn main() {
     }
 }
 
+fn select_instance(instance: Option<&str>) {
+    let result = match instance {
+        Some(id) => tuic_ipc::app_instance::select_app_instance(Some(id)),
+        None => tuic_ipc::app_instance::select_app_instance_from_env(),
+    };
+    if let Err(error) = result {
+        eprintln!("tuic: {error}");
+        std::process::exit(1);
+    }
+}
+
 fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
@@ -395,6 +416,8 @@ fn dispatch(cmd: Command) -> Result<(), String> {
             caller,
             command,
         } => bg::run(&log, &caller, &command),
+        Command::Automations { arguments } => cmd_mcp("automations", arguments.as_deref()),
+        Command::Workflow { arguments } => cmd_mcp("workflow", arguments.as_deref()),
         Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
@@ -524,12 +547,15 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
                  For a shell there instead: tuic new {actual_path}"
             ));
         }
-        // A directory is a REPO, not a terminal: hand it to the app, which adds it
-        // to the sidebar if it is new (asking first) and activates it. Creating a
-        // PTY here instead — as this used to — left the sidebar untouched, which is
-        // never what `tuic .` means. Use `tuic new` when you want a shell.
-        open_deep_link(&format!("tuic://open-repo?path={}", urlencod(actual_path)))
-            .map_err(|e| e.to_string())?;
+        // The selected server owns registration. Dev builds and headless
+        // instances need no OS URL handler or connected desktop window.
+        let result = mcp::McpClient::connect()?.call(
+            "repo",
+            serde_json::json!({"action": "add", "path": actual_path}),
+        )?;
+        if let Some(warning) = result["warning"].as_str() {
+            eprintln!("warning: {warning}");
+        }
         eprintln!("Opening {actual_path}");
     } else {
         // Open file in editor via deep link
@@ -1746,6 +1772,20 @@ mod tests {
     }
     use serde_json::json;
 
+    // Catches: workflow CLI arguments parsed as story JSON or sent to automations.
+    #[test]
+    fn workflow_cli_accepts_the_grouped_action_envelope() {
+        for arguments in [r#"{"action":"story","input":{"action":"list_plans"}}"#, "-"] {
+            let cli =
+                Cli::try_parse_from(["tuic", "workflow", arguments]).expect("workflow command");
+            assert!(
+                matches!(cli.command, Some(Command::Workflow { arguments: Some(value) }) if value == arguments)
+            );
+        }
+        let cli = Cli::try_parse_from(["tuic", "automations", r#"{"action":"list"}"#]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Automations { .. })));
+    }
+
     #[test]
     fn story_cli_accepts_a_typed_action_and_project() {
         let cli = Cli::try_parse_from([
@@ -1765,8 +1805,14 @@ mod tests {
 
     #[test]
     fn agent_peer_filter_uses_path_name() {
-        let parsed = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"]);
-        assert!(parsed.is_ok(), "{}", parsed.err().unwrap());
+        let cli = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"])
+            .expect("parse list-peers");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Agent {
+                action: super::AgentAction::ListPeers { path, .. }
+            }) if path.as_deref() == Some("/repo")
+        ));
     }
 
     #[test]

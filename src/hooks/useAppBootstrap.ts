@@ -1,5 +1,4 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onMount } from "solid-js";
 import { initDeepLinkHandler } from "../deep-link-handler";
 import { invoke } from "../invoke";
@@ -29,11 +28,13 @@ import { startAutoFetch } from "./useAutoFetch";
 // `registerRepo` is omitted too: it is supplied below from `openRepoPath`, so the
 // caller passes one repo-registration function and both consumers (the deep link
 // and the parked-tab toast) share it.
-type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "onCloseRequested" | "registerRepo">;
+type InitOptions = Omit<AppInitDeps, "stores" | "applyPlatformClass" | "registerRepo">;
 
 export type AppBootstrapOptions = InitOptions & {
 	detectAgents: () => Promise<unknown>;
 	restoreDetachedPanels: () => void;
+	/** After an update restart, resume the agent tabs of every branch. */
+	resumeAgentTabsAfterUpdate: () => Promise<void>;
 	setWhatsNewVersion: (version: string) => void;
 	openSettings: (tab?: string) => void;
 	/** Add a repo by path — wired to the deep link `tuic://open-repo` (`tuic <dir>`). */
@@ -122,6 +123,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 	const {
 		detectAgents,
 		restoreDetachedPanels,
+		resumeAgentTabsAfterUpdate,
 		setWhatsNewVersion,
 		openSettings,
 		openRepoPath,
@@ -139,6 +141,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			startAutoFetch,
 			startPrNotificationTimer: prNotificationsStore.startFocusTimer,
 			loadFontFromConfig: settingsStore.loadFontFromConfig,
+			startDictationSettingsSync: () => dictationStore.startRemoteSync(),
 			refreshDictationConfig: () =>
 				dictationStore.refreshConfig().then(() => {
 					if (!dictationStore.state.enabled) return;
@@ -151,16 +154,13 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			startUserActivityListening: userActivityStore.startListening,
 		},
 		applyPlatformClass,
-		onCloseRequested: (handler) => {
-			if (!isTauri()) return;
-			void getCurrentWindow().onCloseRequested(async (event) => handler(event));
-		},
 	}).catch((error) => {
 		appLogger.error("app", "Fatal initialization error", error);
 		options.setStatusInfo("Error: App failed to initialize — check error log");
 		document.getElementById("splash")?.remove();
 	});
 
+	resumeAgentTabsAfterUpdate().catch((error) => appLogger.warn("app", "Resuming agents after update failed", error));
 	detectAgents().catch((error) => appLogger.debug("app", "Agent detection failed", error));
 
 	restoreDetachedPanels();

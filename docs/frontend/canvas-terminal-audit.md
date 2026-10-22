@@ -3,7 +3,32 @@
 **Last updated:** 2026-09-21
 **Branch:** refactor/solid-architecture
 
-CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
+CanvasTerminal renders desktop and full-terminal browser sessions. The dedicated phone session screen instead uses `SessionDetailScreen` → `OutputView`: HTTP/WS log lines append to DOM history while screen frames replace its live region. Its durable log must continue advancing after the grid history cap. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
+
+Remote grid streams report handshake, initial-replay timeout (15 seconds), decode and unexpected-close failures through the WS-only `onStreamError` callback (never a Tauri PTY listener). CanvasTerminal displays a persistent error toast. Reconnect health resets only after the renderer receives a frame or the server explicitly finishes an empty replay, not at socket open; intentional teardown cancels replay and reconnect timers. No silence deadline applies after initial replay. Replay timeouts detach the socket and schedule recovery directly, even when its close handshake never completes. The recorded idle remote replay regression asserts visible viewport text after reconnect without new PTY output. The backend WS attach regression separately verifies existing scrollback text at both the live viewport and a history offset without publishing a new frame (story 1421-733e); these prove recovery and replay, not attribution of the historical blank pane.
+
+Answers-only history includes a retained prompt-less prefix before the first tracked prompt. Finished prefix and prompt turns share the history-base cache, with prompt association included in its validity check. The panel shows a status notice when no turn has a marked answer.
+
+Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
+
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker. User prompt echoes do not open answer regions: indented quoted markers stay in the prompt until an agent output bullet or an unindented answer marker begins output.
+
+## Incremental base-grid painting
+
+Whole-row forward viewport movement can copy retained base-canvas pixels once.
+The renderer compares all retained cells before reusing them and repaints changed
+or newly exposed rows. Geometry, font, theme, explicit invalidation and hidden
+marker layouts disable the copy. Full wire frames replace decoded state without
+forcing a full canvas clear. Overlay painting remains independent. Workload
+recordings include the optional absolute viewport origin for the same replay path;
+older recordings remain readable without scroll reuse.
+
+Dirty rows are compared as cells, including colors, attributes and combining
+content. Unchanged rows do not paint. In-place changes repaint a clipped column
+span with neighboring glyphs for wide-cell and italic overlap. Changed row widths,
+marker ownership and combining sequences keep the whole-row fallback. Adjacent
+cells with the same resolved explicit background share one fill operation; default
+background gaps and resolved color changes split the runs.
 
 ## Architecture
 
@@ -26,7 +51,7 @@ Terminal.tsx (outer shell)
         +-- Suggest/intent overlay (DOM divs over canvas)
         +-- Link detection (hover: file paths, web URLs, OSC 8)
         +-- Keyboard input (VT100 + Kitty protocol)
-        +-- Touch input (tap/swipe/pinch for mobile/tablet via offscreen textarea)
+        +-- Touch input (tap/swipe/pinch for mobile/tablet via shared input)
         +-- IntersectionObserver flow control (skip paint when hidden)
         +-- Plugin watcher lines from Rust (pluginRegistry.handleWatcherLines)
         +-- OSC 7 CWD + OSC 133 shell integration
@@ -140,7 +165,7 @@ cell's full text span, since native search points have no subcell index.
 | Overlay canvas (cursor+selection+search) | OK | Separate canvas cleared+redrawn every frame; base canvas only repaints dirty rows |
 | DPI/Retina scaling | OK | `dpr * logical` sizing + `ctx.scale()` |
 | DPR change listener | OK | `matchMedia(resolution)` re-register on change |
-| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data |
+| Theme colors (ANSI 16) | OK | Colors come from Rust/Alacritty in frame data. In light themes, an explicit neutral SGR background with default foreground and contrast below 4.5:1 maps to `--bg-tertiary`. Explicit foreground pairs, colored backgrounds, inverse cells, and dark themes keep their wire colors. |
 | Default fg/bg from terminal theme | OK | `getTerminalTheme(settingsStore.state.theme)` |
 | Scrollbar themed | OK | Uses `var(--fg-primary)` CSS custom property with configurable opacity |
 
@@ -196,9 +221,9 @@ cell's full text span, since native search points have no subcell index.
 | IME composition | OK | `compositionstart/compositionend`; hidden input positioned at cursor coords via `syncImePosition()` for East Asian IME candidate windows |
 | Bracketed paste | OK | `\x1b[200~...\x1b[201~` |
 | MCP atomic agent submission | OK | Backend-only `session action=submit`; the shared PTY writer lock spans payload, raw-mode gap, and Enter, so CanvasTerminal input cannot splice the submitted command. No renderer state or new frontend transport exists. |
-| Image paste detection | OK | Checks `items[i].type.startsWith("image/")` |
+| Image paste detection | OK | Shared `isImagePaste()` precedence: substantive `text/plain` wins over incidental images; screenshot-only and Finder image filename pastes send Ctrl+V |
 | Resume banner keyboard | OK | Space/Enter/Escape/printable |
-| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` via offscreen textarea |
+| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` focuses the shared keyboard input; primary compatibility mouse presses cancel the browser default canvas focus action; native keyboard animation still needs iPad verification |
 
 ### Selection & Clipboard
 
@@ -208,7 +233,7 @@ cell's full text span, since native search points have no subcell index.
 | Double-click word select | OK | `terminal_select_start` with `word:true` |
 | Triple-click line select | OK | |
 | Cmd+C copy with selection | OK | `terminal_get_selection_text` IPC/HTTP parity path |
-| Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, and removes coherent Claude `NBSP NBSP ▎` gutter runs |
+| Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, removes coherent Claude space/NBSP `▎` gutters, and strips one composer `❯ ` plus its continuation margin with conservative width reflow only when selected from grid column zero outside a VT soft-wrap continuation |
 | Copy-on-select | OK | `copySelection()` called from `onMouseUp` |
 | getSelection() ref method | OK | Returns the cached backend selection; `getLocalSelectionText()` is the transient fallback |
 
@@ -230,7 +255,7 @@ cell's full text span, since native search points have no subcell index.
 | File path Cmd+click open | OK | |
 | Pointer cursor on link | OK | |
 | Web URL links (http/https) | OK | `webUrlRe` regex in `checkLinksAtRow` |
-| OSC 8 hyperlinks | OK | `terminal_hyperlink_at` IPC, priority over other link types |
+| OSC 8 hyperlinks | OK | `terminal_hyperlink_span` IPC, priority over other link types |
 
 ### Search
 
@@ -302,3 +327,86 @@ cell's full text span, since native search points have no subcell index.
 ## Remaining Gaps
 
 None. All tracked gaps have been resolved or marked wontfix.
+
+### Stored terminal marker coordinates
+
+Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.
+
+Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.
+
+HTTP(S) link context menus include **Start in Design Mode**, passing the resolved URL and owning terminal session to the shared start command. File and other schemes retain Open and Copy link only.
+
+### History-anchored viewport scrolling
+
+Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `historyBase + historySize - offset`. Null resumes following output. The cache keeps rendering until the backend frame reaches the target; there is no timed settle handoff that can skip rows during sustained output.
+
+### Hidden agent marker rows
+
+Mobile CLI uses the log transport rather than the canvas. Its serializer preserves intent spans in both history and screen snapshots. OutputView rejoins soft wraps before classification and applies the shared intent anchor and 12% warning tint to the whole paragraph.
+
+The marker plan keeps intent text visible with a theme-aware warning tint, including column-zero ego rows and bullet-prefixed Claude/Codex rows. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Complete suggest blocks are projected out of the displayed grid without changing stored backend coordinates. Paint and hit testing share the viewport projection. Copy classifies the same recorded rows and asks the backend for retained runs only, so omitted marker rows cannot leak through a selection spanning them. Backend selection reads still unwrap soft wraps and reject evicted rows. Off-screen selection classification reads styled rows with marker lookback. A blank row ends an indented marker tail. Unwrapped output, answer and prompt rows start separate blocks.
+
+Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.
+
+Hidden desktop canvases retain their session event listeners but receive no grid frames. The intersection observer publishes epoch-scoped visibility in order; the desktop transport owns the show-frame request after publication, while the canvas owns it for WebSocket transports. Showing requests a full authoritative grid, including its display offset and history base. Bell callbacks use the backend session bell event rather than frame decoding. Browser grid sockets keep their independent stream.
+
+Native terminal ego provider recovery is carried in the backend session snapshot,
+not inferred from canvas rows. Tab/status-bar presentation uses that snapshot;
+canvas rendering and input routing remain unchanged. Force retry uses the normal
+agent-aware command submission helper.
+
+### Soft-wrap text fidelity
+
+Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
+
+### Opt-in workload evidence
+
+CanvasTerminal records raw arrivals before decode and immutable merged grid snapshots immediately before the base paint, plus visibility transitions. Capture requires both the explicit recorder flag and perfDebug. No render behavior changes. See [stall evidence](../backend/stall-journal.md) for caps, timing replay and limitations.
+
+### Prompt ownership after reflow (#1389-3a47)
+
+Accepting changed frame geometry invalidates cached prompt boundaries and rejects
+ownership reads started with old coordinates, even if an interim old-frame paint
+refilled the cache after the resize request. Prefix reads classify each 256-row
+chunk once and retain one preceding row for blank separation and wrap semantics;
+they do not rescan the accumulated prefix.
+
+
+### Incremental projected painting (#2003-f218)
+
+Hidden marker rows do not force a full canvas clear. Stable projections clear and
+paint only dirty display rows, using projected coordinates. A dirty hidden row
+does not clear the visible content that occupies its old backend coordinate.
+The renderer retains the backend owner and marker-span layout of each display
+slot. Projection changes invalidate only slots whose owner or marker span changed,
+including old bottom slots that must be cleared after rows move upward.
+Geometry, theme and other explicit full repaint requests still clear the canvas.
+
+### Viewport-bounded marker work (#2002-2239)
+
+CLI painting classifies the visible rows, one bottom overscan row and at most
+128 rows above the viewport. Unchanged row generations reuse the existing `rowTextLayout` text cache,
+marker snapshots and the marker plan. Replaced rows invalidate their own text and the dependent plan;
+a change to the preceding wrap flag invalidates the dependent snapshot too.
+History outside this window is classified when scrolling reaches it. An answer
+whose anchor is more than 128 rows above the viewport is not inferred from prose.
+
+A tracked prompt can start much earlier. Its ownership prefix is limited to 128
+rows synchronously and 128 rows per background read. Unresolved ownership stays
+fail-closed and resumes from the prior read boundary, including the preceding
+row to preserve blank separation. No background completion scans the accumulated
+prefix again, and intermediate chunks do not repaint the canvas. This bounds individual paint/read tasks, not the total work needed
+to resolve an arbitrarily long pasted prompt.
+
+| Consumer | Trigger | Text work before this fix | Text work after this fix |
+| --- | --- | --- | --- |
+| `planViewportMarkers` / `planMarkers` | Output frame, forced repaint | Viewport + 32 rows, but cold tracked prompt could synchronously walk retained history | Viewport + 128 rows; cold prefix at most 128; unchanged generations reuse text and plan |
+| `renderCachedBase` / `planMarkers` | Integer smooth-scroll paint | Same cold prompt exception | Same bounded planner; uncached history classified lazily |
+| `readMarkerPromptBoundary` / `readTurnRows` | Cold tracked prompt | One async operation fetched every prefix chunk | One operation reads at most 128 rows and retains its continuation position |
+| `planSuggestOverlay`, `answerExtent`, prompt echo and gutter gap walks | Called by marker plan | Caller range, except prompt prefix supplied by planner | Caller range is viewport + lookback; row dependencies cached |
+| `gridRenderer` / `ViewportProjection` | Paint and marker projection | Visible cells and marker sets, not history text classification | Unchanged; consumes bounded marker sets |
+| `readAnswersHistory` / `buildAnswersTurn` | Explicit Answers-only view; output refresh every 400 ms while open | Finished turns cached; running turn scanned in full, or last 5000 rows with no known prompts | Unchanged semantic full-history reader; not a canvas frame/scroll consumer |
+
+The explicit Answers-only view still reads full retained turns to preserve its
+copy/selectable history contract. Its running-turn refresh is not viewport-bound;
+this change does not claim to fix that separate full-history consumer.

@@ -1,5 +1,6 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
@@ -58,11 +59,8 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
-	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
-	// below are override slots with no writer: no UI sets them, and `config.rs`
-	// has no matching field on `RepoSettingsEntry`, so a value set here would be
-	// dropped by the backend. Either wire them up or delete them; leaving them is
-	// what let the camelCase persistence bug hide.
+	// DEFERRED (2026-08-30) — terminalMetaHotkeys remains transient: the Rust
+	// RepoSettingsEntry has no matching field. PR visibility overrides persist.
 	/** null = inherit from settingsStore (global) */
 	prHideDrafts: boolean | null;
 	/** null = inherit from settingsStore (global) */
@@ -151,6 +149,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 
 /** Repo-local config loaded from .tuic.json (team-shareable, snake_case from Rust) */
 interface RepoLocalConfig {
+	ego_profile?: string;
 	base_branch?: string;
 	copy_ignored_files?: boolean;
 	copy_untracked_files?: boolean;
@@ -215,6 +214,13 @@ function fromWire(repos: Record<string, Record<string, unknown>>): Record<string
 	return out;
 }
 
+/** Use the same defaults for the acknowledged baseline, local intent and peer snapshots. */
+function normalizedWire(repos: Record<string, Record<string, unknown>>) {
+	return {
+		repos: Object.fromEntries(Object.entries(fromWire(repos)).map(([path, entry]) => [path, toSnakeKeys(entry)])),
+	};
+}
+
 /**
  * Per-field resolution of the three-tier chain (per-repo > .tuic.json > global).
  * One resolver per effective field, each reading only the signals its own field
@@ -276,6 +282,39 @@ function createRepoSettingsStore() {
 	};
 
 	const actions = {
+		startRemoteSync(): () => void {
+			const stopSettings = settingsRefresh.register({
+				section: "repositories",
+				read: () => invoke<{ repos: Record<string, Record<string, unknown>> }>("load_repo_settings"),
+				apply: (remote) => {
+					const local = {
+						repos: Object.fromEntries(
+							Object.entries(state.settings).map(([path, value]) => [path, toSnakeKeys(value)]),
+						),
+					};
+					const merged = repoSettingsWriter.adopt(normalizedWire(remote?.repos ?? {}), local);
+					setState("settings", reconcile(fromWire(merged.value.repos as Record<string, Record<string, unknown>>)));
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+			const stopLocal = settingsRefresh.register({
+				section: "repo_local",
+				read: async () =>
+					Object.fromEntries(
+						await Promise.all(
+							Object.keys(state.localConfigs).map(
+								async (path) =>
+									[path, await invoke<RepoLocalConfig | null>("load_repo_local_config", { repoPath: path })] as const,
+							),
+						),
+					),
+				apply: (configs) => setState("localConfigs", reconcile(configs)),
+			});
+			return () => {
+				stopSettings();
+				stopLocal();
+			};
+		},
 		/** Load settings from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
@@ -290,7 +329,7 @@ function createRepoSettingsStore() {
 						const repos: Record<string, unknown> = {};
 						for (const [path, entry] of Object.entries(parsed)) repos[path] = toSnakeKeys(entry);
 						const current = (await invoke<{ repos: Record<string, unknown> }>("load_repo_settings")) ?? { repos: {} };
-						repoSettingsWriter.loaded(current);
+						repoSettingsWriter.loaded(normalizedWire(current.repos as Record<string, Record<string, unknown>>));
 						await repoSettingsWriter.save({ repos: { ...current.repos, ...repos } });
 					} catch {
 						/* ignore corrupt legacy data */
@@ -299,7 +338,7 @@ function createRepoSettingsStore() {
 				}
 
 				const loaded = await invoke<{ repos?: Record<string, Record<string, unknown>> }>("load_repo_settings");
-				repoSettingsWriter.loaded({ repos: loaded?.repos ?? {} });
+				repoSettingsWriter.loaded(normalizedWire(loaded?.repos ?? {}));
 				if (loaded?.repos) {
 					setState("settings", fromWire(loaded.repos));
 				}

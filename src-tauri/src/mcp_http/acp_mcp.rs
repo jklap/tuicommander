@@ -22,7 +22,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use super::mcp_transport::{
-    MCP_SESSION_HEADER, TUIC_SESSION_HEADER, end_mcp_session, mcp_post, refresh_mcp_session,
+    MCP_SESSION_HEADER, TUIC_SESSION_HEADER, add_result_envelope, end_mcp_session, mcp_post,
+    refresh_mcp_session,
 };
 use crate::AppState;
 use crate::acp::{McpNotify, McpOverAcpError, McpOverAcpHost, McpReply};
@@ -45,7 +46,8 @@ pub(crate) struct AcpMcpHost {
 }
 
 /// Given a peer id, start a turn in its conversation if nothing is running.
-type Waker = Arc<dyn Fn(String) + Send + Sync>;
+type WakeResult = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+type Waker = Arc<dyn Fn(String) -> WakeResult + Send + Sync>;
 
 /// How long a burst of mail is gathered before an idle ego is woken, so ten
 /// messages cost one turn rather than ten.
@@ -66,27 +68,27 @@ impl AcpMcpHost {
     pub(crate) fn new(state: &Arc<AppState>) -> Self {
         let weak = Arc::downgrade(state);
         let wake: Waker = Arc::new(move |peer: String| {
-            let Some(state) = weak.upgrade() else { return };
-            tokio::spawn(async move {
+            let state = weak.upgrade();
+            Box::pin(async move {
+                let Some(state) = state else { return false };
                 match state
                     .acp
                     .wake_idle_peer(&peer, crate::pty::PEER_MAIL_WAKE)
                     .await
                 {
-                    Ok(Some(turn)) => tracing::info!(
-                        source = "acp_mcp",
-                        tuic_session = %peer,
-                        turn = ?turn,
-                        "Woke idle ego for new mail"
-                    ),
-                    Ok(None) => {}
-                    Err(error) => tracing::warn!(
-                        source = "acp_mcp",
-                        tuic_session = %peer,
-                        "Waking ego for new mail failed: {error:?}"
-                    ),
+                    Ok(Some(turn)) => {
+                        tracing::info!(source = "acp_mcp", tuic_session = %peer,
+                            turn = ?turn, "Woke idle ego for new mail");
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(error) => {
+                        tracing::warn!(source = "acp_mcp", tuic_session = %peer,
+                            "Waking ego for new mail failed: {error:?}");
+                        false
+                    }
                 }
-            });
+            })
         });
         Self {
             state: Arc::downgrade(state),
@@ -129,7 +131,11 @@ impl McpOverAcpHost for AcpMcpHost {
         self.connections.lock().values().any(|link| {
             link.peer_id.as_deref() == Some(peer_id)
                 && !link.forwarder.is_finished()
-                && link.subscriptions.lock().contains(INBOX_URI)
+                && link
+                    .subscriptions
+                    .lock()
+                    .iter()
+                    .any(|uri| uri == INBOX_URI || subscription_id(uri).is_some())
         })
     }
 
@@ -165,7 +171,7 @@ impl McpOverAcpHost for AcpMcpHost {
         let wake = peer_id.map(|peer| {
             let wake = Arc::clone(&self.wake);
             let peer = peer.to_owned();
-            Box::new(move || wake(peer.clone())) as Box<dyn Fn() + Send>
+            Box::new(move || wake(peer.clone())) as Box<dyn Fn() -> WakeResult + Send>
         });
         let forwarder = tokio::spawn(forward(
             Arc::downgrade(&state),
@@ -208,7 +214,11 @@ impl McpOverAcpHost for AcpMcpHost {
         Box::pin(async move {
             let (state, headers, peer_id, subscriptions) = prepared?;
             match method.as_str() {
-                "resources/list" => return Ok(resource_list()),
+                "resources/list" => {
+                    let mut result = resource_list();
+                    add_result_envelope(&mut result);
+                    return Ok(result);
+                }
                 "resources/read" => {
                     let uri = uri_param(params.as_ref())?;
                     let contents = match uri.as_str() {
@@ -216,32 +226,69 @@ impl McpOverAcpHost for AcpMcpHost {
                             workspace_snapshot(&state, &crate::config::load_repositories())
                         }
                         INBOX_URI => inbox_snapshot(&state, peer_id.as_deref()),
+                        _ if subscription_id(&uri).is_some() => {
+                            let peer = peer_id.as_deref().ok_or_else(|| {
+                                McpOverAcpError::new(INVALID_PARAMS, "Inbox requires a bound peer")
+                            })?;
+                            crate::mail_subscriptions::read(
+                                &state,
+                                peer,
+                                &json!({"action":"inbox","subscription_id":subscription_id(&uri)}),
+                            )
+                            .await
+                        }
                         _ => return Err(unknown_resource(&uri)),
                     };
-                    return Ok(json!({ "contents": [{
+                    let mut result = json!({ "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
                         "text": contents.to_string(),
-                    }] }));
+                    }] });
+                    add_result_envelope(&mut result);
+                    return Ok(result);
                 }
                 "resources/subscribe" | "resources/unsubscribe" => {
                     let uri = uri_param(params.as_ref())?;
-                    if uri != WORKSPACE_URI && uri != INBOX_URI {
+                    if uri != WORKSPACE_URI && uri != INBOX_URI && subscription_id(&uri).is_none() {
                         return Err(unknown_resource(&uri));
                     }
                     if method == "resources/subscribe" {
+                        if let Some(id) = subscription_id(&uri) {
+                            let peer = peer_id.as_deref().ok_or_else(|| {
+                                McpOverAcpError::new(INVALID_PARAMS, "Inbox requires a bound peer")
+                            })?;
+                            let batch = crate::mail_subscriptions::read(
+                                &state,
+                                peer,
+                                &json!({"action":"inbox","subscription_id":id}),
+                            )
+                            .await;
+                            if let Some(error) = batch["error"].as_str() {
+                                return Err(McpOverAcpError::new(INVALID_PARAMS, error));
+                            }
+                        }
                         subscriptions.lock().insert(uri);
+                        if let Some(peer) = peer_id.as_deref() {
+                            state.notify_mail_subscription_change(peer);
+                        }
                     } else {
                         subscriptions.lock().remove(&uri);
                     }
-                    return Ok(json!({}));
+                    let mut result = json!({});
+                    add_result_envelope(&mut result);
+                    return Ok(result);
                 }
                 _ => {}
             }
             let body = json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
-            let response = mcp_post(State(state), ConnectInfo(loopback()), headers, Json(body))
-                .await
-                .into_response();
+            let response = Box::pin(mcp_post(
+                State(state),
+                ConnectInfo(loopback()),
+                headers,
+                Json(body),
+            ))
+            .await
+            .into_response();
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .map_err(|error| McpOverAcpError::new(INTERNAL_ERROR, error.to_string()))?;
@@ -301,6 +348,12 @@ impl McpOverAcpHost for AcpMcpHost {
 pub(crate) const WORKSPACE_URI: &str = "tuic://workspace";
 /// This peer's unread mail.
 pub(crate) const INBOX_URI: &str = "tuic://inbox";
+const SUBSCRIPTION_PREFIX: &str = "tuic://inbox/subscriptions/";
+fn subscription_id(uri: &str) -> Option<&str> {
+    uri.strip_prefix(SUBSCRIPTION_PREFIX)
+        .filter(|id| !id.is_empty())
+}
+
 /// How long a burst of changes is gathered into one `resources/updated`.
 const COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
 /// The most unread messages one inbox read carries.
@@ -435,6 +488,7 @@ fn touches_workspace(event: &crate::state::AppEvent) -> bool {
             | AppEvent::SessionClosed { .. }
             | AppEvent::PtyExit { .. }
             | AppEvent::SessionStateChanged { .. }
+            | AppEvent::SessionWorktreeDeclared(_)
             | AppEvent::WorktreeCreated(_)
             | AppEvent::WorktreeRemoved(_)
             | AppEvent::TermAliasAssigned { .. }
@@ -462,7 +516,7 @@ async fn forward(
     mut feeds: Feeds,
     subscriptions: Subscriptions,
     notify: McpNotify,
-    wake: Option<Box<dyn Fn() + Send>>,
+    wake: Option<Box<dyn Fn() -> WakeResult + Send>>,
 ) {
     use broadcast::error::RecvError;
     let updated = |uri: &str| {
@@ -475,6 +529,8 @@ async fn forward(
     let mut inbox_due: Option<tokio::time::Instant> = None;
     let mut wake_due: Option<tokio::time::Instant> = None;
     let mut last_workspace: Option<Value> = None;
+    let mut notified_subscriptions = std::collections::HashMap::new();
+    let mut woken_subscriptions = std::collections::HashMap::new();
     let arm = |due: &mut Option<tokio::time::Instant>| {
         due.get_or_insert_with(|| tokio::time::Instant::now() + COALESCE);
     };
@@ -487,8 +543,11 @@ async fn forward(
     loop {
         tokio::select! {
             changed = feeds.tools.recv() => match changed {
-                Ok(()) => notify("notifications/tools/list_changed".to_owned(), None),
-                Err(RecvError::Lagged(_)) => {}
+                Ok(()) | Err(RecvError::Lagged(_)) => {
+                    let Some(state) = state.upgrade() else { return };
+                    super::mcp_transport_catalogue::rebuild_tool_search_index(&state);
+                    notify("notifications/tools/list_changed".to_owned(), None);
+                }
                 Err(RecvError::Closed) => return,
             },
             message = feeds.messages.recv() => match message {
@@ -519,7 +578,7 @@ async fn forward(
                 }
             } => match changed {
                 Ok(()) => {
-                    if subscribed(INBOX_URI) {
+                    if subscriptions.lock().iter().any(|uri| uri == INBOX_URI || subscription_id(uri).is_some()) {
                         arm(&mut inbox_due);
                     }
                     // Armed whether or not ego subscribed: an idle ego is not
@@ -539,18 +598,47 @@ async fn forward(
             },
             () = until(inbox_due) => {
                 inbox_due = None;
-                updated(INBOX_URI);
+                if subscribed(INBOX_URI) { updated(INBOX_URI); }
+                let uris: Vec<_> = subscriptions.lock().iter().filter(|uri| subscription_id(uri).is_some()).cloned().collect();
+                notified_subscriptions.retain(|uri, _| uris.contains(uri));
+                let Some(state) = state.upgrade() else { return };
+                if let Some(peer) = feeds.peer.as_deref() {
+                    for uri in uris {
+                        let batch = crate::mail_subscriptions::read(&state,peer,&json!({"action":"inbox","subscription_id":subscription_id(&uri)})).await;
+                        let cursor = batch["cursor"].as_u64();
+                        if (crate::mail_subscriptions::pending(&batch) || batch.get("error").is_some()) && notified_subscriptions.get(&uri) != Some(&cursor) {
+                            notified_subscriptions.insert(uri.clone(),cursor);
+                            updated(&uri);
+                        }
+                    }
+                }
             },
             () = until(wake_due) => {
                 wake_due = None;
                 let Some(state) = state.upgrade() else { return };
-                let unread = feeds.peer.as_deref().is_some_and(|peer| {
-                    inbox_snapshot(&state, Some(peer))["messages"]
-                        .as_array()
-                        .is_some_and(|messages| !messages.is_empty())
-                });
-                if unread && let Some(wake) = &wake {
-                    wake();
+                let uris: Vec<_> = subscriptions.lock().iter().filter(|uri| subscription_id(uri).is_some()).cloned().collect();
+                woken_subscriptions.retain(|uri, _| uris.contains(uri));
+                let mut unread = false;
+                let mut candidates = Vec::new();
+                if uris.is_empty() {
+                    unread = feeds.peer.as_deref().is_some_and(|peer| {
+                        inbox_snapshot(&state, Some(peer))["messages"].as_array().is_some_and(|messages| !messages.is_empty())
+                    });
+                } else if let Some(peer) = feeds.peer.as_deref() {
+                    // A durable resource selection also filters the idle ego wake.
+                    for uri in uris {
+                        let batch = crate::mail_subscriptions::read(&state,peer,&json!({"action":"inbox","subscription_id":subscription_id(&uri)})).await;
+                        let cursor = batch["cursor"].as_u64();
+                        if crate::mail_subscriptions::pending(&batch) && woken_subscriptions.get(&uri) != Some(&cursor) {
+                            candidates.push((uri,cursor));
+                            unread = true;
+                        }
+                    }
+                }
+                if unread && let Some(wake) = &wake && wake().await {
+                    // An attempted wake can be skipped while ego is busy. Only
+                    // an accepted turn consumes this frozen batch's wake.
+                    woken_subscriptions.extend(candidates);
                 }
             },
         }
@@ -818,6 +906,34 @@ mod tests {
         );
     }
 
+    /// ego refuses to admit a server whose `resources/list` omits the
+    /// 2026-07-28 result envelope (#1318-abd7): `session/new` fails with
+    /// "MCP server `tuicommander`: server configuration is invalid". Every
+    /// resource result on this channel must carry all three fields, exactly as
+    /// `tools/list` does.
+    #[tokio::test]
+    async fn every_resource_result_carries_the_result_envelope() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+
+        for (method, params) in [
+            ("resources/list", None),
+            ("resources/read", object(json!({ "uri": WORKSPACE_URI }))),
+            ("resources/subscribe", object(json!({ "uri": INBOX_URI }))),
+            ("resources/unsubscribe", object(json!({ "uri": INBOX_URI }))),
+        ] {
+            let result = host
+                .message(&id, method.to_owned(), params)
+                .await
+                .expect(method);
+            assert_eq!(result["resultType"], "complete", "{method}: {result}");
+            assert_eq!(result["ttlMs"], 0, "{method}: {result}");
+            assert_eq!(result["cacheScope"], "private", "{method}: {result}");
+        }
+    }
+
     #[test]
     fn the_workspace_names_every_repo_and_the_one_being_viewed() {
         let state = test_state();
@@ -941,7 +1057,10 @@ mod tests {
         let host = AcpMcpHost {
             wake: {
                 let woken = Arc::clone(&woken);
-                Arc::new(move |peer| woken.lock().push(peer))
+                Arc::new(move |peer| {
+                    woken.lock().push(peer);
+                    Box::pin(async { true })
+                })
             },
             ..AcpMcpHost::new(&state)
         };
@@ -963,5 +1082,231 @@ mod tests {
         state.agent_read_cursor.insert(PEER.to_owned(), last);
         tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
         assert_eq!(woken.lock().len(), 1, "mail already read wakes nothing");
+    }
+
+    /// ego admits the session only if every answer the host gives parses under
+    /// the 2026-07-28 result envelope: it calls `server/discover`, `tools/list`
+    /// and `resources/list`, and refuses `session/new` when any of them is
+    /// malformed. A `resources/list` without `resultType`/`ttlMs`/`cacheScope`
+    /// passed every test of our own answers and still made AI Chat unusable
+    /// (#1318-abd7).
+    ///
+    /// Needs a real ego binary, which this repository does not build: run with
+    /// `TUIC_EGO_BIN=<path to ego> cargo nextest run --run-ignored only -E
+    /// 'test(ego_admits_the_session)'`. ego runs under a throwaway
+    /// `HOME`/`EGO_HOME` so it reads none of the developer's configuration.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "needs a real ego binary: set TUIC_EGO_BIN"]
+    async fn ego_admits_the_session_the_host_answers() {
+        use crate::acp::{AcpConnectRequest, AcpSessionAuthority, EgoAcpConfig};
+        use std::os::unix::fs::PermissionsExt;
+
+        let ego = std::env::var("TUIC_EGO_BIN").expect("TUIC_EGO_BIN names a real ego binary");
+        let root = tempfile::TempDir::new_in(tuic_test_support::test_temp_root()).expect("root");
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let launcher = root.path().join("ego-isolated.sh");
+        std::fs::write(
+            &launcher,
+            format!(
+                "#!/bin/sh\nHOME='{home}' EGO_HOME='{home}' exec '{ego}' \"$@\"\n",
+                home = home.display()
+            ),
+        )
+        .expect("launcher");
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+            .expect("launcher mode");
+
+        let state = test_state();
+        install(&state);
+        let connection = state
+            .acp
+            .connect_with_peer(
+                &EgoAcpConfig {
+                    executable: launcher,
+                    profile: String::new(),
+                },
+                AcpConnectRequest {
+                    root: workspace.clone(),
+                },
+                PEER.to_owned(),
+            )
+            .await
+            .expect("connect to ego");
+
+        let session = state
+            .acp
+            .new_session(
+                connection.connection_id,
+                AcpSessionAuthority {
+                    cwd: workspace,
+                    additional_directories: Vec::new(),
+                    mcp_servers: Vec::new(),
+                },
+            )
+            .await
+            .expect("ego admits the tuicommander MCP server");
+        assert_ne!(session.session_id.to_string(), "");
+
+        state
+            .acp
+            .disconnect(connection.connection_id)
+            .await
+            .expect("disconnect");
+    }
+    // Catches: a durable resource still forwards idle lifecycle notices, or an
+    // acknowledged RESULT wakes ego again after its MCP connection reconnects.
+    #[tokio::test]
+    async fn actionable_subscription_acp_filters_notifications_and_wakes_once() {
+        let state = test_state();
+        let woken: Arc<Mutex<Vec<String>>> = Arc::default();
+        let host = AcpMcpHost {
+            state: Arc::downgrade(&state),
+            connections: Mutex::default(),
+            wake: {
+                let woken = woken.clone();
+                Arc::new(move |peer| {
+                    woken.lock().push(peer);
+                    Box::pin(async { true })
+                })
+            },
+        };
+        let (notify, heard) = listener();
+        let id = host.connect(Some(PEER), notify).unwrap();
+        let create = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"subscribe","subscription_id":"acp"}),
+        );
+        assert!(create.get("error").is_none(), "{create}");
+        let uri = "tuic://inbox/subscriptions/acp";
+        host.message(
+            &id,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        let fixture: Vec<Value> =
+            serde_json::from_str(include_str!("fixtures/actionable-lifecycle-mail.json")).unwrap();
+        for m in fixture {
+            state.push_agent_inbox(
+                PEER,
+                crate::state::AgentMessage {
+                    id: m["id"].as_str().unwrap().into(),
+                    from_tuic_session: m["from_tuic_session"].as_str().unwrap().into(),
+                    from_name: "tuic".into(),
+                    content: m["content"].as_str().unwrap().into(),
+                    timestamp: m["timestamp"].as_u64().unwrap(),
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        // Let both production debounce paths run before asserting no wake.
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE * 2).await;
+        assert!(woken.lock().is_empty(), "routine traffic must not wake ego");
+        let updates = || {
+            heard
+                .lock()
+                .iter()
+                .filter(|(method, params)| {
+                    method == "notifications/resources/updated"
+                        && params.as_ref().and_then(|p| p.get("uri")) == Some(&json!(uri))
+                })
+                .count()
+        };
+        assert_eq!(updates(), 0);
+        state.push_agent_inbox(PEER, mail("durable-acp-result", "RESULT acp delivery"));
+        eventually("one actionable notification", || updates() == 1).await;
+        eventually("one actionable wake", || woken.lock().len() == 1).await;
+        let batch = read(&host, &id, uri).await;
+        assert_eq!(batch["count"], 1);
+        let ack = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"ack","subscription_id":"acp","cursor":batch["cursor"]}),
+        );
+        assert!(ack.get("error").is_none(), "{ack}");
+        host.disconnect(&id);
+        let (notify, _) = listener();
+        let resumed = host.connect(Some(PEER), notify).unwrap();
+        host.message(
+            &resumed,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read(&host, &resumed, uri).await["count"], 0);
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(
+            woken.lock().len(),
+            1,
+            "acknowledged RESULT must not wake after reconnect"
+        );
+        host.disconnect(&resumed);
+    }
+    // Catches: a skipped busy wake consumes the frozen cursor and suppresses a later accepted turn.
+    #[tokio::test]
+    async fn actionable_subscription_skipped_busy_wake_remains_eligible() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let state = test_state();
+        let busy = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let host = AcpMcpHost {
+            wake: {
+                let busy = busy.clone();
+                let attempts = attempts.clone();
+                let accepted = accepted.clone();
+                Arc::new(move |_| {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    let idle = !busy.load(Ordering::SeqCst);
+                    if idle {
+                        accepted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Box::pin(async move { idle })
+                })
+            },
+            ..AcpMcpHost::new(&state)
+        };
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).unwrap();
+        let created = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"subscribe","subscription_id":"busy"}),
+        );
+        assert!(created.get("error").is_none(), "{created}");
+        let uri = "tuic://inbox/subscriptions/busy";
+        host.message(
+            &id,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        state.push_agent_inbox(PEER, mail("busy-result", "RESULT while busy"));
+        eventually("first skipped attempt", || {
+            attempts.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        let frozen = read(&host, &id, uri).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), 0);
+        busy.store(false, Ordering::SeqCst);
+        state.push_agent_inbox(PEER, mail("idle-result", "RESULT after idle"));
+        assert_eq!(read(&host, &id, uri).await["cursor"], frozen["cursor"]);
+        eventually("accepted wake after skipped attempt", || {
+            accepted.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        state.push_agent_inbox(PEER, mail("later-result", "RESULT same frozen cursor"));
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        host.disconnect(&id);
     }
 }

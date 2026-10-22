@@ -19,6 +19,9 @@ cd src-tauri && cargo build
 make dev
 ```
 
+On macOS, `make dev` also requires Python 3. It launches a stable executable
+copy outside Cargo/mbx targets; see [Development Setup](docs/guides/development-setup.md).
+
 `make check` also needs two cargo subcommands:
 
 ```bash
@@ -62,6 +65,12 @@ sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
 `cargo nextest run --workspace` plus doctests, Vitest, the plugin tests,
 `pnpm audit`, and `cargo audit`.
 
+Cargo owns the executables in `src-tauri/target/`: sidecar staging never
+copies back into that directory. `pnpm build:sidecar` builds the CLI and bridge
+with Cargo and stages them in `src-tauri/binaries/` for development and
+packaging. `build.rs` disables only tauri-build's reverse sidecar copy;
+`tauri.conf.json` and CLI packaging overrides keep the bundle entries.
+
 To run a single gate, copy its command out of the `check` target in the
 [Makefile](Makefile) — that target is the source of truth for what CI enforces.
 Prefix standalone test commands with `scripts/with-test-tmp.sh` from the
@@ -70,6 +79,8 @@ a per-run directory under `.tmp/tuic-tests/` and removes it when the command
 ends, including when a test fails. `make check`, `make test-shell`, `make cov`, and
 `make mutants` do this automatically. `make dev` and `cargo run` retain their
 normal runtime temporary directory.
+
+When `src-tauri/src/design_mode/extract.js` changes, run `TUIC_DESIGN_BROWSER=/path/to/browser-stealth/ab-stealth.sh scripts/with-test-tmp.sh pnpm test:design-mode-browser`; this test requires real Chromium and is not in CI.
 
 Mutation testing runs on a change, not on the tree: `make mutants RANGE=<base>`
 (default `HEAD~1`) needs `cargo install --locked cargo-mutants` and reports the

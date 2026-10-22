@@ -48,6 +48,7 @@ type StatusPayload = {
 	protocol_version?: number;
 	out_of_date?: boolean;
 	error?: string;
+	retry_after_secs?: number;
 	step?: string;
 };
 
@@ -179,6 +180,16 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(store.getConnectionState("c2")).toMatchObject({ connection: added, status: "disconnected" });
 		});
 
+		// Catches: saving a recovered endpoint resets the UI route despite a live backend session.
+		it("keeps the live endpoint and token while saving connection metadata", async () => {
+			push(connected);
+			const connection = store.getConnectionState("c1")!.connection;
+			await store.addConnection({ ...connection, transport: { type: "Direct", url: "http://resolved.ts.net:9876" } });
+			expect(store.getConnectionState("c1")?.status).toBe("connected");
+			expect(store.getBaseUrl("c1")).toBe(connected.base_url);
+			expect(store.getToken("c1")).toBe(connected.token);
+		});
+
 		it("a rejected save leaves the loaded connection unchanged", async () => {
 			const original = store.getConnectionState("c1")!.connection;
 			invokeMock.mockRejectedValueOnce(new Error("save failed"));
@@ -200,6 +211,14 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			push(connected);
 			expect(store.getConnectionState("c1")?.status).toBe("connected");
 			expect(store.getConnectionState("c1")?.protocolVersion).toBe(2);
+		});
+
+		it("clears failed-attempt details when the next backend attempt begins", () => {
+			push({ id: "c1", status: "error", error: "Cannot resolve mac-mint", retry_after_secs: 3 });
+			expect(store.getConnectionState("c1")).toMatchObject({ error: "Cannot resolve mac-mint", retryAfterSecs: 3 });
+			push({ id: "c1", status: "connecting" });
+			expect(store.getConnectionState("c1")?.error).toBeUndefined();
+			expect(store.getConnectionState("c1")?.retryAfterSecs).toBeUndefined();
 		});
 
 		it("keeps the deployment step from the backend status", () => {

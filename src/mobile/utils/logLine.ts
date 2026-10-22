@@ -22,6 +22,7 @@ export interface LogSpan {
 export interface LogLine {
 	spans: LogSpan[];
 	cols?: number;
+	wrapped?: boolean;
 }
 
 // --- ANSI color mapping ---
@@ -227,7 +228,7 @@ function sameColor(a: LogColor | undefined, b: LogColor | undefined): boolean {
  */
 export function sameLine(a: LogLine, b: LogLine): boolean {
 	if (a === b) return true;
-	if (a.cols !== b.cols) return false;
+	if (a.cols !== b.cols || a.wrapped !== b.wrapped) return false;
 	if (a.spans.length !== b.spans.length) return false;
 	for (let i = 0; i < a.spans.length; i++) {
 		const x = a.spans[i];
@@ -259,7 +260,11 @@ function joinedLineFor(rows: LogLine[]): LogLine {
 		return cached.line;
 	}
 	const spans: LogSpan[] = [...rows[0].spans];
-	for (const row of rows.slice(1)) {
+	for (const [index, row] of rows.slice(1).entries()) {
+		if (rows[index].wrapped === true) {
+			spans.push(...row.spans);
+			continue;
+		}
 		spans.push({ text: " " });
 		const continuation = row.spans.map((span) => ({ ...span }));
 		while (continuation.length > 0) {
@@ -269,12 +274,22 @@ function joinedLineFor(rows: LogLine[]): LogLine {
 		}
 		spans.push(...continuation);
 	}
-	const line = { spans, cols: rows[0].cols };
+	const line = { spans, cols: rows[0].cols, wrapped: rows.at(-1)?.wrapped };
 	joinedLineCache.set(rows[0], { rows, line });
 	return line;
 }
 
 const codePoints = (text: string): number => [...text].length;
+
+/** Claude paints its tool bullet as one blank cell while it pulses, so the dot
+ * counts as indentation: both frames of the blink must measure the same. */
+const bulletIndent = (text: string): number => {
+	const normalized = text.replace(/^⏺\uFE0E?(?=[ \t])/, " ");
+	return normalized.length - normalized.trimStart().length;
+};
+
+/** A tool result row (`⎿ …`) starts its own item and is never a wrapped continuation. */
+const TOOL_RESULT_RE = /^\s*⎿/;
 
 export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 	const result: LogLine[] = [];
@@ -282,6 +297,17 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 	let i = 0;
 	while (i < lines.length) {
 		const first = lines[i];
+		// Current backends provide the terminal's exact boundary. Keep the
+		// heuristic below only for rows from older daemons without metadata.
+		if (first.wrapped !== undefined) {
+			const group = [first];
+			while (group.at(-1)?.wrapped && i + group.length < lines.length) {
+				group.push(lines[i + group.length]);
+			}
+			result.push(joinedLineFor(group));
+			i += group.length;
+			continue;
+		}
 		const cols = first.cols ?? 0;
 		const firstText = lineText(first);
 		if (
@@ -304,6 +330,7 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 				!text.trim() ||
 				hasBoxDrawing(next) ||
 				listMarker.test(text.trimStart()) ||
+				TOOL_RESULT_RE.test(text) ||
 				/^\s{4}/.test(text)
 			)
 				break;
@@ -323,8 +350,8 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 			const next = run[j];
 			const prevText = lineText(previous);
 			const nextText = lineText(next);
-			const prevIndent = prevText.length - prevText.trimStart().length;
-			const nextIndent = nextText.length - nextText.trimStart().length;
+			const prevIndent = bulletIndent(prevText);
+			const nextIndent = bulletIndent(nextText);
 			const nextWord = nextText.trimStart().split(/\s/, 1)[0];
 			const prevLength = codePoints(prevText);
 			const joins =

@@ -32,7 +32,7 @@
 ## Key Features
 
 - **Terminal Management** — Tabbed terminals with split panes, drag-and-drop reordering, and per-branch isolation via Git worktrees
-- **AI Agent Support** — Auto-detect Claude Code, Aider, Codex, Gemini CLI and more. Monitor progress, costs, and active subtasks in real time
+- **AI Agent Support** — Auto-detect Claude Code, Codex, Gemini CLI and more. Monitor progress, costs, and active subtasks in real time
 - **Git Worktrees** — Each branch gets its own working directory. Create, merge, archive, and batch-manage worktrees from the UI
 - **GitHub Integration** — PR badges, CI status rings, merge from the UI, post-merge cleanup, and notification bell for PR events
 - **Plugin System** — Extend TUICommander with JavaScript plugins. Full API for terminals, git, notifications, and status bar widgets
@@ -42,3 +42,7 @@
 - **[Remote Daemon](./user-guide/remote-access.md#tuic-remote-beta)** — `tuic-remote` runs the backend headless on a server or build host: same HTTP/WebSocket API, no Tauri, no GUI
 
 The complete, always-current capability inventory lives in the [Feature Reference](./FEATURES.md).
+
+## Community & support
+
+Join [TUICommander & Co on Discord](https://discord.gg/4DQ7Ah6hSh) for questions and ideas. Use **#support**, **#ideas**, or **#plugins** in the **TUICommander** category. The server is checked once a day. Report reproducible bugs in [GitHub issues](https://github.com/sstraus/tuicommander/issues).

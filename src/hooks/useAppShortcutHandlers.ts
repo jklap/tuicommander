@@ -83,6 +83,14 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			const previousId = terminalsStore.getPreviousActiveId();
 			if (previousId) navigateToTerminal(previousId);
 		},
+		historyBack: () => {
+			const id = terminalsStore.stepHistory("back");
+			if (id) navigateToTerminal(id);
+		},
+		historyForward: () => {
+			const id = terminalsStore.stepHistory("forward");
+			if (id) navigateToTerminal(id);
+		},
 		jumpWaitingTerminal: () => {
 			const waiting = terminalsStore
 				.getIds()
@@ -105,15 +113,14 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		handleTerminalSelect: terminalLifecycle.handleTerminalSelect,
 		handleSplit: splitPanes.handleSplit,
 		handleRunCommand: (forceDialog) => {
-			const activeId = mdTabsStore.state.activeId;
-			if (activeId) {
-				const handle = mdTabsStore.getHandle<{ reload?: () => void }>(activeId);
-				if (handle?.reload) {
-					handle.reload();
-					return;
-				}
-			}
 			gitOps.handleRunCommand(forceDialog, () => options.setRunCommandDialogVisible(true));
+		},
+		reloadActiveTab: () => {
+			const activeId = mdTabsStore.state.activeId;
+			const handle = activeId ? mdTabsStore.getHandle<{ reload?: () => void }>(activeId) : undefined;
+			if (!handle?.reload) return false;
+			handle.reload();
+			return true;
 		},
 		switchToBranchByIndex: quickSwitcher.switchToBranchByIndex,
 		isQuickSwitcherOpen: options.quickSwitcherVisible,
@@ -215,6 +222,7 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			);
 		},
 		toggleCommandOverview: mdTabsStore.addCommandOverview,
+		openTasks: mdTabsStore.addTasks,
 		toggleComposePanel: () => terminalsStore.getActive()?.ref?.toggleCompose(),
 		detachActivityDashboard: () => {
 			if (!isTauri()) return;
@@ -272,11 +280,14 @@ function navigateCommandBlock(direction: "previous" | "next"): void {
 	if (!sessionId) return;
 	invoke<[number, number, number]>("terminal_scroll_info", { sessionId })
 		.then(([offset, total]) => {
-			const viewTop = total - offset;
+			const viewTop = terminal.historyBase + total - offset;
 			if (direction === "previous") {
 				for (let index = terminal.commandBlocks.length - 1; index >= 0; index--) {
-					if (terminal.commandBlocks[index].promptLine < viewTop - 1) {
-						terminal.ref!.scrollToLine(terminal.commandBlocks[index].promptLine);
+					if (
+						terminal.commandBlocks[index].promptLine >= terminal.historyBase &&
+						terminal.commandBlocks[index].promptLine < viewTop - 1
+					) {
+						terminal.ref!.scrollToLine(terminal.commandBlocks[index].promptLine - terminal.historyBase);
 						return;
 					}
 				}
@@ -284,7 +295,7 @@ function navigateCommandBlock(direction: "previous" | "next"): void {
 			}
 			for (const block of terminal.commandBlocks) {
 				if (block.promptLine > viewTop + 1) {
-					terminal.ref!.scrollToLine(block.promptLine);
+					terminal.ref!.scrollToLine(block.promptLine - terminal.historyBase);
 					return;
 				}
 			}
@@ -302,13 +313,15 @@ function toggleNearestCommandBlock(): void {
 	if (!sessionId) return;
 	invoke<[number, number, number]>("terminal_scroll_info", { sessionId })
 		.then(([offset, total, screenRows]) => {
-			const viewCenter = total - offset + Math.floor(screenRows / 2);
-			let nearest = terminal.commandBlocks[0];
+			const viewCenter = terminal.historyBase + total - offset + Math.floor(screenRows / 2);
+			const blocks = terminal.commandBlocks.filter((block) => block.promptLine >= terminal.historyBase);
+			if (blocks.length === 0) return;
+			let nearest = blocks[0];
 			let bestDistance = Math.abs(nearest.promptLine - viewCenter);
-			for (let index = 1; index < terminal.commandBlocks.length; index++) {
-				const distance = Math.abs(terminal.commandBlocks[index].promptLine - viewCenter);
+			for (let index = 1; index < blocks.length; index++) {
+				const distance = Math.abs(blocks[index].promptLine - viewCenter);
 				if (distance < bestDistance) {
-					nearest = terminal.commandBlocks[index];
+					nearest = blocks[index];
 					bestDistance = distance;
 				}
 			}

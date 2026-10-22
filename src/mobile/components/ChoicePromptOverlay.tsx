@@ -1,9 +1,11 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { ChoicePrompt } from "../useSessions";
 import styles from "./ChoicePromptOverlay.module.css";
 
 interface ChoicePromptOverlayProps {
 	prompt: ChoicePrompt;
+	disabled?: boolean;
+	embedded?: boolean;
 	onSelect: (key: string) => void;
 }
 
@@ -11,12 +13,13 @@ interface ChoicePromptOverlayProps {
  *  caller follows the backend's selection mode when sending PTY keys. */
 export function ChoicePromptOverlay(props: ChoicePromptOverlayProps) {
 	return (
-		<div class={styles.dropup}>
+		<div class={styles.dropup} classList={{ [styles.embedded]: props.embedded }}>
 			<div class={styles.title}>{props.prompt.title}</div>
 			<For each={props.prompt.options}>
 				{(option) => (
 					<button
 						class={styles.item}
+						disabled={props.disabled}
 						classList={{
 							[styles.itemHighlighted]: option.highlighted,
 							[styles.itemDestructive]: option.destructive,
@@ -29,6 +32,11 @@ export function ChoicePromptOverlay(props: ChoicePromptOverlayProps) {
 					</button>
 				)}
 			</For>
+			<Show when={props.prompt.selection_mode === "toggle-enter"}>
+				<button class={styles.item} disabled={props.disabled} onClick={() => props.onSelect("\r")}>
+					Submit answers
+				</button>
+			</Show>
 		</div>
 	);
 }

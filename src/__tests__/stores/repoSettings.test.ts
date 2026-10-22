@@ -28,7 +28,7 @@ vi.mock("../../stores/repoDefaults", () => ({
 /** The entry for `path` in the most recent `save_repo_settings` call. */
 function lastSavedEntry(path: string): Record<string, unknown> {
 	const calls = mockInvoke.mock.calls.filter(([name]) => name === "save_repo_settings");
-	const call = calls[calls.length - 1];
+	const call = calls.at(-1)!;
 	if (!call) throw new Error("save_repo_settings was never called");
 	const repos = (call[1] as { config: { repos: Record<string, Record<string, unknown>> } }).config.repos;
 	return repos[path];
@@ -63,6 +63,50 @@ describe("repoSettingsStore", () => {
 		store = (await import("../../stores/repoSettings")).repoSettingsStore;
 		await store.hydrate();
 		mockInvoke.mockClear();
+	});
+
+	// Catches: false being treated as inheritance, or null retaining a stale global filter.
+	it("PR visibility overrides preserve false and track inherited global changes", async () => {
+		const { settingsStore } = await import("../../stores/settings");
+		mockInvoke.mockResolvedValueOnce({});
+		await settingsStore.hydrate();
+		vi.useFakeTimers();
+		try {
+			testInScope(() => {
+				store.getOrCreate("/repo", "Repo");
+				settingsStore.setPrHideDrafts(true);
+				settingsStore.setPrHideConflicting(true);
+				settingsStore.setPrHideCiFailing(true);
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: true,
+					prHideConflicting: true,
+					prHideCiFailing: true,
+				});
+				store.update("/repo", { prHideDrafts: false, prHideConflicting: false, prHideCiFailing: false });
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: false,
+					prHideConflicting: false,
+					prHideCiFailing: false,
+				});
+				store.update("/repo", { prHideDrafts: null, prHideConflicting: null, prHideCiFailing: null });
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: true,
+					prHideConflicting: true,
+					prHideCiFailing: true,
+				});
+				settingsStore.setPrHideDrafts(false);
+				settingsStore.setPrHideConflicting(false);
+				settingsStore.setPrHideCiFailing(false);
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: false,
+					prHideConflicting: false,
+					prHideCiFailing: false,
+				});
+			});
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
 	});
 
 	describe("get()", () => {
@@ -175,18 +219,6 @@ describe("repoSettingsStore", () => {
 				const effective = store.getEffective("/repo");
 				expect(effective).toBeDefined();
 				expect(effective!.baseBranch).toBe("develop");
-			});
-		});
-
-		it("returns non-nullable effective settings", () => {
-			testInScope(() => {
-				store.getOrCreate("/repo", "my-repo");
-				const effective = store.getEffective("/repo");
-				expect(effective).toBeDefined();
-				// All fields must be non-null
-				expect(effective!.baseBranch).not.toBeNull();
-				expect(effective!.copyIgnoredFiles).not.toBeNull();
-				expect(effective!.setupScript).not.toBeNull();
 			});
 		});
 

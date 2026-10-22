@@ -44,17 +44,27 @@ self.addEventListener("fetch", (event) => {
     })());
     return;
   }
+  // Built assets: without them an offline cold start gets the cached shell but
+  // no JS, and the page stays blank.
+  if (event.request.method === "GET" && url.pathname.startsWith("/assets/") && url.origin === self.location.origin) {
+    event.respondWith(cacheFirstAsset(event.request));
+    return;
+  }
   // Only intercept navigation requests (HTML page loads)
   if (event.request.mode !== "navigate") return;
 
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        // Cache mobile.html on successful navigation for offline use
+        // Cache mobile.html on successful navigation for offline use. Only
+        // the app shell: the login page (story 1359) would otherwise replace
+        // the shell, and offline the app would open on a form that cannot
+        // log in. `response.ok` already keeps a 401 or a redirect out.
         if (response.ok) {
           const url = new URL(event.request.url);
-          if (url.pathname === "/mobile" || url.pathname === "/mobile.html"
-              || url.pathname.startsWith("/mobile/")) {
+          if (url.pathname !== "/mobile/login"
+              && (url.pathname === "/mobile" || url.pathname === "/mobile.html"
+                  || url.pathname.startsWith("/mobile/"))) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put("/mobile.html", clone));
           }
@@ -71,6 +81,30 @@ self.addEventListener("fetch", (event) => {
       ),
   );
 });
+
+// --- Built asset cache (hashed, immutable) ---
+
+const MAX_CACHED_ASSETS = 200;
+
+async function cacheFirstAsset(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const response = await fetch(request);
+  // A pruned chunk gets the SPA fallback (HTML, 200); caching it would pin the wrong body for that URL.
+  const isHtml = (response.headers?.get("content-type") || "").includes("text/html");
+  if (response.ok && !isHtml) {
+    await cache.put(request, response.clone());
+    await trimAssets(cache);
+  }
+  return response;
+}
+
+// Every rebuild adds new hashed names; drop the oldest assets (keys() is in insertion order).
+async function trimAssets(cache) {
+  const keys = (await cache.keys()).filter((k) => new URL(k.url).pathname.startsWith("/assets/"));
+  await Promise.all(keys.slice(0, Math.max(0, keys.length - MAX_CACHED_ASSETS)).map((k) => cache.delete(k)));
+}
 
 // --- Push notifications ---
 

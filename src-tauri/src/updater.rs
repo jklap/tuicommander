@@ -1,4 +1,4 @@
-//! Update channel checker for nightly releases.
+//! Update channel checker for prerelease feeds.
 //!
 //! Owns URL mapping, HTTP fetch (with timeout + size cap), manifest parsing,
 //! and error classification. The TypeScript frontend is a pure state consumer.
@@ -22,13 +22,22 @@ struct ChannelConfig {
     release_page: &'static str,
 }
 
-const CHANNELS: &[(&str, ChannelConfig)] = &[(
-    "nightly",
-    ChannelConfig {
-        manifest_url: "https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json",
-        release_page: "https://github.com/sstraus/tuicommander/releases/tag/nightly",
-    },
-)];
+const CHANNELS: &[(&str, ChannelConfig)] = &[
+    (
+        "beta",
+        ChannelConfig {
+            manifest_url: "https://github.com/sstraus/tuicommander/releases/download/beta/latest.json",
+            release_page: "https://github.com/sstraus/tuicommander/releases/tag/beta",
+        },
+    ),
+    (
+        "nightly",
+        ChannelConfig {
+            manifest_url: "https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json",
+            release_page: "https://github.com/sstraus/tuicommander/releases/tag/nightly",
+        },
+    ),
+];
 
 /// Maximum manifest size (64 KB). Anything larger is rejected.
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -42,7 +51,9 @@ fn get_channel_config(channel: &str) -> Result<&'static ChannelConfig, String> {
         .iter()
         .find(|(name, _)| *name == channel)
         .map(|(_, cfg)| cfg)
-        .ok_or_else(|| format!("Unknown update channel: \"{channel}\". Valid channels: nightly"))
+        .ok_or_else(|| {
+            format!("Unknown update channel: \"{channel}\". Valid channels: beta, nightly")
+        })
 }
 
 /// Internal implementation that accepts a URL — enables testing with mock server.
@@ -127,13 +138,34 @@ async fn fetch_channel_manifest(
     })
 }
 
-/// Check a nightly update channel for available updates.
+async fn fetch_update_channel(
+    channel: &str,
+    manifest_url: &str,
+) -> Result<UpdateCheckResult, String> {
+    let config = get_channel_config(channel)?;
+    let mut result = fetch_channel_manifest(manifest_url, config.release_page).await?;
+    // The rolling beta release only hosts latest.json; installers stay on the
+    // immutable versioned release so their signed URLs never move.
+    if channel == "beta"
+        && let Some(version) = &result.version
+    {
+        result.release_page = Some(format!(
+            "https://github.com/sstraus/tuicommander/releases/tag/v{version}"
+        ));
+    }
+    Ok(result)
+}
+
+/// Check a prerelease update channel for available updates.
 ///
 /// URLs are hardcoded — no user-supplied URLs accepted (SSRF prevention).
 #[tauri::command]
 pub async fn check_update_channel(channel: String) -> Result<UpdateCheckResult, String> {
+    if crate::agent_test::active() {
+        return Err("Updater is disabled in agent-test".into());
+    }
     let config = get_channel_config(&channel)?;
-    fetch_channel_manifest(config.manifest_url, config.release_page).await
+    fetch_update_channel(&channel, config.manifest_url).await
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +199,52 @@ mod tests {
     #[test]
     fn test_get_channel_config_valid() {
         assert!(get_channel_config("nightly").is_ok());
+    }
+
+    // Catches: beta accepted in Settings but rejected by the backend.
+    #[tokio::test]
+    async fn beta_feed_offers_versioned_downloads_using_recorded_manifest_shape() {
+        let mut server = mockito::Server::new_async().await;
+        let mut manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../test-fixtures/updater/stable-manifest.json"
+        ))
+        .unwrap();
+        // There is no published beta yet. Change only its version to exercise
+        // the same tauri-action schema recorded from the real stable release.
+        manifest["version"] = serde_json::json!("2.0.0-beta.2");
+        let mock = server
+            .mock("GET", "/beta/latest.json")
+            .with_status(200)
+            .with_body(manifest.to_string())
+            .create_async()
+            .await;
+        let result = fetch_update_channel("beta", &format!("{}/beta/latest.json", server.url()))
+            .await
+            .unwrap();
+        assert!(result.available);
+        assert_eq!(result.version.as_deref(), Some("2.0.0-beta.2"));
+        assert_eq!(
+            result.release_page.as_deref(),
+            Some("https://github.com/sstraus/tuicommander/releases/tag/v2.0.0-beta.2")
+        );
+        mock.assert_async().await;
+    }
+
+    // Catches: a missing beta feed turns a valid channel into an error.
+    #[tokio::test]
+    async fn beta_channel_before_first_release_is_informational() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/beta/latest.json")
+            .with_status(404)
+            .create_async()
+            .await;
+        let result = fetch_update_channel("beta", &format!("{}/beta/latest.json", server.url()))
+            .await
+            .unwrap();
+        assert!(!result.available);
+        assert!(result.not_found);
+        mock.assert_async().await;
     }
 
     #[test]

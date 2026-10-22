@@ -1,7 +1,12 @@
+import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
+import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
+import { settingNumberDefault } from "../services/settingsCatalogue";
+import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
+import { isAcpConfigured } from "../utils/acpAvailability";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -26,6 +31,9 @@ export interface CustomLauncher {
 	platform?: "macos" | "windows" | "linux";
 }
 
+export type TrayIconPreference = "always" | "background_only" | "never";
+export type CloseBehavior = "ask" | "background" | "quit";
+
 interface RustAppConfig {
 	shell: string | null;
 	font_family: string;
@@ -35,6 +43,8 @@ interface RustAppConfig {
 	mcp_server_enabled: boolean;
 	ide: string;
 	default_font_size: number;
+	close_behavior: CloseBehavior;
+	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference; webview_unload_minutes?: number };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -42,10 +52,13 @@ interface RustAppConfig {
 	tab_ordering_mode: string;
 	tab_cycling_all_types: boolean;
 	tab_tree_enabled: boolean;
+	chat_mute_intermediate_text: boolean;
 	auto_show_pr_popover: boolean;
 	prevent_sleep_when_busy: boolean;
 	auto_update_enabled: boolean;
 	auto_update_plugins_enabled: boolean;
+	defer_update_relaunch: boolean;
+	eager_resume_after_update: boolean;
 	language: string;
 	update_channel: string;
 	services: {
@@ -72,6 +85,8 @@ interface RustAppConfig {
 	show_scrollbar_marks?: boolean;
 	block_folding_enabled?: boolean;
 	index_strategy?: string;
+	index_memory_budget_mb?: number;
+	attachment_max_bytes?: number;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
 	inline_blame_enabled?: boolean;
@@ -79,6 +94,7 @@ interface RustAppConfig {
 	ego_executable?: string;
 	/** Optional ego user-config profile for AI Chat ACP launches. */
 	ego_profile?: string;
+	ai_chat_workspace?: string;
 }
 
 // Default values
@@ -144,41 +160,7 @@ export type FontType =
 	| "Geist Mono";
 
 /** IDE display names */
-export const IDE_NAMES: Record<IdeType, string> = {
-	vscode: "VS Code",
-	cursor: "Cursor",
-	zed: "Zed",
-	windsurf: "Windsurf",
-	neovim: "Neovim",
-	xcode: "Xcode",
-	ghostty: "Ghostty",
-	wezterm: "WezTerm",
-	alacritty: "Alacritty",
-	kitty: "Kitty",
-	warp: "Warp",
-	iterm2: "iTerm2",
-	sourcetree: "Sourcetree",
-	"github-desktop": "GitHub Desktop",
-	fork: "Fork",
-	gitkraken: "GitKraken",
-	smerge: "Sublime Merge",
-	tower: "Tower",
-	intellij: "IntelliJ IDEA",
-	pycharm: "PyCharm",
-	webstorm: "WebStorm",
-	goland: "GoLand",
-	clion: "CLion",
-	phpstorm: "PhpStorm",
-	rubymine: "RubyMine",
-	rider: "Rider",
-	datagrip: "DataGrip",
-	rustrover: "RustRover",
-	"android-studio": "Android Studio",
-	fleet: "Fleet",
-	terminal: "Terminal",
-	finder: "Finder",
-	editor: "$EDITOR",
-};
+export const IDE_NAMES: Record<IdeType, string> = appChoiceOptions.ides;
 
 /** IDE categories */
 export const IDE_CATEGORIES: Record<string, IdeType[]> = {
@@ -203,37 +185,13 @@ export const IDE_CATEGORIES: Record<string, IdeType[]> = {
 };
 
 /** Font family CSS values — system Nerd Font (if installed) → bundled font → bundled symbols → monospace */
-export const FONT_FAMILIES: Record<FontType, string> = {
-	"JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace',
-	"Fira Code": '"FiraCode Nerd Font", "Fira Code", "Symbols Nerd Font Mono", monospace',
-	Hack: '"Hack Nerd Font", "Hack", "Symbols Nerd Font Mono", monospace',
-	"Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", "Symbols Nerd Font Mono", monospace',
-	Iosevka: '"Iosevka Nerd Font", "Iosevka", "Symbols Nerd Font Mono", monospace',
-	"Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", "Symbols Nerd Font Mono", monospace',
-	Inconsolata: '"Inconsolata Nerd Font", "Inconsolata", "Symbols Nerd Font Mono", monospace',
-	"IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", "Symbols Nerd Font Mono", monospace',
-	"Monaspace Neon": '"Monaspace Neon", "Symbols Nerd Font Mono", monospace',
-	"Commit Mono": '"CommitMono Nerd Font", "Commit Mono", "Symbols Nerd Font Mono", monospace',
-	"Geist Mono": '"GeistMono Nerd Font", "Geist Mono", "Symbols Nerd Font Mono", monospace',
-};
+export const FONT_FAMILIES: Record<FontType, string> = appChoiceOptions.fonts;
 
 /** Valid IDE values */
 const VALID_IDES: readonly string[] = Object.keys(IDE_NAMES);
 
 /** Valid font values */
-const VALID_FONTS: readonly FontType[] = [
-	"JetBrains Mono",
-	"Fira Code",
-	"Hack",
-	"Cascadia Code",
-	"Iosevka",
-	"Source Code Pro",
-	"Inconsolata",
-	"IBM Plex Mono",
-	"Monaspace Neon",
-	"Commit Mono",
-	"Geist Mono",
-];
+const VALID_FONTS = Object.keys(FONT_FAMILIES) as FontType[];
 
 /** Validate and return IDE type or default */
 function validateIde(value: string | null): IdeType {
@@ -270,7 +228,7 @@ export type TabOrderingMode = "grouped-by-type" | "terminals-first" | "free";
 export type TerminalRenderer = "webgl" | "canvas" | "native";
 
 /** Update channel */
-export type UpdateChannel = "stable" | "nightly";
+export type UpdateChannel = "stable" | "beta" | "nightly";
 
 /** Settings store state */
 interface SettingsStoreState {
@@ -280,6 +238,9 @@ interface SettingsStoreState {
 	defaultFontSize: number;
 	shell: string | null;
 	theme: string;
+	closeBehavior: CloseBehavior;
+	hideDockIcon: boolean;
+	trayIcon: TrayIconPreference;
 	confirmBeforeQuit: boolean;
 	confirmBeforeClosingTab: boolean;
 	maxTabNameLength: number;
@@ -287,10 +248,16 @@ interface SettingsStoreState {
 	tabOrderingMode: TabOrderingMode;
 	tabCyclingAllTypes: boolean;
 	tabTreeEnabled: boolean;
+	/** Draw assistant text that a tool call follows in the same turn muted, in Chat. */
+	chatMuteIntermediateText: boolean;
 	autoShowPrPopover: boolean;
 	preventSleepWhenBusy: boolean;
 	autoUpdateEnabled: boolean;
 	autoUpdatePluginsEnabled: boolean;
+	/** Hold the post-update restart until no session is busy or awaiting input */
+	deferUpdateRelaunch: boolean;
+	/** After an update restart, resume every agent tab with a confirmed session, on every branch */
+	eagerResumeAfterUpdate: boolean;
 	language: string;
 	updateChannel: UpdateChannel;
 	disabledAgents: string[];
@@ -315,6 +282,9 @@ interface SettingsStoreState {
 	blockFoldingEnabled: boolean;
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
+	indexMemoryBudgetMb: number;
+	attachmentMaxBytes: number;
+	webviewUnloadMinutes: number;
 	customLaunchers: CustomLauncher[];
 	inlineBlameEnabled: boolean;
 	/**
@@ -325,6 +295,7 @@ interface SettingsStoreState {
 	 */
 	egoExecutable: string;
 	egoProfile: string;
+	aiChatWorkspace: string;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -338,6 +309,9 @@ function createSettingsStore() {
 		defaultFontSize: DEFAULTS.fontSize,
 		shell: null,
 		theme: DEFAULT_THEME,
+		closeBehavior: "ask",
+		hideDockIcon: true,
+		trayIcon: "background_only",
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -345,10 +319,13 @@ function createSettingsStore() {
 		tabOrderingMode: "grouped-by-type",
 		tabCyclingAllTypes: false,
 		tabTreeEnabled: false,
+		chatMuteIntermediateText: true,
 		autoShowPrPopover: true,
 		preventSleepWhenBusy: false,
 		autoUpdateEnabled: true,
 		autoUpdatePluginsEnabled: true,
+		deferUpdateRelaunch: true,
+		eagerResumeAfterUpdate: true,
 		language: "en",
 		updateChannel: "stable" as UpdateChannel,
 		disabledAgents: [],
@@ -373,10 +350,14 @@ function createSettingsStore() {
 		blockFoldingEnabled: true,
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
+		indexMemoryBudgetMb: settingNumberDefault("app.index_memory_budget_mb"),
+		attachmentMaxBytes: settingNumberDefault("app.attachment_max_bytes"),
+		webviewUnloadMinutes: settingNumberDefault("app.background.webview_unload_minutes"),
 		customLaunchers: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
 		egoProfile: "",
+		aiChatWorkspace: "",
 	});
 
 	// Cache of the last loaded config, refreshed on hydrate and each persist.
@@ -384,81 +365,219 @@ function createSettingsStore() {
 	// on top of this snapshot (it does a fresh load-modify-save instead).
 	let baseConfig: RustAppConfig | null = null;
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
-	// Write lock: save() serializes the ENTIRE state, so a save before a
-	// successful hydrate would overwrite config.json with defaults, wiping the
-	// user's settings (observed in the field: full config reset to defaults).
+	// Write lock: a save before successful hydrate could overwrite config.json
+	// with defaults, wiping the user's settings (observed in the field).
 	// No successful hydrate, no persist.
 	let hydrated = false;
 
-	/** Overwrite the settings-store-owned fields on a freshly-loaded config.
-	 *  Fields owned by OTHER surfaces are deliberately left as loaded:
-	 *   - `services.*`        — RemoteAccessPanel (its own load-modify-save)
-	 *   - `mcp_server_enabled` — services panels (config type only)
-	 *   - `global_hotkey`      — the `set_global_hotkey` command
-	 *  This store must never write them from its own (possibly stale) snapshot,
-	 *  or a general-settings save clobbers a concurrent writer's change — the
-	 *  "web server disabled / hotkey lost on restart" bug. Mirrors the
-	 *  load-modify-save pattern the services panels already use. */
-	function applyOwnedFields(config: RustAppConfig): RustAppConfig {
-		config.shell = state.shell;
-		config.font_family = state.font;
-		config.font_size = state.defaultFontSize;
-		config.font_weight = state.fontWeight;
-		config.theme = state.theme;
-		config.ide = state.ide;
-		config.default_font_size = state.defaultFontSize;
-		config.confirm_before_quit = state.confirmBeforeQuit;
-		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
-		config.max_tab_name_length = state.maxTabNameLength;
-		config.split_tab_mode = state.splitTabMode;
-		config.tab_ordering_mode = state.tabOrderingMode;
-		config.tab_cycling_all_types = state.tabCyclingAllTypes;
-		config.tab_tree_enabled = state.tabTreeEnabled;
-		config.auto_show_pr_popover = state.autoShowPrPopover;
-		config.prevent_sleep_when_busy = state.preventSleepWhenBusy;
-		config.auto_update_enabled = state.autoUpdateEnabled;
-		config.auto_update_plugins_enabled = state.autoUpdatePluginsEnabled;
-		config.language = state.language;
-		config.update_channel = state.updateChannel;
-		config.disabled_agents = [...state.disabledAgents];
-		config.intent_tab_title = state.intentTabTitle;
-		config.progress_tracking = state.progressTracking;
-		config.suggest_followups = state.suggestFollowups;
-		config.copy_on_select = state.copyOnSelect;
-		config.osc52_clipboard = state.osc52Clipboard;
-		config.show_last_prompt = state.showLastPrompt;
-		config.bell_style = state.bellStyle;
-		config.issue_filter = state.issueFilter;
-		config.pr_hide_drafts = state.prHideDrafts;
-		config.pr_hide_conflicting = state.prHideConflicting;
-		config.pr_hide_ci_failing = state.prHideCiFailing;
-		config.experimental_features_enabled = state.experimentalFeaturesEnabled;
-		config.scrollback_reflow = state.scrollbackReflow;
-		config.cursor_style = state.cursorStyle;
-		config.terminal_renderer = state.terminalRenderer;
-		config.show_block_timestamps = state.showBlockTimestamps;
-		config.show_scrollbar_marks = state.showScrollbarMarks;
-		config.block_folding_enabled = state.blockFoldingEnabled;
-		config.index_strategy = state.indexStrategy;
-		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
-		config.custom_launchers = [...state.customLaunchers];
-		config.inline_blame_enabled = state.inlineBlameEnabled;
-		config.ego_executable = state.egoExecutable;
-		config.ego_profile = state.egoProfile;
-		return config;
+	// Compare with this window's normalized local state, never a fresh disk load:
+	// another window may have changed even fields owned by this same store.
+	let savedFields: Record<string, string> = {};
+	let savedRender: Partial<SettingsStoreState> = {};
+	const [conflicts, setConflicts] = createSignal<string[]>([]);
+	let stopRemoteSync: (() => void) | undefined;
+
+	function renderedConfig(config: RustAppConfig): SettingsStoreState {
+		const values = {} as SettingsStoreState;
+		values.font = validateFont(config.font_family);
+		values.fontWeight = config.font_weight || DEFAULTS.fontWeight;
+		values.ide = validateIde(config.ide);
+		values.defaultFontSize = config.default_font_size || DEFAULTS.fontSize;
+		values.shell = config.shell || null;
+		values.theme = config.theme || DEFAULT_THEME;
+		values.closeBehavior = config.close_behavior ?? "ask";
+		values.hideDockIcon = config.background?.hide_dock_icon ?? true;
+		values.trayIcon = config.background?.tray_icon ?? "background_only";
+		values.confirmBeforeQuit = config.confirm_before_quit ?? true;
+		values.confirmBeforeClosingTab = config.confirm_before_closing_tab ?? true;
+		values.maxTabNameLength = config.max_tab_name_length || 25;
+		values.splitTabMode = config.split_tab_mode === "unified" ? "unified" : "separate";
+		const tom = config.tab_ordering_mode;
+		values.tabOrderingMode = tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type";
+		values.tabCyclingAllTypes = config.tab_cycling_all_types ?? false;
+		values.tabTreeEnabled = config.tab_tree_enabled ?? false;
+		values.chatMuteIntermediateText = config.chat_mute_intermediate_text ?? true;
+		values.autoShowPrPopover = config.auto_show_pr_popover ?? true;
+		values.preventSleepWhenBusy = config.prevent_sleep_when_busy ?? false;
+		values.autoUpdateEnabled = config.auto_update_enabled ?? true;
+		values.autoUpdatePluginsEnabled = config.auto_update_plugins_enabled ?? true;
+		values.deferUpdateRelaunch = config.defer_update_relaunch ?? true;
+		values.eagerResumeAfterUpdate = config.eager_resume_after_update ?? true;
+		values.language = config.language || "en";
+		const channel = config.update_channel;
+		values.updateChannel = channel === "nightly" || channel === "beta" ? channel : "stable";
+		values.disabledAgents = config.disabled_agents ?? [];
+		values.intentTabTitle = config.intent_tab_title ?? true;
+		values.progressTracking = config.progress_tracking ?? true;
+		values.copyOnSelect = config.copy_on_select ?? true;
+		values.osc52Clipboard = config.osc52_clipboard ?? true;
+		values.showLastPrompt = config.show_last_prompt ?? true;
+		values.bellStyle = (config.bell_style || "visual") as SettingsStoreState["bellStyle"];
+		values.suggestFollowups = config.suggest_followups ?? true;
+		values.globalHotkey = config.global_hotkey ?? null;
+		values.issueFilter = validateIssueFilter(config.issue_filter || null);
+		values.prHideDrafts = config.pr_hide_drafts ?? false;
+		values.prHideConflicting = config.pr_hide_conflicting ?? false;
+		values.prHideCiFailing = config.pr_hide_ci_failing ?? false;
+		values.experimentalFeaturesEnabled = config.experimental_features_enabled ?? false;
+		values.scrollbackReflow = config.scrollback_reflow ?? true;
+		const cs = config.cursor_style;
+		values.cursorStyle = cs === "block" || cs === "underline" ? cs : "bar";
+		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
+		values.showBlockTimestamps = config.show_block_timestamps ?? true;
+		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
+		values.blockFoldingEnabled = config.block_folding_enabled ?? true;
+		values.indexStrategy = (config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch";
+		values.standbyTimeoutMinutes = config.standby_timeout_minutes ?? 5;
+		values.indexMemoryBudgetMb = config.index_memory_budget_mb ?? settingNumberDefault("app.index_memory_budget_mb");
+		values.attachmentMaxBytes = config.attachment_max_bytes ?? settingNumberDefault("app.attachment_max_bytes");
+		values.webviewUnloadMinutes =
+			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
+		values.customLaunchers = config.custom_launchers ?? [];
+		values.inlineBlameEnabled = config.inline_blame_enabled ?? true;
+		values.egoExecutable = config.ego_executable ?? "";
+		values.egoProfile = config.ego_profile ?? "";
+		values.aiChatWorkspace = config.ai_chat_workspace ?? "";
+		return values;
 	}
 
-	/** Load the current on-disk config, apply this store's owned fields, and
-	 *  persist. Load-modify-save guarantees fields written by other surfaces
-	 *  (services, global_hotkey, …) survive — never overwritten from a stale
-	 *  in-memory snapshot. If the fresh load fails we skip the save entirely
-	 *  rather than risk writing a partial config. */
+	/** The single mapping from settings state to config fields. Foreign-owned
+	 *  services, mcp_server_enabled and global_hotkey stay outside this projection. */
+	function ownedFields(values: SettingsStoreState = state) {
+		return {
+			shell: values.shell,
+			font_family: values.font,
+			font_size: values.defaultFontSize,
+			font_weight: values.fontWeight,
+			theme: values.theme,
+			ide: values.ide,
+			default_font_size: values.defaultFontSize,
+			close_behavior: values.closeBehavior,
+			background: {
+				hide_dock_icon: values.hideDockIcon,
+				tray_icon: values.trayIcon,
+				webview_unload_minutes: values.webviewUnloadMinutes,
+			},
+			confirm_before_quit: values.confirmBeforeQuit,
+			confirm_before_closing_tab: values.confirmBeforeClosingTab,
+			max_tab_name_length: values.maxTabNameLength,
+			split_tab_mode: values.splitTabMode,
+			tab_ordering_mode: values.tabOrderingMode,
+			tab_cycling_all_types: values.tabCyclingAllTypes,
+			tab_tree_enabled: values.tabTreeEnabled,
+			chat_mute_intermediate_text: values.chatMuteIntermediateText,
+			auto_show_pr_popover: values.autoShowPrPopover,
+			prevent_sleep_when_busy: values.preventSleepWhenBusy,
+			auto_update_enabled: values.autoUpdateEnabled,
+			auto_update_plugins_enabled: values.autoUpdatePluginsEnabled,
+			defer_update_relaunch: values.deferUpdateRelaunch,
+			eager_resume_after_update: values.eagerResumeAfterUpdate,
+			language: values.language,
+			update_channel: values.updateChannel,
+			disabled_agents: [...values.disabledAgents],
+			intent_tab_title: values.intentTabTitle,
+			progress_tracking: values.progressTracking,
+			suggest_followups: values.suggestFollowups,
+			copy_on_select: values.copyOnSelect,
+			osc52_clipboard: values.osc52Clipboard,
+			show_last_prompt: values.showLastPrompt,
+			bell_style: values.bellStyle,
+			issue_filter: values.issueFilter,
+			pr_hide_drafts: values.prHideDrafts,
+			pr_hide_conflicting: values.prHideConflicting,
+			pr_hide_ci_failing: values.prHideCiFailing,
+			experimental_features_enabled: values.experimentalFeaturesEnabled,
+			scrollback_reflow: values.scrollbackReflow,
+			cursor_style: values.cursorStyle,
+			terminal_renderer: values.terminalRenderer,
+			show_block_timestamps: values.showBlockTimestamps,
+			show_scrollbar_marks: values.showScrollbarMarks,
+			block_folding_enabled: values.blockFoldingEnabled,
+			index_strategy: values.indexStrategy,
+			index_memory_budget_mb: values.indexMemoryBudgetMb,
+			attachment_max_bytes: values.attachmentMaxBytes,
+			standby_timeout_minutes: values.standbyTimeoutMinutes,
+			custom_launchers: [...values.customLaunchers],
+			inline_blame_enabled: values.inlineBlameEnabled,
+			ego_executable: values.egoExecutable,
+			ego_profile: values.egoProfile,
+			ai_chat_workspace: values.aiChatWorkspace,
+		} satisfies Partial<RustAppConfig>;
+	}
+
+	/** Immutable values also detect edits to nested launcher arguments. */
+	function snapshotFields(fields: ReturnType<typeof ownedFields>): Record<string, string> {
+		return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, JSON.stringify(value)]));
+	}
+
+	/** No migration, save, setter side effects or dirty-state reset on a remote read. */
+	function applyConfig(config: RustAppConfig, preserveDirty: boolean): void {
+		const incoming = renderedConfig(config);
+		const conflicting: string[] = [];
+		const patch: Partial<SettingsStoreState> = { ...incoming };
+		for (const key of Object.keys(incoming) as (keyof SettingsStoreState)[]) {
+			const local = JSON.stringify(state[key]);
+			const base = JSON.stringify(savedRender[key]);
+			const next = JSON.stringify(incoming[key]);
+			if (preserveDirty && local !== base) {
+				delete patch[key];
+				if (next !== base && next !== local) conflicting.push(key);
+			}
+		}
+		setState(patch);
+		baseConfig = config;
+		savedRender = JSON.parse(JSON.stringify(incoming));
+		savedFields = snapshotFields(ownedFields(incoming));
+		setConflicts(conflicting);
+		setLocale(state.language);
+		if (preserveDirty && saveTimer) {
+			clearTimeout(saveTimer);
+			saveTimer = null;
+			if (conflicting.length === 0 && JSON.stringify(snapshotFields(ownedFields())) !== JSON.stringify(savedFields))
+				save();
+		}
+		if (conflicting.length > 0) {
+			toastsStore.add(
+				"Settings changed elsewhere",
+				"Your unsaved edits were kept. Review them before saving again.",
+				"warn",
+			);
+		}
+	}
+
+	/** Apply only local edits to a fresh document. The backend derives its delta
+	 *  from this base/config pair while holding the cross-process file lock. */
 	async function persist(): Promise<void> {
 		try {
+			let snapshot = savedFields;
 			const config = await updateAppConfig<RustAppConfig>((fresh) => {
-				applyOwnedFields(fresh);
+				const fields = ownedFields();
+				snapshot = snapshotFields(fields);
+				Object.assign(
+					fresh,
+					Object.fromEntries(
+						Object.entries(fields)
+							.filter(([key]) => snapshot[key] !== savedFields[key])
+							.map(([key, value]) => [
+								key,
+								key === "background"
+									? {
+											...fresh.background,
+											...Object.fromEntries(
+												Object.entries(fields.background).filter(
+													([name, next]) =>
+														JSON.stringify(next) !== JSON.stringify(JSON.parse(savedFields.background ?? "{}")[name]),
+												),
+											),
+										}
+									: value,
+							]),
+					),
+				);
 			});
+			savedFields = snapshot; // failed saves keep their edits pending for a later attempt
 			baseConfig = config; // keep the cache (loadFontFromConfig) current
+			savedRender = renderedConfig(config);
 		} catch (err) {
 			appLogger.error("config", "Failed to save config", err);
 		}
@@ -481,8 +600,24 @@ function createSettingsStore() {
 	}
 
 	const actions = {
+		conflicts,
+		/** App-lifetime, idempotent subscription; teardown also invalidates pending reads. */
+		startRemoteSync(): () => void {
+			if (!stopRemoteSync)
+				stopRemoteSync = settingsRefresh.register({
+					section: "app",
+					read: () => runSerializedConfigWrite(() => invoke<RustAppConfig>("load_config")),
+					apply: (config) => {
+						if (hydrated) applyConfig(config, true);
+					},
+				});
+			return () => {
+				stopRemoteSync?.();
+				stopRemoteSync = undefined;
+			};
+		},
 		/** Load settings from Rust config; migrate from localStorage on first run */
-		async hydrate(): Promise<void> {
+		async hydrate(options?: { notifyOnError?: boolean }): Promise<boolean> {
 			try {
 				// One-time migration from localStorage
 				const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
@@ -501,66 +636,19 @@ function createSettingsStore() {
 
 				const config = await invoke<RustAppConfig>("load_config");
 				baseConfig = config;
-				setState("font", validateFont(config.font_family));
-				setState("fontWeight", config.font_weight || DEFAULTS.fontWeight);
-				setState("ide", validateIde(config.ide));
-				setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
-				setState("shell", config.shell || null);
-				setState("theme", config.theme || DEFAULT_THEME);
-				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
-				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
-				setState("maxTabNameLength", config.max_tab_name_length || 25);
-				setState("splitTabMode", config.split_tab_mode === "unified" ? "unified" : "separate");
-				const tom = config.tab_ordering_mode;
-				setState("tabOrderingMode", tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type");
-				setState("tabCyclingAllTypes", config.tab_cycling_all_types ?? false);
-				setState("tabTreeEnabled", config.tab_tree_enabled ?? false);
-				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
-				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
-				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
-				setState("autoUpdatePluginsEnabled", config.auto_update_plugins_enabled ?? true);
-				setState("language", config.language || "en");
-				setLocale(config.language || "en");
-				const channel = config.update_channel;
-				setState("updateChannel", channel === "nightly" ? channel : "stable");
-				setState("disabledAgents", config.disabled_agents ?? []);
-				setState("intentTabTitle", config.intent_tab_title ?? true);
-				setState("progressTracking", config.progress_tracking ?? true);
-				setState("copyOnSelect", config.copy_on_select ?? true);
-				setState("osc52Clipboard", config.osc52_clipboard ?? true);
-				setState("showLastPrompt", config.show_last_prompt ?? true);
-				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
-				setState("suggestFollowups", config.suggest_followups ?? true);
-				setState("globalHotkey", config.global_hotkey ?? null);
-				setState("issueFilter", validateIssueFilter(config.issue_filter || null));
-				setState("prHideDrafts", config.pr_hide_drafts ?? false);
-				setState("prHideConflicting", config.pr_hide_conflicting ?? false);
-				setState("prHideCiFailing", config.pr_hide_ci_failing ?? false);
-				setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
-				setState("scrollbackReflow", config.scrollback_reflow ?? true);
-				const cs = config.cursor_style;
-				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
-				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
-				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
-				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
-				setState("blockFoldingEnabled", config.block_folding_enabled ?? true);
-				setState(
-					"indexStrategy",
-					(config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch",
-				);
-				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
-				setState("customLaunchers", config.custom_launchers ?? []);
-				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
-				setState("egoExecutable", config.ego_executable ?? "");
-				setState("egoProfile", config.ego_profile ?? "");
+				applyConfig(config, false);
+				savedFields = snapshotFields(ownedFields());
 				hydrated = true;
+				return true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
-				toastsStore.add(
-					"Settings failed to load",
-					"Running on defaults; changes will NOT be saved. Check logs and restart.",
-					"error",
-				);
+				if (options?.notifyOnError !== false)
+					toastsStore.add(
+						"Settings failed to load",
+						"Running on defaults; changes will NOT be saved. Check logs and restart.",
+						"error",
+					);
+				return false;
 			}
 		},
 
@@ -600,7 +688,22 @@ function createSettingsStore() {
 			save();
 		},
 
-		/** Set confirm-before-quit preference */
+		/** Set the main-window close preference. */
+		setCloseBehavior(behavior: CloseBehavior) {
+			setState("closeBehavior", behavior);
+			save();
+		},
+
+		setTrayIcon(value: TrayIconPreference) {
+			setState("trayIcon", value);
+			save();
+		},
+
+		setHideDockIcon(enabled: boolean) {
+			setState("hideDockIcon", enabled);
+			save();
+		},
+
 		setConfirmBeforeQuit(enabled: boolean): void {
 			setState("confirmBeforeQuit", enabled);
 			save();
@@ -633,6 +736,11 @@ function createSettingsStore() {
 			save();
 		},
 
+		setChatMuteIntermediateText(enabled: boolean): void {
+			setState("chatMuteIntermediateText", enabled);
+			save();
+		},
+
 		/** Set auto-show PR popover preference */
 		setAutoShowPrPopover(enabled: boolean): void {
 			setState("autoShowPrPopover", enabled);
@@ -650,6 +758,22 @@ function createSettingsStore() {
 			save();
 		},
 
+		setIndexMemoryBudgetMb(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("indexMemoryBudgetMb", value);
+			save();
+		},
+		setAttachmentMaxBytes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 1) return;
+			setState("attachmentMaxBytes", value);
+			save();
+		},
+		setWebviewUnloadMinutes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("webviewUnloadMinutes", value);
+			save();
+		},
+
 		setIndexStrategy(strategy: SettingsStoreState["indexStrategy"]): void {
 			setState("indexStrategy", strategy);
 			save();
@@ -664,6 +788,18 @@ function createSettingsStore() {
 		/** Set auto-update-plugins-enabled preference */
 		setAutoUpdatePluginsEnabled(enabled: boolean): void {
 			setState("autoUpdatePluginsEnabled", enabled);
+			save();
+		},
+
+		/** Set defer-update-relaunch preference */
+		setDeferUpdateRelaunch(enabled: boolean): void {
+			setState("deferUpdateRelaunch", enabled);
+			save();
+		},
+
+		/** Set eager-resume-after-update preference */
+		setEagerResumeAfterUpdate(enabled: boolean): void {
+			setState("eagerResumeAfterUpdate", enabled);
 			save();
 		},
 
@@ -816,6 +952,16 @@ function createSettingsStore() {
 			return true;
 		},
 
+		/** Set the folder AI Chat runs in. Empty means the host home directory;
+		 *  anything else must be absolute, as the backend requires. */
+		setAiChatWorkspace(path: string): boolean {
+			const value = path.trim();
+			if (value !== "" && !/^([/\\]|[A-Za-z]:[/\\])/.test(value)) return false;
+			setState("aiChatWorkspace", value);
+			save();
+			return true;
+		},
+
 		/** Toggle GitLens-style inline git blame on the editor's active line */
 		setInlineBlameEnabled(enabled: boolean): void {
 			setState("inlineBlameEnabled", enabled);
@@ -875,7 +1021,7 @@ function createSettingsStore() {
 		/** Whether an ego binary is named at all. Rust refuses every connect while
 		 *  it is not, so the panel says so instead of launching nothing. */
 		isAcpConfigured(): boolean {
-			return state.egoExecutable.trim().length > 0;
+			return isAcpConfigured(state.egoExecutable);
 		},
 	};
 
@@ -910,6 +1056,7 @@ registerDebugSnapshot("settings", () => {
 		tabOrderingMode: s.tabOrderingMode,
 		tabCyclingAllTypes: s.tabCyclingAllTypes,
 		tabTreeEnabled: s.tabTreeEnabled,
+		chatMuteIntermediateText: s.chatMuteIntermediateText,
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,

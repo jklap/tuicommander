@@ -17,6 +17,7 @@ The binary is installed to:
 
 The CLI auto-updates silently when TUICommander starts — no manual update needed.
 Install and update stage the new executable beside the installed path, then rename it into place. A running `tuic` process keeps its original executable; installing over a symlink replaces the link without changing its target.
+The CLI status check probes the install directory with a temporary sibling file. It does not open the installed executable for writing: on macOS, even a write-open without changed bytes can invalidate its cached signature.
 
 ## Opening Files and Repos
 
@@ -40,7 +41,7 @@ tuic open --wait file.rs
 tuic diff old.rs new.rs
 ```
 
-A directory is treated as a **repo**, not as a terminal: it lands in the sidebar and becomes the active repo. A folder TUICommander does not know yet is confirmed once in the app before it is added — after that, `tuic .` activates it silently. Use `tuic new` when what you want is a shell.
+A directory lands in the sidebar and becomes the active repo. `tuic <dir>` and `tuic open <dir>` call the selected running server over local IPC through MCP `repo action=add`; development builds need no registered OS URL handler. Registration is explicit and takes effect immediately, without a confirmation dialog or a connected desktop window. Reopening preserves existing workspaces, terminals, names and groups. Registration does not create a terminal; use `tuic new` for a shell. Server errors produce a nonzero exit code.
 
 ### Temporary directories are refused
 
@@ -137,13 +138,37 @@ arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
 peer binding; callers outside TUICommander register an external identity for
 that invocation.
 
+### Workflow actions
+
+`tuic workflow [<json>|-]` calls the grouped `workflow` MCP tool. Use a typed action envelope:
+
+```bash
+tuic workflow '{"action":"story","input":{"action":"list_plans"}}'
+tuic workflow '{"action":"run","input":{"action":"get","run_id":"run-id"}}'
+```
+
+The other actions are `proposal_create`, `report` and `launch`, each with its typed payload under `input`. Proposal creation requires the run's active bound coordinator and a stable `proposalKey`; retries return the same story. Ordinary story creation is not a substitute. Managed callers retain their caller binding. `tuic story` still calls the shared story service with `--project` support; `tuic automations` still calls the separate scheduler and works when `workflow` is disabled. The old workflow MCP names are removed without aliases. Reconnect after installing the updated backend to discover the new tool.
+
+Register an existing local directory directly through MCP:
+
+```bash
+tuic mcp repo '{"action":"add","path":"/absolute/path/to/project"}'
+```
+
+Both forms use the same backend registration operation. Git directories get a
+workspace for their checked-out branch; plain directories get a shell workspace.
+`ui action=tab` with a `tuic://open-repo` URL returns an error directing the caller
+to `repo action=add`.
+
 ### Detached commands
 
 Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
 once while the command runs in a separate process group. The command's stdout
-and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
-When it finishes, `tuic` requests a `BG DONE exit=<code> log=<log> cmd=…`
-wake for the originating session. If that session is busy, the wake is queued
+and stderr append to `<log>`, after a header with the full command, and its exit
+code is written to `<log>.exit`. When it finishes, `tuic` requests a
+`BG DONE exit=<code> log=<log> cmd=…` wake for the originating session.
+The `cmd` label contains only the first line and at most 120 Unicode characters,
+including a final `…` when text is omitted. Read the log header for the full command. If that session is busy, the wake is queued
 until it becomes idle. `<log>.wake` records the request outcome as JSON:
 `queued`, `mailed`, `retrying`, or `failed`, with `tuic_session` and the number
 of queue attempts. A queue lookup or request failure falls
@@ -163,6 +188,35 @@ on macOS, Linux, and Windows.
 ```bash
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
+
+The detached command does not inherit `TUIC_SESSION` or `TUIC_PARENT`. It is
+not the foreground peer: `TUIC_BG_COMMAND=1` marks the command tree as an
+ancestry boundary, including when an agent scrubs its bridge environment. Its progress reports and agent hooks must not change
+the foreground composer state. The runner retains the original caller identity
+for completion queueing and mail. Socket, app-instance and other environment
+settings remain inherited. A command that needs a peer identity must establish
+its own binding instead of using the foreground caller.
+
+On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
+
+Each background runner generates one completion key and reuses it on queue
+retries. The backend remembers the last 128 accepted keys per live terminal,
+so a lost reply does not enqueue the same completion again within that window.
+A recognized acceptance remains `queued` in the wake file even after the queue
+has drained. If every queue receipt is lost and mail also fails, the wake file
+reports `uncertain`, not a proven delivery failure; inspect backend state before
+retrying manually. `uncertain` also prevents automatic child closure.
+
+If a BG DONE entry remains in the backend queue for 60 seconds, the backend
+records one warning under source `bg-wake`. Read `/logs?source=bg-wake` on the
+owning instance. Its JSON data reports the composer, question, uncertainty and
+foreground gates, process-probe generations, and a fresh process tree for the
+foreground group and matching detached runner. It records at most 128 process
+rows, marks truncation, and distinguishes an unavailable inventory from an empty
+tree. It excludes argv, prompt text and environment values. This warning uses
+the normal bounded log ring, not durable delivery storage; collect it before
+ring overflow or restart. It does not retry a possibly submitted message or
+clear `background_work`.
 
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
@@ -324,9 +378,51 @@ tuic alias --remove
 ## IPC Architecture
 
 The CLI communicates with TUICommander via IPC:
-- **macOS/Linux:** Unix domain socket at `~/.config/com.tuic.commander/mcp.sock`
+- **macOS/Linux:** Unix domain socket at `<platform config dir>/com.tuic.commander/mcp.sock` for the default instance.
 - **Windows:** Named pipe at `\\.\pipe\tuicommander-mcp`
 
-Override with `$TUIC_SOCKET` environment variable.
+Use `tuic --instance <id> <command>` or `TUIC_APP_INSTANCE=<id> tuic <command>`
+to select the same namespace as `tuic-remote --instance <id>`. An explicit
+`--instance` takes precedence over the environment. Invalid ids fail before any
+connection. Named Unix sockets use the server's short SHA-256-based name in the OS
+temp directory. The bridge accepts `tuic-bridge --instance <id>` and the same
+environment variable; it searches only that instance's alternative sockets.
+
+On Unix, `TUIC_SOCKET` overrides the selected socket path. Windows retains the
+existing named-pipe endpoint. The clients and server share instance validation,
+config paths and IPC names through `tuic-ipc`; CLI and bridge also share HTTP
+request and response framing.
 
 If TUICommander is not running, `tuic open` and `tuic new` will launch it automatically.
+
+## Automations
+
+`tuic automations` accepts a backend action JSON object. It uses the selected
+instance's MCP endpoint and the same validation, results and errors as HTTP/IPC.
+
+```bash
+tuic automations '{"action":"list"}'
+tuic automations '{"action":"update","id":"review","enabled":false}'
+tuic automations '{"action":"run_now","id":"review"}'
+tuic automations '{"action":"list_runs","id":"review","limit":10}'
+tuic --instance staging automations '{"action":"summary","window":"7d"}'
+cat definition-action.json | tuic automations -
+```
+
+Actions: list, get, create, update, pause, resume, delete, run_now, run, list_runs,
+summary, preview, preview_definition and preset. See the HTTP API Automations
+table for the shared input/result shapes. Create and update accept a complete
+definition; update also accepts id and enabled instead. Creation records the
+bound caller session, including an external MCP identity when run outside TUIC.
+Success prints JSON; backend rejection prints its exact message after `tuic:`
+on stderr and exits 1. Invalid CLI JSON exits 2.
+
+Automation templates (#1622-be11): the shared automation action accepts
+**templates** (catalogue) and **template** (draft). Draft inputs are template_id,
+repository, run_config and optional timezone (host local by default).
+Drafts have fresh ids and start disabled; no definition or run is created until
+an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode through MCP UI actions
+
+Use `tuic mcp ui '{"action":"design_start","session_id":"<terminal>","url":"http://localhost:3000"}'` to start Design Mode. Browser commands use `design_stop`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` or `design_eval` with `repo_path` from the lifecycle result; `design_navigate` also needs `url`, and `design_eval` needs `script`. `design_status` lists bindings for an armed caller. Caller ownership and extension host grants still apply. The old `tuic mcp design_mode` entry is removed with no alias. Also replace literal task calls with `tuic mcp agent` task_get/task_cancel, and story/workflow_* calls with `tuic workflow` and its typed actions. Reconnect cached MCP clients and review external allow rules for the grouped domains.

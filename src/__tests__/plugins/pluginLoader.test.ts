@@ -4,6 +4,8 @@ import {
 	loadPluginsConcurrently,
 	loadUserPlugins,
 	pluginModuleBaseUrl,
+	pluginModuleUrl,
+	replayActiveAgents,
 	validateManifest,
 	validateModule,
 } from "../../plugins/pluginLoader";
@@ -19,6 +21,8 @@ vi.mock("../../plugins/pluginRegistry", () => ({
 	pluginRegistry: {
 		register: vi.fn(),
 		unregister: vi.fn(),
+		notifyStateChange: vi.fn(),
+		dispatchStructuredEvent: vi.fn(),
 	},
 }));
 
@@ -158,6 +162,35 @@ describe("pluginModuleBaseUrl", () => {
 	});
 });
 
+describe("pluginModuleUrl", () => {
+	// The browser resolves `import "./provider.js"` against the importing module's URL
+	// and keys its module map on the result, so what a reload must change is the URL
+	// that sub-modules resolve to, not only the entry URL.
+	const resolveSibling = (entry: string) => new URL("./provider.js", entry).href;
+
+	it("gives a sub-module a different URL on every reload", () => {
+		const first = pluginModuleUrl("github-work", "main.js", false, 1000);
+		const second = pluginModuleUrl("github-work", "main.js", false, 2000);
+		expect(resolveSibling(first)).not.toBe(resolveSibling(second));
+	});
+
+	it("keeps sub-modules of one load on one URL, so the graph shares instances", () => {
+		const entry = pluginModuleUrl("github-work", "main.js", false, 1000);
+		expect(resolveSibling(entry)).toBe(resolveSibling(pluginModuleUrl("github-work", "main.js", false, 1000)));
+	});
+
+	it("resolves a parent-directory import under the same load version", () => {
+		const entry = pluginModuleUrl("github-work", "src/main.js", false, 1000);
+		expect(new URL("../lib/model.js", entry).href).toBe("plugin://github-work/~v1000/lib/model.js");
+	});
+
+	it("uses the http://plugin.localhost form on Windows", () => {
+		expect(pluginModuleUrl("github-work", "main.js", true, 1000)).toBe(
+			"http://plugin.localhost/github-work/~v1000/main.js",
+		);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // loadUserPlugins
 // ---------------------------------------------------------------------------
@@ -171,6 +204,25 @@ describe("loadUserPlugins", () => {
 	it("calls list_user_plugins to discover plugins", async () => {
 		await loadUserPlugins();
 		expect(invoke).toHaveBeenCalledWith("list_user_plugins");
+	});
+
+	it("discovers only once for a multi-plugin reload batch — catches repeated whole-store scans", async () => {
+		await loadUserPlugins(false);
+		const handler = (listen as Mock).mock.calls.find(([event]) => event === "plugin-changed")?.[1];
+		expect(handler).toBeTypeOf("function");
+		vi.clearAllMocks();
+		await handler({ payload: ["plugin-a", "plugin-b", "plugin-a"] });
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke).toHaveBeenCalledWith("list_user_plugins", { pluginIds: ["plugin-a", "plugin-b"] });
+	});
+
+	it("coalesces overlapping reload notifications — catches concurrent duplicate discovery", async () => {
+		await loadUserPlugins(false);
+		const handler = (listen as Mock).mock.calls.find(([event]) => event === "plugin-changed")?.[1];
+		vi.clearAllMocks();
+		await Promise.all([handler({ payload: ["plugin-a"] }), handler({ payload: ["plugin-b"] })]);
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke).toHaveBeenCalledWith("list_user_plugins", { pluginIds: ["plugin-a", "plugin-b"] });
 	});
 
 	it("registers listen handler for plugin-changed events", async () => {
@@ -230,4 +282,30 @@ describe("loadUserPlugins", () => {
 			}),
 		);
 	});
+});
+
+// Catches: hot reload loses an already open question and agent identity.
+it("replays awaiting and agent type when reloading into an open question", async () => {
+	const { terminalsStore } = await import("../../stores/terminals");
+	const id = terminalsStore.add({
+		sessionId: "reload-question",
+		agentType: "claude",
+		fontSize: 14,
+		name: "Reload",
+		cwd: "/repo",
+		awaitingInput: null,
+	});
+	terminalsStore.update(id, { shellState: "idle", awaitingInput: "question", awaitingInputConfident: true });
+	replayActiveAgents(terminalsStore);
+	expect(pluginRegistry.dispatchStructuredEvent).toHaveBeenCalledWith(
+		"shell-state",
+		{ state: "idle", agent_type: "claude" },
+		"reload-question",
+	);
+	expect(pluginRegistry.dispatchStructuredEvent).toHaveBeenCalledWith(
+		"awaiting",
+		{ awaiting: true, confident: true },
+		"reload-question",
+	);
+	terminalsStore.remove(id);
 });

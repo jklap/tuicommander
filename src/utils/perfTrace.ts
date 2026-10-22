@@ -62,7 +62,11 @@ export function timeSync<T>(label: string, fn: () => T, detail?: unknown): T {
  *  flush. Dormant unless perfDebug; then logs only if the whole thing blocks
  *  > SLOW_SYNC_MS. This is how we attribute git.refreshBatch freezes to body vs
  *  flush without guessing. */
-export function timeBatch(label: string, run: (markBodyEnd: () => void) => void): void {
+export function timeBatch(
+	label: string,
+	run: (markBodyEnd: () => void) => void,
+	metadata?: () => Record<string, number>,
+): void {
 	if (!isPerfDebug()) {
 		run(() => {});
 		return;
@@ -79,6 +83,7 @@ export function timeBatch(label: string, run: (markBodyEnd: () => void) => void)
 		appLogger.warn(
 			"app",
 			`SLOW ${label}: ${Math.round(total)}ms (body ${Math.round(body)}ms + flush ${Math.round(total - body)}ms)`,
+			{ ...metadata?.(), total_ms: Math.round(total), body_ms: Math.round(body), flush_ms: Math.round(total - body) },
 		);
 	}
 }

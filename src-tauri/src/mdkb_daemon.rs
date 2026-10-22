@@ -331,7 +331,7 @@ mod tests {
     async fn spawn_probeable_server() -> (PathBuf, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_support::short_socket_tempdir();
         let sock_path = dir.path().join("probeable.sock");
         let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
         let path = sock_path.clone();

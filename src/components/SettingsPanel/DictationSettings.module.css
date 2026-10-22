@@ -66,7 +66,7 @@
    button beside a select lines up with it. */
 .modelSelect,
 .modelDownload {
-  height: 32px;
+  height: var(--control-height, 36px);
   box-sizing: border-box;
   padding: 0 16px;
   border: 1px solid var(--border);
@@ -237,20 +237,9 @@
   align-items: center;
 }
 
-.correctionAdd input {
-  flex: 1;
-  padding: 6px 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-}
+.correctionAdd input { flex: 1; }
 
-.correctionAdd input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+
 
 .correctionArrow {
   color: var(--fg-muted);
@@ -479,3 +468,37 @@
   letter-spacing: 0.05em;
   color: var(--fg-muted);
 }
+
+button.startConversation {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+button.startConversation:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--text-on-accent);
+}
+
+button.stopConversation {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.conversationState .phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stateIndicator {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.hotkeyRow { width: 100%; }
+
+.tuningDisplay { flex: 1; min-width: 100px; }

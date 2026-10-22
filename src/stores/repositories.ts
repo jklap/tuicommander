@@ -2,6 +2,7 @@ import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { invoke, listen } from "../invoke";
+import { settingsRefresh } from "../services/settingsRefresh";
 import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
@@ -46,6 +47,8 @@ export interface RepositoryState {
 	/** Which workspace is on screen. Indexes `workspaces`, so it is an id — read
 	 *  `workspaces[activeWorkspaceId].branchName` when you want the branch. */
 	activeWorkspaceId: WorkspaceId | null;
+	/** Backend-authored stable agent placement; retained by repository persistence. */
+	declaredWorktrees?: Record<string, { workspaceId: string; branch: string; worktreePath: string }>;
 	/** Which remote connection this repo belongs to (undefined = local) */
 	connectionId?: string;
 }
@@ -527,6 +530,8 @@ let hydrated = false;
 let persistedSnapshot: RepositorySnapshot | null = null;
 let queuedSnapshot: RepositorySnapshot | null = null;
 let saveInFlight = false;
+let saveCompletion: Promise<void> = Promise.resolve();
+let saveError: unknown;
 
 /** Set by the store so an adoption that arrived mid-save can run once the baseline
  *  is settled. A save writes `persistedSnapshot` when its request resolves, which
@@ -546,8 +551,10 @@ function drainRepositorySaveQueue(): void {
 	}
 
 	saveInFlight = true;
-	persistRepositoryMutation(mutation, next)
+	saveError = undefined;
+	saveCompletion = persistRepositoryMutation(mutation, next)
 		.catch((err: unknown) => {
+			saveError = err;
 			// An error-level entry increments the visible Errors badge. In particular,
 			// same-record conflicts must never remain a debug-only lost mutation.
 			appLogger.error("store", "Repository changes were not saved", err);
@@ -853,6 +860,19 @@ function createRepositoriesStore() {
 	const startRemoteSync = (): void => {
 		if (remoteSyncStarted) return;
 		remoteSyncStarted = true;
+		const stopSettings = settingsRefresh.register({
+			section: "repositories_registration",
+			read: loadPersistedSnapshot,
+			apply: (fresh) => {
+				if (!fresh) return;
+				if (saveInFlight) {
+					remoteSyncPending = true;
+					return;
+				}
+				adoptRemoteRepositories(fresh);
+			},
+		});
+		window.addEventListener("beforeunload", stopSettings, { once: true });
 		onSaveSettled = () => {
 			if (remoteSyncPending) syncFromDisk();
 		};
@@ -1158,6 +1178,18 @@ function createRepositoriesStore() {
 			setState("repositories", repoPath, "activeWorkspaceId", workspaceId);
 		},
 
+		/** Adopt a caller-bound backend declaration before its repository refresh arrives. */
+		setDeclaredWorktree(
+			repoPath: string,
+			peer: string,
+			placement: { workspaceId: string; branch: string; worktreePath: string },
+		): void {
+			const repo = state.repositories[repoPath];
+			if (!repo) return;
+			setState("repositories", repoPath, "declaredWorktrees", { ...repo.declaredWorktrees, [peer]: placement });
+			save();
+		},
+
 		/** Add terminal to branch */
 		addTerminalToWorkspace(repoPath: string, workspaceId: string, terminalId: string): void {
 			const branch = state.repositories[repoPath]?.workspaces[workspaceId];
@@ -1247,6 +1279,10 @@ function createRepositoriesStore() {
 					const r = s.repositories[repoPath];
 					if (!r) return;
 
+					// A removed checkout must not remain a saved peer placement.
+					for (const [peer, placement] of Object.entries(r.declaredWorktrees ?? {})) {
+						if (placement.workspaceId === workspaceId) delete r.declaredWorktrees![peer];
+					}
 					// Delete the branch
 					delete r.workspaces[workspaceId];
 
@@ -1547,6 +1583,15 @@ function createRepositoriesStore() {
 			);
 			// Flush immediately (not debounced) — app is about to exit
 			saveNow();
+		},
+
+		/** Wait until the latest queued snapshot reaches the backend. */
+		async flushSave(): Promise<void> {
+			while (saveInFlight || queuedSnapshot) {
+				drainRepositorySaveQueue();
+				await saveCompletion;
+			}
+			if (saveError !== undefined) throw saveError;
 		},
 
 		/** Clear savedTerminals from all workspaces (consume-once after restore) */
@@ -1949,10 +1994,9 @@ export function locateFile(absolutePath: string): FileLocation {
  * feet — so it resolves late, here:
  *
  *  1. whichever workspace records the repo root as its worktree;
- *  2. failing that, `activeWorkspaceId`.
+ *  2. failing that, no workspace until the root checkout is discovered.
  *
- * The root workspace is an exact path match. `activeWorkspaceId` is only a fallback
- * for repositories discovered before their workspaces were scanned: using it first
+ * The root workspace is an exact path match. Falling back to `activeWorkspaceId`
  * files every root session under whichever linked worktree happened to be selected
  * when the frontend rehydrated.
  * It returns that workspace's KEY, not its `branchName`: the caller feeds the
@@ -1965,7 +2009,7 @@ export function placementWorkspaceFor(owner: RepoOwner): string | null {
 	const atRoot = Object.entries(repo.workspaces).find(
 		([, ws]) => !!ws.worktreePath && sameDir(ws.worktreePath, owner.repoPath),
 	);
-	return atRoot?.[0] ?? repo.activeWorkspaceId ?? null;
+	return atRoot?.[0] ?? null;
 }
 
 /** True while at least one registered repository lives on another machine. */

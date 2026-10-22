@@ -14,4 +14,5 @@ export { SmartPromptsTab } from "./SmartPromptsTab";
 export { LocalMcpPanel } from "./services/LocalMcpPanel";
 export { RemoteAccessPanel } from "./services/RemoteAccessPanel";
 export { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
+export { TelegramTab } from "./TelegramTab";
 export { TerminalTab } from "./TerminalTab";

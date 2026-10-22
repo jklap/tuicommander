@@ -1,4 +1,6 @@
 mod api;
+#[cfg(test)]
+mod critic_tests;
 mod model;
 mod sources;
 mod store;
@@ -106,6 +108,69 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_story_proposal_is_idempotent_across_reopen() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let proposed = NewStory {
+            plan_id: plan.id.clone(),
+            title: "Implement".into(),
+            criteria: vec!["Focused test passes".into()],
+            priority: 1,
+            origin: StoryOrigin::PlanStep {
+                step: "implementation".into(),
+            },
+            file_scope: vec!["src/core.rs".into()],
+        };
+        assert!(
+            store
+                .existing_story_for_proposal("run-1", "proposal-1", &proposed)
+                .unwrap()
+                .is_none()
+        );
+        let first = store
+            .create_story_once("run-1", "proposal-1", proposed.clone())
+            .expect("create");
+        drop(store);
+        let reopened = StoryStore::open_at(&db).expect("reopen");
+        let retry = reopened
+            .create_story_once("run-1", "proposal-1", proposed.clone())
+            .expect("retry");
+        assert_eq!(retry.id, first.id);
+        assert_eq!(
+            reopened
+                .existing_story_for_proposal("run-1", "proposal-1", &proposed)
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert_eq!(reopened.list_stories(&plan.id).unwrap().len(), 1);
+        let mut changed = proposed.clone();
+        changed.title = "Different".into();
+        assert!(
+            reopened
+                .create_story_once("run-1", "proposal-1", changed)
+                .is_err()
+        );
+        let mut invalid = proposed;
+        invalid.origin = StoryOrigin::PlanStep { step: " ".into() };
+        assert!(
+            reopened
+                .create_story_once("run-1", "proposal-2", invalid)
+                .is_err()
+        );
+        assert_eq!(reopened.list_stories(&plan.id).unwrap().len(), 1);
+    }
+
+    #[test]
     fn operator_can_work_a_story_without_a_terminal_claim() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
@@ -126,19 +191,21 @@ mod tests {
                 file_scope: vec![],
             })
             .expect("story");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    story.revision,
-                    StoryCommand::StartManual,
-                    Some("agent")
-                )
-                .is_err()
-        );
+        // Catches: tracking metadata refusing a valid manual start without creating a claim.
         let started = store
-            .transition_for_actor(&story.id, story.revision, StoryCommand::StartManual, None)
-            .expect("start");
+            .transition_for_actor(
+                &story.id,
+                story.revision,
+                StoryCommand::StartManual,
+                Some("agent"),
+            )
+            .expect("trusted manual start");
+        assert_eq!(
+            store.transition_history(&story.id).expect("history")[0].actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "agent".into()
+            }
+        );
         assert_eq!(started.status, StoryStatus::InProgress);
         assert_eq!(started.claim_session, None);
         let checked = store
@@ -160,6 +227,11 @@ mod tests {
         let done = store
             .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, None)
             .expect("approve");
+        assert!(
+            store
+                .transition(&story.id, done.revision, StoryCommand::Approve)
+                .is_err()
+        );
         assert_eq!(done.status, StoryStatus::Done);
     }
 
@@ -528,6 +600,191 @@ mod tests {
     }
 
     #[test]
+    fn desktop_approval_records_human_provenance() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check");
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        let done = store
+            .transition(&story.id, review.revision, StoryCommand::Approve)
+            .expect("approve");
+        drop(store);
+        let history = StoryStore::open_at(&db)
+            .expect("reopen")
+            .transition_history(&story.id)
+            .expect("history");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history.last().expect("approval").revision, done.revision);
+        assert_eq!(
+            history.last().expect("approval").actor,
+            StoryTransitionActor::Human
+        );
+        assert_eq!(
+            history.last().expect("approval").command,
+            StoryCommand::Approve
+        );
+    }
+
+    #[test]
+    fn claiming_session_approval_records_managed_provenance() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let claimed = store
+            .claim(&story.id, "implementer", story.revision)
+            .expect("claim");
+        let checked = store
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("implementer"),
+            )
+            .expect("check criterion");
+        let review = store
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                Some("implementer"),
+            )
+            .expect("submit review");
+
+        // Catches: actor tracking refusing a valid approval by the claiming session.
+        let done = store
+            .transition_for_actor(
+                &story.id,
+                review.revision,
+                StoryCommand::Approve,
+                Some("implementer"),
+            )
+            .expect("implementer approval");
+        assert_eq!(done.status, StoryStatus::Done);
+        assert_eq!(done.claim_session, None);
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("approval")
+                .actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "implementer".into()
+            }
+        );
+    }
+
+    #[test]
+    fn local_http_approval_records_its_own_provenance() {
+        let dir = tempfile::tempdir().expect("config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        // Catches: local administrative actions being refused or losing LocalApi provenance.
+        let blocked = store
+            .transition_from_local_api(&story.id, story.revision, StoryCommand::Block)
+            .expect("local block");
+        let story = store
+            .transition_from_local_api(&story.id, blocked.revision, StoryCommand::Unblock)
+            .expect("local unblock");
+        assert!(
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .iter()
+                .all(|entry| entry.actor == StoryTransitionActor::LocalApi)
+        );
+        let started = store
+            .transition_from_local_api(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("local action");
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .actor,
+            StoryTransitionActor::LocalApi
+        );
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .unwrap();
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .unwrap();
+        let done = store
+            .transition_from_local_api(&story.id, review.revision, StoryCommand::Approve)
+            .expect("local reviewer approves");
+        assert_eq!(done.status, StoryStatus::Done);
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("approval")
+                .actor,
+            StoryTransitionActor::LocalApi
+        );
+    }
+
+    #[test]
     fn manual_claim_conflicts_and_is_released_with_session() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
@@ -551,19 +808,27 @@ mod tests {
         let claimed = store
             .claim(&story.id, "tab-one", story.revision)
             .expect("claim");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    claimed.revision,
-                    StoryCommand::CheckCriterion(0),
-                    Some("tab-two"),
-                )
-                .is_err()
-        );
+        // Catches: provenance restricting another caller's criterion update or stealing the claim.
+        let claimed = store
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("tab-two"),
+            )
+            .expect("trusted update");
+        assert_eq!(claimed.checked, vec![true]);
+        assert_eq!(claimed.claim_session.as_deref(), Some("tab-one"));
         assert_eq!(
-            store.get_story(&story.id).expect("story").revision,
-            claimed.revision
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("update")
+                .actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "tab-two".into()
+            }
         );
         assert!(store.claim(&story.id, "tab-two", claimed.revision).is_err());
         assert_eq!(store.release_session_claims("tab-one").expect("release"), 1);
@@ -861,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_caller_cannot_remove_an_otherwise_valid_cancelled_edge() {
+    fn managed_caller_can_remove_an_otherwise_valid_cancelled_edge() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
         let plan = store
@@ -891,13 +1156,12 @@ mod tests {
         store
             .transition_for_actor(&target.id, target.revision, StoryCommand::WontFix, None)
             .expect("cancel target");
-        let error = store
+        // Catches: actor metadata preventing release after a cancelled dependency is removed.
+        let released = store
             .remove_dependency(&dependent.id, &target.id, dependent.revision, Some("agent"))
-            .expect_err("managed caller refused");
-        assert!(error.contains("user action"), "{error}");
-        assert_eq!(
-            store.get_story(&dependent.id).expect("unchanged").revision,
-            dependent.revision
-        );
+            .expect("managed removal");
+        assert_eq!(released.status, StoryStatus::Ready);
+        assert_eq!(released.dependencies, [] as [std::string::String; 0]);
+        assert_eq!(released.revision, dependent.revision + 1);
     }
 }

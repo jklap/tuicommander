@@ -3,7 +3,10 @@ import { ErrorBoundary, render } from "solid-js/web";
 import { CrashScreen } from "../components/CrashScreen/CrashScreen";
 import { appLogger } from "../stores/appLogger";
 import MobileApp from "./MobileApp";
+import { installResumeDiagnostics } from "./resumeDiagnostics";
 import "./mobile.css";
+
+installResumeDiagnostics();
 
 // Global error handlers
 window.addEventListener("error", (event) => {
@@ -34,3 +37,8 @@ render(
 	),
 	root,
 );
+
+// The shell in mobile.html shows a preloader until now; see its boot watchdog.
+(window as unknown as { __tuicMobileReady?: boolean }).__tuicMobileReady = true;
+document.getElementById("mobile-preloader")?.remove();
+sessionStorage.removeItem("tuic-boot-delay");

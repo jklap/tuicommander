@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { settingsRefresh } from "../services/settingsRefresh";
 import { subscribeEvents } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
 import { ensureAgentConfigs, invalidateAgentConfigs } from "./agentConfigs";
@@ -23,8 +24,31 @@ export interface RemoteConnection {
 
 export type DeployMode = "never" | "on_connect" | "installed";
 
+export interface DiscoveredSshHost {
+	/** Name to show and to connect with: the config alias or the known_hosts name. */
+	host: string;
+	/** Resolved machine; with `port` it identifies the entry. */
+	target: string;
+	user: string | null;
+	port: number | null;
+	source: "config" | "known_hosts";
+}
+
+export interface DiscoveredSshHosts {
+	hosts: DiscoveredSshHost[];
+	/** known_hosts entries with hashed names: present on disk, not listable. */
+	hashed_count: number;
+}
+
+export interface SshAgentInfo {
+	keys: { fingerprint: string; comment: string; key_type: string }[];
+	agent_type: string;
+}
+
 export interface SshHostStatus {
 	host: string;
+	target: string;
+	port: number | null;
 	auth: "shell" | "no_shell" | "auth_failed" | "unreachable";
 }
 
@@ -56,6 +80,7 @@ export interface ConnectionState {
 	updateNotice?: string;
 	updateInProgress?: boolean;
 	error?: string;
+	retryAfterSecs?: number;
 	deployStep?: string;
 }
 
@@ -71,6 +96,7 @@ interface RemoteConnectionStatusPayload {
 	update_notice?: string;
 	update_in_progress?: boolean;
 	error?: string;
+	retry_after_secs?: number;
 	step?: string;
 }
 
@@ -172,6 +198,7 @@ function createRemoteConnectionsStore() {
 			updateNotice: payload.update_notice,
 			updateInProgress: payload.update_in_progress,
 			error: payload.error,
+			retryAfterSecs: payload.retry_after_secs,
 			deployStep: payload.step,
 		});
 
@@ -197,6 +224,25 @@ function createRemoteConnectionsStore() {
 	// ---------------------------------------------------------------------------
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "connections",
+				read: () => invoke<RemoteConnection[]>("list_remote_connections"),
+				apply: (connections) => {
+					const fresh = Object.fromEntries(
+						(connections ?? []).map((connection) => [
+							connection.id,
+							{
+								...state.connections[connection.id],
+								connection,
+								status: state.connections[connection.id]?.status ?? "disconnected",
+							} as ConnectionState,
+						]),
+					);
+					setState("connections", reconcile(fresh));
+				},
+			});
+		},
 		/** Load connections and their live status, then follow the status pushes. */
 		async hydrate(): Promise<void> {
 			if (hydrated) return;
@@ -272,6 +318,19 @@ function createRemoteConnectionsStore() {
 			setState("connections", id, "connection", "deploy", "on_connect");
 		},
 
+		async discoverSshHosts(): Promise<DiscoveredSshHosts> {
+			return (await invoke<DiscoveredSshHosts>("list_discovered_ssh_hosts")) ?? { hosts: [], hashed_count: 0 };
+		},
+
+		async sshAgentInfo(): Promise<SshAgentInfo> {
+			return (await invoke<SshAgentInfo>("list_ssh_agent_keys")) ?? { keys: [], agent_type: "" };
+		},
+
+		/** Probe one discovered host on request; known_hosts entries are only ever probed this way. */
+		async probeSshHost(host: DiscoveredSshHost): Promise<SshHostStatus> {
+			return invoke<SshHostStatus>("probe_discovered_ssh_host", { target: host.target, port: host.port });
+		},
+
 		async probeSshHosts(): Promise<SshHostStatus[]> {
 			return (await invoke<SshHostStatus[]>("probe_ssh_config_hosts")) ?? [];
 		},
@@ -281,7 +340,10 @@ function createRemoteConnectionsStore() {
 			try {
 				const base = state.connections[conn.id]?.connection ?? null;
 				await invoke("save_remote_connection", { base, connection: conn });
-				setState("connections", conn.id, { connection: conn, status: "disconnected" });
+				// Saving metadata does not disconnect the backend runtime. Retain its
+				// endpoint/token-backed state until the next authoritative status event.
+				if (state.connections[conn.id]) setState("connections", conn.id, "connection", conn);
+				else setState("connections", conn.id, { connection: conn, status: "disconnected" });
 			} catch (err) {
 				appLogger.error("store", "Failed to save remote connection", err);
 				throw err;

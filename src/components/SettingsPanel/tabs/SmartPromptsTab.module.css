@@ -153,45 +153,15 @@
   color: var(--fg-secondary);
 }
 
-.editorInput {
-  width: 100%;
-  padding: 6px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  box-sizing: border-box;
-}
+.editorInput { width: 100%; }
 
-.editorInput:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
-.editorInput:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
-.editorTextarea {
-  width: 100%;
-  padding: 8px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  font-family: var(--font-mono);
-  resize: vertical;
-  min-height: 120px;
-  box-sizing: border-box;
-}
 
-.editorTextarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+
+.editorTextarea { width: 100%; font-family: var(--font-mono); min-height: 120px; }
+
+
 
 .placementGrid {
   display: flex;
@@ -372,4 +342,10 @@
   border-color: var(--accent);
   color: var(--accent);
   background: var(--bg-tertiary);
+}
+
+@media (max-width: 800px) {
+  .promptHeader, .editorRow { flex-wrap: wrap; }
+  .promptName { min-width: 0; overflow-wrap: anywhere; }
+  .promptMeta { flex-wrap: wrap; }
 }

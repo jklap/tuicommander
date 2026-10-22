@@ -302,6 +302,18 @@ pub(super) async fn spawn_agent_session(
     }
     let session_id = Uuid::new_v4().to_string();
 
+    let attachment_dir =
+        match crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id) {
+            Ok(directory) => directory,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        };
+
     let spawn_binary_path = binary_path.clone();
     let spawn_args = body.args.clone();
     let spawn_prompt = body.prompt.clone();
@@ -316,6 +328,8 @@ pub(super) async fn spawn_agent_session(
         .agent_type
         .clone()
         .unwrap_or_else(|| "claude".to_string());
+    let launch_receipt = Arc::new(Mutex::new(None));
+    let captured_receipt = Arc::clone(&launch_receipt);
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -345,12 +359,27 @@ pub(super) async fn spawn_agent_session(
                 launch_args.push(spawn_prompt.clone());
             }
             crate::pty::apply_agent_screen_env(&mut cmd, &spawn_env);
-            for arg in crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::launch_args(
                 &spawn_agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-            ) {
+                &attachment_dir,
+            );
+            crate::launch_instructions::apply_env(
+                &mut cmd,
+                &spawn_agent_type,
+                &launch_args,
+                &crate::config::config_dir(),
+            );
+            *captured_receipt.lock() = Some(crate::prompt_receipt::PromptReceipt::capture(
+                &spawn_prompt,
+                "TUIC HTTP agent spawn",
+                &final_args,
+                spawn_cwd.as_deref(),
+                false,
+            ));
+            for arg in final_args {
                 cmd.arg(arg);
             }
 
@@ -408,13 +437,16 @@ pub(super) async fn spawn_agent_session(
     // on immediately and intent/suggest protocol tokens are parsed from the first
     // line of output. Seeded before registration because that is what publishes
     // `session-created`.
-    let mut session_state = crate::state::SessionState::default();
+    let mut session_state = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+        ..Default::default()
+    };
     if let Some(ref agent_type) = body.agent_type {
         session_state.hook_instrumented = crate::pty::hook_instrumented_for(
             &crate::config::load_agents_config(),
             Some(agent_type.as_str()),
         );
-        session_state.agent_type = Some(agent_type.clone());
+        session_state.seed_configured_agent(Some(agent_type.clone()));
     }
     state
         .session_maps
@@ -428,11 +460,13 @@ pub(super) async fn spawn_agent_session(
         &state,
         &session_id,
         PtySession {
+            launch_receipt: launch_receipt.lock().take(),
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
             worktree: None,
+            initial_cwd: body.cwd.clone(),
             cwd: body.cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
@@ -447,19 +481,23 @@ pub(super) async fn spawn_agent_session(
         None,
     );
 
+    crate::prompt_receipt::adopt_mcp_instructions(&state, &session_id);
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
 
     #[cfg(feature = "desktop")]
     if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "cwd": body.cwd,
-                "display_name": null,
-            }),
+        super::session::emit_native_agent_session_created(
+            |event, payload| {
+                let _ = app.emit(event, payload);
+            },
+            &state_ref,
+            &session_id,
+            body.cwd.as_deref(),
+            body.agent_type.as_deref(),
+            None,
+            None,
         );
     }
 
@@ -473,6 +511,248 @@ pub(super) async fn spawn_agent_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: HTTP/MCP readers start without the identity inherited by the
+    // child, so a genuine native Codex hook cannot authorize its Chat transcript.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_spawned_codex_pty_accepts_its_native_binding() {
+        exercise_native_binding(false).await;
+    }
+
+    // Catches: session listing holds the PTY mutex while native binding
+    // validation tries to acquire the same mutex, deadlocking HTTP and IPC.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_codex_session_listing_does_not_relock_pty() {
+        exercise_native_binding(true).await;
+    }
+
+    #[cfg(unix)]
+    async fn exercise_native_binding(check_listing: bool) {
+        use base64::Engine;
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        crate::config::save_agents_config(
+            crate::config::AgentsConfig::default(),
+            crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cwd = scratch.path().canonicalize().unwrap();
+        let mut hook: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/chat_view/codex/http-user-prompt-submit.json"
+        ))
+        .unwrap();
+        hook["cwd"] = cwd.to_string_lossy().as_ref().into();
+        hook["transcript_path"] = cwd.join("rollout.jsonl").to_string_lossy().as_ref().into();
+        let mut header: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/chat_view/codex/session-meta.json"
+        ))
+        .unwrap();
+        header["payload"]["id"] = hook["session_id"].clone();
+        header["payload"]["cwd"] = hook["cwd"].clone();
+        std::fs::write(
+            hook["transcript_path"].as_str().unwrap(),
+            format!(
+                "{header}\n{}",
+                include_str!("../fixtures/chat_view/codex/completed.jsonl")
+            ),
+        )
+        .unwrap();
+        // Like ForegroundIdentityProbe: this is an OS process-name probe,
+        // not a fake implementation of Codex. The hook bytes are recorded.
+        let probe = cwd.join("codex");
+        std::fs::copy("/bin/cat", &probe).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            let signed = std::process::Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&probe)
+                .output()
+                .unwrap();
+            assert!(signed.status.success(), "sign the local process-name probe");
+        }
+        let frame = cwd.join("hook-frame");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(hook.to_string());
+        let script = crate::test_support::fake_ssh_script(
+            "codex-http-native-binding",
+            "if [ \"$1\" = '--help' ]; then exit 0; fi; printf '\\033]7770;codex-session=%s:%s\\033\\\\\\nHOOK_REPLAY_DONE\\n' \"$TUIC_SESSION\" \"$CODEX_HOOK\" > \"$CODEX_FRAME\"; exec \"$CODEX_PROBE\" \"$CODEX_FRAME\" -",
+            "exit /b 0",
+        );
+        let mut failures = Vec::new();
+        for path in ["http", "mcp", "generic-restored"] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = match path {
+                "http" => {
+                    let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+                        "prompt": "ignored", "agent_type": "codex", "args": [],
+                        "binary_path": script, "cwd": cwd, "env": {"CODEX_HOOK": encoded, "CODEX_FRAME": frame, "CODEX_PROBE": probe}
+                    })).unwrap();
+                    let response = spawn_agent_session(
+                        State(state.clone()),
+                        ConnectInfo(loopback()),
+                        None,
+                        Json(body),
+                    )
+                    .await;
+                    assert_eq!(response.status(), StatusCode::CREATED);
+                    response_json(response).await["session_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }
+                "mcp" => {
+                    let result = super::super::mcp_transport_session_agent::handle_agent(
+                        &state,
+                        loopback(),
+                        &serde_json::json!({
+                            "action": "spawn", "prompt": "ignored", "agent_type": "codex", "args": [],
+                            "binary_path": script, "cwd": cwd, "env": {"CODEX_HOOK": encoded, "CODEX_FRAME": frame, "CODEX_PROBE": probe}
+                        }),
+                        None,
+                    );
+                    result["session_id"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("MCP spawn failed: {result}"))
+                        .to_owned()
+                }
+                _ => super::super::session::spawn_pty_session(
+                    state.clone(),
+                    "/bin/sh".into(),
+                    Some(cwd.to_string_lossy().into()),
+                    24,
+                    80,
+                    None,
+                    super::super::session::RequestedIdentity {
+                        tuic_session: Some("restored-codex-owner".into()),
+                        startup_command: Some(format!(
+                            "CODEX_HOOK='{encoded}' CODEX_FRAME='{}' CODEX_PROBE='{}' exec '{}'",
+                            frame.display(),
+                            probe.display(),
+                            script.display()
+                        )),
+                        agent_type: Some("codex".into()),
+                        ..Default::default()
+                    },
+                )
+                .expect("generic shell launch")
+                .to_owned(),
+            };
+            let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    if state.grid.vt_log_buffers.get(&sid).is_some_and(|vt| {
+                        vt.lock()
+                            .screen_rows()
+                            .join("\n")
+                            .contains("HOOK_REPLAY_DONE")
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            // Wait for the reader to finish processing the chunk that painted the
+            // marker, not for a protocol deadline: this is setup, not the subject.
+            let result = if ready.is_ok() {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if state
+                            .session_maps
+                            .session_states
+                            .get(&sid)
+                            .is_some_and(|s| s.codex_binding.is_some())
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .ok();
+                // Observe the real exec'd process through the production probe;
+                // the generic shell path must discover its agent, not hand-set it.
+                super::super::session::get_foreground_process(
+                    State(state.clone()),
+                    axum::extract::Path(sid.clone()),
+                )
+                .await;
+                crate::chat_view::chat_view_snapshot(&state, &sid, None, 0)
+            } else {
+                Err("hook replay never reached the reader".into())
+            };
+            if check_listing && result.is_ok() {
+                let pid = state
+                    .session_maps
+                    .sessions
+                    .get(&sid)
+                    .unwrap()
+                    .lock()
+                    ._child
+                    .process_id()
+                    .unwrap();
+                let listed_state = state.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let listing = std::thread::spawn(move || {
+                    let rows = super::super::session::local_session_rows(&listed_state);
+                    let mcp = super::super::mcp_transport_session_agent::handle_session(
+                        &listed_state,
+                        &serde_json::json!({"action":"list"}),
+                        None,
+                    );
+                    let _ = tx.send((rows, mcp));
+                });
+                let (rows, mcp) = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        // The failed worker owns the locked session. Do not
+                        // deadlock cleanup on it: kill only our spawned probe.
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                        panic!("{path}: session listing deadlocked on native binding: {error}");
+                    }
+                };
+                listing.join().unwrap();
+                assert!(
+                    mcp.as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row["session_id"] == sid),
+                    "MCP must list the same bound PTY"
+                );
+                let row = rows.iter().find(|row| row.session_id == sid).unwrap();
+                assert_eq!(
+                    row.state
+                        .as_ref()
+                        .unwrap()
+                        .codex_binding
+                        .as_ref()
+                        .unwrap()
+                        .session_id,
+                    hook["session_id"].as_str().unwrap()
+                );
+            }
+            crate::pty::close_pty_core(&state, &sid, false);
+            match result {
+                Ok(snapshot) => assert!(
+                    serde_json::to_string(&snapshot.updates)
+                        .unwrap()
+                        .contains("Recorded reply"),
+                    "{path}: wrong transcript"
+                ),
+                Err(error) => failures.push(format!("{path}: {error}")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "native binding lost: {}",
+            failures.join("; ")
+        );
+    }
 
     fn spawn_request() -> SpawnAgentRequest {
         SpawnAgentRequest {
@@ -569,6 +849,17 @@ mod tests {
             "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\nTUIC_SESSION=%s\\n' \"$*\" \"$TUIC_SESSION\"; read unused; fi",
             "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%* & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=)",
         );
+        // Launch instructions off: this test pins the argv around the screen flag.
+        let config_root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(config_root.path().join("config"));
+        crate::config::save_agents_config(
+            crate::config::AgentsConfig::default(),
+            crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
             "rows": 24,
@@ -591,11 +882,35 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        // Catches: HTTP agent creation labels a direct program as a shell,
+        // so its own foreground root would revoke the configured identity.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(&session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::DirectProgram
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
         let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
                     let text = buffer.lock().screen_rows().join("\n");
-                    if text.contains("ARGS=") {
+                    // PTY reads may split the two output lines. Wait for the identity
+                    // line before checking either assertion; the first line is not readiness.
+                    if text.contains(&format!("TUIC_SESSION={session_id}")) {
                         break text;
                     }
                 }
@@ -621,8 +936,9 @@ mod tests {
     async fn http_agent_spawn_accepts_model_and_env_with_ipc_field_names() {
         let script = crate::test_support::fake_ssh_script(
             "http-agent-model-env",
-            "printf 'ARGS=%s\nSPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$*\" \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
-            "echo ARGS=%* & echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
+            "printf 'ARG=%s\n' \"$@\"; printf 'SPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
+            "for %%a in (%*) do @echo ARG=%%~a
+ echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
         );
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
@@ -658,7 +974,9 @@ mod tests {
         })
         .await
         .expect("fake agent output");
-        assert!(output.contains("ARGS=--model sonnet task"), "{output}");
+        assert!(output.contains("ARG=--model"), "{output}");
+        assert!(output.contains("ARG=sonnet"), "{output}");
+        assert!(output.contains("ARG=task"), "{output}");
         assert!(output.contains("SPAWN_VALUE=caller"), "{output}");
         assert!(
             output.contains(&format!("TUIC_SESSION={session_id}")),

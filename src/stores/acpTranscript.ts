@@ -26,15 +26,36 @@ import type {
  * that changed nothing a person can see.
  */
 
-export type AcpTranscriptEntry =
+/**
+ * What a card's button does, as ego's notice carries it in `_meta.ego.action`.
+ *
+ * Mirrors `NoticeAction` in ego-acp `project.rs`: the tag is `kind`, the payload
+ * keys are snake_case on the wire. An action this client does not know is
+ * dropped, leaving a card with text and no button.
+ */
+export type AcpNoticeAction =
+	| { kind: "open_result"; path: string }
+	| { kind: "answer"; questionId: string }
+	| { kind: "approve"; requestId: string };
+
+export type AcpTranscriptEntry = { messageId?: string; inherited?: boolean } & (
 	| { id: string; kind: "user"; text: string }
 	| { id: string; kind: "agent"; text: string }
 	| { id: string; kind: "thought"; text: string }
 	| { id: string; kind: "tool"; call: AcpToolCall }
 	| { id: string; kind: "plan"; entries: AcpPlanEntry[] }
+	/** An ego notice (`_meta.ego.salience = "card"`), shown apart from the agent's prose. */
+	| { id: string; kind: "notice"; text: string; action?: AcpNoticeAction }
 	/** A turn that ended as something other than a finished answer. */
 	| { id: string; kind: "settled"; stopReason: string }
-	| { id: string; kind: "failed"; message: string };
+	| { id: string; kind: "failed"; message: string }
+);
+
+export interface AcpProviderRetry {
+	text: string;
+	/** Presentation deadline measured when the update arrived, never from panel mount. */
+	retryAt?: number;
+}
 
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
@@ -42,6 +63,8 @@ interface TranscriptState {
 	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
 	turnHasReply: Record<AcpSessionId, boolean>;
 	pendingUserEcho: Record<AcpSessionId, { entryId: string; received: string }>;
+	/** ego's provider-retry status while a turn waits to retry (`_meta.ego.providerRetry`). */
+	retries: Record<AcpSessionId, AcpProviderRetry>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
@@ -52,6 +75,7 @@ const [state, setState] = createStore<TranscriptState>({
 	usage: {},
 	turnHasReply: {},
 	pendingUserEcho: {},
+	retries: {},
 	nextId: 1,
 });
 
@@ -68,6 +92,28 @@ function textOf(content: unknown): string {
 	return "";
 }
 
+function noticeAction(raw: unknown): AcpNoticeAction | undefined {
+	const action = raw as { kind?: unknown; path?: unknown; question_id?: unknown; request_id?: unknown } | null;
+	if (!action || typeof action !== "object") return undefined;
+	if (action.kind === "open_result" && typeof action.path === "string" && action.path)
+		return { kind: "open_result", path: action.path };
+	if (action.kind === "answer" && typeof action.question_id === "string" && action.question_id)
+		return { kind: "answer", questionId: action.question_id };
+	if (action.kind === "approve" && typeof action.request_id === "string" && action.request_id)
+		return { kind: "approve", requestId: action.request_id };
+	return undefined;
+}
+
+/** The `_meta.ego` object of an update, when it has one. */
+function egoMeta(
+	record: Record<string, unknown>,
+): { salience?: unknown; action?: unknown; inherited?: unknown } | undefined {
+	const ego = (record._meta as { ego?: unknown } | null | undefined)?.ego;
+	return ego && typeof ego === "object"
+		? (ego as { salience?: unknown; action?: unknown; inherited?: unknown })
+		: undefined;
+}
+
 /**
  * Append text to the last entry when it is the same kind, or start a new one.
  *
@@ -80,14 +126,27 @@ function appendChunk(
 	entries: AcpTranscriptEntry[],
 	kind: "user" | "agent" | "thought",
 	text: string,
+	messageId?: string,
+	inherited?: boolean,
 ): void {
 	if (!text) return;
 	const last = entries.at(-1);
-	if (last?.kind === kind) {
+	if (
+		last?.kind === kind &&
+		last.inherited === inherited &&
+		(!messageId || !last.messageId || last.messageId === messageId)
+	) {
 		last.text += text;
+		if (messageId) last.messageId = messageId;
 		return;
 	}
-	entries.push({ id: `e${draft.nextId}`, kind, text });
+	entries.push({
+		id: `e${draft.nextId}`,
+		kind,
+		text,
+		...(messageId ? { messageId } : {}),
+		...(inherited ? { inherited } : {}),
+	});
 	draft.nextId += 1;
 }
 
@@ -97,6 +156,8 @@ function appendUserChunk(
 	sessionId: AcpSessionId,
 	entries: AcpTranscriptEntry[],
 	text: string,
+	messageId?: string,
+	inherited?: boolean,
 ): void {
 	if (!text) return;
 	const pending = draft.pendingUserEcho[sessionId];
@@ -115,7 +176,7 @@ function appendUserChunk(
 		}
 		delete draft.pendingUserEcho[sessionId];
 	}
-	appendChunk(draft, entries, "user", text);
+	appendChunk(draft, entries, "user", text, messageId, inherited);
 }
 
 /** Fold a tool call, or an update to one, into the single card that shows it. */
@@ -175,9 +236,24 @@ function reduceUpdate(
 ): void {
 	const record = update as unknown as Record<string, unknown>;
 	switch (update.sessionUpdate) {
-		case "session_info_update":
+		case "session_info_update": {
 			if (typeof record.title === "string" && record.title.trim()) draft.titles[sessionId] = record.title;
+			// A patch: only a present key changes the status, and null clears it.
+			const ego = egoMeta(record) as { providerRetry?: { text?: unknown; delayMs?: unknown } | null } | undefined;
+			if (ego && "providerRetry" in ego) {
+				const text = ego.providerRetry?.text;
+				if (typeof text === "string" && text) {
+					const delay = ego.providerRetry?.delayMs;
+					draft.retries[sessionId] = {
+						text,
+						...(typeof delay === "number" && Number.isFinite(delay) && delay >= 0
+							? { retryAt: Date.now() + delay }
+							: {}),
+					};
+				} else delete draft.retries[sessionId];
+			}
 			break;
+		}
 		case "usage_update": {
 			if (
 				typeof record.used !== "number" ||
@@ -203,21 +279,64 @@ function reduceUpdate(
 			break;
 		}
 		case "user_message_chunk":
-			appendUserChunk(draft, sessionId, entries, textOf(record.content));
+			appendUserChunk(
+				draft,
+				sessionId,
+				entries,
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
+			);
 			break;
-		case "agent_message_chunk":
+		case "agent_message_chunk": {
+			const ego = egoMeta(record);
+			if (ego?.salience === "card") {
+				// A card is one whole message. Chunk-joining it would glue it
+				// onto the agent's last reply, and the next reply onto it.
+				const cardText = textOf(record.content);
+				if (cardText) {
+					entries.push({
+						id: `e${draft.nextId}`,
+						kind: "notice",
+						text: cardText,
+						action: noticeAction(ego.action),
+						...(ego.inherited === true ? { inherited: true } : {}),
+					});
+					draft.nextId += 1;
+				}
+				break;
+			}
 			delete draft.pendingUserEcho[sessionId];
-			appendChunk(draft, entries, "agent", textOf(record.content));
+			appendChunk(
+				draft,
+				entries,
+				"agent",
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
+			);
 			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
+		}
 		case "agent_thought_chunk":
 			delete draft.pendingUserEcho[sessionId];
-			appendChunk(draft, entries, "thought", textOf(record.content));
+			appendChunk(
+				draft,
+				entries,
+				"thought",
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
+			);
 			break;
 		case "tool_call":
 		case "tool_call_update":
 			delete draft.pendingUserEcho[sessionId];
 			foldToolCall(draft, entries, record);
+			if (egoMeta(record)?.inherited === true) {
+				const tool = entries.find((entry) => entry.kind === "tool" && entry.call.toolCallId === record.toolCallId);
+				if (tool) tool.inherited = true;
+			}
 			break;
 		case "plan": {
 			// The agent sends the whole plan every time and the client replaces
@@ -244,7 +363,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, retries: {}, nextId: 1 });
 	},
 
 	/**
@@ -266,6 +385,7 @@ export const acpTranscript = {
 				delete s.sessions[sessionId];
 				delete s.turnHasReply[sessionId];
 				delete s.pendingUserEcho[sessionId];
+				delete s.retries[sessionId];
 			}),
 		);
 		return removed;
@@ -319,6 +439,7 @@ export const acpTranscript = {
 				}
 				if (event.kind === "turnFailed") {
 					delete s.pendingUserEcho[sessionId];
+					delete s.retries[sessionId];
 					settleToolCalls(entries, "failed");
 					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
 					s.nextId += 1;
@@ -326,6 +447,7 @@ export const acpTranscript = {
 				}
 				if (event.kind === "turnSettled") {
 					delete s.pendingUserEcho[sessionId];
+					delete s.retries[sessionId];
 					settleToolCalls(entries, event.stopReason === "end_turn" ? "completed" : "failed");
 				}
 				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {
@@ -343,6 +465,26 @@ export const acpTranscript = {
 					});
 					s.nextId += 1;
 				}
+			}),
+		);
+	},
+
+	/**
+	 * Settle the calls a replayed history left unfinished.
+	 *
+	 * A session that ended mid-call — a permission never answered, a crashed
+	 * process — has `tool_call` and `in_progress` in its journal and nothing
+	 * after, so no `turnSettled` ever arrives to close them. `failed` because
+	 * ACP has no "unknown" status and the call did not complete; it is the status
+	 * `settleToolCalls` already gives a turn that did not end. ego does not say
+	 * on `session/load` whether a turn is still running, so this is a reading of
+	 * the journal, not of the session: a live call's next update overwrites it.
+	 */
+	settleReplayed(sessionId: AcpSessionId): void {
+		setState(
+			produce((s: TranscriptState) => {
+				const entries = s.sessions[sessionId];
+				if (entries) settleToolCalls(entries, "failed");
 			}),
 		);
 	},
@@ -390,6 +532,11 @@ export const acpTranscript = {
 
 	title(sessionId: AcpSessionId): string | null {
 		return state.titles[sessionId] ?? null;
+	},
+
+	/** ego's provider-retry line for a turn waiting to retry, or null. */
+	retry(sessionId: AcpSessionId): AcpProviderRetry | null {
+		return state.retries[sessionId] ?? null;
 	},
 
 	usage(sessionId: AcpSessionId): { used: number; size: number; cost?: { amount: number; currency: string } } | null {

@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { DISCORD_URL } from "../../community";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
 import { isTauri } from "../../transport";
@@ -145,6 +146,12 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
 										</svg>
 										{t("helpPanel.githubProject", "GitHub Project")}
 									</button>
+									<button class={s.linkButton} onClick={() => handleOpenUrl(DISCORD_URL)}>
+										<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+											<path d="M2 1a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2v3l4-3h6a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm0 1h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7.667L5 13v-2H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
+										</svg>
+										{t("helpPanel.discord", "Discord Community")}
+									</button>
 									<button class={s.linkButton} onClick={() => handleOpenUrl(DOCS_URL)}>
 										<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
 											<path d="M1 2.828c.885-.37 2.154-.769 3.388-.893 1.33-.134 2.458.063 3.112.752v9.746c-.935-.53-2.12-.603-3.213-.493-1.18.12-2.37.461-3.287.811V2.828zm7.5-.141c.654-.689 1.782-.886 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492V2.687zM8 1.783C7.015.936 5.587.81 4.287.94c-1.514.153-3.042.672-3.994 1.105A.5.5 0 000 2.5v10a.5.5 0 00.707.455c.882-.4 2.303-.881 3.68-1.02 1.409-.142 2.59.087 3.223.877a.5.5 0 00.78 0c.633-.79 1.814-1.019 3.222-.877 1.378.139 2.8.62 3.681 1.02A.5.5 0 0016 12.5v-10a.5.5 0 00-.293-.455c-.952-.433-2.48-.952-3.994-1.105C10.413.81 8.985.936 8 1.783z" />
@@ -161,7 +168,7 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
 								</div>
 							</div>
 
-							<div class={s.section}>
+							<div class={`${s.section} ${s.footer}`}>
 								<p class={s.menuNote}>MIT License &middot; Tauri 2 &middot; SolidJS &middot; Alacritty &middot; Rust</p>
 								<p class={s.menuNote}>&copy; 2026 Stefano Straus</p>
 								<div class={s.versionRow}>

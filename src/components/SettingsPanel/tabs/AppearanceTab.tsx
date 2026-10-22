@@ -3,12 +3,15 @@ import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
+import { transcriptPreferences } from "../../../stores/transcriptPreferences";
 import { uiStore } from "../../../stores/ui";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
+import { Input } from "../../ui/Input";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 
 /** Preset colors for groups and sidebar */
 export { DEFAULT_COLOR_PRESETS as PRESET_COLORS } from "../../shared/colorPresets";
@@ -53,8 +56,11 @@ const GroupSettingsItem: Component<{
 						</span>
 					}
 				>
-					<input
+					<Input
+						data-setting-id="repositories_registration.groups.{id}.name"
 						class={s.groupNameInput}
+						aria-label={`Group name: ${props.group.name}`}
+						aria-invalid={!!nameError()}
 						value={editName()}
 						onInput={(e) => {
 							setEditName(e.currentTarget.value);
@@ -68,9 +74,11 @@ const GroupSettingsItem: Component<{
 					/>
 				</Show>
 				<button
+					data-non-setting="Create or remove a stable repository group through its owner"
 					class={s.groupDeleteBtn}
 					onClick={() => repositoriesStore.deleteGroup(props.group.id)}
 					title={t("groups.btn.deleteGroup", "Delete group")}
+					aria-label={`${t("groups.btn.deleteGroup", "Delete group")}: ${props.group.name}`}
 				>
 					×
 				</button>
@@ -79,6 +87,7 @@ const GroupSettingsItem: Component<{
 				<div class={s.groupNameError}>{nameError()}</div>
 			</Show>
 			<ColorSwatchPicker
+				settingId="repositories_registration.groups.{id}.color"
 				color={props.group.color}
 				presets={DEFAULT_COLOR_PRESETS}
 				onChange={(c) => repositoriesStore.setGroupColor(props.group.id, c)}
@@ -92,100 +101,140 @@ export const AppearanceTab: Component = () => {
 		repositoriesStore.state.groupOrder.map((id) => repositoriesStore.state.groups[id]).filter(Boolean);
 
 	return (
-		<div class={s.section}>
-			<h3>{t("appearance.heading.tabs", "Tabs")}</h3>
+		<div class={`${s.section} ${s.applicationPage}`}>
+			<SettingPageHeader title="Appearance" breadcrumb="Application / Appearance" scope="Application defaults" />
+			<SectionCard title={t("appearance.heading.tabs", "Tabs")}>
+				<SettingSelect
+					settingId="app.split_tab_mode"
+					row
+					label={t("appearance.label.splitTabMode", "Split Tab Mode")}
+					value={settingsStore.state.splitTabMode}
+					onChange={(v) => {
+						if (v === "separate" || v === "unified") settingsStore.setSplitTabMode(v);
+					}}
+					options={[
+						{ value: "separate", label: t("appearance.splitTabMode.separate", "Separate") },
+						{ value: "unified", label: t("appearance.splitTabMode.unified", "Unified") },
+					]}
+					hint={t("appearance.hint.splitTabMode", "How worktree tabs are arranged in the tab bar")}
+				/>
 
-			<SettingSelect
-				label={t("appearance.label.splitTabMode", "Split Tab Mode")}
-				value={settingsStore.state.splitTabMode}
-				onChange={(v) => {
-					if (v === "separate" || v === "unified") settingsStore.setSplitTabMode(v);
-				}}
-				options={[
-					{ value: "separate", label: t("appearance.splitTabMode.separate", "Separate") },
-					{ value: "unified", label: t("appearance.splitTabMode.unified", "Unified") },
-				]}
-				hint={t("appearance.hint.splitTabMode", "How worktree tabs are arranged in the tab bar")}
-			/>
+				<SettingSelect
+					settingId="app.tab_ordering_mode"
+					row
+					label={t("appearance.label.tabOrderingMode", "Tab Ordering")}
+					value={settingsStore.state.tabOrderingMode}
+					onChange={(v) => {
+						if (v === "grouped-by-type" || v === "terminals-first" || v === "free") settingsStore.setTabOrderingMode(v);
+					}}
+					options={[
+						{ value: "grouped-by-type", label: t("appearance.tabOrderingMode.grouped", "Grouped by Type") },
+						{ value: "terminals-first", label: t("appearance.tabOrderingMode.terminalsFirst", "Terminals First") },
+						{ value: "free", label: t("appearance.tabOrderingMode.free", "Free") },
+					]}
+					hint={t(
+						"appearance.hint.tabOrderingMode",
+						"How tabs are ordered: grouped by type, terminals first, or freely interleaved",
+					)}
+				/>
 
-			<SettingSelect
-				label={t("appearance.label.tabOrderingMode", "Tab Ordering")}
-				value={settingsStore.state.tabOrderingMode}
-				onChange={(v) => {
-					if (v === "grouped-by-type" || v === "terminals-first" || v === "free") settingsStore.setTabOrderingMode(v);
-				}}
-				options={[
-					{ value: "grouped-by-type", label: t("appearance.tabOrderingMode.grouped", "Grouped by Type") },
-					{ value: "terminals-first", label: t("appearance.tabOrderingMode.terminalsFirst", "Terminals First") },
-					{ value: "free", label: t("appearance.tabOrderingMode.free", "Free") },
-				]}
-				hint={t(
-					"appearance.hint.tabOrderingMode",
-					"How tabs are ordered: grouped by type, terminals first, or freely interleaved",
-				)}
-			/>
+				<SettingToggle
+					settingId="app.tab_cycling_all_types"
+					row
+					checked={settingsStore.state.tabCyclingAllTypes}
+					onChange={(v) => settingsStore.setTabCyclingAllTypes(v)}
+					label={t("appearance.label.tabCyclingAllTypes", "Cycle All Tab Types")}
+					hint={t(
+						"appearance.hint.tabCyclingAllTypes",
+						"Next/previous tab shortcuts cycle through diff, markdown and editor tabs too — not just terminals",
+					)}
+				/>
 
-			<SettingToggle
-				checked={settingsStore.state.tabCyclingAllTypes}
-				onChange={(v) => settingsStore.setTabCyclingAllTypes(v)}
-				label={t("appearance.label.tabCyclingAllTypes", "Cycle All Tab Types")}
-				hint={t(
-					"appearance.hint.tabCyclingAllTypes",
-					"Next/previous tab shortcuts cycle through diff, markdown and editor tabs too — not just terminals",
-				)}
-			/>
+				<SettingToggle
+					settingId="app.tab_tree_enabled"
+					row
+					checked={settingsStore.state.tabTreeEnabled}
+					onChange={(v) => settingsStore.setTabTreeEnabled(v)}
+					label={t("appearance.label.tabTreeEnabled", "Nested Terminal Tabs")}
+					hint={t(
+						"appearance.hint.tabTreeEnabled",
+						"Show each branch's open sessions and agent activity in a collapsible card under its sidebar row",
+					)}
+				/>
 
-			<SettingToggle
-				checked={settingsStore.state.tabTreeEnabled}
-				onChange={(v) => settingsStore.setTabTreeEnabled(v)}
-				label={t("appearance.label.tabTreeEnabled", "Nested Terminal Tabs")}
-				hint={t(
-					"appearance.hint.tabTreeEnabled",
-					"Show each branch's open sessions and agent activity in a collapsible card under its sidebar row",
-				)}
-			/>
+				<SettingSlider
+					settingId="app.max_tab_name_length"
+					row
+					label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
+					value={settingsStore.state.maxTabNameLength}
+					onChange={(v) => settingsStore.setMaxTabNameLength(v)}
+					min={10}
+					max={60}
+					hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
+				/>
+			</SectionCard>
+			<SectionCard title={t("appearance.heading.chat", "Chat")}>
+				<SettingToggle
+					data-non-setting="Client-local new-text indicator preference; no backend owner"
+					row
+					checked={transcriptPreferences.enabled()}
+					onChange={(value) => transcriptPreferences.setEnabled(value)}
+					label={t("appearance.label.newTextIndicator", "New text indicator")}
+					hint={t(
+						"appearance.hint.newTextIndicator",
+						"Show New text below when a chat receives content while you read earlier messages. Saved on this client.",
+					)}
+				/>
 
-			<SettingSlider
-				label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
-				value={settingsStore.state.maxTabNameLength}
-				onChange={(v) => settingsStore.setMaxTabNameLength(v)}
-				min={10}
-				max={60}
-				hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
-			/>
+				<SettingToggle
+					settingId="app.chat_mute_intermediate_text"
+					row
+					checked={settingsStore.state.chatMuteIntermediateText}
+					onChange={(v) => settingsStore.setChatMuteIntermediateText(v)}
+					label={t("appearance.label.chatMuteIntermediateText", "Mute Intermediate Text")}
+					hint={t(
+						"appearance.hint.chatMuteIntermediateText",
+						"Show assistant text that is followed by a tool call in the same turn smaller and dimmer, so the final answer stands out",
+					)}
+				/>
+			</SectionCard>
+			<SectionCard title={t("appearance.heading.groups", "Repository Groups")}>
+				<p class={s.hint}>
+					{t("appearance.hint.groups", "Organize repositories into color-coded groups in the sidebar")}
+				</p>
 
-			<h3>{t("appearance.heading.groups", "Repository Groups")}</h3>
-			<p class={s.hint}>
-				{t("appearance.hint.groups", "Organize repositories into color-coded groups in the sidebar")}
-			</p>
+				<Show when={groups().length === 0}>
+					<div class={s.groupsEmpty}>{t("groups.empty.noGroups", "No groups yet")}</div>
+				</Show>
 
-			<Show when={groups().length === 0}>
-				<div class={s.groupsEmpty}>{t("groups.empty.noGroups", "No groups yet")}</div>
-			</Show>
+				<For each={groups()}>{(group) => <GroupSettingsItem group={group} />}</For>
 
-			<For each={groups()}>{(group) => <GroupSettingsItem group={group} />}</For>
-
-			<button
-				class={s.groupsAddBtn}
-				onClick={() => repositoriesStore.createGroup(t("groups.defaultGroupName", "New Group"))}
-			>
-				{t("groups.btn.addGroup", "Add Group")}
-			</button>
-
-			<h3>{t("appearance.heading.layout", "Layout")}</h3>
-
-			<div class={s.group}>
-				<button class={s.testBtn} onClick={() => uiStore.resetLayout()}>
-					{t("appearance.btn.resetLayout", "Reset Panel Sizes")}
+				<button
+					data-non-setting="Create or remove a stable repository group through its owner"
+					class={s.groupsAddBtn}
+					onClick={() => repositoriesStore.createGroup(t("groups.defaultGroupName", "New Group"))}
+				>
+					{t("groups.btn.addGroup", "Add Group")}
 				</button>
-				<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>
-			</div>
-
-			<h3>{t("appearance.heading.uiLegend", "UI Legend")}</h3>
-			<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-				{t("appearance.hint.uiLegend", "Visual reference for colors, symbols, and badges used throughout the app")}
-			</p>
-			<UiLegend />
+			</SectionCard>
+			<SectionCard title={t("appearance.heading.layout", "Layout")}>
+				<div class={s.group}>
+					<button
+						data-non-setting="Reset panel geometry through the existing UI layout owner"
+						class={s.testBtn}
+						onClick={() => uiStore.resetLayout()}
+					>
+						{t("appearance.btn.resetLayout", "Reset Panel Sizes")}
+					</button>
+					<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>
+				</div>
+			</SectionCard>
+			<SectionCard title={t("appearance.heading.uiLegend", "UI Legend")}>
+				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+					{t("appearance.hint.uiLegend", "Visual reference for colors, symbols, and badges used throughout the app")}
+				</p>
+				<UiLegend />
+			</SectionCard>
 		</div>
 	);
 };

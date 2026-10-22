@@ -12,6 +12,8 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import s from "./BranchesTab.module.css";
 import type { BranchDetail } from "./types";
 
@@ -926,7 +928,8 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 		const isRenaming = renamingBranch() === branch.name;
 		if (isRenaming) {
 			return (
-				<input
+				<Input
+					compact
 					ref={renameInputRef}
 					class={s.inlineInput}
 					value={renameValue()}
@@ -1049,7 +1052,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 	return (
 		<div ref={containerRef} class={s.container} tabIndex={-1} onKeyDown={handleKeyDown}>
 			<div class={s.searchBar}>
-				<input
+				<Input
 					ref={searchInputRef}
 					data-focus-target="git-branches-search"
 					data-repo-path={props.repoPath ?? ""}
@@ -1104,7 +1107,8 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 			{/* Create branch inline form */}
 			<Show when={creating()}>
 				<div class={s.createForm}>
-					<input
+					<Input
+						compact
 						ref={createInputRef}
 						class={s.inlineInput}
 						placeholder="New branch name..."
@@ -1112,7 +1116,8 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 						onInput={(e) => setCreateState((p) => ({ ...p, name: e.currentTarget.value }))}
 					/>
 					<Show when={createBaseRefs().length > 0}>
-						<select
+						<Select
+							compact
 							class={s.fromSelect}
 							value={createState().startPoint ?? ""}
 							onChange={(e) => setCreateState((p) => ({ ...p, startPoint: e.currentTarget.value || null }))}
@@ -1135,7 +1140,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 									</For>
 								</optgroup>
 							</Show>
-						</select>
+						</Select>
 					</Show>
 					<label class={s.createCheckboxLabel}>
 						<input

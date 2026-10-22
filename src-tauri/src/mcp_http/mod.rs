@@ -1,49 +1,77 @@
+mod account_routes;
 pub(crate) mod acp_mcp;
 mod acp_routes;
 mod agent_routes;
 pub(crate) mod auth;
+mod automation_routes;
 mod claude_routes;
 mod config_routes;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
 mod git_routes;
+mod github_pr_action_routes;
+mod github_review_routes;
 mod github_routes;
 mod guards;
+pub(crate) mod launch_transaction;
 mod log_routes;
+pub(crate) mod managed_launch;
+pub(crate) mod mcp_call_audit;
+mod mcp_input_contract;
 pub(crate) mod mcp_transport;
+mod mcp_transport_ancillary;
+#[cfg(test)]
+mod settings_policy_confirm_tests;
+mod settings_routes;
+pub(crate) use mcp_transport_ancillary::confirm_settings;
+mod mcp_transport_catalogue;
+mod mcp_transport_peer;
+pub(crate) mod mcp_transport_session_agent;
+mod open_markdown_routes;
+pub(crate) mod response_pages;
+
+mod mail_routes;
+mod mcp_work_item;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_mcp_sessions;
+pub(crate) mod remote_peer;
 mod remote_session_proxy;
+mod request_boundary;
 pub(crate) mod session;
+mod session_placement;
 pub(crate) mod sse_routes;
-mod static_files;
+pub(crate) mod static_files;
+pub(crate) mod suspended_routes;
 #[cfg(feature = "desktop")]
 mod system_routes;
+mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
+mod work_item_bridge_routes;
+mod work_item_query_routes;
+mod workitem_link_routes;
 mod worktree_routes;
 mod ws_compression;
 
 use crate::AppState;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{Method, StatusCode, header};
+#[cfg(test)]
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Extension, Path as AxumPath, Query, State},
 };
-// Only `named_socket_path` hashes, and Unix domain sockets are the only reason
-// it exists — so on Windows this import is dead and `-D warnings` rejects it.
-#[cfg(unix)]
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
-use tower_http::cors::CorsLayer;
+#[cfg(unix)]
+use tuic_ipc::named_socket_path;
 
 /// Maximum terminal dimension (rows or cols). Prevents resource abuse from
 /// absurdly large allocations while still allowing generous sizes.
@@ -132,23 +160,11 @@ pub(crate) fn upstream_json_result<T: serde::Serialize>(result: Result<T, String
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
 #[cfg(unix)]
 pub(crate) fn socket_path() -> std::path::PathBuf {
-    let instance = crate::app_instance::current_app_instance();
-    let Some(id) = instance.named_id() else {
-        return crate::config::config_dir().join("mcp.sock");
-    };
-
-    named_socket_path(id, &std::env::temp_dir())
-}
-
-#[cfg(unix)]
-fn named_socket_path(id: &str, temp_dir: &std::path::Path) -> std::path::PathBuf {
-    // macOS limits Unix-domain socket paths to 104 bytes. The platform config
-    // directory plus `instances/<id>/mcp.sock` exceeds that limit for ordinary
-    // named ids, so keep named-instance sockets in the OS temp directory while
-    // retaining a deterministic, collision-resistant name for the bridge.
-    let digest = Sha256::digest(id.as_bytes());
-    let short_id = hex::encode(&digest[..8]);
-    temp_dir.join(format!("tuic-mcp-{short_id}.sock"))
+    tuic_ipc::socket_path(
+        crate::app_instance::current_app_instance(),
+        &crate::config::config_dir(),
+        &std::env::temp_dir(),
+    )
 }
 
 /// Resolve which socket path this instance should bind to.
@@ -218,7 +234,7 @@ fn cleanup_stale_sockets() {
 
 /// Named pipe name for Windows IPC (without the \\.\pipe\ prefix for display).
 #[cfg(windows)]
-const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+const PIPE_NAME: &str = tuic_ipc::PIPE_NAME;
 
 /// axum::serve::Listener implementation for Windows named pipes.
 /// Uses the tokio reconnect pattern: pre-creates the next pipe instance before
@@ -298,10 +314,15 @@ async fn save_mcp_upstreams_http(
     State(state): State<Arc<AppState>>,
     Json(request): Json<crate::mcp_upstream_config::UpstreamMcpSaveRequest>,
 ) -> Response {
-    match crate::mcp_upstream_config::save_mcp_upstreams_inner(request.base, request.config, &state)
-        .await
+    match crate::mcp_upstream_config::save_mcp_upstreams_with_credentials_inner(
+        request.base,
+        request.config,
+        request.credentials,
+        &state,
+    )
+    .await
     {
-        Ok(()) => StatusCode::OK.into_response(),
+        Ok(()) => Json(()).into_response(),
         Err(e)
             if e.starts_with("Invalid upstream config")
                 || e.starts_with("Duplicate upstream id") =>
@@ -340,13 +361,16 @@ async fn reconnect_mcp_upstream_http(
         tracing::warn!(source = "mcp_http", upstream = %name, error = %e, "Failed to disconnect upstream before reconnect");
     }
     match registry.connect_upstream(server, Some(self_port)).await {
-        Ok(()) => StatusCode::OK.into_response(),
+        Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
 }
 
 /// POST /mcp/upstreams/credential — save an upstream credential to OS keyring.
-async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn save_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -355,20 +379,55 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
         Some(t) => t.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'token'").into_response(),
     };
-    match crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token) {
-        Ok(()) => StatusCode::OK.into_response(),
+    let header = match body
+        .get("header")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+    {
+        Ok(header) => header,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid header metadata").into_response(),
+    };
+    let url = match body.get("url").and_then(|v| v.as_str()) {
+        Some(url) => url.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "missing 'url'").into_response(),
+    };
+    let result = crate::mcp_upstream_credentials::save_with_refresh(
+        &state,
+        name,
+        token,
+        header,
+        url,
+        body.get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
+    match result {
+        Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
 }
 
 /// DELETE /mcp/upstreams/credential — delete an upstream credential from OS keyring.
-async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn delete_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
     };
-    match crate::mcp_upstream_credentials::delete_mcp_upstream_credential(name) {
-        Ok(()) => StatusCode::OK.into_response(),
+    let header = match body
+        .get("header")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+    {
+        Ok(header) => header,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid header metadata").into_response(),
+    };
+    match crate::mcp_upstream_credentials::delete_with_refresh(&state, name, header) {
+        Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
 }
@@ -401,9 +460,39 @@ async fn post_progress_report(
     ))
 }
 
+/// Uses the same draft-preserving input transaction as MCP force_retry.
+async fn force_retry_provider_recovery(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    AxumPath(session_id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        crate::pty::force_retry_provider_recovery(&state, &session_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::Value::Null).into_response(),
+        Ok(Err(error)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct SubmitAgentReplyRequest {
     input: String,
+    timeout_ms: Option<u64>,
 }
 
 /// Browser counterpart of the managed session `submit` action. Both transports
@@ -431,7 +520,7 @@ async fn submit_agent_reply(
     }
     let result = mcp_transport::handle_session_submit(
         &state,
-        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        &serde_json::json!({"session_id": session_id, "input": body.input, "timeout_ms": body.timeout_ms}),
         true,
     )
     .await;
@@ -488,20 +577,26 @@ struct StoryActionRequest {
 
 async fn post_story_action(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(input): Json<StoryActionRequest>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::stories::story_action_for_session(
+        crate::stories::story_action_for_http_authenticated(
             &state,
             &q.path,
             input.action,
             input.session_id.as_deref(),
+            user_auth.is_some(),
         )
     })
     .await
@@ -512,6 +607,56 @@ async fn post_story_action(
 
 async fn get_story_capabilities() -> Json<bool> {
     Json(true)
+}
+
+async fn post_workflow_definition_action(
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(action): Json<crate::workflows::WorkflowAction>,
+) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    let result =
+        tokio::task::spawn_blocking(move || crate::workflows::definition_action(&q.path, action))
+            .await
+            .map_err(|error| format!("workflow definition task failed: {error}"))
+            .and_then(|result| result);
+    match result {
+        Err(error) if error.starts_with(crate::workflows::WORKFLOW_VALIDATION_ERROR_PREFIX) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        result => json_result(result),
+    }
+}
+async fn post_workflow_run_action(
+    State(state): State<Arc<AppState>>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(action): Json<crate::workflows::RunAction>,
+) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::workflows::run_action_with_events(&state, &q.path, action)
+    })
+    .await
+    .map_err(|error| format!("workflow run task failed: {error}"))
+    .and_then(|result| result);
+    json_result(result)
 }
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -748,8 +893,8 @@ async fn inject_localhost_connect_info(
 /// Kept honest by `api_prefixes_cover_every_registered_route`, which reads the
 /// route literals out of this file — a new family added here without a matching
 /// entry fails that test instead of quietly serving HTML again.
-#[cfg(any(feature = "desktop", test))]
 const API_PREFIXES: &[&str] = &[
+    "accounts",
     "acp",
     "agent",
     "agents",
@@ -757,6 +902,8 @@ const API_PREFIXES: &[&str] = &[
     "api",
     "attachments",
     "audio",
+    "auth",
+    "automations",
     "circleci",
     "claude",
     "codex",
@@ -783,13 +930,19 @@ const API_PREFIXES: &[&str] = &[
     "registry",
     "remote",
     "repo",
+    "secrets",
     "sessions",
+    "settings",
     "stats",
     "stories",
     "system",
+    "tasks",
     "terminal",
     "tunnels",
     "watchers",
+    "workflows",
+    "work-items",
+    "workitem-links",
     "worktrees",
 ];
 
@@ -805,7 +958,6 @@ const API_PREFIXES: &[&str] = &[
 /// PATCH probe read that 405 as "route present". A fallback fires only when no
 /// route matched the path; a real route with the wrong method still returns its
 /// own 405, which is precisely the distinction the probe needs.
-#[cfg(feature = "desktop")]
 async fn spa_or_api_404(uri: axum::http::Uri) -> Response {
     // Compare against the path without its leading slash, as `{*path}` did.
     let path = AxumPath(uri.path().trim_start_matches('/').to_string());
@@ -819,7 +971,11 @@ async fn spa_or_api_404(uri: axum::http::Uri) -> Response {
         )
             .into_response();
     }
-    static_files::serve_static(path).await
+    #[cfg(feature = "desktop")]
+    return static_files::serve_static(path).await;
+    // The headless binary embeds no frontend: a non-API path is a plain 404.
+    #[cfg(not(feature = "desktop"))]
+    StatusCode::NOT_FOUND.into_response()
 }
 
 /// Build the router (exposed for testing).
@@ -841,6 +997,14 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/audit/{id}", get(commands::get_tunnel_audit))
         .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
         .route(
+            "/ssh-hosts/discovered",
+            get(commands::list_discovered_ssh_hosts_http),
+        )
+        .route(
+            "/ssh-hosts/probe",
+            post(commands::probe_discovered_host_http),
+        )
+        .route(
             "/ssh-hosts/status",
             get(commands::probe_ssh_config_hosts_http),
         )
@@ -856,6 +1020,16 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 /// the per-router `/fs/read-editor*` handler down-scope (SECURITY).
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/mcp/audit", get(mcp_call_audit::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
+        .route("/accounts/action", post(account_routes::action))
+        .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only
@@ -865,6 +1039,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/api/auth/session-token",
             get(config_routes::get_session_token),
         )
+        // The mobile app's login form posts here. It is the one route a device
+        // without a session may call: `basic_auth_middleware` lets it through
+        // and the handler runs the same admission as the Basic fallback.
+        .route("/auth/login", post(auth::login_handler))
         // Agent configs. Shared: a remote repo's agents run with the remote
         // machine's `agents.json`, which the frontend reads by connection
         // (`remoteIO` in agentConfigs.ts). Only in `build_router`, the daemon
@@ -872,6 +1050,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/config/agents",
             get(config_routes::get_agents_config).put(config_routes::put_agents_config),
+        )
+        // Defaults and draft previews belong to the same machine as agents.json.
+        .route(
+            "/config/defaults",
+            get(config_routes::get_config_defaults_http)
+                .post(config_routes::preview_config_defaults_http),
         )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
@@ -890,13 +1074,32 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/flow/detail", post(post_progress_flow_detail))
         .route("/stories/action", post(post_story_action))
         .route("/stories/capabilities", get(get_story_capabilities))
+        .route(
+            "/workflows/definition/action",
+            post(post_workflow_definition_action),
+        )
+        .route("/automations/action", post(automation_routes::post_action))
+        .route("/workflows/run/action", post(post_workflow_run_action))
         // Session lifecycle
         .route(
             "/sessions",
             get(session::list_sessions).post(session::create_session),
         )
+        .route("/sessions/suspended", post(suspended_routes::action_http))
+        .route(
+            "/repo/open-markdown-tabs",
+            get(open_markdown_routes::get_tabs),
+        )
+        .route(
+            "/config/open-markdown-tabs",
+            put(open_markdown_routes::put_tabs),
+        )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/submit", post(submit_agent_reply))
+        .route(
+            "/sessions/{id}/force-retry",
+            post(force_retry_provider_recovery),
+        )
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
         // runs once per part. Concatenating into `/write` is NOT equivalent —
         // `apply_input_bookkeeping` reads the whole payload as one keystroke.
@@ -921,6 +1124,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
+        .route("/sessions/wake", post(suspended_routes::resume_http))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
         .route(
             "/sessions/{id}/foreground",
@@ -928,10 +1132,18 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
         .route(
+            "/sessions/{id}/input-if-empty",
+            post(session::send_agent_input_if_empty),
+        )
+        .route(
             "/sessions/{id}/shell-family",
             get(session::get_session_shell_family),
         )
         .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
+        .route(
+            "/sessions/{id}/prompt-receipt",
+            get(session::get_prompt_receipt),
+        )
         .route(
             "/sessions/{id}/input-buffer",
             get(session::get_input_buffer_content),
@@ -967,6 +1179,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(session::terminal_scroll_to_offset),
         )
         .route(
+            "/sessions/{id}/terminal/scroll-to-anchor",
+            post(session::terminal_scroll_to_anchor),
+        )
+        .route(
             "/sessions/{id}/terminal/scroll-info",
             get(session::terminal_scroll_info),
         )
@@ -986,6 +1202,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/terminal/lines",
             get(session::terminal_get_lines),
         )
+        .route("/sessions/{id}/chat-view", get(session::chat_view))
         .route(
             "/sessions/{id}/terminal/styled-rows",
             get(session::terminal_styled_rows),
@@ -993,10 +1210,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/sessions/{id}/terminal/cursor-line",
             get(session::terminal_get_cursor_line),
-        )
-        .route(
-            "/sessions/{id}/terminal/hyperlink",
-            get(session::terminal_hyperlink_at),
         )
         .route(
             "/sessions/{id}/terminal/hyperlink-span",
@@ -1028,6 +1241,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
+        .route("/repo/remotes", get(workitem_link_routes::remotes))
+        .route(
+            "/workitem-links",
+            get(workitem_link_routes::list)
+                .put(workitem_link_routes::link)
+                .delete(workitem_link_routes::unlink),
+        )
         .route("/repo/diff", get(git_routes::repo_diff))
         .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
         .route("/repo/files", get(git_routes::repo_changed_files))
@@ -1171,6 +1391,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(agent_routes::verify_agent_session_http),
         )
         .route("/agents", get(agent_routes::detect_agents))
+        .route("/agents/launch", post(launch_transaction::http))
         .route(
             "/agents/detect",
             get(agent_routes::detect_agent_binary_http),
@@ -1197,9 +1418,26 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route(
+            "/work-items/provider-bridge",
+            post(work_item_bridge_routes::bridge),
+        )
+        .route("/tasks/project", post(work_item_query_routes::project))
+        .route(
+            "/tasks/compare-comments",
+            post(work_item_query_routes::compare_comments),
+        )
+        .route(
+            "/tasks/start-work-prompt",
+            post(fs_routes::start_work_prompt_http),
+        )
         .route("/fs/markdown-image", get(fs_routes::markdown_image_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route("/fs/write", post(fs_routes::write_file_http))
+        .route(
+            "/fs/write-if-unchanged",
+            post(fs_routes::write_file_if_unchanged_http),
+        )
         .route("/fs/mkdir", post(fs_routes::create_directory_http))
         .route("/fs/delete", post(fs_routes::delete_path_http))
         .route("/fs/rename", post(fs_routes::rename_path_http))
@@ -1226,6 +1464,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
         .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
         .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        .route("/fs/upload-copy", post(fs_routes::upload_copy_http))
         // Claude Usage dashboard
         .route("/claude/usage", get(claude_routes::claude_usage_api))
         .route(
@@ -1247,7 +1486,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/recent-commits",
             get(git_routes::get_recent_commits_http),
         )
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
         .route("/repo/run-git", post(git_routes::run_git_command_http))
         .route(
             "/repo/working-tree-status",
@@ -1421,7 +1659,7 @@ fn acp_prompt_body_limit() -> usize {
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
 /// The remote binary upload reads the raw Body as a stream, so its separate
 /// 512 MiB limit is enforced while copying chunks rather than by this layer.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
 
@@ -1433,48 +1671,33 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// exercising different code (AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
-/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
-/// races its sleep only against the future that produces the `Response`; once
+/// Both layers are safe over SSE and WebSocket. The timeout races its sleep
+/// only against the future that produces the `Response`; once
 /// headers are returned the timeout is dropped and the body streams
 /// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
 /// `/events` nor a PTY socket can be cut off mid-stream.
 pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
     routes
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            timeout,
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                // Upload bodies carry their own idle, size and total receive budgets.
+                // The ordinary response deadline is too short for large transfers.
+                if request.uri().path() == "/fs/upload-copy" {
+                    return next.run(request).await;
+                }
+                match tokio::time::timeout(timeout, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+                }
+            },
         ))
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
-    // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
-    // Otherwise, restrict to localhost and Tauri webview origins.
-    let cors = if remote_auth {
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    } else {
-        let allowed_origins = [
-            "http://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "http://127.0.0.1"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "tauri://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "https://tauri.localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-        ];
-        CorsLayer::new()
-            .allow_origin(allowed_origins.to_vec())
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    };
+    // false selects the trusted local IPC transport; every TCP listener uses true.
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let mut routes = Router::new()
         // Routes common to the remote daemon router live in shared_routes().
@@ -1485,6 +1708,39 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/github", get(github_routes::repo_github_status))
         .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
+        .route(
+            "/repo/pr-review-threads",
+            get(github_routes::repo_pr_review_threads),
+        )
+        .route("/repo/pr-action-state", get(github_pr_action_routes::state))
+        .route(
+            "/repo/pr-auto-merge",
+            post(github_pr_action_routes::auto_merge),
+        )
+        .route("/repo/pr-merge-queue", post(github_pr_action_routes::queue))
+        .route(
+            "/repo/pr-merge-or-enqueue",
+            post(github_pr_action_routes::merge),
+        )
+        .route(
+            "/repo/pr-rerun-failed",
+            post(github_pr_action_routes::rerun),
+        )
+        .route("/repo/pr-line-threads", get(github_review_routes::threads))
+        .route(
+            "/repo/pr-open-threads",
+            get(github_review_routes::open_threads),
+        )
+        .route(
+            "/repo/pr-thread-comments",
+            get(github_review_routes::comments),
+        )
+        .route(
+            "/repo/pr-thread-resolved",
+            post(github_review_routes::resolve),
+        )
+        .route("/repo/pr-thread-reply", post(github_review_routes::reply))
+        .route("/repo/pr-draft-review", post(github_review_routes::submit))
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(
@@ -1505,6 +1761,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::repo_conflict_assist),
         )
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
+        .route(
+            "/repo/update-pr-branch",
+            post(github_routes::repo_update_pr_branch),
+        )
+        .route("/repo/close-pr", post(github_routes::repo_close_pr))
         .route("/repo/create-pr", post(github_routes::repo_create_pr))
         .route("/repo/create-issue", post(github_routes::repo_create_issue))
         .route(
@@ -1566,6 +1827,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::github_start_login),
         )
         .route("/github/auth/poll", post(github_routes::github_poll_login))
+        .route(
+            "/github/accounts/poll",
+            post(github_routes::github_poll_add_account),
+        )
         .route("/github/auth/logout", post(github_routes::github_logout))
         .route(
             "/github/auth/disconnect",
@@ -1591,10 +1856,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         // Config
         .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
-        .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),
         )
@@ -1603,16 +1864,16 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(config_routes::rotate_session_token),
         )
         .route(
+            "/config/telegram",
+            get(telegram_routes::get).put(telegram_routes::put),
+        )
+        .route(
             "/config/notifications",
             get(config_routes::get_notification_config).put(config_routes::put_notification_config),
         )
         .route(
             "/config/ui-prefs",
             get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
-        )
-        .route(
-            "/config/defaults",
-            get(config_routes::get_config_defaults_http),
         )
         .route(
             "/config/repo-settings",
@@ -1679,6 +1940,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/audio/output-devices",
             get(config_routes::list_audio_output_devices_http),
         )
+        .route("/agent/subscriptions/action", post(mail_routes::action))
+        .route("/agent/subscriptions/{id}/events", get(mail_routes::events))
         .route(
             "/agent/discover-session",
             post(config_routes::discover_agent_session_http),
@@ -1759,6 +2022,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        .route(
+            "/debug/frame-workload",
+            post(log_routes::save_frame_workload)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route("/secrets/forms/{nonce}", get(crate::secrets::form_http))
+        .route("/secrets/forms/submit", post(crate::secrets::submit_http))
         // Debug: reload the main WebView natively (loopback-only, enforced in
         // handler). Local router only — the remote client reloads its own tab.
         .route(
@@ -1878,8 +2148,16 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_exec),
         )
         .route(
+            "/api/plugins/{plugin_id}/github",
+            post(plugin_routes::plugin_github_action),
+        )
+        .route(
             "/api/plugins/{plugin_id}/http",
             post(plugin_routes::plugin_http_fetch),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/http/cancel",
+            post(plugin_routes::plugin_http_cancel),
         )
         .route(
             "/api/plugins/{plugin_id}/pty/output",
@@ -1888,6 +2166,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/plugins/{plugin_id}/register",
             post(plugin_routes::plugin_register),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/settings",
+            post(plugin_routes::plugin_settings),
         )
         .route(
             "/api/plugins/{plugin_id}/unregister",
@@ -1911,6 +2193,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes());
 
+    routes = routes.route(
+        "/design-mode/extension",
+        post(crate::design_mode::extension::message),
+    );
+
     #[cfg(feature = "desktop")]
     {
         routes = routes
@@ -1921,6 +2208,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             .route(
                 "/design-mode/stop",
                 post(crate::design_mode::commands::stop),
+            )
+            .route(
+                "/design-mode/reload",
+                post(crate::design_mode::commands::reload),
+            )
+            .route(
+                "/design-mode/navigate",
+                post(crate::design_mode::commands::navigate),
+            )
+            .route(
+                "/design-mode/command",
+                post(crate::design_mode::commands::browser_command),
             )
             .route("/design-mode", get(crate::design_mode::commands::statuses));
     }
@@ -1942,10 +2241,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     // tuic-remote (#094-ec55 remote-target fix).
     #[cfg(feature = "desktop")]
     let routes = routes
-        .route(
-            "/github/accounts",
-            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
-        )
+        .route("/github/accounts", get(github_routes::github_list_accounts))
         .route(
             "/github/accounts/remove",
             post(github_routes::github_remove_account),
@@ -1960,8 +2256,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
-    // the whisper model, both gated on the `desktop` feature.
-    #[cfg(feature = "desktop")]
+    // the whisper model, both gated on the opt-in `dictation` feature.
+    #[cfg(feature = "dictation")]
     let routes = routes
         .route(
             "/dictation/status",
@@ -2000,6 +2296,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(dictation_routes::get_speech_voices_http),
         )
         .route(
+            "/dictation/speech/edge-voices",
+            get(dictation_routes::get_edge_voices_http),
+        )
+        .route(
             "/dictation/speech/voices/import",
             post(dictation_routes::import_speech_voice_http).layer(
                 axum::extract::DefaultBodyLimit::max(SPEECH_VOICE_IMPORT_BODY_BYTES),
@@ -2020,6 +2320,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/dictation/speech/stop",
             post(dictation_routes::stop_speech_http),
+        )
+        .route(
+            "/dictation/speech/pause",
+            post(dictation_routes::pause_speech_http),
+        )
+        .route(
+            "/dictation/speech/resume",
+            post(dictation_routes::resume_speech_http),
         )
         .route(
             "/dictation/speech/status",
@@ -2096,10 +2404,19 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     #[cfg(feature = "desktop")]
     let routes = routes
         .route("/", get(static_files::serve_index))
-        .fallback(spa_or_api_404);
+        // The Settings landing page is a UI route; its descendants belong to the API.
+        .route(
+            "/settings",
+            get(|| async { static_files::serve_static(AxumPath("settings".into())).await }),
+        );
 
     let routes = routes
+        .fallback(spa_or_api_404)
         .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::workflow_actor_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             remote_session_proxy::proxy_http,
@@ -2114,10 +2431,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     let routes = with_server_limits(routes, REQUEST_TIMEOUT);
 
     if remote_auth {
-        routes.layer(axum::middleware::from_fn_with_state(
-            state,
-            auth::basic_auth_middleware,
-        ))
+        routes
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                auth::basic_auth_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                boundary,
+                request_boundary::check,
+            ))
     } else {
         routes
     }
@@ -2136,10 +2458,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 /// Auth and compression layers are applied identically to `build_router()`.
 #[allow(dead_code)] // Used by tuic-remote binary (not(desktop) build)
 pub fn build_remote_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let public_routes = Router::new()
         .route("/health", get(session::health))
@@ -2162,6 +2482,7 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         )
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes())
+        .fallback(spa_or_api_404)
         .with_state(state.clone())
         .layer(cors)
         .layer(
@@ -2172,7 +2493,12 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         axum::middleware::from_fn_with_state(state, auth::basic_auth_middleware),
     );
 
-    public_routes.merge(authed)
+    public_routes
+        .merge(authed)
+        .layer(axum::middleware::from_fn_with_state(
+            boundary,
+            request_boundary::check,
+        ))
 }
 
 /// Rebind the TCP listener after a config write changed remote-access settings.
@@ -2240,7 +2566,7 @@ fn evict_peers_for_reaped_mcp_session_locked(
         .map(|entry| entry.key().clone())
         .partition(|tuic| state.peer_identity_is_reapable(tuic));
     for tuic in &removed {
-        state.peer_agents.remove(tuic);
+        crate::mcp_http::remote_peer::unregister_peer(state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.active_agent_waiters.remove(tuic);
         let _ = state
@@ -2546,11 +2872,15 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = std::env::var("TUIC_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(config.services.server.port);
-        let host = if config.services.server.ipv6_enabled {
+        let base_port = crate::agent_test::port().unwrap_or_else(|| {
+            std::env::var("TUIC_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(config.services.server.port)
+        });
+        let host = if crate::agent_test::active() {
+            "127.0.0.1"
+        } else if config.services.server.ipv6_enabled {
             "[::]"
         } else {
             "0.0.0.0"
@@ -2569,7 +2899,11 @@ pub async fn start_server(
 
         let mut listener_result: Option<std::net::TcpListener> = None;
         // Port 0 = OS-assigned, no retry needed
-        let attempts = if base_port == 0 { 1 } else { MAX_PORT_ATTEMPTS };
+        let attempts = if base_port == 0 || crate::agent_test::active() {
+            1
+        } else {
+            MAX_PORT_ATTEMPTS
+        };
         'bind: for round in 0..BIND_RETRY_ROUNDS {
             for attempt in 0..attempts {
                 let port = base_port + attempt;
@@ -2716,6 +3050,52 @@ pub async fn start_server(
     tcp_bound
 }
 
+/// Start the explicitly configured Repo Scripts command in its own visible shell tab.
+pub(crate) async fn design_start_server(
+    state: Arc<AppState>,
+    repo: &std::path::Path,
+    script: String,
+) -> Result<serde_json::Value, String> {
+    use axum::response::IntoResponse;
+    let body =
+        serde_json::from_value(serde_json::json!({"cwd":repo})).map_err(|e| e.to_string())?;
+    let response = session::create_session(axum::extract::State(state.clone()), axum::Json(body))
+        .await
+        .into_response();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .map_err(|e| e.to_string())?;
+    let result: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(result["error"]
+            .as_str()
+            .unwrap_or("Could not start dev-server terminal")
+            .to_owned());
+    }
+    let sid = result["session_id"]
+        .as_str()
+        .ok_or("No dev-server session was created")?
+        .to_owned();
+    let response_sid = sid.clone();
+    tokio::task::spawn_blocking(move || {
+        session::write_pty_input_pair(&state, &sid, &script, "\r", None)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(serde_json::json!({"sessionId":response_sid}))
+}
+
+/// The native host and core sender use the same live repository recipient rule.
+pub(crate) fn design_review_agents(
+    state: &AppState,
+    repo: &std::path::Path,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rows = serde_json::to_value(session::local_session_rows(state))
+        .map_err(|error| error.to_string())?;
+    tuic_ipc::review_agents::review_agents(&rows, repo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2725,6 +3105,105 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
+    // Catches: seeded Pause targets missing from otherwise publishable story drafts.
+    #[tokio::test]
+    async fn seeded_story_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, false, false).await;
+    }
+
+    // Catches: a user validation failure being returned as HTTP 500.
+    #[tokio::test]
+    async fn invalid_pause_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Story, true, false).await;
+    }
+
+    // Catches: Resolve plan seeds lacking checks and therefore refusing HTTP publication.
+    #[tokio::test]
+    async fn seeded_plan_draft_publishes() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, false).await;
+    }
+
+    // Catches: adding seed checks accidentally allowing edited plans with no final check.
+    #[tokio::test]
+    async fn plan_without_final_checks_publish_is_a_client_error() {
+        workflow_pause_publish_case(crate::workflows::WorkflowKind::Plan, false, true).await;
+    }
+
+    async fn workflow_pause_publish_case(
+        kind: crate::workflows::WorkflowKind,
+        invalid: bool,
+        missing_checks: bool,
+    ) {
+        use crate::workflows::{NodeKind, WorkflowStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = project.path().to_str().unwrap();
+        let store = WorkflowStore::open().unwrap();
+        let draft = store
+            .seed_templates(project)
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == kind)
+            .unwrap();
+        let mut graph = draft.graph;
+        if invalid {
+            for node in &mut graph.nodes {
+                if let NodeKind::Pause { resume_to } = &mut node.kind {
+                    *resume_to = None;
+                }
+            }
+        }
+        let edited = store
+            .update_draft(&draft.id, draft.draft_revision, graph)
+            .unwrap();
+        let edited = if missing_checks {
+            store
+                .update_checks(&draft.id, edited.draft_revision, vec![])
+                .unwrap()
+        } else {
+            edited
+        };
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: project.into(),
+            }),
+            Json(crate::workflows::WorkflowAction::Publish {
+                id: draft.id.clone(),
+                expected_revision: edited.draft_revision,
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        if invalid || missing_checks {
+            assert!(status.is_client_error(), "{status}: {body}");
+            assert!(
+                body.contains(if missing_checks {
+                    "deterministic final checks"
+                } else {
+                    "resume_to"
+                }),
+                "{body}"
+            );
+            assert_eq!(
+                store
+                    .get_draft(&draft.id)
+                    .unwrap()
+                    .latest_published_revision,
+                1
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(store.get_published(&draft.id, 2).unwrap().revision, 2);
+        }
+    }
+
     /// Build a POST request with ConnectInfo from the given address.
     fn mcp_post_from(
         url: &str,
@@ -2732,6 +3211,7 @@ mod tests {
         addr: std::net::SocketAddr,
     ) -> Request<Body> {
         let mut req = Request::post(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -2748,6 +3228,7 @@ mod tests {
 
     fn get_localhost(url: &str) -> Request<Body> {
         let mut req = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::empty())
             .expect("build GET request");
         req.extensions_mut()
@@ -2758,6 +3239,7 @@ mod tests {
     /// Build a PUT request with ConnectInfo from the given address.
     fn put_from(url: &str, body: &serde_json::Value, addr: std::net::SocketAddr) -> Request<Body> {
         let mut req = Request::put(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -2777,8 +3259,9 @@ mod tests {
         // every test — the SQLITE_BUSY collision `make_test_app_state`
         // documents and avoids (#678-9a75).
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        // Override default disabled_native_tools so all 8 tools are visible in tests
-        state.config.write().disabled_native_tools = Vec::new();
+        // This fixture opts into every native tool, including the settings facade.
+        state.config.write().mcp_capabilities.denied = Vec::new();
+        state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
     }
@@ -2910,12 +3393,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_defaults_preview_is_available_with_authentication() {
+        // Catches: the machine preview route registered only on the desktop router.
+        let state = test_state();
+        *state.session_token.write() = "preview-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (token, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some("preview-secret"), StatusCode::OK),
+        ] {
+            let uri = token.map_or_else(
+                || "/config/defaults".to_string(),
+                |token| format!("/config/defaults?token={token}"),
+            );
+            let builder = Request::post(uri)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json");
+            let mut request = builder
+                .body(Body::from(
+                    r#"{"agents":{"agents":{},"launch_instructions":"REMOTE DRAFT"}}"#,
+                ))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert!(
+                    json["launch_instructions"]["effective_text"]["claude"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("REMOTE DRAFT")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn remote_update_rejects_a_missing_session_token() {
         let state = test_state();
         *state.session_token.write() = "update-secret".to_string();
         state.config.write().services.auth.lan_auth_bypass = false;
         let app = build_remote_router(state);
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::from("not a binary"))
             .unwrap();
         request
@@ -2941,6 +3471,7 @@ mod tests {
         }
         let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .header(
                 axum::http::header::AUTHORIZATION,
                 format!("Basic {credentials}"),
@@ -2957,6 +3488,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn remote_update_rejects_invalid_metadata_before_writing() {
         let state = test_state();
@@ -3014,7 +3547,9 @@ mod tests {
                 StatusCode::PAYLOAD_TOO_LARGE,
             ),
         ] {
-            let mut request = Request::post("/remote/update?token=update-secret")
+            let mut request = Request::post("/remote/update")
+                .header(header::COOKIE, "tui-session=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", target)
                 .header("x-tuic-sha256", sha256)
                 .header("x-tuic-confirmed-sessions", sessions)
@@ -3032,6 +3567,8 @@ mod tests {
         }
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn remote_update_preserves_the_old_executable_on_bad_digest_then_promotes() {
         let directory = tempfile::tempdir().unwrap();
@@ -3062,7 +3599,9 @@ mod tests {
                 bytes.as_slice(),
             ),
         ] {
-            let mut request = Request::post("/remote/update?token=update-secret")
+            let mut request = Request::post("/remote/update")
+                .header(header::COOKIE, "tui-session=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
                 .header("x-tuic-sha256", hash)
                 .header("x-tuic-confirmed-sessions", "0")
@@ -3079,7 +3618,9 @@ mod tests {
             assert_eq!(std::fs::read(&executable).unwrap(), contents);
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         }
-        let mut duplicate = Request::post("/remote/update?token=update-secret")
+        let mut duplicate = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header("x-tuic-sha256", good_hash)
             .header("x-tuic-confirmed-sessions", "0")
@@ -3098,6 +3639,8 @@ mod tests {
     }
 
     // Catches: overlapping valid uploads both promote a binary or leave staging files behind.
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_remote_updates_reject_the_second_upload_without_leaking_staging() {
         use futures_util::StreamExt;
@@ -3126,7 +3669,9 @@ mod tests {
             first_released.await.unwrap();
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
         }));
-        let mut first = Request::post("/remote/update?token=update-secret")
+        let mut first = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3144,7 +3689,9 @@ mod tests {
         let first_task = tokio::spawn(app.clone().oneshot(first));
         first_chunk_received.await.unwrap();
 
-        let mut second = Request::post("/remote/update?token=update-secret")
+        let mut second = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3172,6 +3719,8 @@ mod tests {
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn two_local_remote_routers_isolate_update_and_restart_signal() {
         let directory = tempfile::tempdir().unwrap();
@@ -3218,7 +3767,8 @@ mod tests {
         });
         let client = reqwest::Client::new();
         let response = client
-            .post(format!("{first_url}/remote/update?token=first-secret"))
+            .post(format!("{first_url}/remote/update"))
+            .header("cookie", "tui-session=first-secret")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3438,7 +3988,10 @@ mod tests {
             format!("/fs/markdown-image?{}", params.finish())
         };
         let request = |path: String, addr: std::net::SocketAddr| {
-            let mut req = Request::get(path).body(Body::empty()).unwrap();
+            let mut req = Request::get(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .body(Body::empty())
+                .unwrap();
             req.extensions_mut().insert(ConnectInfo(addr));
             req
         };
@@ -3454,27 +4007,13 @@ mod tests {
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        #[cfg(feature = "desktop")]
-        {
-            let accepted_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(accepted_local.status(), StatusCode::OK);
-        }
-
-        // Headless serves remote clients and requires auth even over loopback.
-        // The desktop-only webview bypass is intentionally unavailable there.
-        #[cfg(not(feature = "desktop"))]
-        {
-            let denied_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
-        }
+        // Loopback HTTP must authenticate in desktop and headless builds alike.
+        let denied_local = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png", None), local))
+            .await
+            .unwrap();
+        assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
 
         let accepted_remote = app
             .clone()
@@ -3526,6 +4065,181 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_story_action_without_session_is_local_api_not_human() {
+        use crate::stories::{
+            NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStatus, StoryStore,
+            StoryTransitionActor,
+        };
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let store = StoryStore::open().expect("stories");
+        let plan = store
+            .create_plan(NewPlan {
+                project: project
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id.clone(),
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let path = format!("/stories/action?path={}", project.path().display());
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
+            "action": { "action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual" }
+        }), local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let started = store.get_story(&story.id).unwrap();
+        assert_eq!(
+            store.transition_history(&story.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .unwrap();
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .unwrap();
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
+            "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
+        }), local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_story(&story.id).unwrap().status,
+            StoryStatus::Done
+        );
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .actor,
+            StoryTransitionActor::LocalApi
+        );
+        let other = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": other.revision, "command": "block"
+        }});
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(&path, &body, local))
+            .await
+            .unwrap();
+        // Catches: administrative local actions being refused or attributed to Human.
+        assert_eq!(response.status(), StatusCode::OK);
+        let blocked = store.get_story(&other.id).unwrap();
+        assert_eq!(blocked.status, StoryStatus::Blocked);
+        assert_eq!(
+            store.transition_history(&other.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": blocked.revision, "command": "unblock"
+        }});
+        let response = app
+            .oneshot(mcp_post_from(
+                &format!("{path}&token={token}"),
+                &body,
+                local,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_story(&other.id).unwrap().status,
+            StoryStatus::Ready
+        );
+        let history = store.transition_history(&other.id).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].actor, StoryTransitionActor::Human);
+    }
+
+    #[tokio::test]
+    async fn workflow_actor_metadata_does_not_block_local_actions() {
+        // Catches: local requests failing actor authorization instead of normal missing-record validation.
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let state = test_state();
+        // The operator API needs the daemon owner, independently of caller metadata.
+        crate::workflows::WorkflowRuntime::spawn(&state);
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while state.workflow_runtime.require_owner().is_err() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("daemon startup must acquire the run owner lock");
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        for (route, body) in [
+            (
+                "/workflows/definition/action",
+                serde_json::json!({
+                    "action": "publish", "id": "missing", "expected_revision": 1
+                }),
+            ),
+            (
+                "/workflows/run/action",
+                serde_json::json!({
+                    "action": "command", "run_id": "missing", "command_id": "decision",
+                    "expected_sequence": 1, "command": {"action": "resume"}
+                }),
+            ),
+        ] {
+            let path = format!("{route}?path={}", project.path().display());
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+            let path = format!("{path}&token={token}");
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
         }
     }
 
@@ -3685,23 +4399,30 @@ mod tests {
         // handler's own 404 (e.g. get_output 404s for a missing session, which would
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
+            "/config/defaults",
             "/api/version",
             // The remote client's only way onto a WebSocket: it trades Basic
             // Auth for the session token here, so the remote router must carry
             // it. `build_router` alone is exactly the Progress mistake below.
             "/api/auth/session-token",
+            // The mobile login form's POST: the PWA of a `tuic-remote` host
+            // needs it exactly as the desktop one does.
+            "/auth/login",
             "/sessions",
             "/sessions/x/write",
             "/sessions/x/submit",
             "/sessions/x/output",
             "/sessions/x/terminal/scroll",
             "/sessions/x/terminal/lines",
+            "/sessions/x/chat-view",
             "/sessions/agent",
             "/sessions/worktree",
             "/stats",
             "/metrics",
             "/process/stats",
             "/repo/info",
+            "/repo/remotes",
+            "/workitem-links",
             "/repo/diff",
             "/repo/files",
             "/repo/branches",
@@ -3722,6 +4443,7 @@ mod tests {
             "/fs/read",
             "/fs/markdown-image",
             "/fs/write",
+            "/fs/write-if-unchanged",
             "/fs/stat",
             "/claude/usage",
             "/claude/projects",
@@ -3731,6 +4453,7 @@ mod tests {
             "/terminal/theme-colors",
             "/system/local-ip",
             "/system/home-directory",
+            "/acp/workspace",
             "/acp/connections",
             "/acp/connections/x",
             "/acp/connections/x/reconnect",
@@ -3759,6 +4482,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -3771,7 +4496,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
@@ -3898,6 +4622,9 @@ mod tests {
         let app = build_router(state, false, true);
         let mut unrouted: Vec<String> = Vec::new();
         for path in paths {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let resp = app
                 .clone()
                 .oneshot(
@@ -4130,10 +4857,10 @@ mod tests {
                     }
                     ws.on_upgrade(move |mut socket| async move {
                         let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
-                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
-                            if let Some(sender) = input_sender.lock().unwrap().take() {
-                                let _ = sender.send(input.to_string());
-                            }
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await
+                            && let Some(sender) = input_sender.lock().unwrap().take()
+                        {
+                            let _ = sender.send(input.to_string());
                         }
                     }).into_response()
                 }
@@ -4274,6 +5001,7 @@ mod tests {
                 },
                 enabled: false,
                 timeout_secs: 30,
+                headers: vec![],
                 tool_filter: None,
                 auth: None,
             }],
@@ -4322,6 +5050,383 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: legacy connection password writes bypassing refresh or advertising failed persistence.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_connection_password_settings_refresh_follows_vault_persistence() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "legacy-connection-refresh";
+        let request = |password: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/password"),
+                &serde_json::json!({"password": password}),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let response = app
+            .clone()
+            .oneshot(request("connection-secret-canary"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let crate::state::AppEvent::SettingsChanged(first) = events
+            .try_recv()
+            .expect("durable connection password write must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = app
+            .clone()
+            .oneshot(request("rejected-secret-canary"))
+            .await
+            .unwrap();
+        crate::credentials::reset_test_faults();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            events.try_recv().is_err(),
+            "failed vault write must not publish"
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let response = app.oneshot(request("")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(id).unwrap());
+        let crate::state::AppEvent::SettingsChanged(second) = events
+            .try_recv()
+            .expect("durable connection password clear must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(first.section, "connections");
+        assert_eq!(second.section, "connections");
+        assert!(first.persisted && first.applied && second.persisted && second.applied);
+        assert!(first.generation < second.generation);
+        assert!(
+            events.try_recv().is_err(),
+            "each write publishes exactly once"
+        );
+        let payload = serde_json::to_value((first, second)).unwrap();
+        for notice in payload.as_array().unwrap() {
+            assert_eq!(
+                notice.as_object().unwrap().len(),
+                4,
+                "hints contain only section, generation and persistence/apply flags"
+            );
+        }
+        assert!(!payload.to_string().contains("secret-canary"));
+    }
+
+    // Catches: a successful direct credential write leaving other Settings readers stale.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_upstream_credential_write_publishes_value_free_refresh() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/upstreams/credential")
+                    .header("content-type", "application/json")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::from(
+                        serde_json::json!({"name":"legacy-publisher-fixture",
+                    "token":"legacy-secret-canary","url":"https://example.com/mcp"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(
+                "legacy-publisher-fixture",
+                "https://example.com/mcp"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("legacy-secret-canary")
+        );
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+                _ => None,
+            })
+            .expect("durable legacy credential write did not refresh another Settings reader");
+        assert_eq!(notice.section, "upstreams");
+        assert!(notice.persisted);
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains("legacy-secret-canary")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential("legacy-publisher-fixture")
+            .unwrap();
+    }
+
+    // Catches: HTTP dropping compound credentials or treating omitted replace
+    // as permission to overwrite an existing upstream credential.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn upstream_http_compound_credentials_require_explicit_replacement() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let name = "compound-http-lifecycle";
+        let url = "https://example.com/mcp";
+        let body = serde_json::json!({
+            "base": {"servers": []},
+            "config": {"servers": [{"id":"new-http", "name":name,
+                "transport":{"type":"http","url":url}, "enabled":false,
+                "auth":{"type":"bearer","token":""}}]},
+            "credentials": [{"server_id":"new-http", "token":"original-http-secret"}]
+        });
+        let response = build_router(test_state(), false, true)
+            .oneshot(put_from(
+                "/mcp/upstreams",
+                &body,
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("original-http-secret")
+        );
+        let mut replacement =
+            serde_json::json!({"name":name,"token":"replacement-http-secret","url":url});
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement.clone())).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("original-http-secret")
+        );
+        replacement["replace"] = serde_json::json!(true);
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(name, url)
+                .unwrap()
+                .as_deref(),
+            Some("replacement-http-secret")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential(name).unwrap();
+    }
+
+    #[tokio::test]
+    async fn secret_header_http_credentials_preserve_metadata_and_return_json_unit() {
+        let name = "secret-header-http";
+        let header = serde_json::json!({"name":"x-api-key", "credential_ref":uuid::Uuid::new_v4().to_string()});
+        let response = save_mcp_upstream_credential_http(State(test_state()), Json(
+            serde_json::json!({"name":name,"token":"DUMMY_HTTP_SENTINEL","header":header,"url":"https://example.com/mcp"}),
+        ))
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            body.as_ref(),
+            b"null",
+            "browser RPC rejects empty success bodies"
+        );
+        let metadata: crate::mcp_upstream_config::UpstreamHeader =
+            serde_json::from_value(header.clone()).unwrap();
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_upstream_credential(
+                &metadata.credential_key(name)
+            )
+            .unwrap()
+            .as_deref(),
+            Some("DUMMY_HTTP_SENTINEL")
+        );
+        let response = delete_mcp_upstream_credential_http(
+            State(test_state()),
+            Json(serde_json::json!({"name":name,"header":header})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"null"
+        );
+        assert!(
+            crate::mcp_upstream_credentials::read_upstream_credential(
+                &metadata.credential_key(name)
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    // Catches: omitting the maintenance task leaves expired protocol sessions and orphan inboxes live.
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_task_reaps_expired_sessions_and_orphan_inboxes() {
+        let state = test_state();
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("expired", now - std::time::Duration::from_secs(7200)),
+            ("fresh", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.into(),
+                crate::state::McpSessionMeta {
+                    prompt_instructions: None,
+                    last_activity,
+                    is_claude_code: false,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+        }
+        state
+            .agent_inbox
+            .insert("orphan".into(), std::collections::VecDeque::new());
+        spawn_maintenance_sweep(&state);
+        // Yield first so the sweep arms its own timer; no wall-clock startup deadline.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+        assert!(!state.mcp.sessions.contains_key("expired"));
+        assert!(state.mcp.sessions.contains_key("fresh"));
+        assert!(!state.agent_inbox.contains_key("orphan"));
+    }
+
+    // Catches: workflow route handlers return an empty default response instead of backend errors.
+    #[tokio::test]
+    async fn workflow_action_routes_preserve_project_validation_errors() {
+        let app = build_router(test_state(), false, true);
+        for (path, body) in [
+            (
+                "/workflows/definition/action?path=relative",
+                r#"{"action":"list_drafts"}"#,
+            ),
+            (
+                "/workflows/run/action?path=relative",
+                r#"{"action":"get","run_id":"missing"}"#,
+            ),
+        ] {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            req.extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"], "project must be an absolute path");
+        }
+    }
+
+    // Catches: removing the tunnel subrouter turns an implemented route into HTTP 404.
+    #[tokio::test]
+    async fn tunnel_subrouter_keeps_session_listing_available() {
+        let mut req = Request::builder()
+            .uri("/tunnels/active")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = build_router(test_state(), false, true)
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!([])
+        );
+    }
+
+    // Catches: arithmetic mutations under-size the documented 10 MiB base64 image plus JSON allowance.
+    #[test]
+    fn acp_prompt_cap_preserves_the_documented_image_and_framing_allowance() {
+        assert_eq!(acp_prompt_body_limit(), 14_046_552);
+    }
+
+    /// The SSH host and agent-key listings disclose machine names and key
+    /// fingerprints. Catches: `tunnel_routes()` being merged outside the
+    /// Basic Auth layer so a public address reads them without credentials.
+    #[tokio::test]
+    async fn ssh_host_disclosure_routes_require_auth_from_a_public_address() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let routers = [
+            ("build_router", build_router(test_state(), true, true)),
+            ("build_remote_router", build_remote_router(test_state())),
+        ];
+        for (name, app) in routers {
+            for (method, path) in [
+                ("GET", "/tunnels/ssh-hosts"),
+                ("GET", "/tunnels/ssh-hosts/discovered"),
+                ("GET", "/tunnels/ssh-hosts/status"),
+                ("POST", "/tunnels/ssh-hosts/probe"),
+                ("GET", "/tunnels/agent-keys"),
+            ] {
+                let mut req = Request::builder()
+                    .header(header::HOST, "127.0.0.1:9876")
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                req.extensions_mut().insert(ConnectInfo(remote));
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{name} {path} must not answer an unauthenticated public address"
+                );
+            }
+        }
+    }
+
     /// A remote client cannot put an `Authorization` header on a WebSocket
     /// upgrade, so it trades Basic Auth for the session token once and then
     /// uses `?token=`. The trade must itself be authenticated: a public address
@@ -4348,6 +5453,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .extension(remote())
                     .body(Body::empty())
                     .unwrap(),
@@ -4361,6 +5467,7 @@ mod tests {
         let authenticated = app
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .header(header::AUTHORIZATION, format!("Basic {credentials}"))
                     .extension(remote())
                     .body(Body::empty())
@@ -5259,6 +6366,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -5282,6 +6390,8 @@ mod tests {
         );
     }
 
+    // Catches: tools/list re-advertises retired native actions or input aliases,
+    // making clients send requests that the native dispatcher rejects.
     #[tokio::test]
     async fn test_mcp_tools_list() {
         let state = test_state();
@@ -5305,7 +6415,8 @@ mod tests {
         assert!(names.contains(&"repo"));
         assert!(names.contains(&"ui"));
         assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"config"));
+        assert!(names.contains(&"settings"));
+        assert!(!names.contains(&"config"));
         assert!(names.contains(&"debug"));
         // One family only: the ai_terminal_* tools were deleted in 789-f6ed.
         assert!(
@@ -5313,6 +6424,39 @@ mod tests {
             "a second tool family is registered again: {names:?}"
         );
         assert_eq!(tools.len(), names.len());
+        for (tool, retired_actions, retired_parameters) in [
+            (
+                "agent",
+                &["detect", "stats", "metrics"][..],
+                &["project"][..],
+            ),
+            ("session", &["process_stats"][..], &[][..]),
+            (
+                "repo",
+                &["prs", "issues", "close_issue", "reopen_issue", "ci_logs"][..],
+                &["workspace_id"][..],
+            ),
+        ] {
+            let definition = tools.iter().find(|entry| entry["name"] == tool).unwrap();
+            let properties = &definition["inputSchema"]["properties"];
+            let actions = properties["action"]["description"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("One of: ")
+                .unwrap();
+            for action in retired_actions {
+                assert!(
+                    !actions.split(", ").any(|listed| listed == *action),
+                    "tools/list advertises retired {tool} action {action}"
+                );
+            }
+            for parameter in retired_parameters {
+                assert!(
+                    properties.get(*parameter).is_none(),
+                    "tools/list advertises retired {tool} parameter {parameter}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -5321,6 +6465,7 @@ mod tests {
         state.mcp.sessions.insert(
             "ping-session".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -5354,10 +6499,197 @@ mod tests {
         );
     }
 
+    // Exact discovery contract for an unbound caller with no optional owner
+    // configuration, all ordinary tools enabled, and expanded discovery.
+    const UNCONFIGURED_NATIVE_TOOL_NAMES: &[&str] = &[
+        "automations",
+        "secret",
+        "session",
+        "agent",
+        "repo",
+        "workflow",
+        "progress",
+        "ui",
+        "plugin_dev_guide",
+        "settings",
+        "debug",
+    ];
+
+    /// Catches: Settings inventories only enabled tools, loses newly registered
+    /// tools, or offers switches which MCP discovery ignores.
+    #[tokio::test]
+    async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
+        let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
+        let definitions = mcp_transport::test_mcp_tool_definitions();
+        // Agent-only compaction must not rewrite Settings tooltip copy.
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
+        let app = build_router(state.clone(), false, true);
+        for tool in definitions.as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            {
+                let mut cfg = state.config.write();
+                cfg.mcp_capabilities =
+                    crate::mcp_capabilities::McpCapabilities::from_legacy(&[name.to_owned()]);
+                cfg.collapse_tools = true;
+                cfg.progress_tracking = false;
+            }
+            let response = app
+                .clone()
+                .oneshot(get_localhost("/mcp/status"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let catalog = status["native_tools"].as_array().unwrap();
+            assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
+            for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
+                assert_eq!(entry["name"], definition["name"]);
+                assert_eq!(
+                    &entry["description"],
+                    recorded
+                        .get(definition["name"].as_str().unwrap())
+                        .filter(|_| definition["name"] != "workflow")
+                        .unwrap_or(&definition["description"])
+                );
+                // Catches: HTTP status retaining description prefixes while Settings
+                // switches to dedicated, concise native registry summaries.
+                let summary = entry["summary"].as_str().unwrap();
+                assert_ne!(summary.trim(), "");
+                assert!(summary.chars().count() <= 70);
+                assert!(
+                    !definition["description"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with(summary)
+                );
+                if entry["name"] == "secret" {
+                    assert_eq!(summary, "Request sensitive values from the user securely.");
+                }
+            }
+            // Collapse/progress gates must not shrink the Settings inventory.
+            {
+                let mut cfg = state.config.write();
+                cfg.collapse_tools = false;
+                cfg.progress_tracking = true;
+            }
+            let response = app
+                .clone()
+                .oneshot(mcp_post(
+                    "/mcp",
+                    &serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+                    }),
+                ))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let listed = listing["result"]["tools"].as_array().unwrap();
+            let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
+                .iter()
+                .copied()
+                .filter(|available| *available != name)
+                .collect();
+            let actual: Vec<_> = listed
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "disabled {name}; unconfigured owners and unbound Design Mode stay hidden"
+            );
+            assert!(
+                listed.iter().all(|entry| entry["name"] != name),
+                "disabled {name} remains discoverable"
+            );
+        }
+    }
+
+    /// Catches: a Settings switch hides critical tools but direct or collapsed
+    /// calls still execute them (the stdio bridge forwards to this same route).
+    #[tokio::test]
+    async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
+        let state = test_state();
+        state.config.write().mcp_capabilities.denied =
+            vec!["session".into(), "agent".into(), "progress".into()];
+        let app = build_router(state.clone(), false, true);
+        for collapse in [false, true] {
+            state.config.write().collapse_tools = collapse;
+            for (name, arguments) in [
+                ("session", serde_json::json!({"action": "list"})),
+                ("agent", serde_json::json!({"action": "list_peers"})),
+                (
+                    "progress",
+                    serde_json::json!({"type": "done", "message": "must not run"}),
+                ),
+            ] {
+                for meta in [false, true] {
+                    let params = if meta {
+                        serde_json::json!({"name": "call_tool", "arguments": {
+                            "tool_name": name, "arguments": arguments
+                        }})
+                    } else {
+                        serde_json::json!({"name": name, "arguments": arguments})
+                    };
+                    let response = app
+                        .clone()
+                        .oneshot(mcp_post(
+                            "/mcp",
+                            &serde_json::json!({
+                                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params
+                            }),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        reply["result"]["isError"], true,
+                        "{name} collapse={collapse} meta={meta}: {reply}"
+                    );
+                    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+                    assert!(
+                        text.contains(&format!("Tool '{name}' is disabled by configuration")),
+                        "{reply}"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
-        state.config.write().disabled_native_tools = vec!["debug".to_string()];
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
+        state.config.write().mcp_capabilities.denied = vec!["diagnostics".to_string()];
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -5372,18 +6704,16 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        let total = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        // total native − 1 disabled
-        assert_eq!(tools.len(), total - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(
-            !names.contains(&"debug"),
-            "disabled tool must not appear in tools/list"
+        let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != "debug")
+            .collect();
+        assert_eq!(
+            names, expected,
+            "disabled debug must not appear in discovery"
         );
-        assert!(names.contains(&"session"));
     }
 
     /// The count this used to assert (`>= 13`) was sized when a second tool
@@ -5402,11 +6732,10 @@ mod tests {
         for core in [
             "session",
             "agent",
-            "task",
             "repo",
             "progress",
             "ui",
-            "config",
+            "settings",
             "debug",
             "plugin_dev_guide",
         ] {
@@ -5582,11 +6911,9 @@ mod tests {
     async fn test_session_input_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "input"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5618,7 +6945,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("'input'"));
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["input"]},{"required":["special_key"]},{"required":["pty_description"]}])
+        );
     }
 
     #[tokio::test]
@@ -5647,11 +6977,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5675,11 +7003,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5704,11 +7030,9 @@ mod tests {
     async fn test_session_close_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "close"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5732,11 +7056,9 @@ mod tests {
     async fn test_session_pause_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "pause"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5760,11 +7082,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -5811,69 +7131,123 @@ mod tests {
         assert!(result["error"].as_str().unwrap().contains("not found"));
     }
 
-    // --- Config meta-command tests ---
+    // --- Typed settings MCP cutover contracts ---
 
+    // Catches: typed app reads returning raw credentials after the config tool cutover.
     #[tokio::test]
-    async fn test_config_get() {
+    async fn test_settings_get_redacts_app_secrets() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+        crate::credentials::reset_test_faults();
         let state = test_state();
         {
             let mut cfg = state.config.write();
-            cfg.services.auth.password_hash = "password-hash".to_string();
-            cfg.services.auth.session_token = "session-secret".to_string();
-            cfg.services.auth.session_token_exists = true;
-            cfg.services.relay.token = "relay-secret".to_string();
-            cfg.services.relay.token_exists = Some(true);
-            cfg.services.push.vapid_private_key = "vapid-secret".to_string();
-            cfg.services.push.vapid_private_key_exists = true;
+            cfg.services.auth.password_hash = "password-hash".into();
+            cfg.services.auth.session_token = "session-secret".into();
+            cfg.services.relay.token = "relay-secret".into();
+            cfg.services.push.vapid_private_key = "vapid-secret".into();
         }
-        let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "get"})).await;
-        assert!(result["font_family"].as_str().is_some());
-        assert!(
-            result.pointer("/services/auth/password_hash").is_none(),
-            "Password hash should be stripped from MCP tool response"
-        );
-        assert!(result.pointer("/services/auth/session_token").is_none());
-        assert_eq!(
-            result.pointer("/services/auth/session_token_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert!(result.pointer("/services/relay/token").is_none());
-        assert_eq!(
-            result.pointer("/services/relay/token_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert!(result.pointer("/services/push/vapid_private_key").is_none());
-        assert_eq!(
-            result.pointer("/services/push/vapid_private_key_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-    }
-
-    #[tokio::test]
-    async fn test_config_save_requires_base_and_config() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "save"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Invalid config save request")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_config_save_invalid_config() {
-        let state = test_state();
+        let paths = [
+            "/font_family",
+            "/services/auth/password_hash",
+            "/services/auth/session_token",
+            "/services/relay/token",
+            "/services/push/vapid_private_key",
+        ];
         let result = call_mcp_tool(
             &state,
-            "config",
+            "settings",
             serde_json::json!({
-                "action": "save",
-                "config": "not an object"
+                "action":"get", "target":{"kind":"machine"}, "store":"app", "paths":paths
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("Invalid config"));
+        assert!(
+            result["values"]["/font_family"]["stored"].is_string(),
+            "{result}"
+        );
+        for path in &paths[1..] {
+            assert_eq!(
+                result["values"][path]["stored"],
+                serde_json::json!({"status":"set"}),
+                "{result}"
+            );
+        }
+        for secret in [
+            "password-hash",
+            "session-secret",
+            "relay-secret",
+            "vapid-secret",
+        ] {
+            assert!(!result.to_string().contains(secret), "{result}");
+        }
+        let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"get"})).await;
+        assert!(
+            retired["error"].as_str().unwrap().contains("Unknown tool"),
+            "{retired}"
+        );
+    }
+
+    // Catches: malformed legacy-style writes accidentally reaching typed persistence.
+    #[tokio::test]
+    async fn test_settings_patch_requires_revision_and_operations() {
+        let state = test_state();
+        let result = call_mcp_tool(
+            &state,
+            "settings",
+            serde_json::json!({
+                "action":"patch", "target":{"kind":"machine"}, "store":"app"
+            }),
+        )
+        .await;
+        let variants = crate::test_support::mcp_argument_constraint(&result, "", "anyOf");
+        let patch = variants
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant["oneOf"].as_array())
+            .flatten()
+            .find(|variant| variant["properties"]["action"]["const"] == "patch")
+            .expect("patch repair schema");
+        assert_eq!(
+            patch["required"],
+            serde_json::json!([
+                "action",
+                "target",
+                "store",
+                "expectedRevision",
+                "operations"
+            ])
+        );
+        let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"save"})).await;
+        assert!(
+            retired["error"].as_str().unwrap().contains("Unknown tool"),
+            "{retired}"
+        );
+    }
+
+    // Catches: an invalid typed value being persisted after legacy whole-config saves were removed.
+    #[tokio::test]
+    async fn test_settings_patch_rejects_invalid_typed_value() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let before = call_mcp_tool(
+            &state,
+            "settings",
+            serde_json::json!({
+                "action":"get", "target":{"kind":"machine"}, "store":"app", "paths":["/font_size"]
+            }),
+        )
+        .await;
+        assert!(before["revision"].is_string(), "{before}");
+        let result = call_mcp_tool(&state, "settings", serde_json::json!({
+            "action":"patch", "target":{"kind":"machine"}, "store":"app", "expectedRevision":before["revision"],
+            "operations":[{"op":"set", "path":"/font_size", "value":"not a number"}]
+        })).await;
+        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        assert!(!dir.path().join("config.json").exists());
     }
 
     // --- Git meta-command tests ---
@@ -5887,11 +7261,9 @@ mod tests {
             serde_json::json!({"action": "worktree_list"}),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'path'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["path"])
         );
     }
 
@@ -5908,12 +7280,99 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'branch'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["branch"]},{"required":["worktree_path"]}])
         );
+    }
+
+    // Catches: worktree_remove demanding `branch`, so a detached checkout could
+    // not be removed through MCP at all; and the path route skipping the orphan
+    // safety verdict (untracked files must survive).
+    #[tokio::test]
+    async fn test_repo_worktree_remove_by_path_removes_clean_detached_and_refuses_untracked() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let add = |name: &str| {
+            let linked = repo.path().join(name);
+            crate::git_cli::git_cmd(repo.path())
+                .args([
+                    "worktree",
+                    "add",
+                    "--detach",
+                    linked.to_str().unwrap(),
+                    "HEAD",
+                ])
+                .run()
+                .unwrap();
+            linked
+        };
+        let clean = add("clean");
+        let dirty = add("dirty");
+        std::fs::write(dirty.join("untracked.txt"), "keep me").unwrap();
+
+        let removed = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "worktree_path": clean.to_str().unwrap()
+            }),
+        )
+        .await;
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert!(!clean.exists());
+
+        let refused = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "worktree_path": dirty.to_str().unwrap()
+            }),
+        )
+        .await;
+        assert!(
+            refused["error"].as_str().unwrap().contains("untracked"),
+            "{refused}"
+        );
+        assert!(dirty.join("untracked.txt").exists());
+    }
+
+    // Catches: worktree_remove defaulting `force` to true (or ignoring its absence), which
+    // would discard the uncommitted work of a branch worktree without confirmation.
+    #[tokio::test]
+    async fn test_repo_worktree_remove_without_force_refuses_a_dirty_branch_worktree() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("dirty-wt");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "dirty-branch",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(linked.join("work.txt"), "uncommitted").unwrap();
+
+        let result = call_mcp_tool(
+            &test_state(),
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "branch": "dirty-branch"
+            }),
+        )
+        .await;
+
+        assert!(result["error"].is_string(), "{result}");
+        assert!(linked.join("work.txt").exists());
     }
 
     #[tokio::test]
@@ -5930,11 +7389,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("workspace_id was renamed to branch")
+        // Catches: a removed alias starts removal without a supported target.
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
         );
     }
 
@@ -5944,37 +7402,30 @@ mod tests {
     async fn test_session_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
-        assert!(result["error"].as_str().unwrap().contains("list, create"));
     }
 
     #[tokio::test]
     async fn test_session_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "bogus"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'bogus'")
-        );
-        assert!(result["error"].as_str().unwrap().contains("session"));
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("create")));
+        assert!(!allowed.contains(&serde_json::json!("bogus")));
     }
 
     #[tokio::test]
     async fn test_repo_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
     }
 
@@ -5982,12 +7433,11 @@ mod tests {
     async fn test_repo_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "commit"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'commit'")
-        );
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("worktree_list")));
+        assert!(!allowed.contains(&serde_json::json!("commit")));
     }
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.
@@ -6051,7 +7501,20 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("untracked"));
         assert!(linked.join("untracked.txt").exists());
@@ -6106,7 +7569,20 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("branch"));
 
@@ -6152,6 +7628,253 @@ mod tests {
             .unwrap();
         assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
         assert!(linked.exists(), "tag-only orphan must survive safe removal");
+    }
+
+    /// A clean detached checkout with a live session registered in it.
+    #[cfg(unix)]
+    fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "agent-1");
+        crate::state::tests_support::set_session_cwd(&state, "agent-1", &linked.to_string_lossy());
+        state
+            .session_maps
+            .sessions
+            .get("agent-1")
+            .unwrap()
+            .lock()
+            .display_name = Some("Claude: refactor".to_string());
+        (repo, linked, state)
+    }
+
+    // Catches: a clean detached checkout reported safe (and auto-removed) while
+    // an agent session is still working inside it.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
+        assert_eq!(rows[0]["safe"], false);
+        assert!(
+            rows[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Claude: refactor")
+        );
+        assert_eq!(rows[0]["live_sessions"][0]["session_id"], "agent-1");
+    }
+
+    // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
+    // skipping the session registry that the assessment consults.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+
+        let answer = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert!(
+            answer["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("Claude") || error.contains("live session")),
+            "{answer}"
+        );
+
+        let removal = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            linked.exists(),
+            "a checkout with a live session must survive"
+        );
+    }
+
+    // Catches: a confirmed (safeOnly=false) removal ignoring a session that
+    // started after the user reviewed the dialog, or refusing the sessions the
+    // user did see.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let remove = |sessions: serde_json::Value| {
+            mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": sessions,
+                }),
+            )
+        };
+
+        let unreviewed = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!([])))
+            .await
+            .unwrap();
+        assert_eq!(unreviewed.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        crate::state::tests_support::insert_dummy_session(&state, "agent-late");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "agent-late",
+            &linked.to_string_lossy(),
+        );
+        let late = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!(["agent-1"])))
+            .await
+            .unwrap();
+        assert_eq!(late.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        let reviewed = build_router(state, false, true)
+            .oneshot(remove(serde_json::json!(["agent-1", "agent-late"])))
+            .await
+            .unwrap();
+        assert_eq!(reviewed.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a client that predates `confirmedSessions` (field absent) being treated as
+    // having reviewed every session, so its removal closes a live checkout.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+    }
+
+    // Catches: an id list that names sessions which do not (or no longer) live in the checkout
+    // blocking a removal that has no live session at all.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_ignores_stale_confirmed_ids() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": ["gone-1"],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a path outside the repo's worktree list being refused as a server error (500)
+    // instead of 400 on the confirmed (safeOnly=false) path.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
+        let (repo, _linked, state) = orphan_with_live_session();
+        let stranger = tempfile::tempdir().unwrap();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": stranger.path().display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": [],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(stranger.path().exists());
     }
 
     #[tokio::test]
@@ -6211,6 +7934,188 @@ mod tests {
             linked.exists(),
             "answering only closes the dialog; UI decides removal"
         );
+    }
+
+    fn critic_detached_checkout(repo: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let linked = repo.join(name);
+        crate::git_cli::git_cmd(repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        linked
+    }
+
+    async fn critic_remove_by_path(
+        state: &Arc<AppState>,
+        repo: &std::path::Path,
+        worktree_path: &str,
+    ) -> serde_json::Value {
+        call_mcp_tool(
+            state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.to_str().unwrap(),
+                "worktree_path": worktree_path
+            }),
+        )
+        .await
+    }
+
+    // Catches (critic-1367): the path route reaching `git worktree remove` for the main
+    // checkout when it is the detached one (rebase/bisect/`checkout --detach` leave it
+    // so), naming it from the repo itself or from a linked worktree as `path`.
+    #[tokio::test]
+    async fn worktree_remove_by_path_never_removes_the_main_checkout_even_when_detached() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::git_cli::git_cmd(repo.path())
+            .args(["checkout", "--detach"])
+            .run()
+            .unwrap();
+        // The linked checkout lives inside the main one; hide it from `git status` so
+        // the main checkout is clean and only the removal guard can stop the call.
+        std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
+        let caller = critic_detached_checkout(repo.path(), "caller");
+        let main = repo.path().to_str().unwrap();
+
+        let by_itself = critic_remove_by_path(&state, repo.path(), main).await;
+        let by_a_linked_caller = critic_remove_by_path(&state, &caller, main).await;
+
+        assert!(by_itself["error"].is_string(), "{by_itself}");
+        assert!(
+            by_a_linked_caller["error"].is_string(),
+            "{by_a_linked_caller}"
+        );
+        assert!(repo.path().join("README.md").exists());
+        assert!(repo.path().join(".git").exists());
+        assert!(caller.exists());
+    }
+
+    // Catches (critic-1367): the path route skipping a check the sweep applies, so a
+    // checkout with staged work, a commit no branch holds, or a branch attached to it
+    // is removed through MCP.
+    #[tokio::test]
+    async fn worktree_remove_by_path_refuses_staged_work_unreachable_commits_and_branch_checkouts()
+    {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let staged = critic_detached_checkout(repo.path(), "staged");
+        std::fs::write(staged.join("new.txt"), "x").unwrap();
+        crate::git_cli::git_cmd(&staged)
+            .args(["add", "new.txt"])
+            .run()
+            .unwrap();
+        let unreachable = critic_detached_checkout(repo.path(), "unreachable");
+        std::fs::write(unreachable.join("only-here.txt"), "x").unwrap();
+        crate::git_cli::git_cmd(&unreachable)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&unreachable)
+            .args(["commit", "-m", "only here"])
+            .run()
+            .unwrap();
+        let attached = repo.path().join("attached");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "attached",
+                attached.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+
+        for (dir, needle) in [
+            (&staged, "uncommitted"),
+            (&unreachable, "unreachable"),
+            (&attached, "not detached"),
+        ] {
+            let result = critic_remove_by_path(&state, repo.path(), dir.to_str().unwrap()).await;
+            assert!(
+                result["error"].as_str().is_some_and(|e| e.contains(needle)),
+                "{}: {result}",
+                dir.display()
+            );
+            assert!(dir.exists(), "{} must survive", dir.display());
+        }
+    }
+
+    // Catches (critic-1367): `worktree_path` accepted without being matched against the
+    // repo's own worktree list (a stranger directory, a relative path, an empty string,
+    // a `..` hop out of a real checkout), which would delete anything the caller names.
+    #[tokio::test]
+    async fn worktree_remove_by_path_refuses_anything_that_is_not_a_registered_worktree() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let linked = critic_detached_checkout(repo.path(), "linked");
+        std::fs::create_dir(linked.join("sub")).unwrap();
+        let stranger = tempfile::tempdir().unwrap();
+        std::fs::write(stranger.path().join("precious.txt"), "x").unwrap();
+        let candidates = [
+            stranger.path().display().to_string(),
+            "linked".to_string(),
+            String::new(),
+            format!("{}/..", linked.display()),
+            linked.join("sub").display().to_string(),
+        ];
+
+        for candidate in candidates {
+            let result = critic_remove_by_path(&state, repo.path(), &candidate).await;
+            assert!(result["error"].is_string(), "{candidate:?}: {result}");
+        }
+
+        assert!(stranger.path().join("precious.txt").exists());
+        assert!(linked.join("sub").exists());
+        assert!(repo.path().join("README.md").exists());
+    }
+
+    // Catches (critic-1367): the path route bypassing the session registry, so an agent
+    // working in the checkout loses its directory to another agent's cleanup.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn worktree_remove_by_path_refuses_a_checkout_with_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let result = critic_remove_by_path(&state, repo.path(), linked.to_str().unwrap()).await;
+
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("live session")),
+            "{result}"
+        );
+        assert!(linked.exists());
+    }
+
+    // Catches (critic-1367): a checkout whose directory vanished being refused with
+    // "needs force confirmation" on the path route, so the stale registration that
+    // keeps the orphan listed can never be dropped through MCP.
+    #[tokio::test]
+    async fn worktree_remove_by_path_drops_the_registration_of_a_vanished_checkout() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let linked = critic_detached_checkout(repo.path(), "vanished");
+        std::fs::remove_dir_all(&linked).unwrap();
+
+        let result = critic_remove_by_path(&state, repo.path(), linked.to_str().unwrap()).await;
+
+        assert_eq!(result["ok"], true, "{result}");
+        let listed = crate::git_cli::git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains(linked.to_str().unwrap()), "{listed}");
     }
 
     #[tokio::test]
@@ -6291,18 +8196,15 @@ mod tests {
             .output();
     }
 
+    // Catches: unknown-tool errors lose the rejected name or advertise a stale tool inventory.
     #[tokio::test]
     async fn test_unknown_tool() {
         let state = test_state();
         let result = call_mcp_tool(&state, "nonexistent_tool", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown tool"));
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("story, progress, ui")
+        assert_eq!(
+            result,
+            serde_json::json!({"error": "Unknown tool 'nonexistent_tool'"})
         );
-        assert!(result["error"].as_str().unwrap().contains("search_tools"));
     }
 
     // --- isError flag tests ---
@@ -6671,6 +8573,7 @@ mod tests {
             "/api/no-such-endpoint",
             "/attachments/no-such-endpoint",
             "/dictation/no-such-endpoint",
+            "/settings/no-such-endpoint",
         ] {
             let resp = app
                 .clone()
@@ -6759,6 +8662,9 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         for (method, path) in PROBES {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let req = if *method == "GET" {
                 Request::get(*path).body(Body::empty()).unwrap()
             } else {
@@ -6773,6 +8679,40 @@ mod tests {
             assert!(
                 status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
                 "{method} {path} resolves to no route (got {status})"
+            );
+        }
+    }
+
+    /// Catches: a device route answering 200 with an error body (a plain `Json(..)`
+    /// instead of `json_result`) when the enumeration fails, which the client
+    /// would parse as a device list. The injected failure panics inside the real
+    /// blocking task, independent of enumeration speed; no mock layer.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn the_device_routes_answer_500_when_the_enumeration_fails() {
+        let _failure = crate::audio_enumeration::fail_enumeration_for_test();
+        let app = build_router(test_state(), false, true);
+        for path in ["/dictation/devices", "/audio/output-devices"] {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET {path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                json["error"].as_str().is_some_and(|e| e.contains("failed")),
+                "GET {path}: {json}"
             );
         }
     }
@@ -7199,7 +9139,17 @@ mod tests {
     /// tools/list returns only native tools when no upstream is connected.
     #[tokio::test]
     async fn test_tools_list_no_upstream_returns_native_only() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
@@ -7212,20 +9162,8 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → all native tools only
-        let expected = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        assert_eq!(tools.len(), expected);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"session"));
-        assert!(names.contains(&"agent"));
-        assert!(names.contains(&"repo"));
-        assert!(names.contains(&"ui"));
-        assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"config"));
-        assert!(names.contains(&"debug"));
+        assert_eq!(names, UNCONFIGURED_NATIVE_TOOL_NAMES);
     }
 
     /// tools/call with upstream-prefixed name returns error (no upstream registered).
@@ -7237,6 +9175,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-proxy".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -7276,6 +9215,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-native".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -7320,7 +9260,7 @@ mod tests {
         // Save config with a disabled tool
         let base = state.config.read().clone();
         let mut config = base.clone();
-        config.disabled_native_tools = vec!["session".to_string()];
+        config.mcp_capabilities.denied = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app
@@ -8070,7 +10010,7 @@ mod tests {
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-3");
         assert_eq!(removed, vec!["ghost".to_string()]);
-        assert!(retained.is_empty());
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert!(!state.peer_agents.contains_key("ghost"));
         assert!(!state.orchestrator_peers.contains("ghost"));
     }
@@ -8115,8 +10055,8 @@ mod tests {
             .insert("mcp-live".to_string(), live_channel);
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-old");
-        assert!(removed.is_empty());
-        assert!(retained.is_empty());
+        assert_eq!(removed, [] as [std::string::String; 0]);
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert_eq!(
             state.peer_agents.get("shared").unwrap().mcp_session_id,
             "mcp-live"
@@ -8145,6 +10085,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -8216,6 +10157,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,
@@ -8279,6 +10221,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -8333,6 +10276,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,
@@ -8510,6 +10454,38 @@ mod tests {
     /// ::disable()` added anywhere outside this layer, or an axum release that
     /// drifts its default upward, fails here instead of silently uncapping the
     /// server.
+    /// Catches: the default 2 MiB cap preventing a bounded capture dump, or the
+    /// capture-specific override removing bounds from neighboring routes.
+    #[tokio::test]
+    async fn frame_workload_route_has_its_own_bounded_body_limit() {
+        async fn post_capture(path: &str, bytes: usize) -> StatusCode {
+            let payload = serde_json::json!({"recording": " ".repeat(bytes)}).to_string();
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+        // Invalid recording reaches the handler without writing application data.
+        assert_eq!(
+            post_capture("/debug/frame-workload", 3 * 1024 * 1024).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_capture("/debug/frame-workload", 8 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            post_capture("/logs", 3 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
     #[tokio::test]
     async fn server_limits_reject_a_body_over_the_cap() {
         async fn post_bytes(n: usize) -> StatusCode {
@@ -8539,7 +10515,7 @@ mod tests {
 
     /// A voice file is imported whole, as base64 in JSON, so its one route has
     /// to take more than the 2 MB every other route is held to — and only it.
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[tokio::test]
     async fn only_the_voice_import_route_accepts_a_large_body() {
         async fn post_json(path: &str, body_bytes: usize) -> StatusCode {
@@ -8633,10 +10609,13 @@ mod tests {
         );
     }
 
+    // Catches: uploads still create .tuic and modify info/exclude in the user's repo.
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_streams_into_session_cwd_and_stays_out_of_git() {
+    async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
         crate::state::tests_support::set_session_cwd(
@@ -8644,73 +10623,59 @@ mod tests {
             "upload-session",
             repo.path().to_str().unwrap(),
         );
-        let route = build_router(state.clone(), false, true);
-        let response = route
-            .clone()
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=upload-session&name=notes.txt")
-                    .header(CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("attachment bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(CONTENT_TYPE).unwrap(),
-            "application/json",
-            "the upload endpoint must answer with attachment metadata, not the SPA fallback"
+        assert!(
+            !repo.path().join(".tuic").exists(),
+            "uploads must not create repository files"
         );
+        assert_eq!(std::fs::read(&exclude).unwrap(), before);
         let bytes = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
-        let ignored = std::process::Command::new("git")
-            .args(["check-ignore", "-q"])
-            .arg(path)
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-        assert!(
-            ignored.success(),
-            "an uploaded file must stay out of commits"
-        );
+    }
 
-        let oversized = route
+    // Catches: session close retains fresh uploads under the obsolete day-count policy.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_session_end_removes_fresh_uploads() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ended-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "ended-upload",
+            repo.path().to_str().unwrap(),
+        );
+        let response = build_router(state.clone(), false, true)
             .oneshot(
-                Request::post("/attachments/upload?kind=pty&id=upload-session&name=too-big.bin")
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .body(Body::from(vec![0u8; 26 * 1024 * 1024]))
+                Request::post("/attachments/upload?kind=pty&id=ended-upload&name=notes.txt")
+                    .body(Body::from("fresh bytes"))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        assert_eq!(
-            std::fs::read_dir(repo.path().join(".tuic/attachments"))
-                .unwrap()
-                .count(),
-            1
-        );
-        let fresh = repo.path().join(".tuic/attachments/2-fresh.txt");
-        std::fs::write(&fresh, b"keep me").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
-        std::fs::File::open(path)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
             .unwrap();
-        crate::pty::cleanup_session("upload-session", &state);
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        crate::pty::cleanup_session("ended-upload", &state);
         assert!(
             !path.exists(),
-            "closing the session removes attachments older than seven days"
-        );
-        assert_eq!(
-            std::fs::read(&fresh).unwrap(),
-            b"keep me",
-            "recent attachments survive cleanup"
+            "ending the session removes fresh attachments too"
         );
     }
 
@@ -8741,12 +10706,116 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    // Catches: an old Claude/Gemini agent gets an inaccessible upload with no useful notice.
+    #[tokio::test]
+    async fn attachment_legacy_agent_gets_restart_notice() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "legacy-agent");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("claude".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("legacy-agent".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=legacy-agent&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            reply["error"]
+                .as_str()
+                .unwrap()
+                .contains("Start a new session")
+        );
+        assert!(!state.data_dir.join("attachments").exists());
+    }
+
+    // Catches: ego uploads imply an unsupported invocation-scoped read grant.
+    #[tokio::test]
+    async fn attachment_ego_upload_explains_confined_read_root_requirement() {
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "ego-upload");
+        let mut row = crate::state::SessionState::default();
+        row.seed_configured_agent(Some("ego".into()));
+        state
+            .session_maps
+            .session_states
+            .insert("ego-upload".into(), row);
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=ego-upload&name=notes.txt")
+                    .body(Body::from("bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            receipt["notice"]
+                .as_str()
+                .unwrap()
+                .contains("existing user/profile read root")
+        );
+        assert_eq!(
+            std::fs::read(receipt["path"].as_str().unwrap()).unwrap(),
+            b"bytes"
+        );
+    }
+
+    // Catches: a failed streamed/empty upload leaves partial bytes in session storage.
+    #[tokio::test]
+    async fn attachment_empty_or_oversized_stream_leaves_no_file() {
+        let state = test_state();
+        state.config.write().attachment_max_bytes = 1;
+        crate::state::tests_support::insert_dummy_session(&state, "failed-upload");
+        let route = build_router(state.clone(), false, true);
+        for (body, status) in [
+            ("", StatusCode::BAD_REQUEST),
+            ("xx", StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let response = route
+                .clone()
+                .oneshot(
+                    Request::post("/attachments/upload?kind=pty&id=failed-upload&name=notes.txt")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                std::fs::read_dir(state.data_dir.join("attachments/pty-failed-upload"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn attachment_upload_excludes_nested_session_directory_from_git() {
+    async fn attachment_upload_leaves_nested_repository_and_legacy_files_untouched() {
         let repo = create_temp_git_repo();
         let nested = repo.path().join("project/subdir");
         std::fs::create_dir_all(&nested).unwrap();
+        let legacy = nested.join(".tuic/attachments/user.txt");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"user bytes").unwrap();
+        let exclude = repo.path().join(".git/info/exclude");
+        let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
         crate::state::tests_support::set_session_cwd(
@@ -8754,7 +10823,7 @@ mod tests {
             "nested-upload",
             nested.to_str().unwrap(),
         );
-        let response = build_router(state, false, true)
+        let response = build_router(state.clone(), false, true)
             .oneshot(
                 Request::post("/attachments/upload?kind=pty&id=nested-upload&name=notes.txt")
                     .body(Body::from("nested bytes"))
@@ -8769,15 +10838,10 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
         assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
-        assert!(
-            std::process::Command::new("git")
-                .args(["check-ignore", "-q"])
-                .arg(path)
-                .current_dir(repo.path())
-                .status()
-                .unwrap()
-                .success()
-        );
+        crate::pty::cleanup_session("nested-upload", &state);
+        assert_eq!(std::fs::read(legacy).unwrap(), b"user bytes");
+        assert_eq!(std::fs::read(exclude).unwrap(), before);
+        assert!(!path.exists());
     }
 
     #[tokio::test]
@@ -8785,7 +10849,7 @@ mod tests {
         let response = build_router(test_state(), false, true)
             .oneshot(
                 Request::post(format!(
-                    "/attachments/upload?kind=acp&id={}&name=notes.txt",
+                    "/attachments/upload?kind=acp&id={}&session=missing&name=notes.txt",
                     crate::acp::AcpConnectionId::new()
                 ))
                 .body(Body::from("bytes"))
@@ -8898,7 +10962,10 @@ mod tests {
             .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
-        let mut get = Request::get(url).body(Body::empty()).unwrap();
+        let mut get = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
         get.extensions_mut().insert(ConnectInfo(address));
         let response = app.oneshot(get).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -8912,3 +10979,107 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod workflow_authority_critic_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Catches: accepted loopback token actions being refused or recorded as LocalApi instead of Human.
+    #[tokio::test]
+    async fn loopback_token_exchange_records_human_provenance_for_successful_action() {
+        let config =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated project");
+        let store = crate::stories::StoryStore::open().unwrap();
+        let plan = store
+            .create_plan(crate::stories::NewPlan {
+                // Match story_action: the store expects the API's canonical identity.
+                project: crate::progress::resolve_owning_project(Some(
+                    project.path().to_str().unwrap(),
+                ))
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+                title: "Operator plan".into(),
+                source: "operator.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(crate::stories::NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Approved by the operator".into()],
+                priority: 1,
+                origin: crate::stories::StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let app = build_router(super::tests::test_state(), false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut request = Request::get("/api/auth/session-token")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(local));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let token = value["token"].as_str().expect("returned token");
+        for (index, (with_address, with_token, command)) in [
+            (true, true, "block"),
+            (false, false, "unblock"),
+            (true, false, "block"),
+            (false, true, "unblock"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let current = store.get_story(&story.id).unwrap();
+            let body = serde_json::json!({"action": {
+                "action": "transition", "story_id": story.id,
+                "expected_revision": current.revision, "command": command
+            }});
+            let mut path = format!("/stories/action?path={}", project.path().display());
+            if with_token {
+                path.push_str(&format!("&token={token}"));
+            }
+            let mut request = Request::post(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            if with_address {
+                request.extensions_mut().insert(ConnectInfo(local));
+            }
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let expected_status = if command == "block" {
+                crate::stories::StoryStatus::Blocked
+            } else {
+                crate::stories::StoryStatus::Ready
+            };
+            assert_eq!(store.get_story(&story.id).unwrap().status, expected_status);
+            let history = store.transition_history(&story.id).unwrap();
+            assert_eq!(history.len(), index + 1);
+            assert_eq!(
+                history[index].actor,
+                if with_token {
+                    crate::stories::StoryTransitionActor::Human
+                } else {
+                    crate::stories::StoryTransitionActor::LocalApi
+                }
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod remote_settings_tests;

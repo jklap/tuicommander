@@ -5,6 +5,8 @@
   top: var(--app-top, 0px);
   left: 0;
   right: 0;
+  /* DEFERRED (2026-10-21) — 2116: measure iPhone viewport/safe-area geometry
+     before changing keyboard-critical sizing; screenshots alone show a 62pt band. */
   height: var(--app-height, 100dvh);
   padding-top: env(safe-area-inset-top, 0px);
   background: var(--bg-primary);
@@ -43,7 +45,7 @@
   justify-content: space-between;
   padding: 10px 16px;
   background: var(--accent, #3b82f6);
-  color: var(--text-on-accent);
+  color: var(--mobile-update-foreground);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -51,20 +53,9 @@
 }
 
 .updateBanner:active {
-  opacity: 0.85;
+  background: var(--accent-hover);
 }
 
-.reconnectBanner {
-  padding: 10px 16px;
-  background: color-mix(in srgb, var(--attention) 40%, var(--bg-primary));
-  color: var(--warning);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: center;
-  animation: reconnectPulse 2s ease-in-out infinite;
-}
-
-@keyframes reconnectPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
+/* Keep view state and drafts mounted during a connection outage. */
+.views { height: 100%; }
+.views[hidden] { display: none; }

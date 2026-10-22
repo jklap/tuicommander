@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, configure, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toastsStore } from "../../stores/toasts";
 import MobileApp from "../MobileApp";
@@ -12,18 +12,24 @@ const { rpc, subscribePty, output } = vi.hoisted(() => ({
 	output: { text: "" },
 }));
 
-vi.mock("../../transport", () => ({ rpc, subscribePty }));
+vi.mock("../../transport", () => ({
+	rpc,
+	subscribePty,
+	subscribeEvents: vi.fn(async () => () => {}),
+	isTauri: () => false,
+}));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [session],
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
+		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 	}),
 }));
 vi.mock("../useMobileNotifications", () => ({ useMobileNotifications: vi.fn() }));
@@ -40,6 +46,12 @@ const session: SessionInfo = {
 	worktree_branch: "main",
 	state: { awaiting_input: false, rate_limited: false, last_activity_ms: 1, agent_type: "codex" },
 };
+
+// Every wait below polls for its condition; the deadlines only bound a hang.
+// The 1s waitFor and 5s test defaults expire when a loaded full-suite run
+// starves this file of CPU, and the test deadline must outlast the wait.
+configure({ asyncUtilTimeout: 20_000 });
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const guide = "# Guide\n\nThird line of the guide.\n";
 
@@ -63,7 +75,7 @@ beforeEach(async () => {
 			if (args?.repoPath === "/repo" && args?.file === "docs/guide.md") return guide;
 			throw new Error("Read outside the expected repository");
 		}
-		if (command === "list_directory") return [];
+		if (command === "list_directory" || command === "list_open_markdown_tabs") return [];
 		throw new Error(`Unexpected command: ${command}`);
 	});
 	vi.stubGlobal(
@@ -107,10 +119,13 @@ describe("mobile session output links", () => {
 		const view = render(() => <MobileApp />);
 		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "docs/guide.md:3" })));
 		const editor = (await waitFor(() => view.getByRole("textbox", { name: "File content" }))) as HTMLTextAreaElement;
-		expect(editor.value).toBe(guide);
-		expect(editor.selectionStart).toBe(guide.indexOf("Third line"));
+		await waitFor(() => {
+			expect(editor.value).toBe(guide);
+			expect(editor.selectionStart).toBe(guide.indexOf("Third line"));
+		});
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
-		await fireEvent.click(view.getByRole("button", { name: "/secret/private.md" }));
+		// Back remounts the output, which refetches before the links render again.
+		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "/secret/private.md" })));
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/outside.*registered repository/i));
 		expect(view.getByText("/secret/private.md", { selector: "[class*='message']" })).toBeTruthy();
 		expect(rpc).not.toHaveBeenCalledWith("fs_read_file", expect.objectContaining({ file: "/secret/private.md" }));

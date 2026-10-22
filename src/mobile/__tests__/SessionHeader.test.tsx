@@ -6,7 +6,8 @@ import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
-vi.mock("../../transport", () => ({ rpc }));
+vi.mock("../../transport", () => ({ rpc, subscribeEvents: vi.fn(async () => () => {}) }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div data-testid="terminal-output">Output</div> }));
 vi.mock("../components/CommandInput", () => ({ CommandInput: () => <textarea aria-label="Command" /> }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
@@ -37,20 +38,31 @@ function session(id: string, agentType: string, name: string): SessionInfo {
 	};
 }
 
+// useMobileVoice probes get_hands_free_status on mount. Answering it like the headless
+// `tuic-remote` (a rejection) hides the control and leaves no dictation import pending.
+function rpcReplies(value: unknown) {
+	rpc.mockImplementation((method: string) =>
+		method === "get_hands_free_status" ? Promise.reject(new Error("404")) : Promise.resolve(value),
+	);
+}
+
 afterEach(() => {
 	cleanup();
 	rpc.mockReset();
+	// useMobileVoice probes get_hands_free_status on mount; an undefined return breaks its promise chain.
+	rpcReplies({});
 });
 
 describe("mobile session header", () => {
 	it("shows the Codex brand and name in one compact header, with session-scoped Progress in overflow", async () => {
-		rpc.mockResolvedValue({
+		rpcReplies({
 			project: "/repo",
 			entries: [{ id: 1, type: "done", text: "Tests pass", ptyId: "codex-1" }],
 			nextCursor: null,
 		});
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("codex-1", "codex", "Merge risk")}
 				sessionExists
 				onBack={() => {}}
@@ -76,13 +88,14 @@ describe("mobile session header", () => {
 	});
 
 	it("shows the Claude brand and this session's task count and intent history", async () => {
-		rpc.mockResolvedValue({
+		rpcReplies({
 			project: "/repo",
 			entries: [{ id: 2, type: "intent", text: "Earlier audit", ptyId: "claude-2" }],
 			nextCursor: null,
 		});
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("claude-2", "claude", "Audit workspace")}
 				sessionExists
 				onBack={() => {}}
@@ -108,6 +121,7 @@ describe("mobile session header", () => {
 		const onOpenFiles = vi.fn();
 		const view = render(() => (
 			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
 				session={session("codex-1", "codex", "Merge risk")}
 				sessionExists
 				onBack={() => {}}
@@ -122,10 +136,39 @@ describe("mobile session header", () => {
 		expect(onOpenFiles).toHaveBeenCalledOnce();
 	});
 
+	it("keeps tasks two taps away from More when phone controls are hidden", async () => {
+		// catches: hiding the phone task button without an overflow replacement.
+		rpcReplies({ project: "/repo", entries: [], nextCursor: null });
+		const view = render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={session("phone-tasks", "claude", "COORDINATOR")}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+		await fireEvent.click(view.getByRole("button", { name: "Tasks, 3 active" }));
+		await waitFor(() =>
+			expect(rpc).toHaveBeenCalledWith("progress_list", {
+				project: "/repo",
+				input: expect.objectContaining({ ptyId: "phone-tasks" }),
+			}),
+		);
+		expect(view.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false");
+	});
+
 	it("explains when a session has no project instead of showing another session's journal", async () => {
 		const detached = { ...session("codex-3", "codex", "Detached"), cwd: null, worktree_path: null };
 		const view = render(() => (
-			<SessionDetailScreen session={detached} sessionExists onBack={() => {}} onOpenFiles={() => {}} />
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={detached}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
 		));
 		await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
 		await fireEvent.click(view.getByRole("button", { name: /Progress/ }));

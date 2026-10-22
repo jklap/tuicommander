@@ -1,6 +1,7 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { Select } from "../ui/Select";
 import s from "./ClaudeUsageDashboard.module.css";
 
 // ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ function svgPath(points: { x: number; y: number }[]): string {
 function svgAreaPath(points: { x: number; y: number }[]): string {
 	if (points.length === 0) return "";
 	const line = svgPath(points);
-	const lastX = points[points.length - 1].x;
+	const lastX = points.at(-1)!.x;
 	const firstX = points[0].x;
 	return `${line} L${lastX.toFixed(1)},${PLOT_H.toFixed(1)} L${firstX.toFixed(1)},${PLOT_H.toFixed(1)} Z`;
 }
@@ -579,7 +580,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 	/** Pretty-print a claim key like "seven_day_sonnet" → "7-Day Sonnet". */
 	const claimLabel = (key: string): string => {
 		const match = rateBuckets().find((b) => b.key === key);
-		return match ? match.label : key.replace(/_/g, " ");
+		return match ? match.label : key.replaceAll("_", " ");
 	};
 
 	/** Format a number with thousand separators (no decimal for integers). */
@@ -657,7 +658,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 			{/* Header with scope selector */}
 			<div class={s.header}>
 				<span class={s.title}>Claude Usage Dashboard</span>
-				<select class={s.scopeSelect} value={scope()} onChange={(e) => setScope(e.currentTarget.value)}>
+				<Select class={s.scopeSelect} value={scope()} onChange={(e) => setScope(e.currentTarget.value)}>
 					<option value="all">All Projects</option>
 					<For each={projects()}>
 						{(p) => (
@@ -666,7 +667,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 			</div>
 
 			{/* Loading state */}

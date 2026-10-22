@@ -19,6 +19,10 @@ use crate::state::{
 use crate::cli::has_cli;
 pub(crate) use crate::cli::resolve_cli;
 
+#[cfg(all(test, target_os = "macos", feature = "desktop"))]
+#[path = "agent_launch_reaping_tests.rs"]
+mod launch_reaping_tests;
+
 /// Format a path with line/col for --goto style editors (vscode, cursor, windsurf)
 fn format_goto_arg(path: &str, line: Option<u32>, col: Option<u32>) -> String {
     match (line, col) {
@@ -106,9 +110,9 @@ pub(crate) fn open_in_app(
     line: Option<u32>,
     col: Option<u32>,
 ) -> Result<(), String> {
-    let mut cmd = build_open_in_app_command(&path, &app, line, col)?;
+    let cmd = build_open_in_app_command(&path, &app, line, col)?;
 
-    cmd.spawn()
+    tuic_core::child_reaping::spawn_reaped(cmd)
         .map_err(|e| format!("Failed to open in {app}: {e}"))?;
 
     Ok(())
@@ -412,9 +416,9 @@ pub(crate) fn open_in_custom(
     // Drop blank lines from the args editor (textarea is one-arg-per-line).
     let args: Vec<String> = args.into_iter().filter(|a| !a.trim().is_empty()).collect();
     let expanded = expand_placeholders(&args, &ctx);
-    Command::new(resolve_cli(&executable))
-        .args(&expanded)
-        .spawn()
+    let mut command = Command::new(resolve_cli(&executable));
+    command.args(&expanded);
+    tuic_core::child_reaping::spawn_reaped(command)
         .map_err(|e| format!("Failed to launch {executable}: {e}"))?;
     Ok(())
 }
@@ -630,21 +634,21 @@ impl std::fmt::Display for ScreenProbeError {
 }
 
 #[cfg(unix)]
-struct ScreenProbeTree;
+pub(crate) struct ScreenProbeTree;
 
 #[cfg(unix)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
         Ok(Self)
     }
 
-    fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
         Ok(())
     }
 
-    fn terminate(self, pid: u32) {
+    pub(crate) fn terminate(self, pid: u32) {
         // The probe owns this group: signal its grandchildren as well as the
         // direct child. The child is reaped separately below.
         unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
@@ -652,11 +656,11 @@ impl ScreenProbeTree {
 }
 
 #[cfg(windows)]
-struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -680,7 +684,7 @@ impl ScreenProbeTree {
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const _,
+                std::ptr::from_ref(&limits).cast(),
                 std::mem::size_of_val(&limits) as u32,
             )
         };
@@ -690,7 +694,7 @@ impl ScreenProbeTree {
         Ok(job)
     }
 
-    fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 
@@ -754,7 +758,7 @@ impl ScreenProbeTree {
         Ok(())
     }
 
-    fn terminate(self, _pid: u32) {
+    pub(crate) fn terminate(self, _pid: u32) {
         // Closing the last handle kills the whole job, including cmd.exe's
         // node.exe child when a Windows npm shim hangs on --help.
         drop(self);
@@ -768,9 +772,33 @@ impl Drop for ScreenProbeTree {
     }
 }
 
+// SAFETY: the job handle is owned, never borrowed, and all access by workflow
+// checks is serialized by their process mutex.
+#[cfg(windows)]
+unsafe impl Send for ScreenProbeTree {}
+
 /// A help probe owns and tears down its process tree, including descendants
 /// that inherited stdout or stderr. The shared git deadline helper deliberately
 /// has different child-only semantics, so screen probes keep this local.
+pub(crate) fn cli_help(path: &str) -> Option<String> {
+    let executable = resolve_probe_executable(path);
+    let mut cmd = agent_probe_command(executable.to_str().unwrap_or(path));
+    cmd.arg("--help");
+    crate::cli::apply_no_window(&mut cmd);
+    let output = screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)).ok()?;
+    output
+        .status
+        .success()
+        .then(|| {
+            format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .filter(|help| crate::agent_hook_launch::claude_help_is_usable(help))
+}
+
 fn screen_probe_output(
     cmd: &mut Command,
     timeout: std::time::Duration,
@@ -836,14 +864,14 @@ fn screen_probe_output(
 }
 
 fn preferred_agent_path(output: &str) -> Option<&str> {
-    let mut paths = output
+    let paths = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty());
     #[cfg(windows)]
     {
         let choices: Vec<&str> = paths.collect();
-        return choices
+        choices
             .iter()
             .copied()
             .find(|path| {
@@ -858,10 +886,11 @@ fn preferred_agent_path(output: &str) -> Option<&str> {
                         .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
                 })
             })
-            .or_else(|| choices.first().copied());
+            .or_else(|| choices.first().copied())
     }
     #[cfg(not(windows))]
     {
+        let mut paths = paths;
         paths.next()
     }
 }
@@ -1027,13 +1056,22 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "gemini",
     "grok",
     "opencode",
-    "aider",
     "amp",
     "cursor-agent",
     "goose",
     "droid",
     "pi",
+    "ego",
 ];
+
+pub(crate) fn is_known_agent_type(agent_type: &str) -> bool {
+    let binary = if agent_type == "cursor" {
+        "cursor-agent"
+    } else {
+        agent_type
+    };
+    KNOWN_AGENT_BINARIES.contains(&binary)
+}
 
 /// Detect any agent binary location
 pub(crate) fn detect_agent_binary_sync(binary: String) -> AgentBinaryDetection {
@@ -1280,7 +1318,7 @@ fn get_binary_version(path: &str) -> Option<String> {
 
 /// Whether an agent's CLI accepts a bare positional prompt as its first argument.
 ///
-/// Only Claude's CLI does. codex/gemini/aider/goose require a subcommand or an
+/// Only Claude's CLI does. codex/gemini/goose require a subcommand or an
 /// explicit flag, and hand a bare prompt straight to their clap parser, which
 /// rejects it with a usage error and exits with code 2. Spawn paths use this to
 /// fail fast instead of launching a process that dies immediately with no report.
@@ -1304,10 +1342,9 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
         "claude" => &["{prompt}"],
         // Positional prompt (interactive with the task pre-filled).
         "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" => &["{prompt}"],
-        // Aider: non-interactive single message, auto-confirm edits.
-        "aider" => &["--yes-always", "--message", "{prompt}"],
-        // Goose: the `session` subcommand carries the prompt.
-        "goose" => &["session", "{prompt}"],
+        // Goose 1.49: `session` takes no positional prompt (exit 2); `run -s -t`
+        // runs the text, then stays interactive.
+        "goose" => &["run", "-s", "-t", "{prompt}"],
         _ => return None,
     };
     Some(args.iter().map(|s| s.to_string()).collect())
@@ -1371,12 +1408,17 @@ pub(crate) async fn spawn_agent(
 
     let session_id = Uuid::new_v4().to_string();
 
+    let attachment_dir =
+        crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id)?;
+
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
     let state_for_env = state.inner().clone();
     let session_id_for_env = session_id.clone();
     let spawn_tuic_session = pty_config.tuic_session.clone();
+    let launch_receipt = Arc::new(Mutex::new(None));
+    let captured_receipt = Arc::clone(&launch_receipt);
     let (pair, child) = crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows: pty_config.rows,
@@ -1412,12 +1454,30 @@ pub(crate) async fn spawn_agent(
                 launch_args.push(spawn_agent_config.prompt.clone());
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
-            for arg in crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::launch_args(
                 agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-            ) {
+                &attachment_dir,
+            );
+            crate::launch_instructions::apply_env(
+                &mut cmd,
+                agent_type,
+                &launch_args,
+                &crate::config::config_dir(),
+            );
+            *captured_receipt.lock() = Some(crate::prompt_receipt::PromptReceipt::capture(
+                &spawn_agent_config.prompt,
+                "TUIC spawn_agent",
+                &final_args,
+                spawn_agent_config
+                    .cwd
+                    .as_deref()
+                    .or(spawn_pty_config.cwd.as_deref()),
+                false,
+            ));
+            for arg in final_args {
                 cmd.arg(arg);
             }
 
@@ -1427,17 +1487,17 @@ pub(crate) async fn spawn_agent(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
+            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
+            // Inject env flags (feature flags configured in Settings → Agents)
+            for (key, value) in &spawn_pty_config.env {
+                cmd.env(key, value);
+            }
             crate::pty::bind_pty_identity(
                 &state_for_env,
                 &mut cmd,
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
             );
-            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
-            // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &spawn_pty_config.env {
-                cmd.env(key, value);
-            }
             cmd
         },
     )
@@ -1453,16 +1513,32 @@ pub(crate) async fn spawn_agent(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    let mut session_state = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+        ..Default::default()
+    };
+    session_state.seed_configured_agent(agent_config.agent_type.clone());
+    session_state.hook_instrumented = crate::pty::hook_instrumented_for(
+        &crate::config::load_agents_config(),
+        agent_config.agent_type.as_deref(),
+    );
+    state
+        .session_maps
+        .session_states
+        .insert(session_id.clone(), session_state);
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: launch_receipt.lock().take(),
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
             worktree: None,
+            initial_cwd: agent_config.cwd.clone(),
             cwd: agent_config.cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
@@ -1471,6 +1547,7 @@ pub(crate) async fn spawn_agent(
             shell: binary_path.clone(),
         }),
     );
+    crate::prompt_receipt::adopt_mcp_instructions(&state, &session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -1561,6 +1638,57 @@ mod tests {
             "--no-alt-screen-extra",
             "--no-alt-screen"
         ));
+    }
+
+    // Catches: failed help probes log a generic warning but lose the timeout or IO cause.
+    #[cfg(unix)]
+    #[test]
+    fn screen_probe_errors_keep_timeout_and_io_diagnostics() {
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let script = crate::test_support::fake_ssh_script(
+            "screen-probe-warning-timeout",
+            "exec sleep 8",
+            "echo --no-alt-screen",
+        );
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let missing = dir.path().join("missing-codex");
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(output.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+            assert!(!supports_no_alt_screen("codex", &missing.to_string_lossy()));
+        });
+        let log = String::from_utf8(output.lock().clone()).unwrap();
+        let warnings: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("Agent screen capability probe failed"))
+            .collect();
+        assert_eq!(warnings.len(), 2, "{log}");
+        assert!(warnings[0].contains("WARN"), "{log}");
+        assert!(warnings[0].contains("--help timed out"), "{log}");
+        assert!(warnings[1].contains("WARN"), "{log}");
+        assert!(warnings[1].contains("os error 2"), "{log}");
     }
 
     #[cfg(unix)]
@@ -1669,7 +1797,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_screen_help_probe_is_retried_after_cooldown() {
+    // Catches: subtracting the cooldown makes an inconclusive probe retry immediately.
+    fn failed_screen_help_probe_waits_for_cooldown_before_retrying() {
         let script = crate::test_support::fake_ssh_script(
             "screen-help-retry",
             "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
@@ -1678,6 +1807,7 @@ mod tests {
         let marker = script.with_file_name("screen-help-retry.ready");
         let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
         assert!(supports_no_alt_screen("codex", &path));
@@ -1792,6 +1922,12 @@ mod tests {
         }
     }
 
+    // Catches: a removed harness still reported by MCP/HTTP agent detection.
+    #[test]
+    fn known_agent_binaries_exclude_removed_aider() {
+        assert!(!KNOWN_AGENT_BINARIES.contains(&"aider"));
+    }
+
     #[tokio::test]
     async fn batch_agent_detection_uses_async_runtime_and_skips_empty_names() {
         let detections = detect_all_agent_binaries(vec![String::new(), "git".to_string()]).await;
@@ -1804,7 +1940,7 @@ mod tests {
     fn only_claude_accepts_a_bare_prompt() {
         assert!(agent_accepts_bare_prompt("claude"));
         // Every other known agent CLI would exit with code 2 on a bare prompt.
-        for agent in ["codex", "gemini", "aider", "goose", "opencode", "amp"] {
+        for agent in ["codex", "gemini", "goose", "opencode", "amp"] {
             assert!(
                 !agent_accepts_bare_prompt(agent),
                 "{agent} must not be treated as accepting a bare prompt"
@@ -1824,22 +1960,14 @@ mod tests {
                 "{agent} should get a positional prompt template"
             );
         }
-        // Aider: non-interactive message with auto-confirm.
-        assert_eq!(
-            default_prompt_args("aider"),
-            Some(vec![
-                "--yes-always".to_string(),
-                "--message".to_string(),
-                "{prompt}".to_string()
-            ])
-        );
-        // Goose: session subcommand carries the prompt.
+        // Goose 1.49: `goose session <prompt>` exits 2 (unrecognized subcommand);
+        // `run -s -t` runs the text and stays interactive.
         assert_eq!(
             default_prompt_args("goose"),
-            Some(vec!["session".to_string(), "{prompt}".to_string()])
+            Some(["run", "-s", "-t", "{prompt}"].map(String::from).to_vec())
         );
         // Every template must contain the placeholder so substitution works.
-        for agent in ["gemini", "codex", "aider", "goose"] {
+        for agent in ["gemini", "codex", "goose"] {
             assert!(
                 default_prompt_args(agent)
                     .unwrap()
@@ -1865,7 +1993,7 @@ mod tests {
         // We just verify it doesn't panic and returns a proper Result
         match result {
             Ok(path) => {
-                assert!(!path.is_empty());
+                assert_ne!(path, "");
                 assert!(std::path::Path::new(&path).exists());
             }
             Err(msg) => {
@@ -1952,7 +2080,7 @@ mod tests {
         let out = expand_placeholders(&args, &ctx(None, "/proj", None, None, None));
         // Home resolves to a real path on the dev/CI machine — never left literal.
         assert_ne!(out[0], "{home}");
-        assert!(!out[0].is_empty());
+        assert_ne!(out[0], "");
     }
 
     #[test]

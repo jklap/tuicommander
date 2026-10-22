@@ -173,3 +173,36 @@ All shared TypeScript types are centralized in a single file. Key type groups:
 
 ### Callback Types
 `PtyDataHandler`, `PtyExitHandler`
+
+### Clipboard (`utils/clipboard.ts`)
+
+`writeClipboard` and `readClipboard` use the desktop-only `write_clipboard_text`
+and `read_clipboard_text` Tauri commands. These arboard commands bypass WebView
+focus and user-gesture restrictions and the macOS Paste confirmation pill.
+Failures reject the promise. Browser mode uses the client's `navigator.clipboard`;
+there is no HTTP route to the host clipboard. `copyPathToClipboard` keeps absolute
+paths and shortens the home directory to `~`.
+
+### Default-application opens
+
+`handleOpenUrl` accepts only HTTP, HTTPS and mailto URLs. Desktop calls use
+`open_default_app`; browser clients use `window.open` on their own machine.
+`openLocalPath` sends trusted local paths to the same desktop command and does
+not launch a host application in browser mode. Settings plugin documentation
+links and File Browser default-app actions use these helpers. Reveal in file
+manager remains the opener plugin's separate native reveal operation.
+
+The backend uses `open::commands` for platform selection and option-safe
+arguments, then `tuic_core::child_reaping::spawn_reaped` for each launch. It does
+not use the dependency's detached fork. It returns after spawning, preserves
+the application, and waits off the caller thread to reap the launcher.
+
+### Mobile resume diagnostics
+
+The mobile entry checks the document after one animation frame on `pageshow` and
+on a change to visible. An empty root or a shell wholly outside the visible
+viewport produces an `app` warning with the URL, root child count, shell bounds,
+visual viewport height and top offset, visibility state, and the last window
+error since hide. Normal resumes are silent. The diagnostic does not reload or
+change the page. Read it promptly through MCP debug logs: frontend warnings reach
+the backend memory ring, not the daily log file (#1900-5ff6).

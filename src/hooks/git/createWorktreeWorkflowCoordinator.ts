@@ -5,11 +5,13 @@ import { autofixBranchName } from "../../stores/autofix";
 import { githubStore } from "../../stores/github";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
-import { terminalsStore } from "../../stores/terminals";
+import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
-import { effectiveMergeMethod, isMergeMethodNotAllowed } from "../../utils/prMerge";
+import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
+import { reportActionError } from "../../utils/reportActionError";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import { bindStartWork, createStartWork } from "./startWork";
 
 interface WorktreeWorkflowCoordinatorDeps {
 	repo: {
@@ -21,7 +23,12 @@ interface WorktreeWorkflowCoordinatorDeps {
 			createBranch?: boolean,
 			baseRef?: string,
 		) => Promise<PendingCreation["result"] & { status: "ok" }>;
-		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		mergePrViaGithub: (
+			repoPath: string,
+			prNumber: number,
+			mergeMethod: string,
+			expectedHeadSha: string,
+		) => Promise<string>;
 		mergeAndArchiveWorktree: (
 			repoPath: string,
 			branchName: string,
@@ -75,11 +82,11 @@ interface WorktreeWorkflowCoordinatorDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
-	) => Promise<void>;
-	refreshAllBranchStats: () => Promise<void>;
+	) => Promise<string | undefined>;
+	refreshAllBranchStats: (repoPath: string) => Promise<void>;
 }
 
-/** Owns auto-fix, conflict assist, merge, and post-merge cleanup workflows. */
+/** Owns start work (auto-fix included), conflict assist, merge, and post-merge cleanup workflows. */
 export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordinatorDeps) {
 	const {
 		creatingWorktreeRepos,
@@ -89,36 +96,26 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		refreshAllBranchStats,
 	} = deps;
 
-	/** Auto-fix an issue: create a fresh `autofix/issue-<n>` worktree off the
-	 *  default branch and launch the default agent in it seeded with `prompt`.
-	 *  Mirrors confirmCreateWorktree's create/error handling; the agent
-	 *  seed is threaded into setupNewWorktree so the terminal's agentType +
-	 *  pendingInitCommand are set in the same window the runScript path uses. */
+	const handleStartWork = createStartWork({
+		listBaseRefOptions: (repoPath) => deps.repo.listBaseRefOptions(repoPath),
+		createWorktree: (...args) => deps.repo.createWorktree(...args),
+		setupNewWorktree,
+		setStatusInfo: deps.setStatusInfo,
+		creatingWorktreeRepos,
+		setCreatingWorktreeRepos,
+	});
+	bindStartWork(handleStartWork);
+
+	/** Auto-fix an issue: start work on a fresh `autofix/issue-<n>` worktree off
+	 *  the default branch. The user confirmed `prompt` in the auto-fix dialog, so
+	 *  it is submitted rather than left as a draft. */
 	const handleAutofixIssue = async (repoPath: string, issueNumber: number, prompt: string) => {
 		if (creatingWorktreeRepos().has(repoPath)) return;
-		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
-
-		const branch = autofixBranchName(issueNumber);
-		const agentSeed = await buildAgentSeed(prompt, repoPath);
-
 		try {
-			// Fork the auto-fix branch off the repo's default branch (main/master).
-			const baseRefs = await deps.repo.listBaseRefOptions(repoPath);
-			const base = baseRefs.find((r) => r.is_default)?.name ?? baseRefs[0]?.name ?? "main";
-
-			deps.setStatusInfo(`Creating auto-fix worktree ${branch}...`);
-			const result = await deps.repo.createWorktree(repoPath, branch, true, base);
-
-			await setupNewWorktree(repoPath, result, branch, agentSeed);
+			await handleStartWork({ repoPath, branch: autofixBranchName(issueNumber), prompt, delivery: "submit" });
 		} catch (err) {
 			appLogger.error("git", "Failed to create auto-fix worktree", err);
 			deps.setStatusInfo(`Failed to create auto-fix worktree: ${err}`);
-		} finally {
-			setCreatingWorktreeRepos((prev) => {
-				const next = new Set(prev);
-				next.delete(repoPath);
-				return next;
-			});
 		}
 	};
 
@@ -181,28 +178,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
-	/** Merge a worktree branch into target, then archive/delete based on setting.
-	 *  When the branch has an open PR, uses GitHub API with the configured merge strategy.
-	 *  Falls back to local git merge if no PR is found or GitHub API fails. */
-	/** Close all terminals whose cwd is inside a worktree path. */
-	const closeTerminalsInWorktree = async (wtPath: string) => {
-		for (const termId of terminalsStore.getIds()) {
-			const terminal = terminalsStore.get(termId);
-			if (terminal?.cwd && (terminal.cwd === wtPath || terminal.cwd.startsWith(wtPath + "/"))) {
-				await deps.closeTerminal(termId, true);
-			}
-		}
-	};
+	/** All cleanup entry points share the same cwd-based close authority. */
+	const closeTerminalsInWorktree = (worktreePath: string) => closeWorktreeTerminals(worktreePath, deps.closeTerminal);
 
-	/** Close every terminal filed under one workspace. */
 	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
-		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.workspaces[workspaceId];
-		if (branch) {
-			for (const termId of branch.terminals) {
-				await deps.closeTerminal(termId, true);
-			}
-		}
+		const worktreePath = repositoriesStore.get(repoPath)?.workspaces[workspaceId]?.worktreePath;
+		if (worktreePath) await closeTerminalsInWorktree(worktreePath);
 	};
 
 	/** Merge one workspace's branch into `targetBranch`, then dispose of that
@@ -224,11 +205,16 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			if (pr && pr.state === "OPEN") {
 				const preferred = repoSettingsStore.getEffective(repoPath)?.prMergeStrategy ?? "merge";
 				const method = effectiveMergeMethod(pr, preferred);
+				// No head sha means no pin: refuse here instead of falling back to a local merge of unreviewed commits.
+				if (!pr.head_ref_oid?.trim()) {
+					throw new Error("PR head changed: the PR head commit is unknown. Refresh and review before merging.");
+				}
 				try {
-					await deps.repo.mergePrViaGithub(repoPath, pr.number, method);
+					await deps.repo.mergePrViaGithub(repoPath, pr.number, method, pr.head_ref_oid);
 				} catch (githubErr) {
-					if (isMergeMethodNotAllowed(githubErr)) {
-						// Surface 405 to the caller — branch protection rules disallow this merge method
+					if (isMergeMethodNotAllowed(githubErr) || isMergeHeadChanged(githubErr)) {
+						// Surface 405 (branch protection disallows the method) and head-moved (unreviewed
+						// commits: a local merge would include them too) to the caller
 						throw githubErr;
 					}
 					// Other GitHub API failures — fall back to local git merge
@@ -246,12 +232,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				const action = afterMerge as "archive" | "delete";
 				if (!(await finalizeWithConfirmation(repoPath, workspaceId, action))) {
 					deps.setStatusInfo(`Merged ${branchName} via GitHub — worktree kept`);
-					await refreshAllBranchStats();
+					await refreshAllBranchStats(repoPath);
 					return;
 				}
 				deps.setStatusInfo(`Merged ${branchName} via GitHub (${action === "archive" ? "archived" : "deleted"})`);
-				repositoriesStore.removeWorkspace(repoPath, workspaceId);
-				await refreshAllBranchStats();
+				removeWorktreeWorkspace(repoPath, workspaceId);
+				await refreshAllBranchStats(repoPath);
 				return;
 			}
 
@@ -262,8 +248,21 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				throw err;
 			}
 			appLogger.error("git", "Failed to merge and archive worktree", err);
-			deps.setStatusInfo(`Failed to merge: ${err}`);
+			reportActionError(deps.setStatusInfo, `Failed to merge: ${err}`);
 		}
+	};
+
+	/** Merge a workspace into the repo's main branch with the repo's after-merge setting.
+	 *  Shared by the sidebar and branch-menu Merge & Archive entries. */
+	const handleMergeAndArchiveIntoMain = async (repoPath: string, workspaceId: string) => {
+		const repoState = repositoriesStore.get(repoPath);
+		const mainBranch = repoState ? Object.values(repoState.workspaces).find((b) => b.isMain)?.branchName : undefined;
+		if (!mainBranch) {
+			reportActionError(deps.setStatusInfo, "Cannot merge: no main branch found");
+			return;
+		}
+		const afterMerge = repoSettingsStore.getEffective(repoPath)?.afterMerge ?? "archive";
+		await handleMergeAndArchive(repoPath, workspaceId, mainBranch, afterMerge);
 	};
 
 	/** Collect everything the post-merge cleanup dialog needs to warn honestly.
@@ -395,10 +394,10 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		deps.setStatusInfo(`${branchName} → ${targetBranch}: ${carried} (${result.action})`);
 
 		// Drop the row from the sidebar
-		repositoriesStore.removeWorkspace(repoPath, workspaceId);
+		removeWorktreeWorkspace(repoPath, workspaceId);
 
 		// Refresh to pick up updated branch stats
-		await refreshAllBranchStats();
+		await refreshAllBranchStats(repoPath);
 	};
 
 	/** Dismiss the post-merge cleanup dialog. */
@@ -413,5 +412,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		handleAutofixIssue,
 		handleConflictAssist,
 		handleMergeAndArchive,
+		handleMergeAndArchiveIntoMain,
+		handleStartWork,
 	};
 }

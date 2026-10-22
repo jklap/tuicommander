@@ -1,34 +1,34 @@
 import { emitTo } from "@tauri-apps/api/event";
-import { type Component, createEffect, createMemo, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
-import { openTerminalFilePath } from "../../utils/filePreview";
-import p from "../shared/panel.module.css";
+import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
+import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import s from "./AIChatPanel.module.css";
 import { Composer } from "./Composer";
 import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
-import { SessionControls } from "./SessionControls";
-import { Transcript } from "./Transcript";
+import { NewConversationDialog } from "./NewConversationDialog";
+import { RemoteInteractions } from "./RemoteInteractions";
+import { conversationLabel, SessionControls } from "./SessionControls";
+import { Transcript, type TranscriptSearchRef } from "./Transcript";
+import { openChatTableDocument } from "./tableDocument";
+import { trackPanelWidth } from "./trackPanelWidth";
 import { createAcpChat } from "./useAcpChat";
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
 
-/** The last segment of a path, for the header. */
-function basename(path: string): string {
-	const parts = path.split(/[/\\]/).filter(Boolean);
-	return parts.at(-1) ?? path;
-}
-
 export interface AIChatPanelProps {
 	visible: boolean;
 	onClose: () => void;
+	onOpenSettings?: (tab: string, section?: string) => void;
 	/** The repository on screen: a hint sent with each prompt, not the chat's scope. */
 	repoPath: string | null;
 	/** Effective filesystem root — the worktree path when on a linked worktree. */
@@ -55,8 +55,21 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	// looking at, not the repository's main checkout.
 	const viewed = createMemo(() => props.fsRoot || props.repoPath || null);
 	const chat = createAcpChat(viewed, () => props.visible);
+	const [newOptionsOpen, setNewOptionsOpen] = createSignal(false);
+	// Toasts keep clear of this panel's rendered width (see ToastContainer).
+	let panelEl!: HTMLDivElement;
+	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
+	let transcriptSearch: TranscriptSearchRef | undefined;
 	const keyDown = (event: KeyboardEvent) => {
+		if (event.key === "Escape" && !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey) {
+			const searchClosed = transcriptSearch?.close();
+			if (!searchClosed && !chat.busy()) return;
+			event.preventDefault();
+			event.stopPropagation();
+			if (!searchClosed) void chat.cancel();
+			return;
+		}
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
 		const key = event.key.toLowerCase();
 		if (key === "t" && (isTauri() || event.altKey)) {
@@ -73,78 +86,63 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		const cwd = chat.root() ?? viewed();
 		if (!cwd) return;
 		try {
-			const resolved = await invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
-				cwd,
-				candidate: href,
-			});
-			if (resolved) {
-				if (resolved.is_directory) {
-					if (isPanelMode() && isTauri()) {
-						await emitTo("main", "panel-action", {
-							panelId: "ai-chat",
-							action: "open-directory",
-							data: { path: resolved.absolute_path },
-						});
-						await invoke("focus_main_window");
-					} else {
-						uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
-						uiStore.setFileBrowserPanelVisible(true);
-					}
-					return;
-				}
-				const position = href.match(/:(\d+)(?::(\d+))?$/);
-				const line = position ? Number(position[1]) : undefined;
-				const col = position?.[2] ? Number(position[2]) : undefined;
-				if (isPanelMode() && isTauri()) {
-					await emitTo("main", "panel-action", {
-						panelId: "ai-chat",
-						action: "open-file",
-						data: { path: resolved.absolute_path, ...(line ? { line } : {}), ...(col ? { col } : {}) },
-					});
-					await invoke("focus_main_window");
-				} else if (line) openTerminalFilePath(resolved.absolute_path, undefined, line, col);
-				else openTerminalFilePath(resolved.absolute_path);
+			const target = await resolveFileLink(cwd, href);
+			if (!target) return;
+			if (!(isPanelMode() && isTauri())) {
+				openFileLinkHere(target);
+				return;
 			}
+			await emitTo("main", "panel-action", {
+				panelId: "ai-chat",
+				action: target.isDirectory ? "open-directory" : "open-file",
+				data: target.isDirectory
+					? { path: target.absolutePath }
+					: {
+							path: target.absolutePath,
+							...(target.line ? { line: target.line } : {}),
+							...(target.col ? { col: target.col } : {}),
+						},
+			});
+			await invoke("focus_main_window");
 		} catch (error) {
 			appLogger.error("ai-chat", "Failed to resolve file link", error);
 		}
 	};
 
+	const configureEgo = async () => {
+		if (isPanelMode() && isTauri()) {
+			await emitTo("main", "panel-action", { panelId: "ai-chat", action: "configure-ego", data: {} });
+			await invoke("focus_main_window");
+		} else props.onOpenSettings?.("general", SETTINGS_SECTION_EGO);
+	};
+
 	const emptyMessage = () => {
 		switch (chat.phase()) {
 			case "unconfigured":
-				return "ACP is not configured. Set the ego executable in Settings to start a conversation.";
+				return "AI Chat is inactive because the ego executable is not configured.";
 			case "starting":
-				return "Starting ego…";
+				return "Connecting conversation…";
+			case "failed":
+				return "The conversation could not be opened. Use Retry to try again.";
 			default:
+				if (chat.phase() === "ready" && chat.sessionId()) return "Select a saved tab to load its conversation.";
 				return "Ask ego about any repository. The one on screen is sent as context.";
 		}
 	};
 
 	return (
-		<div id="ai-chat-panel" class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
+		<div id="ai-chat-panel" ref={panelEl} class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
 			<PanelResizeHandle panelId="ai-chat-panel" minWidth={300} maxWidth={700} />
 
-			<div class={p.header}>
-				<div class={p.headerLeft}>
-					<span class={p.title}>
-						<svg
-							width="14"
-							height="14"
-							viewBox="0 0 14 14"
-							fill="currentColor"
-							style={{ "vertical-align": "-2px", "margin-right": "4px" }}
-						>
-							<path
-								d="M2 2.5A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5v6A1.5 1.5 0 0110.5 10H5l-3 2.5V10A1.5 1.5 0 010.5 8.5v-6z"
-								transform="translate(1 0.5)"
-							/>
-						</svg>
-						AI Chat
-					</span>
-					<Show when={viewed()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
-					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
-				</div>
+			<div class={s.tidyHeader}>
+				<SessionControls
+					chat={chat}
+					detached={isPanelMode()}
+					onNewOptions={() => {
+						chat.clearError();
+						setNewOptionsOpen(true);
+					}}
+				/>
 				<div class={s.headerActions}>
 					<PanelWindowControls
 						panelId="ai-chat"
@@ -154,21 +152,30 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				</div>
 			</div>
 			{/* Shown before ego runs too: "+" is one of the two ways a chat starts. */}
-			<Show when={chat.phase() !== "unconfigured"}>
+			<Show when={chat.tabs().length > 1}>
 				<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
 					<For each={chat.tabs()}>
-						{(session, index) => (
-							<div class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}>
+						{(session) => (
+							<div
+								class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}
+								onAuxClick={(event) => {
+									if (event.button !== 1) return;
+									event.preventDefault();
+									event.stopPropagation();
+									void chat.closeTab(session);
+								}}
+							>
 								<button
 									type="button"
 									role="tab"
 									data-chat-session={session}
+									title={session}
 									aria-selected={chat.sessionId() === session}
 									onClick={() => void chat.selectSession(session)}
 								>
-									{acpTranscript.title(session) ||
-										chat.sessions().find((item) => item.sessionId === session)?.title ||
-										`Chat ${index() + 1}`}
+									{conversationLabel(
+										chat.sessions().find((item) => item.sessionId === session) ?? { sessionId: session },
+									)}
 								</button>
 								<Show when={chat.tabs().length > 1}>
 									<button
@@ -184,18 +191,10 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 							</div>
 						)}
 					</For>
-					<button
-						type="button"
-						class={s.newChatTab}
-						aria-label="New chat tab"
-						title="New chat tab (⌘T)"
-						onClick={() => void chat.startSession()}
-					>
-						<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-							<path d="M6.4 1h1.2v5.4H13v1.2H7.6V13H6.4V7.6H1V6.4h5.4z" />
-						</svg>
-					</button>
 				</div>
+			</Show>
+			<Show when={newOptionsOpen()}>
+				<NewConversationDialog chat={chat} onClose={() => setNewOptionsOpen(false)} />
 			</Show>
 
 			{/* A gap is not a transport hiccup: the journal no longer holds the
@@ -232,21 +231,42 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				<div class={s.frozenBanner}>Not receiving updates.</div>
 			</Show>
 
-			<Show when={chat.phase() === "live"}>
-				<SessionControls chat={chat} />
+			<Show when={chat.phase() === "starting"}>
+				<div class={s.frozenBanner} role="status">
+					Connecting conversation…
+				</div>
 			</Show>
 
 			<Transcript
+				onSearchRef={(ref) => {
+					transcriptSearch = ref;
+				}}
+				canForkAtMessage={() => chat.capabilities()?.forkAtMessage === true}
+				onFork={(messageId) => void chat.fork(messageId)}
+				observeToolDuration={false}
 				entries={chat.entries}
 				busy={chat.busy}
+				retry={chat.retry}
+				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				emptyMessage={emptyMessage()}
 				onSuggestion={(text) => void chat.send(text)}
 				onOpenFile={(href) => void openFile(href)}
+				onOpenTable={(source) => {
+					if (isPanelMode() && isTauri()) {
+						void emitTo("main", "panel-action", { panelId: "ai-chat", action: "open-table", data: { source } })
+							.then(() => invoke("focus_main_window"))
+							.catch((error) => appLogger.error("ai-chat", "Failed to open table document", error));
+					} else openChatTableDocument(source);
+				}}
+				onNoticeAction={(action) => {
+					if (action.kind === "open_result") void openFile(action.path);
+				}}
 				onClear={() => {
 					const session = chat.sessionId();
 					if (session) acpTranscript.clear(session);
 				}}
 			>
+				<RemoteInteractions />
 				<Interactions
 					interactions={chat.interactions}
 					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}
@@ -258,6 +278,19 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					onElicitationCancelled={(requestId) => void chat.answerElicitation(requestId, { action: "cancel" })}
 				/>
 			</Transcript>
+
+			<Show when={chat.phase() === "unconfigured"}>
+				<div class={s.setupActions}>
+					<button
+						type="button"
+						onClick={() =>
+							void configureEgo().catch((error) => appLogger.error("ai-chat", "Failed to open ego settings", error))
+						}
+					>
+						Configure ego
+					</button>
+				</div>
+			</Show>
 
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer chat={chat} />

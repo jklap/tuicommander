@@ -1,0 +1,18 @@
+2026-10-08 MacControl help(capture), list_windows(app="Microsoft Edge"):
+Screen Recording permission required. Grant access in System Settings > Privacy & Security > Screen Recording
+MacControl do(focus Google Chrome for Testing; key escape):
+Accessibility permission required. Grant access in System Settings > Privacy & Security > Accessibility
+Screen lock check: ioreg -n Root -d1 -a | rg -A1 CGSSessionScreenIsLocked
+No locked=true entry returned. Chrome for Testing screenshot succeeded, so rendering is available.
+Wrapper, AB_SESSION=dm2-s0 AB_SHARED_PROFILE=~/Gits/.tmp/dm2-s0/cft-profile:
+ab-stealth.sh mac-chrome chrome://extensions
+ab-stealth.sh -- snapshot -i
+ab-stealth.sh -- click @e1  (Developer mode)
+ab-stealth.sh -- snapshot -i
+ab-stealth.sh -- screenshot <worktree>/spike/design-mode-v2-s0/evidence/cft-extensions.png
+ab-stealth.sh -- click @e9  (Load unpacked)
+ab-stealth.sh -- snapshot -i
+The native folder chooser is outside the CDP accessibility tree. Native keyboard automation is blocked by the Accessibility permission above. No directory was selected. No permission was granted by the agent.
+Chrome for Testing 149.0.7827.54 (wrapper-selected installed binary; UA Chrome/149 matches).
+Microsoft Edge 154.0.4258.62 (--version).
+No --enable-automation. CDP used only by the mandated wrapper for the extensions GUI; Edge telemetry checks use no debugging port or CDP.

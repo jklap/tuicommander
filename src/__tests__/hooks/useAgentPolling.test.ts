@@ -24,6 +24,92 @@ describe("useAgentPolling", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: remote agent_type is dropped until the 30s process-discovery poll.
+	it("applies backend identity immediately and retires it when the shell returns", async () => {
+		const id = store.add(makeTerminal({ name: "shell 1", sessionId: "remote-1" }));
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "remote-1",
+				connection_id: "mint",
+				state: {
+					agent_type: "codex",
+					agent_state: "idle",
+					shell_state: "idle",
+				},
+			},
+		]);
+		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { pluginRegistry } = await import("../../plugins/pluginRegistry");
+		const transitions: Array<{ type: string; identity: string | null }> = [];
+		const notify = vi.spyOn(pluginRegistry, "notifyStateChange").mockImplementation((event) => {
+			transitions.push({ type: event.type, identity: store.get(id)?.agentType ?? null });
+		});
+		try {
+			await syncAgentLifecycleStates();
+			expect(store.get(id)?.agentType).toBe("codex");
+			expect(store.get(id)?.agentState).toBe("idle");
+			expect(store.isBusy(id)).toBe(false);
+			store.update(id, { agentSessionId: "old-conversation" });
+			applySessionStateEvent({
+				session_id: "remote-1",
+				state: { agent_type: "claude", agent_state: "idle", shell_state: "idle" },
+			});
+			expect(store.get(id)?.agentType).toBe("claude");
+			expect(store.get(id)?.agentSessionId).toBeNull();
+			applySessionStateEvent({ session_id: "remote-1", state: { shell_state: "idle" } });
+			expect(store.get(id)?.agentType).toBeNull();
+			expect(transitions).toEqual([
+				{ type: "agent-started", identity: "codex" },
+				{ type: "agent-stopped", identity: "codex" },
+				{ type: "agent-started", identity: "claude" },
+				{ type: "agent-stopped", identity: "claude" },
+			]);
+		} finally {
+			notify.mockRestore();
+		}
+	});
+
+	// Catches: hook exactness attached to the wrong tab or surviving an omitted/retracted lifecycle field.
+	it("keeps native Codex binding on its tab and retracts it with the snapshot", async () => {
+		const a = store.add(makeTerminal({ sessionId: "codex-a", agentType: "codex" }));
+		const b = store.add(makeTerminal({ sessionId: "codex-b", agentType: "codex" }));
+		const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		applySessionStateEvent({
+			session_id: "codex-b",
+			state: { agent_type: "codex", codex_binding: { session_id: "thread-b" } },
+		});
+		applySessionStateEvent({
+			session_id: "codex-a",
+			state: { agent_type: "codex", codex_binding: { session_id: "thread-a" } },
+		});
+		expect(store.get(a)?.exactAgentSessionId).toBe("thread-a");
+		expect(store.get(b)?.exactAgentSessionId).toBe("thread-b");
+		expect(store.get(a)?.agentSessionId).toBe("thread-a");
+		applySessionStateEvent({ session_id: "codex-a", state: { agent_type: "codex" } });
+		expect(store.get(a)?.exactAgentSessionId).toBeNull();
+		expect(store.get(b)?.exactAgentSessionId).toBe("thread-b");
+		applySessionStateEvent({ session_id: "codex-b", state: { agent_type: null } });
+		expect(store.get(b)?.exactAgentSessionId).toBeNull();
+	});
+
+	// Catches: an older catch-up undoes an identity push that arrived while the snapshot was in flight.
+	it("does not let a stale snapshot replace a newer pushed identity", async () => {
+		const id = store.add(makeTerminal({ sessionId: "identity-race", agentType: "claude" }));
+		let resolve!: (rows: unknown[]) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const pending = syncAgentLifecycleStates();
+		applySessionStateEvent({ session_id: "identity-race", state: { agent_type: "codex" } });
+		resolve([{ session_id: "identity-race", state: { agent_type: "claude" } }]);
+		await pending;
+		expect(store.get(id)?.agentType).toBe("codex");
+	});
+
 	it("applies authoritative lifecycle transitions without retaining stale working state", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([
@@ -99,6 +185,41 @@ describe("useAgentPolling", () => {
 		mockInvoke.mockResolvedValueOnce([{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle" } }]);
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.queuedCommands).toBe(0);
+	});
+
+	// Catches: a missed queue-drained push leaves a stale queue badge after reconnect or SSE lag.
+	it.each(["reconnect", "lagged"] as const)("clears stale queued commands after %s catch-up", async (reason) => {
+		const transport = await import("../../transport");
+		let resync: ((reason: import("../../transport").ResyncReason) => void) | undefined;
+		const subscription = vi.spyOn(transport, "subscribeEvents").mockImplementation(async (_handlers, options) => {
+			resync = options?.onResync;
+			return () => {};
+		});
+		try {
+			mockInvoke.mockResolvedValue([
+				{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", queued_commands: 1 } },
+			]);
+			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "Codex", sessionId: "sess-1" }));
+				useAgentPolling();
+				await tick(0);
+				expect(store.get(id)?.queuedCommands).toBe(1);
+				// No queue-drained push arrives; only the transport recovery hint does.
+				mockInvoke.mockClear();
+				mockInvoke.mockResolvedValue([
+					{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working" } },
+				]);
+				expect(resync).toBeDefined();
+				resync?.(reason);
+				await tick(0);
+				expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
+				expect(store.get(id)?.queuedCommands).toBe(0);
+				expect(store.get(id)?.agentState).toBe("working");
+			});
+		} finally {
+			subscription.mockRestore();
+		}
 	});
 
 	it("reconciles awaiting state from the authoritative backend snapshot", async () => {
@@ -481,8 +602,8 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("skips discovery for agents without sessionDiscovery config (e.g. aider)", async () => {
-			mockInvoke.mockResolvedValue("aider");
+		it("skips discovery for agents without sessionDiscovery config (e.g. opencode)", async () => {
+			mockInvoke.mockResolvedValue("opencode");
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -491,7 +612,7 @@ describe("useAgentPolling", () => {
 				useAgentPolling();
 
 				await tick(30_000);
-				expect(store.get(id)?.agentType).toBe("aider");
+				expect(store.get(id)?.agentType).toBe("opencode");
 
 				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
 				expect(discoveryCalls).toHaveLength(0);
@@ -1021,7 +1142,7 @@ describe("useAgentPolling", () => {
 				await tick(0);
 
 				expect(
-					[...listeners.keys()].filter((name) => name.startsWith("remote")),
+					[...listeners.keys()].filter((name) => name.startsWith("remote") && name !== "remote-connection-status"),
 					"a mirrored event must need no subscription of its own",
 				).toEqual([]);
 
@@ -1061,4 +1182,20 @@ describe("useAgentPolling", () => {
 			expect(store.get(id)?.shellState).toBe("busy");
 		});
 	});
+});
+
+// Catches: recovery snapshots crossing tabs or an omitted clear leaving a stale overlay.
+it("routes and retracts provider recovery in complete backend snapshots", async () => {
+	const { terminalsStore } = await import("../../stores/terminals");
+	const a = terminalsStore.add(makeTerminal({ sessionId: "recover-a" }));
+	const b = terminalsStore.add(makeTerminal({ sessionId: "recover-b" }));
+	const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+	applySessionStateEvent({
+		session_id: "recover-a",
+		state: { agent_type: "ego", provider_recovery: { phase: "waiting", attempt: 2, next_attempt_ms: 10000 } },
+	});
+	expect(terminalsStore.get(a)?.providerRecovery?.attempt).toBe(2);
+	expect(terminalsStore.get(b)?.providerRecovery).toBeUndefined();
+	applySessionStateEvent({ session_id: "recover-a", state: { agent_type: "ego" } });
+	expect(terminalsStore.get(a)?.providerRecovery).toBeNull();
 });

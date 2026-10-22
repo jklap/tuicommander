@@ -7,6 +7,9 @@
 //! Unix: connects via Unix domain socket at `<config_dir>/mcp.sock`
 //! Windows: connects via named pipe at `\\.\pipe\tuicommander-mcp`
 
+mod native;
+mod native_assets;
+
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::sync::{
@@ -109,6 +112,24 @@ fn response_timeout(body: &str) -> std::time::Duration {
     let Ok(request) = serde_json::from_str::<Value>(body) else {
         return MCP_RESPONSE_TIMEOUT;
     };
+    let name = request.pointer("/params/name").and_then(Value::as_str);
+    let arguments = request.pointer("/params/arguments");
+    let secret_arguments = match (name, arguments) {
+        (Some("secret"), arguments) => arguments,
+        (Some("call_tool"), Some(arguments))
+            if arguments.get("tool_name").and_then(Value::as_str) == Some("secret") =>
+        {
+            arguments.get("arguments")
+        }
+        _ => None,
+    };
+    if let Some(timeout) = secret_arguments
+        .and_then(|arguments| arguments.get("action"))
+        .and_then(Value::as_str)
+        .and_then(tuic_ipc::secret_response_timeout)
+    {
+        return timeout;
+    }
     if is_long_workspace_operation(&request) {
         return WORKSPACE_OPERATION_RESPONSE_TIMEOUT;
     }
@@ -128,23 +149,28 @@ fn response_timeout(body: &str) -> std::time::Duration {
 
 #[cfg(unix)]
 fn config_dir() -> std::path::PathBuf {
-    dirs::config_dir()
-        .map(|d| d.join("com.tuic.commander"))
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".tuicommander")
-        })
+    tuic_ipc::app_instance::current_app_instance().config_dir_from(
+        dirs::config_dir().as_deref(),
+        &dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+    )
 }
 
 #[cfg(unix)]
 fn ipc_endpoint() -> String {
-    config_dir().join("mcp.sock").to_string_lossy().to_string()
+    std::env::var("TUIC_SOCKET").unwrap_or_else(|_| {
+        tuic_ipc::socket_path(
+            tuic_ipc::app_instance::current_app_instance(),
+            &config_dir(),
+            &std::env::temp_dir(),
+        )
+        .to_string_lossy()
+        .into_owned()
+    })
 }
 
 #[cfg(windows)]
 fn ipc_endpoint() -> String {
-    r"\\.\pipe\tuicommander-mcp".to_string()
+    tuic_ipc::PIPE_NAME.to_string()
 }
 
 /// Wrapper that provides a unified IPC stream type across platforms.
@@ -234,7 +260,11 @@ async fn connect_ipc() -> Result<IpcStream, String> {
         }
 
         let dir = config_dir();
-        let primary = dir.join("mcp.sock");
+        let primary = tuic_ipc::socket_path(
+            tuic_ipc::app_instance::current_app_instance(),
+            &dir,
+            &std::env::temp_dir(),
+        );
 
         // Try primary socket first (with timeout to avoid hanging on stale sockets)
         if let Ok(Ok(stream)) = tokio::time::timeout(
@@ -247,13 +277,18 @@ async fn connect_ipc() -> Result<IpcStream, String> {
         }
 
         // Fall back to mcp-*.sock alternatives
-        if let Ok(entries) = std::fs::read_dir(&dir) {
+        let search_dir = primary.parent().unwrap_or(&dir);
+        let prefix = format!(
+            "{}-",
+            primary.file_stem().unwrap_or_default().to_string_lossy()
+        );
+        if let Ok(entries) = std::fs::read_dir(search_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let Some(name_str) = name.to_str() else {
                     continue;
                 };
-                if name_str.starts_with("mcp-")
+                if name_str.starts_with(&prefix)
                     && name_str.ends_with(".sock")
                     && let Ok(Ok(stream)) = tokio::time::timeout(
                         std::time::Duration::from_secs(3),
@@ -273,7 +308,7 @@ async fn connect_ipc() -> Result<IpcStream, String> {
     }
     #[cfg(windows)]
     {
-        const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+        const PIPE_NAME: &str = tuic_ipc::PIPE_NAME;
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
             .open(PIPE_NAME)
             .map_err(|e| format!("connect {PIPE_NAME}: {e}"))?;
@@ -294,6 +329,12 @@ fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
         Some(s) if !s.is_empty() => format!("x-tuic-session: {s}\r\n"),
         _ => String::new(),
     }
+}
+
+/// HTTP header naming the bridge process, logged by the server on initialize so
+/// a reconnect storm can be traced to the process that caused it.
+fn client_pid_header_line(pid: u32) -> String {
+    format!("x-tuic-client-pid: {pid}\r\n")
 }
 
 /// Project the protocol version carried by a stdio request into the HTTP
@@ -364,27 +405,27 @@ async fn post_mcp(
 ) -> Result<(String, Option<String>), String> {
     let mut stream = connect_ipc().await?;
 
-    let mut headers = format!(
-        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nMCP-Protocol-Version: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        request_protocol_version(body),
-        body.len()
-    );
+    let protocol_version = request_protocol_version(body);
+    let session_header = tuic_session_header_line(TUIC_SESSION_ENV.as_deref());
+    let client_header = client_pid_header_line(std::process::id());
+    let mut headers = vec![("MCP-Protocol-Version", protocol_version.as_str())];
     if let Some(sid) = session_id {
-        headers.push_str(&format!("mcp-session-id: {sid}\r\n"));
+        headers.push(("mcp-session-id", sid));
     }
-    // Assert our PTY identity so the server auto-binds swarm identity without an
-    // explicit `agent register` round-trip. Read once, cached at startup.
-    headers.push_str(&tuic_session_header_line(TUIC_SESSION_ENV.as_deref()));
-    headers.push_str("\r\n");
-
+    for line in [session_header.trim(), client_header.trim()] {
+        if let Some((key, value)) = line.split_once(':') {
+            headers.push((key, value.trim()));
+        }
+    }
     stream
-        .write_all(headers.as_bytes())
+        .write_all(&tuic_ipc::http::request(
+            "POST",
+            "/mcp",
+            Some(body),
+            &headers,
+        ))
         .await
-        .map_err(|e| format!("write headers: {e}"))?;
-    stream
-        .write_all(body.as_bytes())
-        .await
-        .map_err(|e| format!("write body: {e}"))?;
+        .map_err(|e| format!("write: {e}"))?;
 
     // Do not wait for EOF: hyper may keep an accepted IPC connection alive even
     // when the request says `Connection: close`. Read exactly Content-Length and
@@ -413,38 +454,20 @@ async fn read_http_response<R>(reader: &mut R) -> Result<(String, String), Strin
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut buf = Vec::with_capacity(4096);
-    let mut chunk = [0u8; 4096];
+    let mut decoder = tuic_ipc::http::ResponseDecoder::default();
+    let mut bytes = [0; 4096];
     loop {
-        let n = reader
-            .read(&mut chunk)
+        let count = reader
+            .read(&mut bytes)
             .await
             .map_err(|e| format!("read: {e}"))?;
-        if n == 0 {
-            return Err("read: response ended before the declared body length".to_string());
+        decoder.push(&bytes[..count]);
+        if let Some(response) = decoder
+            .response(count == 0)
+            .map_err(|e| format!("read: {e}"))?
+        {
+            return Ok((response.raw_headers, response.body));
         }
-        buf.extend_from_slice(&chunk[..n]);
-
-        let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-            continue;
-        };
-        let body_start = header_end + 4;
-        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let content_length = headers.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
-        });
-        let Some(content_length) = content_length else {
-            return Err("read: HTTP response missing Content-Length".to_string());
-        };
-        if buf.len() < body_start + content_length {
-            continue;
-        }
-        let body =
-            String::from_utf8_lossy(&buf[body_start..body_start + content_length]).to_string();
-        return Ok((headers, body));
     }
 }
 
@@ -877,6 +900,60 @@ async fn dispatch_loop(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let native_args: Vec<String> = std::env::args().skip(1).collect();
+    if native_args
+        .first()
+        .is_some_and(|arg| arg.starts_with("chrome-extension://"))
+    {
+        let result = match std::env::current_exe() {
+            Ok(executable) => {
+                native::run(&native_args[0], &executable.with_extension("json")).await
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = result {
+            eprintln!("tuic-design-host: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if native_args.first().map(String::as_str) == Some("--design-install") {
+        if !(4..=5).contains(&native_args.len()) {
+            eprintln!(
+                "Usage: tuic-bridge --design-install <profile> <repo> <socket-or-pipe> [session-id]"
+            );
+            std::process::exit(1);
+        }
+        match native::install(
+            std::path::Path::new(&native_args[1]),
+            std::path::Path::new(&native_args[2]),
+            &native_args[3],
+            native_args.get(4).map(String::as_str),
+        )
+        .await
+        {
+            Ok(result) => println!("{result}"),
+            Err(error) => {
+                eprintln!("tuic-design-host: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let mut args = std::env::args().skip(1);
+    let selected = match args.next().as_deref() {
+        None => tuic_ipc::app_instance::select_app_instance_from_env(),
+        Some("--instance") => match (args.next(), args.next()) {
+            (Some(id), None) => tuic_ipc::app_instance::select_app_instance(Some(&id)),
+            _ => Err("Usage: tuic-bridge [--instance <id>]".to_string()),
+        },
+        Some(_) => Err("Usage: tuic-bridge [--instance <id>]".to_string()),
+    };
+    if let Err(error) = selected {
+        eprintln!("tuic-bridge: {error}");
+        std::process::exit(1);
+    }
+
     eprintln!(
         "tuic-bridge v{} starting ({})",
         env!("CARGO_PKG_VERSION"),
@@ -974,7 +1051,8 @@ mod tests {
     #[cfg(unix)]
     use super::{BridgeState, dispatch_loop, proxy_request};
     use super::{
-        read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
+        client_pid_header_line, read_http_response, request_protocol_version, response_timeout,
+        tuic_session_header_line,
     };
     #[cfg(unix)]
     use std::path::PathBuf;
@@ -1190,8 +1268,7 @@ mod tests {
     }
 
     /// The regression: a long request must not hold the reader hostage. Two slow
-    /// (300ms) calls sent back-to-back finish in roughly one slow window, and the
-    /// server sees both open at once.
+    /// (300ms) calls sent back-to-back are seen open at once by the server.
     #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_requests_are_not_serialized() {
@@ -1204,19 +1281,16 @@ mod tests {
         tx.send(call("slow_other")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
-        let elapsed = started.elapsed();
 
+        // Overlap is asserted through the mock's in-flight counter, not through
+        // elapsed time: a wall-clock bound fails on a loaded box (597ms observed
+        // under nextest -j 6) while proving nothing the counter does not.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             stats.max_in_flight.load(Ordering::SeqCst),
             2,
             "both requests must be in flight together — serialized dispatch is the bug"
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(550),
-            "two 300ms calls took {elapsed:?}: they ran back-to-back, not concurrently"
         );
     }
 
@@ -1234,14 +1308,15 @@ mod tests {
         tx.send(call("repo")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
 
+        // The fast call never sleeps, so it is in flight alongside the slow one
+        // only if it was dispatched while the slow call was still pending.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(stats.max_in_flight.load(Ordering::SeqCst), 2);
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(650),
-            "the fast call inherited the slow call's latency"
+        assert_eq!(
+            stats.max_in_flight.load(Ordering::SeqCst),
+            2,
+            "the fast call waited for the slow call instead of overlapping it"
         );
     }
 
@@ -1381,6 +1456,13 @@ mod tests {
         );
     }
 
+    /// Catches: a reconnect storm that cannot be traced to a process because the
+    /// bridge never says which pid opened the connection.
+    #[test]
+    fn the_bridge_names_its_process_to_the_server() {
+        assert_eq!(client_pid_header_line(4242), "x-tuic-client-pid: 4242\r\n");
+    }
+
     #[test]
     fn header_emitted_when_session_present() {
         assert_eq!(
@@ -1416,6 +1498,62 @@ mod tests {
 
         let bad = r#"{"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"latest"},"protocolVersion":"also-not-a-date"}}"#;
         assert_eq!(request_protocol_version(bad), "2025-11-25");
+    }
+
+    /// Catches the bridge dropping real direct/collapsed sockets at the old 10 s bound.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn secret_entry_after_eleven_seconds_keeps_both_bridge_paths_and_fast_calls_alive() {
+        let _mock = start_mock_ipc(11_000).await;
+        let direct = serde_json::json!({"jsonrpc": "2.0", "id": 1,
+            "method": "tools/call", "params": {"name": "secret", "arguments": {
+                "action": "request", "reason": "slow user entry"}}})
+        .to_string();
+        let collapsed = serde_json::json!({"jsonrpc": "2.0", "id": 2,
+            "method": "tools/call", "params": {"name": "call_tool", "arguments": {
+                "tool_name": "secret", "arguments": {
+                    "action": "request", "reason": "slow user entry"}}}})
+        .to_string();
+        let fast = call("repo");
+        let direct_call = super::post_mcp(&direct, Some("test-sid"));
+        let collapsed_call = super::post_mcp(&collapsed, Some("test-sid"));
+        let fast_call = async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                super::post_mcp(&fast, Some("test-sid")),
+            )
+            .await
+            .expect("ordinary IPC was pinned by pending secret entry")
+            .expect("ordinary IPC failed while secret entry was pending");
+        };
+        let (direct_result, collapsed_result, ()) = Box::pin(tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            async { tokio::join!(direct_call, collapsed_call, fast_call) },
+        ))
+        .await
+        .expect("bridge never returned after the server answered secret entry");
+        assert!(
+            direct_result.is_ok(),
+            "direct secret entry expired: {direct_result:?}"
+        );
+        assert!(
+            collapsed_result.is_ok(),
+            "collapsed secret entry expired: {collapsed_result:?}"
+        );
+    }
+
+    #[test]
+    fn secret_calls_do_not_expire_before_form_and_child_deadlines() {
+        // Catches direct and collapsed secret calls using the ordinary 10 s deadline.
+        for (action, seconds) in [("request", 305), ("run", 425), ("remove", 10)] {
+            let direct = serde_json::json!({"method": "tools/call", "params": {
+                "name": "secret", "arguments": {"action": action}}});
+            let collapsed = serde_json::json!({"method": "tools/call", "params": {
+                "name": "call_tool", "arguments": {"tool_name": "secret",
+                    "arguments": {"action": action}}}});
+            assert_eq!(response_timeout(&direct.to_string()).as_secs(), seconds);
+            assert_eq!(response_timeout(&collapsed.to_string()).as_secs(), seconds);
+        }
     }
 
     #[test]

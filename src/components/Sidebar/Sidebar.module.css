@@ -12,7 +12,7 @@
   --row-h: 22px;
   --tree-indent: 10px;
   width: var(--sidebar-width);
-  min-width: 200px;
+  min-width: 300px;
   max-width: 500px;
   flex-shrink: 0;
   background: var(--bg-secondary);
@@ -22,6 +22,170 @@
   position: relative;
   transition: width 0.2s ease, min-width 0.2s ease, opacity 0.15s ease;
   overflow: hidden;
+}
+
+/* Text step (#1751-6a7b): widening the sidebar steps its text up by 1px per
+   width threshold. data-text-step is set from the sidebar width by
+   sidebarTextStep(); the font tokens are redefined here only, so nothing outside
+   the sidebar changes. Fixed-height boxes that hold text add --text-step too. */
+.sidebar[data-text-step] {
+  --text-step: 0px;
+  --font-3xs: calc(8px + var(--text-step));
+  --font-2xs: calc(10px + var(--text-step));
+  --font-xs: calc(11px + var(--text-step));
+  --font-sm: calc(12px + var(--text-step));
+  --font-md: calc(13px + var(--text-step));
+  --font-base: calc(14px + var(--text-step));
+  --font-lg: calc(15px + var(--text-step));
+  --font-xl: calc(17px + var(--text-step));
+  --font-2xl: calc(20px + var(--text-step));
+  --font-3xl: calc(24px + var(--text-step));
+  --row-icon: calc(14px + var(--text-step));
+  --row-h: calc(22px + var(--text-step));
+}
+
+.sidebar[data-text-step="1"] { --text-step: 1px; }
+.sidebar[data-text-step="2"] { --text-step: 2px; }
+.sidebar[data-text-step="3"] { --text-step: 3px; }
+
+/* Rich adds facts without enlarging the compact navigation chrome. */
+.sidebar[data-density="rich"] .branchItem {
+  flex-wrap: nowrap;
+}
+
+/* Forces the wrap between the name line and the detail line; only touch uses it. */
+.branchBreak {
+  display: none;
+}
+
+/* Detail lines of a rich branch row: a full-width block under the name line,
+   indented to start under the name. */
+.branchRichDetail {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding-left: calc(var(--row-icon) + var(--row-gap));
+}
+
+.branchRichLine {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.branchRichMeta,
+.repoRichMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.repoRichMeta {
+  padding: 0 10px 4px calc(var(--row-pad-x) + 4px);
+}
+
+.richChip {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.richChipWarn {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.richChipRisk {
+  color: var(--error, var(--fg-secondary));
+}
+
+.branchRichPrState {
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+}
+
+.richChipMerged {
+  color: var(--success, var(--fg-secondary));
+}
+
+.branchTabItemRich {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.branchTabItem.branchTabNested {
+  margin-left: 14px;
+  width: calc(100% - 14px);
+}
+
+.subagentList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 7px 2px 26px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.subagentRow {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagentMeta {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.subagentFold {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.branchTabDetail {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.branchTabLine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchTabState {
+  flex-shrink: 0;
+}
+
+.branchTabState_working {
+  color: var(--activity);
+}
+
+.branchTabState_input {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.branchTabState_error {
+  color: var(--error, var(--fg-secondary));
 }
 
 .resizeHandle {
@@ -42,6 +206,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 0;
 }
 
@@ -436,6 +601,7 @@
   transition: background 0.1s;
   position: relative;
   min-height: var(--row-h);
+  touch-action: pan-y;
 }
 
 @media (hover: hover) {
@@ -481,24 +647,29 @@
   justify-content: center;
 }
 
-/* Branch icon as the agents toggle: the chevron sits in the icon's own box and
-   swaps in on hover or focus, so the row gives up no width. */
+/* A separate disclosure control keeps status and agent visibility independent. */
 .branchIconToggle {
-  position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 2px;
   flex-shrink: 0;
   cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
   border-radius: var(--radius-sm);
 }
 
 .branchIconChevron {
-  position: absolute;
-  inset: 0;
+  /* A decorative chevron must not intercept clicks on the branch below it. */
+  pointer-events: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--fg-primary);
-  opacity: 0;
 }
 
 .branchIconChevron svg {
@@ -509,39 +680,23 @@
   transform: rotate(90deg);
 }
 
-.branchIconToggle:hover .branchIcon,
-.branchIconToggle:focus-visible .branchIcon {
-  opacity: 0;
+.branchIconToggle:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
 }
 
-.branchIconToggle:hover .branchIconChevron,
-.branchIconToggle:focus-visible .branchIconChevron {
-  opacity: 1;
+.branchIconToggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
-/* A bare digit below the icon's right edge, not a pill: at 12px a pill covered
-   the part of the glyph that tells main, branch and worktree apart. The halo in
-   the sidebar background keeps it legible where it touches the glyph. */
 .branchAgentCount {
-  position: absolute;
-  bottom: -4px;
-  right: -3px;
   color: var(--fg-primary);
   font-size: var(--font-3xs);
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  text-shadow:
-    0 0 1px var(--bg-secondary),
-    0 0 1px var(--bg-secondary),
-    0 0 2px var(--bg-secondary),
-    0 0 2px var(--bg-secondary);
   pointer-events: none;
-}
-
-.branchIconToggle:hover .branchAgentCount,
-.branchIconToggle:focus-visible .branchAgentCount {
-  opacity: 0;
 }
 
 .branchIconMain {
@@ -638,10 +793,10 @@
   align-items: center;
   justify-content: center;
   align-self: center;
-  width: 14px;
-  height: 14px;
+  width: calc(14px + var(--text-step, 0px));
+  height: calc(14px + var(--text-step, 0px));
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1;
   flex-shrink: 0;
 }
@@ -861,7 +1016,7 @@
 
 .prMerged {
   background: var(--merged);
-  color: var(--text-on-accent);
+  color: var(--text-on-merged);
 }
 
 .prClosed {
@@ -928,7 +1083,7 @@
   flex-shrink: 0;
 }
 
-.prMarkOpen { color: var(--success); }
+.prMarkOpen { color: var(--success-marker); }
 .prMarkMerged { color: var(--merged); }
 .prMarkClosed { color: var(--diff-del); }
 .prMarkChanges { color: var(--changes); }
@@ -979,6 +1134,35 @@
     opacity: 1;
     pointer-events: auto;
   }
+
+  /* Coarse pointer (an iPad trackpad) has 36px buttons: widen the hover reveal
+     only. Idle, the actions stay collapsed and reserve no space. */
+  @media (pointer: coarse) {
+    .sidebar[data-density="rich"] .branchItem:hover .branchActions {
+      max-width: 84px;
+    }
+  }
+}
+
+/* Touch actions live in the swipe tray instead of crowding the row. */
+@media (hover: none) {
+  .branchActions { display: none; }
+
+
+}
+
+.branchMoreBtn {
+  display: none;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
 }
 
 .branchAddBtn,
@@ -999,6 +1183,11 @@
 .branchAddBtn {
   background: var(--accent);
   color: var(--text-on-accent);
+  /* Long press opens the agent list: no text selection, iOS callout or pan. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .branchAddBtn:hover {
@@ -1266,13 +1455,35 @@
   }
 }
 
-/* ── Remote-only PR popover ── */
-.remoteOnlyOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
+/* No hover on touch: ⋯ and + are always visible. The cluster joins the header's
+   flex flow (name, badge, actions, chevron) instead of floating over it, so the
+   repo name gives way and is never covered. */
+@media (hover: none) {
+  .repoActions {
+    position: static;
+    transform: none;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+
+  .repoActionsWithBadge .repoActionBtn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar[data-density="rich"] .repoActionBtn {
+    width: 20px;
+    height: 20px;
+  }
+  .sidebar[data-density="rich"] .repoActions { gap: 0; }
+  .sidebar[data-density="rich"] .repoActions .addBtn { margin-right: 0; }
+
 }
 
+/* ── Remote-only PR popover ── */
 .remoteOnlyPopover {
   position: fixed;
   left: var(--sidebar-width, 240px);
@@ -1369,6 +1580,12 @@
   padding: 0 4px 8px;
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border);
+}
+
+/* The global [data-tooltip] rule sets position: relative at equal specificity; keep these anchored to the corner. */
+.remoteOnlyDetailDismiss[data-tooltip],
+.ghItemDismiss[data-tooltip] {
+	position: absolute;
 }
 
 .remoteOnlyDetailDismiss {
@@ -1544,16 +1761,9 @@
    Unified GitHub Panel (replaces RemoteOnlyPrPopover)
    --------------------------------------------------------------------------- */
 
-.ghPanelOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  outline: none;
-  -webkit-app-region: no-drag;
-}
-
 .ghPanel {
   position: fixed;
+  -webkit-app-region: no-drag;
   left: var(--sidebar-width, 240px);
   top: 0;
   bottom: 0;
@@ -1665,8 +1875,8 @@
 
 .ghSectionCount {
   margin-left: auto;
-  min-width: 18px;
-  height: 18px;
+  min-width: calc(18px + var(--text-step, 0px));
+  height: calc(18px + var(--text-step, 0px));
   padding: 0 4px;
   display: inline-flex;
   align-items: center;
@@ -1733,6 +1943,12 @@
 .ghItemNum {
   font-size: var(--font-xs);
   color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.ghAgeMarker {
+  font-size: var(--font-xs);
+  color: var(--warning, var(--fg-muted));
   flex-shrink: 0;
 }
 
@@ -1889,26 +2105,13 @@
   border-top: 1px solid var(--border);
 }
 
-.ghFilterSelect {
-  width: 100%;
-  padding: 4px 8px;
-  font-size: var(--font-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
+.ghFilterSelect { width: 100%; }
 
-.ghFilterSelect:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
 /* ── GitHub badge button (replaces remoteOnlyBadgeBtn) ── */
 .ghBadgeBtn {
-  min-width: 18px;
-  height: 18px;
+  min-width: calc(18px + var(--text-step, 0px));
+  height: calc(18px + var(--text-step, 0px));
   width: auto;
   padding: 0 3px;
   /* Same size as the branch stats badges; the fixed 18px height and line-height 1
@@ -2065,7 +2268,7 @@
 }
 
 .pluginSectionChevron {
-  font-size: 8px;
+  font-size: var(--font-3xs);
   flex-shrink: 0;
   color: var(--fg-muted);
 }
@@ -2124,4 +2327,151 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+
+.branchSwipeRow {
+  display: contents;
+  position: relative;
+  --swipe-width: 152px;
+}
+.branchSwipeRow:has(.branchSwipeDelete) { --swipe-width: 208px; }
+.branchSwipeRow[data-touch="true"] {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  touch-action: pan-y;
+}
+.branchSwipeRow[data-touch="true"] .branchActions { display: none; }
+.branchSwipeRow > .branchItem { transition: background 0.1s, transform 0.15s ease; }
+.branchSwipeOpen > .branchItem { transform: translateX(calc(-1 * var(--swipe-width))); }
+.branchSwipeOpen > .branchItem:not(.active) { background: var(--bg-secondary); }
+.branchSwipeActions {
+  display: flex;
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--swipe-width);
+  gap: 0;
+}
+.sidebar[data-density] .branchSwipeActions > button {
+  display: flex;
+  flex: 1;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  min-width: 44px;
+}
+.branchSwipeActions > .branchMoreBtn {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+}
+.branchSwipeActions > .branchSwipeDelete {
+  background: var(--error);
+  color: var(--text-on-error);
+}
+@media (hover: none) {
+  .branchSwipeRow {
+    display: block;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    touch-action: pan-y;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .branchSwipeRow > .branchItem { transition: none; }
+}
+
+/* Reserve two intent lines while the agent is working. */
+.branchTabLine.branchTabIntent {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  height: 2.8em;
+  flex: 1;
+}
+
+/* Inline rich facts yield space to branch identity; complete facts remain in the tooltip. */
+.sidebar[data-density="rich"] .branchRichDetail {
+  flex: 0 1 auto;
+  max-width: 55%;
+  padding-left: 0;
+  overflow: hidden;
+}
+.sidebar[data-density="rich"] .branchRichLine { display: none; }
+.sidebar[data-density="rich"] .branchRichMeta {
+  flex-wrap: nowrap;
+  gap: 3px;
+  white-space: nowrap;
+}
+.sidebar[data-density="rich"] .branchContent { min-width: 30px; }
+
+.idleReposHeading {
+  padding: 4px var(--row-pad-x);
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+
+.mergedSummary {
+	font-size: var(--font-2xs);
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.mergedCleanup {
+	border: 0;
+	background: transparent;
+	color: var(--fg-muted);
+	font-size: var(--font-2xs);
+	padding: 2px 3px;
+	cursor: pointer;
+}
+
+.mergedCleanup:hover {
+	color: var(--fg-primary);
+	background: var(--bg-secondary);
+}
+
+.crossRepoChildren {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	width: calc(100% - 24px);
+	margin-left: 24px;
+	padding: 2px 4px;
+	border: 0;
+	background: transparent;
+	color: var(--fg-muted);
+	font-size: var(--font-2xs);
+	text-align: left;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.crossRepoChildren:hover {
+	color: var(--fg-primary);
+	background: var(--bg-secondary);
+}
+
+.crossRepoChildren svg {
+	width: 10px;
+	height: 10px;
+	flex-shrink: 0;
+}
+
+.crossRepoChildren span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }

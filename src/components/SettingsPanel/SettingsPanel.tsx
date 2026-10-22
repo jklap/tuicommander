@@ -1,7 +1,9 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
+import { hasCatalogueEditor, settingLabel } from "../../services/settingsCatalogue";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { type RepoSettings, repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
@@ -12,8 +14,13 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
+import { AllSettingsTab } from "./AllSettingsTab";
+import { SettingsHelpScope } from "./ContextualHelp";
 import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
+import { PluginSettingsTab } from "./PluginSettingsTab";
+import { createPluginSettingsCatalogue, pluginFieldLabel } from "./pluginSettingsCatalogue";
+import { RepositoryActions } from "./RepositoryActions";
 import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
@@ -34,8 +41,8 @@ import {
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	SmartPromptsTab,
+	TelegramTab,
 	TerminalTab,
-	UpstreamMcpPanel,
 } from "./tabs";
 
 /** Context for initial selection when opening the panel */
@@ -57,6 +64,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 		label: t("settings.group.application", "Application"),
 		tabs: [
 			{ key: "general", label: t("settings.general", "General") },
+			{ key: "all-settings", label: "All settings (Expert)" },
 			{ key: "appearance", label: t("settings.appearance", "Appearance") },
 			{ key: "notifications", label: t("settings.notifications", "Notifications") },
 		],
@@ -87,7 +95,8 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "mcp", label: t("settings.mcp", "MCP") },
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
-			{ key: "plugins", label: t("settings.plugins", "Plugins") },
+			{ key: "telegram", label: "Telegram" },
+			{ key: "plugins", label: t("settings.managePlugins", "Manage plugins") },
 		],
 	},
 ];
@@ -135,7 +144,7 @@ function initialTabFor(requested: string | undefined, ctx: SettingsContext): str
 }
 
 /** Build the full nav from global sections + configured repos */
-function buildNavItems(): SettingsShellTab[] {
+function buildNavItems(pluginTabs: SettingsShellTab[] = []): SettingsShellTab[] {
 	// All repos, including those nested in groups — grouped repos live in
 	// group.repoOrder, not state.repoOrder, so iterating repoOrder alone would
 	// hide them from the Settings nav. (#64)
@@ -145,6 +154,20 @@ function buildNavItems(): SettingsShellTab[] {
 	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
 		{ key: `__label__:${group.key}`, label: group.label },
 		...group.tabs.filter((tab) => !hidden.has(tab.key)),
+		...(group.key === "integrations" && pluginTabs.length
+			? [
+					{
+						key: "__label__:plugin-settings",
+						label: "Plugin settings",
+						icon: (
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M5 1h2v4h2V1h2v4h2v2h-1v2a4 4 0 0 1-3 3.87V16H7v-3.13A4 4 0 0 1 4 9V7H3V5h2V1zm1 6v2a2 2 0 0 0 4 0V7H6z" />
+							</svg>
+						),
+					},
+					...pluginTabs,
+				]
+			: []),
 	]);
 
 	if (repos.length > 0) {
@@ -164,6 +187,33 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const [activeTab, setActiveTab] = createSignal(initialTabFor(props.initialTab, ctx()));
 
 	const [query, setQuery] = createSignal("");
+	const [catalogueSelection, setCatalogueSelection] = createSignal<string>();
+	const catalogueEntries = Object.values(settingsCatalogue.fields)
+		.filter(hasCatalogueEditor)
+		.map((field) => ({
+			tab: "all-settings",
+			section: "Catalogue inspector",
+			label: settingLabel(field.id, field.label),
+			configKey: field.id,
+		}));
+	const pluginPages = createPluginSettingsCatalogue();
+	const pluginTabs = () =>
+		pluginPages().map((page) => ({
+			key: `plugin:${page.id}`,
+			label: page.label,
+			source: page.id,
+			icon: (
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
+				</svg>
+			),
+		}));
+
+	const navItems = () => buildNavItems(pluginTabs());
+	const pluginEntries = () =>
+		pluginPages().flatMap((page) =>
+			page.fields.map((field) => ({ tab: `plugin:${page.id}`, section: page.label, label: pluginFieldLabel(field) })),
+		);
 
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
@@ -203,6 +253,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const openResult = (entry: SettingsSearchEntry) => {
 		setQuery("");
 		setActiveTab(entry.tab);
+		if (entry.tab === "all-settings") setCatalogueSelection(entry.configKey);
 		// A hidden expert control has nothing to scroll to until it is revealed
 		if (entry.configKey) settingsExpertStore.reveal(entry.configKey);
 		setPendingTarget({ section: entrySection(entry), label: entryLabel(entry) });
@@ -223,7 +274,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	// controls this client renders: a desktop-only control would open a tab
 	// without it, so a browser is not offered it.
 	const results = () =>
-		searchSettings(query(), new Set(getGlobalTabs().map((tab) => tab.key)), isTauri() ? "desktop" : "browser");
+		searchSettings(
+			query(),
+			new Set([...getGlobalTabs(), ...pluginTabs()].map((tab) => tab.key)),
+			isTauri() ? "desktop" : "browser",
+			[...pluginEntries(), ...catalogueEntries],
+		);
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 
@@ -251,17 +307,14 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	};
 
 	const footer = () => {
-		const path = activeRepoPath();
 		return (
 			<div class={s.footer}>
-				<Show when={path} fallback={<span />}>
-					{(p) => (
-						<button class={s.footerReset} onClick={() => repoSettingsStore.reset(p())}>
-							{t("settings.resetToDefaults", "Reset to Defaults")}
-						</button>
-					)}
-				</Show>
-				<button class={s.footerDone} onClick={props.onClose}>
+				<span />
+				<button
+					data-non-setting="Navigate or close Settings without editing configuration"
+					class={s.footerDone}
+					onClick={props.onClose}
+				>
 					{t("settings.done", "Done")}
 				</button>
 			</div>
@@ -273,7 +326,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			visible={props.visible}
 			onClose={props.onClose}
 			title={t("settings.title", "Settings")}
-			tabs={buildNavItems()}
+			tabs={navItems()}
 			activeTab={activeTab()}
 			onTabChange={setActiveTab}
 			navWidth={uiStore.state.settingsNavWidth}
@@ -285,7 +338,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		>
 			<Show
 				when={!query()}
-				fallback={<SettingsSearchResults results={results()} tabs={buildNavItems()} onSelect={openResult} />}
+				fallback={<SettingsSearchResults results={results()} tabs={navItems()} onSelect={openResult} />}
 			>
 				{/* Repo settings (shown when a repo nav item is active) */}
 				<Show when={activeRepoPath()} keyed>
@@ -294,72 +347,112 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 						const onUpdate = updateRepoSetting(path);
 						return (
 							<>
-								<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-								<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-								<Show when={isTauri()}>
-									<div class={s.section}>
-										<h3>{t("settings.copyToProject.heading", "Share with Team")}</h3>
-										<p class={s.hint}>
-											{t(
-												"settings.copyToProject.hint",
-												"Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-											)}
-										</p>
-										<div class={s.actions}>
-											<button onClick={() => copyToProject(path)}>
-												{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-											</button>
-										</div>
-									</div>
-								</Show>
+								<SettingsHelpScope page="repository">
+									<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+									<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+								</SettingsHelpScope>
+								<RepositoryActions
+									path={settings.path}
+									canExport={isTauri()}
+									onExport={() => void copyToProject(path)}
+									onReset={() => repoSettingsStore.reset(path)}
+								/>
 							</>
 						);
 					}}
 				</Show>
 
+				{/* Live scoped plugin pages disappear with the loaded catalogue. */}
+				<For each={pluginPages().filter((page) => activeTab() === `plugin:${page.id}`)}>
+					{(page) => (
+						<SettingsHelpScope page={page.id}>
+							<PluginSettingsTab page={page} />
+						</SettingsHelpScope>
+					)}
+				</For>
+
 				{/* Global sections */}
+				<Show when={activeTab() === "all-settings"}>
+					<AllSettingsTab initialSetting={catalogueSelection()} />
+				</Show>
 				<Show when={activeTab() === "general"}>
-					<GeneralTab />
+					<SettingsHelpScope page="general">
+						<GeneralTab onOpenAiChat={settingsStore.isAiChatEnabled() ? () => setActiveTab("ai-chat") : undefined} />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "appearance"}>
-					<AppearanceTab />
+					<SettingsHelpScope page="appearance">
+						<AppearanceTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "notifications"}>
-					<NotificationsTab />
+					<SettingsHelpScope page="notifications">
+						<NotificationsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "terminal"}>
-					<TerminalTab />
+					<SettingsHelpScope page="terminal">
+						<TerminalTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "keyboard-shortcuts"}>
-					<KeyboardShortcutsTab />
+					<SettingsHelpScope page="keyboard-shortcuts">
+						<KeyboardShortcutsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "dictation"}>
-					<DictationSettings />
+					<SettingsHelpScope page="voice">
+						<DictationSettings />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "github"}>
-					<GitHubTab />
+					<SettingsHelpScope page="github">
+						<GitHubTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "mcp"}>
-					<LocalMcpPanel />
-					<UpstreamMcpPanel />
+					<SettingsHelpScope page="mcp">
+						<LocalMcpPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
-					<RemoteAccessPanel />
+					<SettingsHelpScope page="remote-access">
+						<RemoteAccessPanel />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-machines"}>
-					<RemoteMachinesTab />
+					<SettingsHelpScope page="remote-machines">
+						<RemoteMachinesTab />
+					</SettingsHelpScope>
+				</Show>
+				<Show when={activeTab() === "telegram"}>
+					<SettingsHelpScope page="telegram">
+						<TelegramTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "plugins"}>
-					<PluginsTab onClose={props.onClose} />
+					<SettingsHelpScope page="plugins">
+						<PluginsTab
+							onClose={props.onClose}
+							settingsPluginIds={pluginPages().map((page) => page.id)}
+							onOpenSettings={(id) => setActiveTab(`plugin:${id}`)}
+						/>
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "smart-prompts"}>
-					<SmartPromptsTab />
+					<SettingsHelpScope page="smart-prompts">
+						<SmartPromptsTab />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "agents"}>
-					<AgentsTab connectionId={activeConnectionId()} />
+					<SettingsHelpScope page="agents">
+						<AgentsTab connectionId={activeConnectionId()} />
+					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-					<AiChatTab />
+					<SettingsHelpScope page="ai-chat">
+						<AiChatTab onClose={props.onClose} />
+					</SettingsHelpScope>
 				</Show>
 			</Show>
 		</SettingsShell>

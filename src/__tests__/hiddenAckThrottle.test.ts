@@ -42,6 +42,19 @@ describe("createHiddenAckThrottle", () => {
 		expect(ack).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps acking through a steady stream — a debounce would starve the gate", () => {
+		// A hidden agent tab repainting at the ticker rate: 30 frames over 480 ms.
+		// Restarting the timer on every frame would never fire inside that stream.
+		const ack = vi.fn();
+		const throttle = createHiddenAckThrottle(ack, 400);
+
+		for (let i = 0; i < 30; i++) {
+			throttle.schedule();
+			vi.advanceTimersByTime(16);
+		}
+		expect(ack).toHaveBeenCalledTimes(1);
+	});
+
 	it("acks late rather than never — a silent gate is what the ticker punishes", () => {
 		const ack = vi.fn();
 		const throttle = createHiddenAckThrottle(ack, 200);

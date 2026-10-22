@@ -1,3 +1,6 @@
+pub use crate::ego_question::{
+    parse_ego_approval, parse_ego_free_text_question, parse_ego_question,
+};
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {
@@ -13,10 +16,45 @@ fn expand_tilde(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Native ego recovery snapshot. Bounded before deserialization at the OSC boundary.
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRecovery {
+    pub phase: String,
+    pub next_attempt_ms: Option<u64>,
+    pub attempt: u32,
+}
+
+pub fn parse_provider_recovery(payload: &str) -> Option<ParsedEvent> {
+    if payload == "clear" {
+        return Some(ParsedEvent::ProviderRecovery { recovery: None });
+    }
+    if payload.len() > 256 {
+        return None;
+    }
+    // Require null explicitly for retrying, rather than accepting a missing field.
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    value.get("next_attempt_ms")?;
+    let recovery: ProviderRecovery = serde_json::from_value(value).ok()?;
+    let valid = recovery.attempt > 0
+        && match recovery.phase.as_str() {
+            "waiting" => recovery
+                .next_attempt_ms
+                .is_some_and(|time| time <= 8_640_000_000_000_000),
+            "retrying" => recovery.next_attempt_ms.is_none(),
+            _ => false,
+        };
+    valid.then_some(ParsedEvent::ProviderRecovery {
+        recovery: Some(recovery),
+    })
+}
+
 /// Structured events parsed from PTY output
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum ParsedEvent {
+    #[serde(rename = "provider-recovery")]
+    ProviderRecovery { recovery: Option<ProviderRecovery> },
     #[serde(rename = "rate-limit")]
     RateLimit {
         pattern_name: String,
@@ -188,7 +226,10 @@ pub struct ChoicePromptPayload {
 #[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChoiceSelectionMode {
+    /// A clipped native form exposes navigation controls, not a complete choice list.
+    NavigateOnly,
     NavigateEnter,
+    ToggleEnter,
 }
 
 /// A single option in a numbered choice dialog (edit-confirm, bash-confirm, etc.).
@@ -296,7 +337,7 @@ impl OutputParser {
 
         // Strip ANSI escape sequences for parsers that need clean text.
         // Uses the vt100 crate (already a dependency) to render a virtual screen
-        // and extract clean rows, avoiding the strip_ansi_escapes crate.
+        // and extract clean rows.
         let clean = strip_ansi_via_vt100(text);
 
         // Status line detection
@@ -368,6 +409,17 @@ impl OutputParser {
         rows: &[crate::vt_log::ChangedRow],
         agent_active: bool,
     ) -> Vec<ParsedEvent> {
+        self.parse_clean_lines_with_suggest_floor(rows, agent_active, None)
+    }
+
+    /// Keep historical suggestions above a submitted composer out of this turn
+    /// without suppressing unrelated event types from those same changed rows.
+    pub fn parse_clean_lines_with_suggest_floor(
+        &mut self,
+        rows: &[crate::vt_log::ChangedRow],
+        agent_active: bool,
+        suggest_floor: Option<usize>,
+    ) -> Vec<ParsedEvent> {
         let mut events = Vec::new();
         // Join rows into a single string so multi-line parsers (rate_limit, etc.) work.
         // Individual row texts are already clean — no ANSI stripping required.
@@ -438,7 +490,15 @@ impl OutputParser {
         // logical line. The token is fully self-contained (bounded by `[ … ]`),
         // so there is no parser-owned cross-chunk buffer — dedup against the last
         // emission to avoid re-firing while the same suggest stays on screen.
-        if let Some((evt, _canonical)) = parse_suggest_with_line(&joined, agent_active)
+        let current_suggest_rows = suggest_floor.map(|floor| {
+            rows.iter()
+                .filter(|row| row.row_index > floor)
+                .map(|row| row.text.replace('`', ""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        let suggest_text = current_suggest_rows.as_deref().unwrap_or(&joined);
+        if let Some((evt, _canonical)) = parse_suggest_with_line(suggest_text, agent_active)
             && let ParsedEvent::Suggest { ref items } = evt
             && self.last_suggest_items.as_ref() != Some(items)
         {
@@ -775,21 +835,25 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             r"API Error: got status: (?:UNAVAILABLE|INTERNAL)",
             "server",
         ),
-        // Aider: litellm server/auth exceptions
+        // LiteLLM provider exceptions (shared by CLI clients)
         ae(
-            "aider-server-error",
+            "provider-server-error",
             r"litellm\.(?:InternalServerError|ServiceUnavailableError|APIError):",
             "server",
         ),
-        ae("aider-auth-error", r"litellm\.AuthenticationError:", "auth"),
-        // Aider: user-facing translated messages
         ae(
-            "aider-server-msg",
+            "provider-auth-error",
+            r"litellm\.AuthenticationError:",
+            "auth",
+        ),
+        // Provider-facing service and authentication messages
+        ae(
+            "provider-server-msg",
             r"The API provider's servers are down or overloaded",
             "server",
         ),
         ae(
-            "aider-auth-msg",
+            "provider-auth-msg",
             r"The API provider is not able to authenticate you",
             "auth",
         ),
@@ -952,11 +1016,11 @@ fn parse_pr_url(text: &str) -> Option<ParsedEvent> {
 
 /// Strip ANSI escape sequences from raw PTY text.
 ///
-/// Uses `strip-ansi-escapes` to remove all CSI/OSC/ESC sequences.
+/// Uses the shared VTE 0.15 stripper to remove CSI/OSC/ESC sequences.
 /// Only used by the test-only [`OutputParser::parse`] method.
 #[cfg(test)]
 fn strip_ansi_via_vt100(text: &str) -> String {
-    let stripped = strip_ansi_escapes::strip(text);
+    let stripped = tuic_ansi::strip(text);
     String::from_utf8_lossy(&stripped)
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -967,23 +1031,12 @@ fn strip_ansi_via_vt100(text: &str) -> String {
 /// Byte-level rejection for [`parse_status_line`]: can this blob contain ANY
 /// status-line marker at all?
 ///
-/// Checks for: '*' (Claude), "[Running]", "Tokens:" (Aider), or multi-byte UTF-8:
-/// 0xC2 leads U+00B7 (the Claude middle dot); 0xE2 leads braille U+2800, the
-/// dingbat asterisks U+2720-273F, the block elements, the bullets, U+2234,
-/// U+25CF and U+25CB.
-///
-/// It is NOT selective on agent output: 0xE2 also leads every box-drawing
-/// character an Ink TUI paints, so an agent screen admits on essentially every
-/// chunk -- proved by `status_line_byte_fast_path_barely_rejects_agent_output`.
-/// It is kept anyway because it is the only guard rejecting `## heading` and
-/// `== divider` lines from the Aider scanner pattern, which is anchored on
-/// `[#=]` and has nothing else to stop it; dropping the byte scan would ADD
-/// false positives rather than remove work. The work it fails to remove is
-/// removed per line by [`status_line_patterns_for`] instead.
+/// Checks for ASCII markers and the UTF-8 lead bytes of supported spinner glyphs.
+/// It is not selective on agent output: box drawing also uses 0xE2. Per-line
+/// dispatch in [`status_line_patterns_for`] rejects unrelated rows.
 fn status_line_fast_path_admits(clean: &str) -> bool {
     clean.contains('*')
         || clean.contains("[Running]")
-        || clean.contains("Tokens:")
         || clean.contains("Ctrl+C")
         || clean.as_bytes().contains(&0xe2)
         || clean.as_bytes().contains(&0xc2)
@@ -1004,13 +1057,6 @@ lazy_static::lazy_static! {
     // Braille spinner: "⠋ Task name" (Gemini CLI dots, generic)
     static ref SPINNER_STATUS_RE: regex::Regex =
         regex::Regex::new(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+([^.…]+)").unwrap();
-    // Aider Knight Rider scanner: "░█" or "█░" prefix followed by spaces + task text
-    // The scanner chars (░ U+2591, █ U+2588) bounce back and forth across the line.
-    static ref AIDER_SPINNER_RE: regex::Regex =
-        regex::Regex::new(r"^\s*[\u{2588}\u{2591}#=]{1,2}\s{2,}(.+)").unwrap();
-    // Aider token report: "Tokens: 5.2k sent, 1.3k received."
-    static ref AIDER_TOKENS_RE: regex::Regex =
-        regex::Regex::new(r"^\s*Tokens:\s+(.+?)\.$").unwrap();
     // Codex CLI bullet spinner: "• Working (5s • esc to interrupt)" or "◦ Working (12s)"
     // • (U+2022) and ◦ (U+25E6) alternate as a blink spinner.
     // Requires parenthesized time suffix to avoid false positives from markdown bullets.
@@ -1036,19 +1082,16 @@ lazy_static::lazy_static! {
 ///
 /// Every pattern is anchored `^\s*` followed by a fixed character class, so
 /// the first non-whitespace character decides the candidates. The flat table
-/// ran all eight regexes per line; on an agent screen the byte fast path admits
-/// nearly every chunk, so that was eight matches per changed row, per chunk.
+/// ran all six regexes per line; on an agent screen the byte fast path admits
+/// nearly every chunk, so that was six matches per changed row, per chunk.
 ///
 /// Order inside a bucket is the order the flat table had — the first match
-/// wins, and `Tokens:` is reachable by two patterns. `trim_start` and the regex
+/// wins. `trim_start` and the regex
 /// `\s` agree on what whitespace is: both are Unicode `White_Space`.
 fn status_line_patterns_for(lead: char) -> &'static [&'static regex::Regex] {
     lazy_static::lazy_static! {
         static ref CLAUDE_ONLY: Vec<&'static regex::Regex> = vec![&CLAUDE_STATUS_RE];
         static ref RUNNING_ONLY: Vec<&'static regex::Regex> = vec![&RUNNING_STATUS_RE];
-        static ref TOKENS_THEN_GOOSE: Vec<&'static regex::Regex> =
-            vec![&AIDER_TOKENS_RE, &GOOSE_SPINNER_RE];
-        static ref AIDER_ONLY: Vec<&'static regex::Regex> = vec![&AIDER_SPINNER_RE];
         static ref GOOSE_ONLY: Vec<&'static regex::Regex> = vec![&GOOSE_SPINNER_RE];
         static ref COPILOT_ONLY: Vec<&'static regex::Regex> = vec![&COPILOT_STATUS_RE];
         static ref CODEX_ONLY: Vec<&'static regex::Regex> = vec![&CODEX_BULLET_RE];
@@ -1057,9 +1100,6 @@ fn status_line_patterns_for(lead: char) -> &'static [&'static regex::Regex] {
     match lead {
         '*' | '\u{00B7}' | '\u{2720}'..='\u{273F}' => &CLAUDE_ONLY,
         '[' => &RUNNING_ONLY,
-        // `Tokens:` is also `[A-Z]`, so it must offer the Goose pattern too.
-        'T' => &TOKENS_THEN_GOOSE,
-        '\u{2588}' | '\u{2591}' | '#' | '=' => &AIDER_ONLY,
         'A'..='Z' => &GOOSE_ONLY,
         '\u{2234}' | '\u{25CF}' | '\u{25CB}' => &COPILOT_ONLY,
         '\u{2022}' | '\u{25E6}' => &CODEX_ONLY,
@@ -1110,12 +1150,7 @@ fn parse_status_line(clean: &str) -> Option<ParsedEvent> {
                     continue;
                 }
                 let time_info = TIME_RE.captures(line).map(|c| c[1].to_string());
-                // For Aider token reports the whole line IS the token info
-                let token_info = if std::ptr::eq(*pattern, &*AIDER_TOKENS_RE) {
-                    Some(task_name.clone())
-                } else {
-                    TOKEN_RE.captures(line).map(|c| c[1].to_string())
-                };
+                let token_info = TOKEN_RE.captures(line).map(|c| c[1].to_string());
                 return Some(ParsedEvent::StatusLine {
                     task_name,
                     full_line: line.trim().to_string(),
@@ -1515,14 +1550,14 @@ const AGENT_LINE_BULLET_CHARS: [char; 4] = ['\u{25CF}', '\u{23FA}', '\u{2022}', 
 /// stays prose. Intent only — a `suggest:` never follows the ack.
 const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+connected\.[\t ]+";
 
-/// Remove `intent:` / `suggest:` plain-prefix tokens from a rendered row before
-/// it is served to PWA/REST clients — they are wire markers, not agent prose.
+/// Remove `suggest:` plain-prefix tokens from a rendered row before it is
+/// served to PWA/REST clients. Intent text stays visible for client-side tinting.
 ///
 /// Built from the same [`AGENT_LINE_BULLETS`] and [`ACK_SENTENCE_PREFIX`] the
 /// parser anchors on, because the two had already drifted apart: `state.rs`
 /// carried its own copy knowing only the two Ink bullets, so every Codex
 /// `• suggest: [ … ]` was parsed by TUIC and then shown to the user anyway.
-/// What TUIC reads is what TUIC hides; one grammar is the only way that holds.
+/// Suggest chips replace their source marker; intent rows remain readable.
 ///
 /// The ack sentence is KEPT (capture group 1 is the replacement) — it is the
 /// agent's own greeting and the user is meant to read it. Everything from the
@@ -1531,7 +1566,7 @@ const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+
 pub fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
     lazy_static::lazy_static! {
         static ref PLAIN_PREFIX_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?(?:intent|suggest):[\t ]+.*$",
+            r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?suggest:[\t ]+.*$",
             b = AGENT_LINE_BULLETS,
             a = ACK_SENTENCE_PREFIX
         ))
@@ -1540,30 +1575,80 @@ pub fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
     PLAIN_PREFIX_RE.replace_all(text, "$1")
 }
 
+/// How many rows after `head` are the wrapped tail of the bracketed
+/// `suggest: [ … ]` token that `head` opens (#1380-05d8).
+///
+/// [`strip_plain_prefix_tokens`] works one row at a time, so on a narrow
+/// terminal it removed the head row and left the continuation rows — the
+/// `Federico Coletto ]` tail — as plain text. The parser reads the same token
+/// bracket-bounded ([`dewrap_suggest_brackets`]); this applies the same bounds
+/// to the rows to hide: the token must close with `]` within
+/// [`MAX_WRAP_ROWS`] rows, with no nested `[`, blank row or new token before it.
+/// An unclosed token is not parsed, so none of its rows are hidden either.
+pub fn suggest_tail_rows<'a>(head: &str, following: impl IntoIterator<Item = &'a str>) -> usize {
+    if structured_token_anchor(head) != Some(StructuredTokenAnchor::Suggest) {
+        return 0;
+    }
+    let Some(keyword) = head.find("suggest:") else {
+        return 0;
+    };
+    let Some(items) = head[keyword + "suggest:".len()..]
+        .trim_start()
+        .strip_prefix('[')
+    else {
+        return 0;
+    };
+    if items.contains(['[', ']']) {
+        return 0;
+    }
+    for (index, row) in following.into_iter().take(MAX_WRAP_ROWS).enumerate() {
+        if row.trim().is_empty() || row.contains('[') || structured_token_anchor(row).is_some() {
+            return 0;
+        }
+        if row.contains(']') {
+            return index + 1;
+        }
+    }
+    0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructuredTokenAnchor {
     Intent,
     Suggest,
 }
 
+/// One marker grammar for backend capture and frontend row styling. Keep the
+/// data file portable between Rust regex and JavaScript RegExp.
+fn intent_anchor_pattern() -> &'static str {
+    lazy_static::lazy_static! {
+        static ref PATTERNS: serde_json::Value =
+            serde_json::from_str(include_str!("intent_marker.json")).expect("intent marker grammar");
+    }
+    PATTERNS["anchor"].as_str().expect("intent anchor")
+}
+
+lazy_static::lazy_static! {
+    static ref INTENT_ANCHOR_RE: regex::Regex =
+        regex::Regex::new(intent_anchor_pattern()).expect("intent anchor regex");
+}
+
 /// Identify a structured token at the start of a logical terminal line.
 /// Keep this shared with the parser grammar so grid filtering accepts exactly
 /// the same optional agent bullets as the authoritative token regexes.
 pub fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
+    if INTENT_ANCHOR_RE.is_match(clean) {
+        return Some(StructuredTokenAnchor::Intent);
+    }
     lazy_static::lazy_static! {
-        static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
-            r"^[\t ]*(?:[{b}][\t ]+)?(?:(?:{a})?(intent)|(suggest)):",
+        static ref SUGGEST_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
+            r"^[\t ]*(?:[{b}][\t ]+)?suggest:",
             b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+        )).unwrap();
     }
-    let captures = STRUCTURED_TOKEN_ANCHOR_RE.captures(clean)?;
-    if captures.get(1).is_some() {
-        Some(StructuredTokenAnchor::Intent)
-    } else {
-        captures.get(2).map(|_| StructuredTokenAnchor::Suggest)
-    }
+    SUGGEST_ANCHOR_RE
+        .is_match(clean)
+        .then_some(StructuredTokenAnchor::Suggest)
 }
 
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
@@ -1574,23 +1659,9 @@ pub fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
         return None;
     }
     lazy_static::lazy_static! {
-        // Plain prefix: `intent:` at line start, with optional leading
-        // horizontal whitespace, a leading bullet glyph (see
-        // AGENT_LINE_BULLETS) and/or the ack sentence (see
-        // ACK_SENTENCE_PREFIX). Ink-hosted agents (Claude Code) decorate the
-        // first line of an assistant message with `● ` and indent every
-        // continuation line by the bullet width, so plain-prefix tokens
-        // emitted after the first line arrive as `  intent: ...`; Codex
-        // decorates the first line with `• ` instead. The leading whitespace
-        // must be horizontal only — any non-whitespace character before the
-        // keyword (other than an allowed bullet or that one sentence) is
-        // rejected.
         static ref INTENT_PLAIN_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?(?:{a})?intent:[\t ]+(.+)$",
-            b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+            r"(?m){}[\t ]+(.+)$", intent_anchor_pattern()
+        )).unwrap();
     }
 
     // The token is a single logical line, but the agent that wrote it wraps its
@@ -1605,11 +1676,13 @@ pub fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
 }
 
 lazy_static::lazy_static! {
-    /// Splits the optional `(title)` suffix off a captured intent body. `[^)]+`
-    /// forbids a nested `)`, so the group can only bind the LAST parenthesis of
-    /// the row — a mid-sentence `(aside)` is left inside the text.
-    static ref INTENT_TITLE_RE: regex::Regex =
-        regex::Regex::new(r"^(.*?)\(([^)]+)\)\s*$").unwrap();
+    /// The shared title closure also bounds frontend tinting. Trailing prose
+    /// is not part of the token; earlier parenthesized asides stay in the body.
+    static ref INTENT_TITLE_RE: regex::Regex = {
+        let grammar: serde_json::Value =
+            serde_json::from_str(include_str!("intent_marker.json")).expect("intent marker grammar");
+        regex::Regex::new(grammar["title"].as_str().expect("intent title grammar")).unwrap()
+    };
 }
 
 /// Keep pathological narrow-pane output bounded while allowing long intents.
@@ -1694,8 +1767,7 @@ pub fn dewrap_intent_continuation_with_rows<'a>(
     (std::borrow::Cow::Owned(kept.join("\n")), absorbed)
 }
 
-/// True when the row ends in a closed `(title)` — the protocol's only
-/// end-of-token marker, and therefore the signal that nothing wrapped.
+/// True when the last group is closed, with no unfinished later title.
 pub fn intent_row_is_complete(row: &str) -> bool {
     INTENT_TITLE_RE.is_match(row.trim_end())
 }
@@ -1730,7 +1802,7 @@ fn build_intent_event(raw_match: Option<String>, title_re: &regex::Regex) -> Opt
         if raw == "..." || raw == "<text>" || raw.len() < 4 {
             return None;
         }
-        // Try to extract optional (title) from the end
+        // Extract the title at the shared end-of-token boundary.
         let (text, title) = if let Some(tc) = title_re.captures(raw) {
             let body = tc[1].trim();
             let t = tc[2].trim();
@@ -1796,7 +1868,7 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
     let content_cow = dewrap_suggest_content(kw_cow.as_ref());
     // Pass 3: the bracketed list itself wrapped across physical rows because the
     // token is wider than the terminal (e.g. a ~78-col `suggest: [ … ]` on a
-    // 76-col window). Rejoin the newlines inside the first `[ … ]` so the
+    // 76-col window). Rejoin the newlines inside the latest `[ … ]` so the
     // single-row SUGGEST_RE can match. Bounded by the closing `]`, a small row
     // window, and nested-bracket rejection so surrounding output is never
     // absorbed.
@@ -1805,8 +1877,10 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
     if !clean.contains("suggest:") {
         return None;
     }
-    // Single match: column-0 `suggest: [ … ]` on one row, no nested brackets.
-    let caps = SUGGEST_RE.captures(clean)?;
+    // A full-screen repaint can include completed turns above the current
+    // response. The lowest complete marker is the latest choice list; choosing
+    // the first would republish consumed suggestions when Claude redraws history.
+    let caps = SUGGEST_RE.captures_iter(clean).last()?;
     let items: Vec<String> = caps[1]
         .split('|')
         .map(|s| s.trim().to_string())
@@ -1860,12 +1934,17 @@ fn dewrap_suggest_content(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(SUGGEST_TRAILING_RE.replace_all(text, "$1").to_string())
 }
 
+/// Continuation rows a wrapped `suggest: [ … ]` token may span. 4 physical rows
+/// comfortably hold a max-size token (4 items × ≤40 chars + separators +
+/// brackets ≈ 170 cols ≈ 3 wraps at a typical narrow width).
+const MAX_WRAP_ROWS: usize = 4;
+
 /// Rejoin a `suggest: [ … ]` token whose bracketed content wrapped across
 /// physical terminal rows. The single-row [`SUGGEST_RE`] cannot match once the
 /// VT buffer has split the list with `\n` (a token wider than the terminal,
 /// e.g. ~78 cols of items on a 76-col window), so the overlay never fires.
 /// We reconstruct the logical line by collapsing newlines (and the horizontal
-/// whitespace the wrap leaves behind) inside the first `[ … ]` into single
+/// whitespace the wrap leaves behind) inside the latest `[ … ]` into single
 /// spaces.
 ///
 /// Because a terminal hard-wrap is column-based, it may break mid-word; the
@@ -1894,11 +1973,7 @@ fn dewrap_suggest_brackets(text: &str) -> std::borrow::Cow<'_, str> {
         // A newline plus the horizontal whitespace surrounding it.
         static ref WRAP_WS_RE: regex::Regex = regex::Regex::new(r"[\t ]*\n[\t ]*").unwrap();
     }
-    // 4 physical rows comfortably hold a max-size token (4 items × ≤40 chars +
-    // separators + brackets ≈ 170 cols ≈ 3 wraps at a typical narrow width).
-    const MAX_WRAP_ROWS: usize = 4;
-
-    let Some(m) = SUGGEST_OPEN_RE.find(text) else {
+    let Some(m) = SUGGEST_OPEN_RE.find_iter(text).last() else {
         return std::borrow::Cow::Borrowed(text);
     };
     let content_start = m.end(); // byte index just after the opening `[`
@@ -2035,8 +2110,12 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
 ///    /clear     Clear conversation history
 /// ```
 ///
-/// Requires at least 2 consecutive matching rows from the bottom of the screen.
+/// Called only while the input FSM is in slash mode. A filtered menu may have
+/// just one matching row at the bottom of the screen.
 /// Highlighted item: detected by `❯` prefix or falls back to first item.
+// DEFERRED (2026-10-19) — Codex 0.162.1 paints completion above its composer and
+// status line, with a `›` selection marker. Supporting that distinct layout is
+// outside the ego single-match/retraction fix; live evidence is in story 2030-84bb.
 pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         // Each menu row: optional leading whitespace, optional ❯ marker, /command, 2+ spaces, description
@@ -2082,7 +2161,7 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     // Reverse to restore top-to-bottom order (we scanned bottom-to-top).
     items.reverse();
 
-    if items.len() < 2 {
+    if items.is_empty() {
         return None;
     }
 
@@ -2131,9 +2210,13 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Footer: `Esc to cancel · Tab to amend` style.
         static ref FOOTER_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:Esc|esc|ESC)\s+to\s+(\S+).*?(?:·|\||•)\s*(?:Tab|tab|TAB)\s+to\s+(\S+)").unwrap();
-        // Codex request_user_input opens with Alt+Up and uses a distinct footer.
+        // Supported Codex 0.162 request_user_input opens with Shift+Left.
         static ref CODEX_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+ctrl\+\]\s+skip\s+⌥\+↓\s+main prompt\s*$").unwrap();
+            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+⌃\]\s+skip\s+⇧→\s+main prompt\s*$").unwrap();
+        // Narrow /plan layouts put each footer action on its own row.
+        static ref CODEX_PLAN_NOTES_RE: regex::Regex = regex::Regex::new(
+            r"^(?:option [1-9][0-9]*/[1-9][0-9]* \| )?tab to add notes$"
+        ).unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -2150,6 +2233,8 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut dismiss_key: Option<String> = None;
     let mut amend_key: Option<String> = None;
     let mut codex_footer = false;
+    let mut codex_approval = false;
+    let mut codex_plan = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -2164,9 +2249,33 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             idx -= 1;
             continue;
         }
+        if row == "Press enter to confirm or esc to cancel" {
+            dismiss_key = Some("cancel".to_owned());
+            codex_approval = true;
+            idx -= 1;
+            continue;
+        }
+        if idx >= 3
+            && row == "esc to interrupt"
+            && screen_rows[idx - 2].trim() == "enter to submit answer"
+            && CODEX_PLAN_NOTES_RE.is_match(screen_rows[idx - 3].trim())
+        {
+            dismiss_key = Some("cancel".to_owned());
+            amend_key = Some("amend".to_owned());
+            codex_plan = true;
+            idx -= 3;
+            continue;
+        }
+        if row == "tab to add notes | enter to submit answer | esc to interrupt" {
+            dismiss_key = Some("cancel".to_owned());
+            amend_key = Some("amend".to_owned());
+            codex_plan = true;
+            idx -= 1;
+            continue;
+        }
         if CODEX_FOOTER_RE.is_match(&screen_rows[idx - 1]) {
             dismiss_key = Some("ctrl+]".to_string());
-            amend_key = Some("alt+down".to_string());
+            amend_key = Some("shift+right".to_string());
             codex_footer = true;
             idx -= 1;
             continue;
@@ -2176,6 +2285,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
 
     // Step 2: collect contiguous option rows bottom-up.
     let mut options_rev: Vec<ChoiceOption> = Vec::new();
+    let mut continuations: Vec<&str> = Vec::new();
     while idx > 0 {
         let raw = &screen_rows[idx - 1];
         if raw.trim().is_empty() {
@@ -2186,10 +2296,55 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             let mut label = caps[2].trim().to_string();
             let highlighted = raw.contains('❯') || raw.contains('›');
 
-            let hint = HINT_RE.captures(&label).map(|c| c[1].to_string());
-            if hint.is_some() {
-                label = HINT_RE.replace(&label, "").trim().to_string();
-            }
+            // /plan renders descriptions in a second column, including its
+            // notes hint. They are not part of the selectable answer label.
+            let hint = if codex_plan {
+                let label_column = raw[..caps.get(2)?.start()].chars().count();
+                let hint_column = label.find("  ").map(|split| {
+                    label_column
+                        + label[..split].chars().count()
+                        + label[split..]
+                            .chars()
+                            .take_while(|ch| ch.is_whitespace())
+                            .count()
+                });
+                let mut hint = label.split_once("  ").map(|(answer, description)| {
+                    (answer.trim().to_owned(), description.trim().to_owned())
+                });
+                if let Some((answer, _)) = &hint {
+                    label = answer.clone();
+                }
+                // Native /plan wraps the answer and its description independently.
+                // Keep their columns separate; a description is never an answer key.
+                for continuation in continuations.drain(..).rev() {
+                    let columns: Vec<char> = continuation.chars().collect();
+                    if columns
+                        .iter()
+                        .take(label_column)
+                        .any(|ch| !ch.is_whitespace())
+                    {
+                        return None;
+                    }
+                    let split = hint_column.unwrap_or(columns.len()).min(columns.len());
+                    let answer: String = columns
+                        .iter()
+                        .skip(label_column)
+                        .take(split.saturating_sub(label_column))
+                        .collect();
+                    append_codex_plan_fragment(&mut label, answer.trim());
+                    if let Some((_, description)) = &mut hint {
+                        let fragment: String = columns.iter().skip(split).collect();
+                        append_codex_plan_fragment(description, fragment.trim());
+                    }
+                }
+                hint.map(|(_, description)| description)
+            } else {
+                let hint = HINT_RE.captures(&label).map(|c| c[1].to_string());
+                if hint.is_some() {
+                    label = HINT_RE.replace(&label, "").trim().to_string();
+                }
+                hint
+            };
 
             let destructive = {
                 let lower = label.to_lowercase();
@@ -2210,12 +2365,15 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
                 hint,
             });
             idx -= 1;
+        } else if codex_plan && raw.starts_with("       ") {
+            continuations.push(raw.as_str());
+            idx -= 1;
         } else {
             break;
         }
     }
 
-    if options_rev.len() < 2 {
+    if !continuations.is_empty() || options_rev.len() < 2 {
         return None;
     }
 
@@ -2226,7 +2384,18 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     if idx == 0 {
         return None;
     }
-    let title_row = screen_rows[idx - 1].trim();
+    // The command approval puts Environment, Reason and the command between
+    // its question and options. Its exact footer distinguishes it from the
+    // queued native question panel, whose numbers also submit immediately.
+    let title_row = if codex_approval {
+        screen_rows[..idx]
+            .iter()
+            .rev()
+            .find(|row| row.trim() == "Would you like to run the following command?")?
+            .trim()
+    } else {
+        screen_rows[idx - 1].trim()
+    };
     // A quoted numbered list can include the footer text. Codex's actual
     // request_user_input panel has this heading above the question.
     if codex_footer
@@ -2238,7 +2407,41 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     {
         return None;
     }
-    let title_qualifies = title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
+    // /plan is a distinct native form, not the queued-follow-up panel. Require
+    // its counter immediately above the title rather than accepting prose lists
+    // solely because their title is imperative or their footer was quoted.
+    if codex_plan {
+        let header = screen_rows[..idx - 1]
+            .iter()
+            .rev()
+            .find(|row| !row.trim().is_empty())?
+            .trim();
+        let counter = header.strip_prefix("Question ")?;
+        let (position, unanswered) = counter.split_once(" (")?;
+        let (current, total) = position.split_once('/')?;
+        let current = current.parse::<usize>().ok()?;
+        let total = total.parse::<usize>().ok()?;
+        let unanswered = unanswered
+            .strip_suffix(" unanswered)")?
+            .parse::<usize>()
+            .ok()?;
+        if current == 0
+            || current > total
+            || unanswered == 0
+            || unanswered > total
+            || options_rev
+                .iter()
+                .rev()
+                .enumerate()
+                .any(|(index, option)| option.key.parse::<usize>().ok() != Some(index + 1))
+        {
+            return None;
+        }
+    }
+    // The exact Codex footer plus queued-panel heading is authoritative even
+    // for imperative titles such as the recorded `Pick a color.`.
+    let title_qualifies =
+        codex_footer || codex_plan || title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;
     }
@@ -2264,19 +2467,244 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     })
 }
 
+// /plan wraps at word boundaries, but punctuation can start a continuation.
+fn append_codex_plan_fragment(text: &mut String, fragment: &str) {
+    if fragment.is_empty() {
+        return;
+    }
+    if !text.is_empty() && !fragment.starts_with([',', '.', ';', ':', ')']) {
+        text.push(' ');
+    }
+    text.push_str(fragment);
+}
+
+/// Grok's native Ask is a framed radio form, not a numbered Markdown list.
+/// Numeric keys settle immediately; z switches to an in-place text composer.
+pub fn parse_grok_question(screen_rows: &[String]) -> Option<ParsedEvent> {
+    lazy_static::lazy_static! {
+        static ref RADIO_RE: regex::Regex = regex::Regex::new(
+            r"^\s*(?:┃\s*)?([1-9]\d*|z)\s+\(([○●])\)\s+(.+?)\s*$"
+        ).unwrap();
+    }
+    let blank = |row: &str| matches!(row.trim(), "" | "┃");
+    let mut end = screen_rows.len();
+    while end > 0 && blank(&screen_rows[end - 1]) {
+        end -= 1;
+    }
+    let mut first = end;
+    let mut options = Vec::new();
+    let mut free_text = false;
+    while first > 0 {
+        let Some(caps) = RADIO_RE.captures(&screen_rows[first - 1]) else {
+            break;
+        };
+        let key = caps[1].to_owned();
+        let text = caps[3].trim();
+        free_text |= key == "z" && &caps[2] == "●" && text.starts_with('❯');
+        let (label, hint) = text.split_once("  ").map_or((text, None), |(label, hint)| {
+            (label, Some(hint.trim().to_owned()))
+        });
+        options.push(ChoiceOption {
+            key,
+            label: label.to_owned(),
+            highlighted: &caps[2] == "●",
+            destructive: label.eq_ignore_ascii_case("no"),
+            hint,
+        });
+        first -= 1;
+    }
+    options.reverse();
+    let ask = options.last()?.key == "z";
+    let numbered = options.len() - usize::from(ask);
+    if numbered < 2
+        || options[..numbered]
+            .iter()
+            .enumerate()
+            .any(|(index, option)| option.key.parse::<usize>().ok() != Some(index + 1))
+    {
+        return None;
+    }
+    let mut title_end = first;
+    while title_end > 0 && blank(&screen_rows[title_end - 1]) {
+        title_end -= 1;
+    }
+    let title = if ask {
+        let mut title_start = title_end;
+        while title_start > 0 {
+            let row = screen_rows[title_start - 1].trim();
+            if !row.starts_with('┃') || blank(row) {
+                break;
+            }
+            title_start -= 1;
+        }
+        if title_start == title_end
+            || !screen_rows[..title_start].iter().rev().take(4).any(|row| {
+                row.trim()
+                    .strip_prefix('◆')
+                    .is_some_and(|row| row.trim_start().starts_with("Waiting on answers for "))
+            })
+        {
+            return None;
+        }
+        screen_rows[title_start..title_end]
+            .iter()
+            .map(|row| row.trim().trim_start_matches('┃').trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        // Enforced approvals have a framed title, command and scope controls,
+        // not Ask's waiting header or z option. Their numeric replies are also
+        // immediate (the recorded 4 rejects without an Enter).
+        let scope = screen_rows
+            .get(title_end.checked_sub(1)?)?
+            .trim()
+            .strip_prefix('┃')?
+            .trim();
+        if !scope.starts_with("← → narrow scope") || !scope.ends_with("e edit pattern") {
+            return None;
+        }
+        let header = (0..title_end - 1).rev().find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('›'))
+        })?;
+        let command = (header + 1..title_end - 1).find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('│'))
+        })?;
+        let title = screen_rows[header..command]
+            .iter()
+            .map(|row| {
+                row.trim()
+                    .trim_start_matches('┃')
+                    .trim()
+                    .trim_start_matches('›')
+                    .trim()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        for option in &mut options {
+            if option.label.ends_with(')')
+                && let Some((label, hint)) = option.label.rsplit_once(" (")
+            {
+                option.hint = Some(hint.trim_end_matches(')').to_owned());
+                option.label = label.to_owned();
+            }
+            option.destructive = option.label.to_ascii_lowercase().starts_with("no,");
+        }
+        title
+    };
+    if free_text {
+        return Some(ParsedEvent::Question {
+            prompt_text: title,
+            confident: true,
+        });
+    }
+    if !options.iter().any(|option| option.highlighted) {
+        options[0].highlighted = true;
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title,
+        options,
+        selection_mode: None,
+        dismiss_key: None,
+        amend_key: None,
+    })
+}
+
+/// Exclusive end of a Claude multi-question Submit review: the separator row
+/// after the tab bar `← ☒ A  ☒ B  ✔ Submit →`, which Claude draws full-bleed at
+/// column zero like the dialog footer, or the end of the screen.
+fn submit_review_end(screen_rows: &[String]) -> Option<usize> {
+    let tab_bar = screen_rows
+        .iter()
+        .rposition(|row| row.starts_with('←') && row.contains("✔ Submit"))?;
+    let end = screen_rows[tab_bar + 1..]
+        .iter()
+        .position(|row| row.starts_with("──"))
+        .map_or(screen_rows.len(), |offset| tab_bar + 1 + offset);
+    Some(end)
+}
+
 /// Claude Ink AskUserQuestion uses arrow navigation and Enter, even though its
 /// displayed options are numbered. Parse only while its column-zero footer is
 /// present; descriptions and wrapped text may separate option rows.
+///
+/// The Submit review that closes a multi-question form (`← ☒ A  ☒ B  ✔ Submit →`
+/// over `Ready to submit your answers?`) has no footer. It is anchored on that
+/// column-zero tab bar instead and ends at the next separator row.
 pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEvent> {
     let footer = screen_rows
         .iter()
-        .rposition(|row| is_ink_dialog_footer_row(row))?;
-    let title = (0..footer)
-        .rev()
-        .find(|&idx| screen_rows[idx].trim_end().ends_with('?'))?;
+        .rposition(|row| is_ink_dialog_footer_row(row))
+        .or_else(|| submit_review_end(screen_rows))?;
     lazy_static::lazy_static! {
         static ref OPTION_RE: regex::Regex =
             regex::Regex::new(r"^\s*([❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$").unwrap();
+    }
+    // Claude replaces a clipped option's cursor with a column-zero scroll
+    // arrow. Hidden rows are not an ordered choice list: expose only the
+    // footer's native navigation instead of guessing labels or cursor offsets.
+    let last_first_option = (0..footer).rev().find(|&idx| {
+        OPTION_RE
+            .captures(&screen_rows[idx])
+            .is_some_and(|caps| &caps[2] == "1")
+    });
+    let clipped = (last_first_option.unwrap_or(0)..footer).rev().find(|&idx| {
+        let row = &screen_rows[idx];
+        row.strip_prefix('↑')
+            .or_else(|| row.strip_prefix('↓'))
+            .is_some_and(|rest| OPTION_RE.is_match(rest))
+    });
+    let clipped_start = clipped.map(|idx| {
+        screen_rows[..idx]
+            .iter()
+            .rposition(|row| row.starts_with("──"))
+            .map_or(0, |separator| separator + 1)
+    });
+    // Native titles can be imperative ("Pick a colour"). Locate the title
+    // from the active numbered form, not punctuation in earlier output or in
+    // an option description. The column-zero footer/review remains the anchor.
+    let first_option = if let Some(start) = clipped_start {
+        (start..footer).find(|&idx| {
+            let row = screen_rows[idx].trim_start_matches(['↑', '↓']);
+            OPTION_RE.is_match(row)
+        })
+    } else {
+        last_first_option
+    }?;
+    let title = (0..first_option)
+        .rev()
+        .find(|&idx| !screen_rows[idx].trim().is_empty())?;
+    let title_text = screen_rows[title].trim();
+    if title_text.starts_with("──") || title_text.starts_with('←') {
+        return None;
+    }
+    let navigation = || ParsedEvent::ChoicePrompt {
+        title: title_text.to_string(),
+        options: [
+            ("↑", "Previous option"),
+            ("↓", "Next option"),
+            ("↵", "Select highlighted option"),
+        ]
+        .into_iter()
+        .map(|(key, label)| ChoiceOption {
+            key: key.to_string(),
+            label: label.to_string(),
+            highlighted: false,
+            destructive: false,
+            hint: None,
+        })
+        .collect(),
+        selection_mode: Some(ChoiceSelectionMode::NavigateOnly),
+        dismiss_key: Some("cancel".to_string()),
+        amend_key: None,
+    };
+    if clipped.is_some() {
+        return Some(navigation());
     }
     let mut options = Vec::new();
     for row in &screen_rows[title + 1..footer] {
@@ -2285,7 +2713,18 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
         };
         let key = caps[2].to_string();
         if key.parse::<usize>().ok() != Some(options.len() + 1) {
-            return None;
+            // At the last visible option Claude can omit the scroll arrow while
+            // still clipping the native text alternative. Its separate Chat
+            // row is an exact native boundary, not an arbitrary numbered gap.
+            let native_chat_boundary = key == "5"
+                && caps[3].trim() == "Chat about this"
+                && screen_rows
+                    .get(footer)
+                    .is_some_and(|row| is_ink_dialog_footer_row(row))
+                && screen_rows[title + 1..footer]
+                    .iter()
+                    .any(|row| row.starts_with("──"));
+            return native_chat_boundary.then(navigation);
         }
         let label = caps[3].trim().to_string();
         let lower = label.to_lowercase();
@@ -2316,6 +2755,47 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_api_error_provider_translated_auth() {
+        let mut parser = OutputParser::new();
+        let input = "The API provider is not able to authenticate you. Check your API key.";
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider auth msg");
+        assert_eq!(name, "provider-auth-msg");
+        assert_eq!(kind, "auth");
+    }
+
+    #[test]
+    fn test_api_error_provider_translated_server() {
+        let mut parser = OutputParser::new();
+        let input = "The API provider's servers are down or overloaded.";
+        let events = parser.parse(input);
+        let (name, _, kind) =
+            get_api_error(&events).expect("should detect provider translated msg");
+        assert_eq!(name, "provider-server-msg");
+        assert_eq!(kind, "server");
+    }
+
+    #[test]
+    fn test_api_error_provider_auth() {
+        let mut parser = OutputParser::new();
+        let input = "litellm.AuthenticationError: AnthropicException - invalid x-api-key";
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider auth error");
+        assert_eq!(name, "provider-auth-error");
+        assert_eq!(kind, "auth");
+    }
+
+    #[test]
+    fn test_api_error_provider_server() {
+        let mut parser = OutputParser::new();
+        let input = r#"litellm.InternalServerError: AnthropicException - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let events = parser.parse(input);
+        let (name, _, kind) = get_api_error(&events).expect("should detect provider server error");
+        assert_eq!(name, "provider-server-error");
+        assert_eq!(kind, "server");
+    }
 
     #[test]
     fn test_rate_limit_claude_429() {
@@ -2623,55 +3103,6 @@ mod tests {
                 assert_eq!(task_name, "npm test");
             }
             _ => panic!("Expected StatusLine event"),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_spinner() {
-        // Aider uses a Knight Rider scanner: "░█        Waiting for claude-3-5-sonnet"
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{2591}\u{2588}        Waiting for claude-3-5-sonnet");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine { task_name, .. } => {
-                assert_eq!(task_name, "Waiting for claude-3-5-sonnet");
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_token_report() {
-        // Aider token report: "Tokens: 5.2k sent, 1.3k received."
-        let mut parser = OutputParser::new();
-        let events = parser.parse("Tokens: 5.2k sent, 1.3k received.");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine {
-                task_name,
-                token_info,
-                ..
-            } => {
-                assert_eq!(task_name, "5.2k sent, 1.3k received");
-                assert!(token_info.is_some(), "Expected token_info");
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
-        }
-    }
-
-    #[test]
-    fn test_status_line_aider_token_report_with_cache() {
-        // Aider with cache: "Tokens: 2,345 sent, 123 cache write, 456 cache hit, 789 received."
-        let mut parser = OutputParser::new();
-        let events =
-            parser.parse("Tokens: 2,345 sent, 123 cache write, 456 cache hit, 789 received.");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            ParsedEvent::StatusLine { task_name, .. } => {
-                assert!(task_name.contains("sent"));
-                assert!(task_name.contains("received"));
-            }
-            _ => panic!("Expected StatusLine, got {:?}", events[0]),
         }
     }
 
@@ -3922,46 +4353,6 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
-    fn test_api_error_aider_server() {
-        let mut parser = OutputParser::new();
-        let input = r#"litellm.InternalServerError: AnthropicException - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider server error");
-        assert_eq!(name, "aider-server-error");
-        assert_eq!(kind, "server");
-    }
-
-    #[test]
-    fn test_api_error_aider_auth() {
-        let mut parser = OutputParser::new();
-        let input = "litellm.AuthenticationError: AnthropicException - invalid x-api-key";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider auth error");
-        assert_eq!(name, "aider-auth-error");
-        assert_eq!(kind, "auth");
-    }
-
-    #[test]
-    fn test_api_error_aider_translated_server() {
-        let mut parser = OutputParser::new();
-        let input = "The API provider's servers are down or overloaded.";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider translated msg");
-        assert_eq!(name, "aider-server-msg");
-        assert_eq!(kind, "server");
-    }
-
-    #[test]
-    fn test_api_error_aider_translated_auth() {
-        let mut parser = OutputParser::new();
-        let input = "The API provider is not able to authenticate you. Check your API key.";
-        let events = parser.parse(input);
-        let (name, _, kind) = get_api_error(&events).expect("should detect Aider auth msg");
-        assert_eq!(name, "aider-auth-msg");
-        assert_eq!(kind, "auth");
-    }
-
-    #[test]
     fn test_api_error_codex_stream_error() {
         let mut parser = OutputParser::new();
         let input = "⚠  stream error: exceeded retry limit, last status: 401 Unauthorized; retrying 5/5 in 3.087s…";
@@ -4385,6 +4776,76 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
+    fn intent_ends_at_title_closure() {
+        // Catches: same-row prose after a closed title leaking into CONTEXT.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../src/dev/fixtures/ego-intent-2060.json"
+        ))
+        .unwrap();
+        let events = parse_intent_events(fixture["text"].as_str().unwrap());
+        assert_eq!(
+            get_intent(&events).as_deref(),
+            Some(
+                "Verificando l’ultima release e riconciliando main senza perdere il lavoro locale"
+            )
+        );
+        assert_eq!(
+            get_intent_title(&events).as_deref(),
+            Some("Allineamento Agent2")
+        );
+    }
+
+    #[test]
+    fn intent_aside_does_not_close_an_unfinished_later_title() {
+        // Catches: an earlier aside publishing a false title during repaint or hard wrap.
+        let incomplete = "intent: checking (local) configuration (Config";
+        assert!(!intent_row_is_complete(incomplete));
+        assert_eq!(get_intent_title(&parse_intent_events(incomplete)), None);
+        for input in [
+            "intent: checking (local) configuration (Config\n  review)",
+            "intent: checking (local) configuration (\n  Config)Next sentence",
+        ] {
+            let events = parse_intent_events(input);
+            assert_eq!(
+                get_intent(&events).as_deref(),
+                Some("checking (local) configuration")
+            );
+            let expected = if input.contains("review") {
+                "Config review"
+            } else {
+                "Config"
+            };
+            assert_eq!(get_intent_title(&events).as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn intent_title_closure_preserves_asides_wraps_and_untitled_rows() {
+        // Catches: truncating an earlier aside, losing a wrapped title, or requiring a title.
+        for (input, text, title) in [
+            (
+                "intent: checking (local) configuration (Config)Next sentence",
+                "checking (local) configuration",
+                Some("Config"),
+            ),
+            (
+                "• intent: checking configuration\n  across modules (Config)Next sentence",
+                "checking configuration across modules",
+                Some("Config"),
+            ),
+            (
+                "intent: checking configuration",
+                "checking configuration",
+                None,
+            ),
+        ] {
+            let events = parse_intent_events(input);
+            assert_eq!(get_intent(&events).as_deref(), Some(text), "{input}");
+            assert_eq!(get_intent_title(&events).as_deref(), title, "{input}");
+        }
+    }
+
+    #[test]
     fn test_intent_plain_prefix_with_title() {
         let events = parse_intent_events("intent: analyzing code (Analysis)");
         assert_eq!(get_intent(&events), Some("analyzing code".to_string()));
@@ -4696,6 +5157,48 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let events = parser.parse("suggest: [   Fix test  |  Refactor  |  Add docs   ]");
         let items = get_suggest(&events).expect("should parse");
         assert_eq!(items, vec!["Fix test", "Refactor", "Add docs"]);
+    }
+
+    // Catches: a repainted historical marker wins over the current response,
+    // including when the latest list needs bounded terminal dewrapping.
+    #[test]
+    fn suggest_repaint_uses_latest_complete_list() {
+        for latest in [
+            "suggest: [ New alpha | New beta ]",
+            "suggest: [ New alpha |\n  New beta ]",
+            "⏺ suggest: [ New alpha | New beta ]",
+        ] {
+            let text = format!("suggest: [ Old alpha | Old beta ]\nresponse\n{latest}");
+            let events = OutputParser::new().parse(&text);
+            assert_eq!(
+                get_suggest(&events),
+                Some(vec!["New alpha".into(), "New beta".into()])
+            );
+        }
+    }
+
+    // Catches: rearming content dedup accepts a consumed marker above the
+    // submitted prompt, or incorrectly blocks identical fresh choices below it.
+    #[test]
+    fn suggest_floor_excludes_history_but_allows_identical_fresh_choices() {
+        let mut parser = OutputParser::new();
+        let marker = "suggest: [ Reply alpha | Reply beta ]";
+        let mut rows = vec![crate::vt_log::ChangedRow {
+            row_index: 0,
+            text: marker.into(),
+        }];
+        assert!(
+            get_suggest(&parser.parse_clean_lines_with_suggest_floor(&rows, true, Some(1)))
+                .is_none()
+        );
+        rows.push(crate::vt_log::ChangedRow {
+            row_index: 2,
+            text: marker.into(),
+        });
+        assert_eq!(
+            get_suggest(&parser.parse_clean_lines_with_suggest_floor(&rows, true, Some(1))),
+            Some(vec!["Reply alpha".into(), "Reply beta".into()])
+        );
     }
 
     #[test]
@@ -5384,6 +5887,44 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         screen
     }
 
+    // Catches: a one-result ego completion is discarded, leaving the old broad menu cached.
+    #[test]
+    fn recorded_ego_slash_filter_keeps_the_single_goal_match() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/ego-slash-filter-2030.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        let mut typed = String::new();
+        let mut checked = false;
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Input {
+                if record.data == b"a" && typed == "/go" {
+                    let screen = grid.screen_text_rows();
+                    assert!(screen.iter().any(|row| row.trim() == "| /go"));
+                    let ParsedEvent::SlashMenu { items } = parse_slash_menu(&screen)
+                        .expect("the real /go screen must replace the unfiltered menu")
+                    else {
+                        panic!("expected slash menu");
+                    };
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].command, "/goal");
+                    checked = true;
+                    break;
+                }
+                if !record.data.starts_with(b"\x1b") {
+                    typed.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            } else {
+                grid.process(&record.data);
+            }
+        }
+        assert!(checked, "capture must contain the /go boundary");
+    }
+
     #[test]
     fn test_slash_menu_claude_code_basic() {
         let screen = make_screen(
@@ -5434,12 +5975,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
-    fn test_slash_menu_single_row_not_detected() {
+    fn test_slash_menu_single_filtered_row_detected() {
         let screen = make_screen(&["   /help      Get help with using Claude Code"], 24);
-        assert!(
-            parse_slash_menu(&screen).is_none(),
-            "single row should not trigger menu"
-        );
+        let Some(ParsedEvent::SlashMenu { items }) = parse_slash_menu(&screen) else {
+            panic!("a filtered menu can contain only one command");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].command, "/help");
     }
 
     #[test]
@@ -6553,6 +7095,396 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(payload.amend_key.as_deref(), Some("amend"));
     }
 
+    fn recorded_codex_plan_question_rows() -> Vec<String> {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/fixtures/agent_prompts/codex-plan-question-20261019.json"
+        ))
+        .unwrap();
+        // The retained ring is not a TCAP: original geometry, input and chunk
+        // timing are unavailable. Replay on a canvas large enough for its last
+        // complete repaint (row 63, column 220); assert parser content only.
+        let mut grid = crate::terminal_grid::TerminalGrid::new(63, 220, 2000);
+        grid.process(fixture["data"].as_str().unwrap().as_bytes());
+        grid.screen_text_rows()
+    }
+
+    // Catches: the /plan request_user_input form losing its title and options
+    // because only the separate queued-follow-up footer is recognized.
+    #[test]
+    fn recorded_codex_plan_question_exports_clean_answer_controls() {
+        assert_codex_plan_answer_controls(&recorded_codex_plan_question_rows());
+    }
+
+    fn assert_codex_plan_answer_controls(rows: &[String]) {
+        let ParsedEvent::ChoicePrompt {
+            title,
+            options,
+            selection_mode,
+            dismiss_key,
+            amend_key,
+        } = parse_choice_prompt(rows).expect("recorded /plan question must export options")
+        else {
+            panic!("expected choice prompt");
+        };
+        assert_eq!(title, "Pick a colour");
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| (o.key.as_str(), o.label.as_str(), o.highlighted))
+                .collect::<Vec<_>>(),
+            [
+                ("1", "Red", true),
+                ("2", "Green", false),
+                ("3", "Blue", false),
+                ("4", "None of the above", false)
+            ]
+        );
+        assert_eq!(options[0].hint.as_deref(), Some("Select Red."));
+        assert_eq!(
+            options[3].hint.as_deref(),
+            Some("Optionally, add details in notes (tab)")
+        );
+        assert_eq!(
+            selection_mode, None,
+            "recorded numeric answer submits immediately"
+        );
+        assert_eq!(dismiss_key.as_deref(), Some("cancel"));
+        assert_eq!(amend_key.as_deref(), Some("amend"));
+    }
+
+    // Catches: the same native /plan form failing at its real captured geometry.
+    #[test]
+    fn captured_codex_plan_question_exports_clean_answer_controls() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/codex-plan-question-20261019-real.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.expect("real recorded geometry");
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && record.data == b"\x03"
+            {
+                break;
+            }
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        assert_codex_plan_answer_controls(&grid.screen_text_rows());
+    }
+
+    // Catches: quoted imperative lists becoming live controls without both
+    // native anchors, or a partial repaint exporting a missing answer key.
+    #[test]
+    fn recorded_codex_plan_question_requires_header_footer_and_numbering() {
+        let rows = recorded_codex_plan_question_rows();
+        for needle in ["Question 1/1", "tab to add notes", "2. Green"] {
+            let mut incomplete = rows.clone();
+            let row = incomplete
+                .iter_mut()
+                .find(|row| row.contains(needle))
+                .unwrap();
+            *row = String::new();
+            assert!(
+                parse_choice_prompt(&incomplete).is_none(),
+                "missing {needle}"
+            );
+        }
+        let mut answered = rows;
+        let header = answered
+            .iter_mut()
+            .find(|row| row.contains("Question 1/1"))
+            .unwrap();
+        *header = "  Question 1/1 (0 unanswered)".to_owned();
+        assert!(parse_choice_prompt(&answered).is_none());
+    }
+
+    fn captured_codex_narrow_plan_rows() -> Vec<String> {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/codex-first-plan-narrow-2094.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        grid.screen_text_rows()
+    }
+
+    // Catches: native wrapped descriptions or labels preventing first-question controls.
+    #[test]
+    fn captured_codex_narrow_plan_exports_clean_columns() {
+        let rows = captured_codex_narrow_plan_rows();
+        let parsed = parse_choice_prompt(&rows);
+        assert!(parsed.is_some(), "native narrow rows: {rows:#?}");
+        let ParsedEvent::ChoicePrompt { options, .. } = parsed.unwrap() else {
+            panic!("native question must export choices");
+        };
+        assert_eq!(options[3].label, "None of the above");
+        assert_eq!(
+            options[3].hint.as_deref(),
+            Some("Optionally, add details in notes (tab)")
+        );
+    }
+
+    // Catches: relaxing the narrow footer accepting a departed or incomplete dialog.
+    #[test]
+    fn captured_codex_narrow_plan_requires_live_footer_and_counter() {
+        let rows = captured_codex_narrow_plan_rows();
+        for needle in [
+            "Question 1/1",
+            "tab to add notes",
+            "enter to submit answer",
+            "esc to interrupt",
+        ] {
+            let mut incomplete = rows.clone();
+            *incomplete
+                .iter_mut()
+                .find(|row| row.contains(needle))
+                .unwrap() = String::new();
+            assert!(
+                parse_choice_prompt(&incomplete).is_none(),
+                "missing {needle}"
+            );
+        }
+        let mut departed = rows;
+        departed.push("New agent output after the answered question".into());
+        assert!(parse_choice_prompt(&departed).is_none());
+    }
+
+    // Catches: prose outside the native answer/description columns becoming a choice label.
+    #[test]
+    fn captured_codex_narrow_plan_rejects_misaligned_continuations() {
+        let mut rows = captured_codex_narrow_plan_rows();
+        let continuation = rows
+            .iter_mut()
+            .find(|row| row.trim() == "above            , add")
+            .unwrap();
+        *continuation = "       outside the answer column".into();
+        // A nonblank prefix before the answer column is not a native wrap.
+        continuation.replace_range(..1, "x");
+        assert!(parse_choice_prompt(&rows).is_none());
+    }
+
+    fn recorded_claude_question_rows() -> Vec<String> {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        // Record 185 is Esc; the preceding frame is the complete recorded dialog.
+        for record in capture.records.into_iter().take(185) {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        grid.screen_text_rows()
+    }
+
+    // Catches: lost title/option offsets, skipped AskUserQuestion parsing, or inverted highlight fallback.
+    #[test]
+    fn recorded_claude_question_preserves_title_options_and_selection_contract() {
+        let rows = recorded_claude_question_rows();
+        let ParsedEvent::ChoicePrompt {
+            title,
+            options,
+            selection_mode,
+            dismiss_key,
+            amend_key,
+        } = parse_claude_ask_user_question(&rows).expect("recorded dialog must parse")
+        else {
+            panic!("expected choice prompt")
+        };
+        assert_eq!(title, "Which color do you prefer?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| (o.key.as_str(), o.label.as_str(), o.highlighted))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "Red", true),
+                ("2", "Green", false),
+                ("3", "Blue", false),
+                ("4", "Type something.", false),
+                ("5", "Chat about this", false)
+            ]
+        );
+        assert_eq!(selection_mode, Some(ChoiceSelectionMode::NavigateEnter));
+        assert_eq!(dismiss_key.as_deref(), Some("cancel"));
+        assert_eq!(amend_key, None);
+    }
+
+    // Catches: off-by-one minimum option counts, nonsequential numbering, and overwritten selection.
+    #[test]
+    fn claude_question_derived_screen_boundaries_reject_incomplete_numbering() {
+        let recorded = recorded_claude_question_rows();
+        let title = recorded
+            .iter()
+            .position(|row| row.trim() == "Which color do you prefer?")
+            .unwrap();
+        let footer = recorded
+            .iter()
+            .position(|row| is_ink_dialog_footer_row(row))
+            .unwrap();
+        let options: Vec<String> = recorded[title + 1..footer]
+            .iter()
+            .filter(|row| {
+                row.trim_start().starts_with("❯ 1.")
+                    || (2..=5).any(|n| row.trim_start().starts_with(&format!("{n}.")))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(options.len(), 5);
+        for count in 0..=3 {
+            let mut rows = vec![recorded[title].clone()];
+            rows.extend(options[..count].iter().cloned());
+            rows.push(recorded[footer].clone());
+            let parsed = parse_claude_ask_user_question(&rows);
+            if count < 2 {
+                assert!(parsed.is_none(), "{count} choices are incomplete");
+            } else {
+                let Some(ParsedEvent::ChoicePrompt { options, .. }) = parsed else {
+                    panic!("{count} choices must parse")
+                };
+                assert_eq!(options.len(), count);
+            }
+        }
+        let rows = vec![
+            recorded[title].clone(),
+            options[0].clone(),
+            options[2].clone(),
+            recorded[footer].clone(),
+        ];
+        assert!(
+            parse_claude_ask_user_question(&rows).is_none(),
+            "a gap in numbering must be refused"
+        );
+        for marked in [false, true] {
+            let first = options[0].replace('❯', " ");
+            let second = if marked {
+                format!("❯ {}", options[1].trim())
+            } else {
+                options[1].clone()
+            };
+            let rows = vec![
+                recorded[title].clone(),
+                first,
+                second,
+                recorded[footer].clone(),
+            ];
+            let Some(ParsedEvent::ChoicePrompt { options, .. }) =
+                parse_claude_ask_user_question(&rows)
+            else {
+                panic!("two choices must parse")
+            };
+            assert_eq!(options[0].highlighted, !marked);
+            assert_eq!(options[1].highlighted, marked);
+        }
+    }
+
+    // Catches: combining destructive-label alternatives with AND hides cancellation choices.
+    #[test]
+    fn claude_question_derived_labels_keep_each_cancellation_choice_destructive() {
+        let recorded = recorded_claude_question_rows();
+        let footer = recorded
+            .iter()
+            .find(|row| is_ink_dialog_footer_row(row))
+            .unwrap();
+        for label in ["No", "Cancel", "Reject", "No thanks", "Continue"] {
+            // Only labels change; retain the captured dialog's numbering and footer grammar.
+            let rows = vec![
+                "Which color do you prefer?".to_string(),
+                "❯ 1. Red".to_string(),
+                format!("  2. {label}"),
+                footer.clone(),
+            ];
+            let Some(ParsedEvent::ChoicePrompt { options, .. }) =
+                parse_claude_ask_user_question(&rows)
+            else {
+                panic!("derived labels must parse")
+            };
+            assert!(!options[0].destructive);
+            assert_eq!(options[1].destructive, label != "Continue", "{label}");
+        }
+    }
+
+    // Catches: blank-row decrement or title indexing mutations lose a shifted dialog and its selected row.
+    #[test]
+    fn choice_prompt_derived_recording_preserves_second_selection_after_padding() {
+        let mut rows = load_rows(&fixtures_dir().join("claude-code_edit-confirm.txt"));
+        rows[1] = rows[1].replace('❯', " ");
+        rows[2] = format!("❯ {}", rows[2].trim());
+        rows.insert(0, "earlier output".into());
+        rows.insert(2, String::new());
+        rows.extend([String::new(), String::new()]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_choice_prompt(&rows)
+        else {
+            panic!("padded dialog must parse")
+        };
+        assert_eq!(title, "Do you want to make this edit to CLAUDE.md?");
+        assert_eq!(options.len(), 3);
+        assert!(!options[0].highlighted);
+        assert!(options[1].highlighted);
+        assert!(!options[2].highlighted);
+        assert_eq!(options[1].hint.as_deref(), Some("shift+tab"));
+    }
+
+    // Catches: scrolling option 1 offscreen losing navigation, or quoted clipped forms becoming controls.
+    #[test]
+    fn captured_claude_clipped_forms_require_native_footer_and_keep_navigation() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/claude-narrow-2093.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let recorded = grid.screen_text_rows();
+        for (scrolled, arrowless) in [(false, false), (true, false), (false, true)] {
+            let mut rows = recorded.clone();
+            if arrowless {
+                for row in &mut rows {
+                    *row = row.replacen('↓', " ", 1);
+                }
+            }
+            if scrolled {
+                let first = rows.iter().position(|row| row.contains("1. Red")).unwrap();
+                rows[first].clear();
+                rows[first + 1].clear();
+            }
+            let Some(ParsedEvent::ChoicePrompt {
+                title,
+                options,
+                selection_mode,
+                ..
+            }) = parse_claude_ask_user_question(&rows)
+            else {
+                panic!("clipped form needs controls");
+            };
+            assert_eq!(title, "Pick a colour?");
+            assert_eq!(selection_mode, Some(ChoiceSelectionMode::NavigateOnly));
+            assert_eq!(
+                options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(),
+                ["↑", "↓", "↵"]
+            );
+            let quoted: Vec<_> = rows.iter().map(|row| format!("  {row}")).collect();
+            assert!(parse_claude_ask_user_question(&quoted).is_none());
+        }
+    }
+
     #[test]
     fn quoted_ink_dialog_footer_does_not_create_mobile_choices() {
         let rows = [
@@ -6716,11 +7648,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// over the whole BMP against the anchored classes.
     #[test]
     fn status_line_dispatch_offers_every_pattern_that_could_match() {
-        let all: [(&regex::Regex, &str); 8] = [
+        let all: [(&regex::Regex, &str); 6] = [
             (&CLAUDE_STATUS_RE, "claude"),
             (&RUNNING_STATUS_RE, "running"),
-            (&AIDER_TOKENS_RE, "aider-tokens"),
-            (&AIDER_SPINNER_RE, "aider-spinner"),
             (&GOOSE_SPINNER_RE, "goose"),
             (&COPILOT_STATUS_RE, "copilot"),
             (&CODEX_BULLET_RE, "codex"),
@@ -6746,6 +7676,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_recovery_tests {
+    use super::*;
+
+    /// Catches: malformed recovery frames overwriting the last trustworthy snapshot.
+    #[test]
+    fn provider_recovery_rejects_invalid_contract_fields() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":1,"attempt":1}"#,
+            r#"{"phase":"retrying","attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":0}"#,
+            r#"{"phase":"unknown","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000001,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":1,"extra":true}"#,
+        ] {
+            assert!(parse_provider_recovery(payload).is_none(), "{payload}");
+        }
+        assert!(parse_provider_recovery(&"x".repeat(257)).is_none());
+    }
+
+    /// Catches: valid retrying or clear transitions being rejected at numeric boundaries.
+    #[test]
+    fn provider_recovery_accepts_snapshots_and_explicit_clear() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":0,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000000,"attempt":4294967295}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":2}"#,
+            "clear",
+        ] {
+            assert!(parse_provider_recovery(payload).is_some(), "{payload}");
         }
     }
 }

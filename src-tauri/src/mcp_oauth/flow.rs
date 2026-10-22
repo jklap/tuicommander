@@ -52,6 +52,7 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 struct PendingFlow {
     /// Upstream name this flow is for.
     upstream_name: String,
+    upstream_url: String,
     /// Full `state` nonce (also the DashMap key for this entry).
     state: String,
     /// PKCE verifier used when exchanging the code.
@@ -102,6 +103,7 @@ pub(crate) struct OAuthFlowManager {
     http_client: reqwest::Client,
     /// Timeout after which a flow is considered abandoned.
     timeout: Duration,
+    pub(crate) settings_publisher: parking_lot::RwLock<crate::settings::changes::Publisher>,
 }
 
 impl OAuthFlowManager {
@@ -114,6 +116,7 @@ impl OAuthFlowManager {
             pending: Arc::new(DashMap::new()),
             http_client: reqwest::Client::new(),
             timeout,
+            settings_publisher: Default::default(),
         }
     }
 
@@ -208,6 +211,7 @@ impl OAuthFlowManager {
         // Store pending flow.
         let flow = PendingFlow {
             upstream_name: upstream_name.to_string(),
+            upstream_url: server_url.to_string(),
             state: state.clone(),
             pkce_verifier: pkce.verifier.clone(),
             redirect_uri: redirect_uri.to_string(),
@@ -252,11 +256,13 @@ impl OAuthFlowManager {
         // Exchange code for tokens.
         let token_mgr = TokenManager::new(
             flow.upstream_name.clone(),
+            flow.upstream_url.clone(),
             flow.client_id.clone(),
             flow.client_secret.clone(),
             flow.token_endpoint.clone(),
             flow.resource.clone(),
-        );
+        )
+        .with_settings_publisher(self.settings_publisher.read().clone());
         let tokens = token_mgr
             .exchange_code(code, &flow.pkce_verifier, &flow.redirect_uri)
             .await?;
@@ -692,7 +698,7 @@ mod tests {
         let pr = pr_meta_no_scopes();
         let as_ = as_meta_no_scopes();
         let scopes = resolve_scopes(&pr, &as_);
-        assert!(scopes.is_empty());
+        assert_eq!(scopes, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -935,7 +941,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(m.cleanup_expired().is_empty());
+        assert_eq!(m.cleanup_expired(), [] as [std::string::String; 0]);
         assert_eq!(m.pending_count(), 1);
     }
 }

@@ -15,22 +15,32 @@ const CONNECTIONS_FILE: &str = "connections.json";
 // ---------------------------------------------------------------------------
 
 /// A saved remote connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RemoteConnection {
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates id for the current owner.","operations":["get"],"confirmationClass":"ordinary"}))]
     pub(crate) id: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates name for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) name: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates transport for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) transport: RemoteTransport,
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates auth username for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auth_username: String,
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto update for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_update: bool,
     #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates deploy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) deploy: DeployMode,
     #[serde(default = "default_survive_secs")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates survive secs for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) survive_secs: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DeployMode {
     #[default]
@@ -44,17 +54,23 @@ const fn default_survive_secs() -> u64 {
 }
 
 /// Transport layer for a remote connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub(crate) enum RemoteTransport {
     Ssh {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh host for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_host: String,
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ssh port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_port: u16,
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh user for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh_user: String,
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates identity file for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         identity_file: Option<String>,
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote daemon port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         remote_daemon_port: u16,
     },
     Direct {
+        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates url for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         url: String,
     },
 }
@@ -270,6 +286,31 @@ pub(crate) fn set_connection_password(id: &str, password: &str) -> Result<(), St
     )
 }
 
+/// Legacy IPC and HTTP password writes share persistence and invalidation.
+pub(crate) fn set_connection_password_with_refresh(
+    state: &crate::AppState,
+    id: &str,
+    password: &str,
+) -> Result<(), String> {
+    set_connection_password(id, password)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
+}
+
+/// Deployment creates a credential only when one is absent. Both deployment
+/// paths invalidate the Settings credential-presence projection after persistence.
+pub(crate) fn ensure_pairing_token(state: &crate::AppState, id: &str) -> Result<String, String> {
+    match pairing_token(id)? {
+        Some(token) => Ok(token),
+        None => {
+            let token = uuid::Uuid::new_v4().to_string();
+            set_pairing_token(id, &token)?;
+            crate::settings::api::publish_change(state, "connections", true);
+            Ok(token)
+        }
+    }
+}
+
 pub(crate) fn connection_password_exists(id: &str) -> Result<bool, String> {
     crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
         .map(|v| v.is_some())
@@ -289,7 +330,7 @@ pub(crate) fn pairing_token(id: &str) -> Result<Option<String>, String> {
     crate::credentials::get(crate::credentials::Credential::RemotePairingToken(id))
 }
 
-fn delete_connection_credentials(id: &str) -> Result<(), String> {
+pub(crate) fn delete_connection_credentials(id: &str) -> Result<(), String> {
     let password = crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
     let pairing =
         crate::credentials::delete(crate::credentials::Credential::RemotePairingToken(id));
@@ -307,8 +348,8 @@ fn delete_connection_credentials(id: &str) -> Result<(), String> {
 ///
 /// A WebSocket upgrade cannot carry an `Authorization` header and the daemon
 /// serves `Access-Control-Allow-Origin: *`, which forbids credentialed cookies,
-/// so `?token=` is the only credential the whole client can use uniformly. The
-/// exchange runs here rather than in the WebView so the password never leaves
+/// so browser WebSocket upgrades carry `?token=` while native HTTP uses the
+/// existing session cookie header. The exchange runs here rather than in the WebView so the password never leaves
 /// the backend.
 ///
 /// The token lives in the daemon's memory and changes on every restart, so the
@@ -338,18 +379,20 @@ async fn request_session_token(
         .timeout(TOKEN_FETCH_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("Token request to {url} failed: {e}"))?;
+        .map_err(|e| format!("Token request failed: {}", e.without_url()))?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Authentication rejected by the remote daemon".to_string());
     }
     if !status.is_success() {
-        return Err(format!("Remote daemon answered {status} for {url}"));
+        return Err(format!(
+            "Remote daemon answered {status} for the session-token request"
+        ));
     }
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Malformed token response: {e}"))?;
+        .map_err(|e| format!("Malformed token response: {}", e.without_url()))?;
     let token = body
         .get("token")
         .and_then(serde_json::Value::as_str)
@@ -360,6 +403,32 @@ async fn request_session_token(
         return Err("Remote daemon returned no session token — is it running a build with /api/auth/session-token?".to_string());
     }
     Ok(token.to_string())
+}
+
+/// State-bearing owner path shared by IPC and HTTP. Callers hold connections_lock.
+pub(crate) fn save_connection_record(
+    state: &crate::AppState,
+    base: Option<RemoteConnection>,
+    connection: RemoteConnection,
+) -> Result<(), String> {
+    upsert_remote_connection(&state.data_dir, base, connection)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
+}
+
+/// Publish persisted metadata even if credential cleanup subsequently fails.
+pub(crate) fn delete_connection_record(
+    state: &crate::AppState,
+    id: &str,
+    cleanup: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<bool, String> {
+    let removed = remove_remote_connection(&state.data_dir, id)?;
+    if removed {
+        let cleanup_result = cleanup(id);
+        crate::settings::api::publish_change(state, "connections", cleanup_result.is_ok());
+        cleanup_result?;
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +451,7 @@ pub async fn save_remote_connection(
     connection: RemoteConnection,
 ) -> Result<(), String> {
     let _guard = state.connections_lock.lock().await;
-    upsert_remote_connection(&state.data_dir, base, connection)
+    save_connection_record(&state, base, connection)
 }
 
 #[cfg(feature = "desktop")]
@@ -397,16 +466,21 @@ pub async fn delete_remote_connection(
     // first leaves all of it running with no way left to address it.
     crate::remote_runtime::teardown_deleted(state.inner(), &id);
     let _guard = state.connections_lock.lock().await;
-    remove_remote_connection(&state.data_dir, &id)?;
-    // The vault entry outlives connections.json unless this runs: the id is a
-    // fresh UUID every time, so a forgotten secret is unreachable and permanent.
-    delete_connection_credentials(&id)
+    if !delete_connection_record(&state, &id, delete_connection_credentials)? {
+        // Preserve IPC's idempotent credential cleanup even when metadata is already absent.
+        delete_connection_credentials(&id)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub async fn set_remote_connection_password(id: String, password: String) -> Result<(), String> {
-    set_connection_password(&id, &password)
+pub async fn set_remote_connection_password(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    id: String,
+    password: String,
+) -> Result<(), String> {
+    set_connection_password_with_refresh(&state, &id, &password)
 }
 
 #[cfg(feature = "desktop")]
@@ -588,6 +662,27 @@ mod tests {
         assert_eq!(decoded.deploy, DeployMode::Never);
         assert_eq!(decoded.survive_secs, 1_800);
         assert!(!decoded.auto_update);
+    }
+
+    // Catches: explicitly echoed base URLs or reqwest URLs leaking URL userinfo in token-request errors.
+    #[tokio::test]
+    async fn token_request_error_redacts_url_credentials() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let base = format!("http://username:URL_SECRET_1457@{address}");
+        let error = request_session_token(&base, "user", "password")
+            .await
+            .expect_err("closed port");
+        assert!(error.contains("failed"), "{error}");
+        assert!(
+            !error.contains("URL_SECRET_1457"),
+            "URL credential in error: {error}"
+        );
+        assert!(
+            !error.contains("password"),
+            "Basic credential in error: {error}"
+        );
     }
 
     #[tokio::test]
@@ -772,5 +867,81 @@ mod tests {
             saved[0].auto_update,
             "an unchanged stale field must not revert another writer"
         );
+    }
+}
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: desktop owner writes persisting records without waking peer settings readers.
+    #[test]
+    fn connection_owner_save_and_delete_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        save_connection_record(&state, None, connection.clone()).unwrap();
+        let notice = events.try_recv().expect("connection save did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        delete_connection_record(&state, &connection.id, |_| Ok(())).unwrap();
+        let notice = events
+            .try_recv()
+            .expect("connection delete did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // Catches: a failed save or missing delete advertising a durable connection change.
+    #[test]
+    fn failed_connection_writes_do_not_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let mut connection =
+            RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        connection.name.clear();
+        assert!(save_connection_record(&state, None, connection).is_err());
+        assert!(
+            !delete_connection_record(&state, "missing", |_| panic!(
+                "missing record has no credentials to delete"
+            ))
+            .unwrap()
+        );
+        assert!(events.try_recv().is_err());
+    }
+
+    // Catches: credential cleanup failure hiding an already persisted metadata deletion.
+    #[test]
+    fn connection_cleanup_failure_still_wakes_readers_as_unapplied() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        save_connection_record(&state, None, connection.clone()).unwrap();
+        let mut events = state.event_bus.subscribe();
+        assert!(
+            delete_connection_record(
+                &state,
+                &connection.id,
+                |_| Err("cleanup unavailable".into())
+            )
+            .is_err()
+        );
+        assert!(
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+        let event = events
+            .try_recv()
+            .expect("persisted deletion needs an invalidation");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && !change.applied)
+        );
+        assert!(events.try_recv().is_err());
     }
 }

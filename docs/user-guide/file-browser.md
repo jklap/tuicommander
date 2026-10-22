@@ -2,6 +2,8 @@
 
 ## File Browser Panel
 
+Drop files from Finder onto a folder or empty panel space to transfer them into that directory. A remote repository always receives a copy over its connected daemon; your Mac originals stay in place. Confirm directory recursion before copying folders. Existing destination names are skipped, as with local drops. Uploads are limited to 256 MiB (including archive overhead) and 10,000 entries per top-level source; symlinks and special files are not uploaded. The remote destination must be inside a registered repository. Executable scripts keep their safe permission bits, and filenames follow the destination platform rules. Slow uploads continue while data arrives; 30 seconds without data aborts the transfer.
+
 Toggle with `Cmd+E` or the folder icon in the status bar. The file browser shows the directory tree of the active repository (or linked worktree when on a worktree branch).
 
 The file browser, Markdown viewer, and Diff panels are mutually exclusive — opening one closes any other that is open.
@@ -28,6 +30,8 @@ Click the funnel icon in the toolbar to switch sort order:
 | **Date** | Directories first, then newest modified first |
 
 ### Live Refresh
+
+Successful drops refresh the listing and expanded tree folders immediately, including the source after a move and transfers accepted in the confirmation dialog.
 
 The panel watches the current directory for filesystem changes. When a file is created, deleted, or renamed outside the app, the listing refreshes automatically without a visible loading spinner.
 
@@ -141,3 +145,12 @@ When the editor has no unsaved changes, files reload silently when they change o
 Links in rendered Markdown stay inside TUICommander: file links open a Markdown or media preview when supported, otherwise the code editor; directory links open the File Browser. `#heading` scrolls within a document, and `file.rs:42` or `file.rs#L42` opens the editor at that line. Relative paths resolve from the Markdown file, including percent-encoded spaces and local symlinks; direct UNC/network hrefs are refused. Missing files show a toast. Web and email links open with the system handler; other URL schemes are blocked.
 
 See [ai-agents.md](ai-agents.md) for how AI-generated plan files are detected and surfaced as a one-click shortcut to open in the viewer.
+
+Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+
+Filename searches share a path-only inventory per repository. Repeated queries
+filter it in memory; result sizes and timestamps are read from disk for matches.
+Repository events invalidate the inventory, and a 60-second reconciliation
+bound covers roots without a repository watcher. Cold queries share one build
+per repository. Up to eight repository inventories are retained, with ten-minute
+idle eviction.

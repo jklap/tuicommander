@@ -9,6 +9,7 @@ import {
 	shouldValidateSelectionSnapshot,
 	viewportRowToSelectionRow,
 } from "../canvasTerminalSelection";
+import { readProjectedSelectionText } from "../canvasTerminalText";
 import type { DecodedRow } from "../canvasTerminalUtils";
 
 function row(text: string): DecodedRow {
@@ -25,6 +26,20 @@ function row(text: string): DecodedRow {
 }
 
 describe("canvas terminal selection controller", () => {
+	// catches: backend reads trim trailing newlines per retained run, deleting the
+	// one visible separator before a removed suggestion paragraph when runs join.
+	it("preserves the visible paragraph separator when backend retained reads trim trailing newlines", async () => {
+		const texts = ["answer", "", "suggest: [ A | B | C ]", "", "footer"];
+		const rows = new Map(texts.map((text, index) => [index, row(text.padEnd(24, " "))]));
+		const text = await readProjectedSelectionText({ row: 0, col: 0 }, { row: 4, col: 5 }, rows, async (start, end) =>
+			texts
+				.slice(start.row, end.row + 1)
+				.join("\n")
+				.replace(/\n+$/, ""),
+		);
+		expect(text).toBe("answer\n\nfooter");
+	});
+
 	it("keeps a selected row stable while parked history grows", () => {
 		const before = { historyBase: 40, historySize: 100, displayOffset: 50, screenRows: 24 };
 		const selectedRow = viewportRowToSelectionRow(before, 7);
@@ -92,13 +107,29 @@ describe("canvas terminal selection controller", () => {
 		const selection = createCanvasSelectionController();
 		selection.start = { row: 7, col: 1 };
 		selection.end = { row: 7, col: 4 };
-		selection.cachedText = "selected";
+		selection.localSnapshot = "selected";
 		selection.selecting = true;
 
 		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(false);
 		selection.selecting = false;
 		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(true);
 		expect(shouldValidateSelectionSnapshot(selection, false, () => 0)).toBe(false);
+	});
+
+	// Bug: the copy stored the Rust text (soft wraps unwrapped, so it differs from the
+	// row-joined local text) and the next full-replace frame compared against it, clearing
+	// the highlight right after copy-on-select.
+	it("keeps the highlight when the clipboard text differs from the local row text", () => {
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 7, col: 0 };
+		selection.end = { row: 8, col: 3 };
+		selection.localSnapshot = "line one\nwrap";
+		selection.cachedText = "line onewrap";
+
+		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(true);
+		expect(selection.cachedText).not.toBe(selection.localSnapshot);
+		selection.invalidateSnapshot();
+		expect(selection.localSnapshot).toBe("");
 	});
 
 	it("extracts forward and reverse multi-row selections and trims trailing space", () => {

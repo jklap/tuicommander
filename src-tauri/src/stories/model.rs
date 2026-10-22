@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -31,22 +32,35 @@ pub enum PlanState {
     Done,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Where a story came from: `{"type":"native"}`, `{"type":"plan_step","step":"..."}` or `{"type":"git_hub_issue","number":123}`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoryOrigin {
     Native,
-    PlanStep { step: String },
-    GitHubIssue { number: u64 },
+    PlanStep {
+        /// The plan step this story implements.
+        step: String,
+    },
+    GitHubIssue {
+        /// The GitHub issue number.
+        number: u64,
+    },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// A new story. Field names are camelCase.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewStory {
+    /// Id of the plan that owns the story (from create_plan or list_plans).
     pub plan_id: String,
     pub title: String,
+    /// Acceptance criteria, 1 to 100 entries.
     pub criteria: Vec<String>,
+    /// 1 (highest), 2 or 3.
+    #[schemars(range(min = 1, max = 3))]
     pub priority: u8,
     pub origin: StoryOrigin,
+    /// Repo-relative paths the story may touch; may be empty.
     pub file_scope: Vec<String>,
 }
 
@@ -110,16 +124,44 @@ pub struct PlanView {
     pub all_cancelled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// A status command. Unit commands are plain strings (`"submit_review"`); the criterion commands
+/// carry a zero-based index (`{"check_criterion":0}`).
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
+    /// Ready -> in_progress without a session claim.
     StartManual,
+    /// Only while in_progress.
     CheckCriterion(usize),
+    /// Only while in_progress.
     UncheckCriterion(usize),
+    /// Requires every criterion checked. Moves it to review.
     SubmitReview,
+    /// Review -> done; dependants whose dependencies are all done become ready.
     Approve,
+    /// Review -> in_progress (claimed) or ready.
     RejectReview,
+    /// Moves an active story to blocked.
     Block,
+    /// Blocked -> ready, or backlog while a dependency is unfinished.
     Unblock,
+    /// Cancels the story.
     WontFix,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StoryTransitionActor {
+    Human,
+    LocalApi,
+    ManagedSession { session_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryTransition {
+    pub story_id: String,
+    pub revision: i64,
+    pub command: StoryCommand,
+    pub actor: StoryTransitionActor,
 }

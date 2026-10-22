@@ -5,7 +5,7 @@ use crate::remote_connection::{DeployMode, RemoteTransport};
 use crate::remote_deploy::assets::{BuildIdentity, resolve_update_asset};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 
@@ -84,6 +84,35 @@ pub(crate) async fn update_and_restart(
     perform_update_and_restart(state, id, confirmed_sessions, expected_sha256).await
 }
 
+/// POST the binary to the daemon. The token travels only in the `tui-session`
+/// cookie, never in the URL; the error is stripped of the URL regardless.
+async fn send_binary_upload(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    build: &BuildIdentity,
+    confirmed_sessions: usize,
+    body: reqwest::Body,
+) -> Result<reqwest::Response, String> {
+    tokio::time::timeout(
+        UPLOAD_TIMEOUT,
+        client
+            .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
+            .header(
+                reqwest::header::COOKIE,
+                format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+            )
+            .header("x-tuic-target", &build.target)
+            .header("x-tuic-sha256", &build.sha256)
+            .header("x-tuic-confirmed-sessions", confirmed_sessions)
+            .body(body)
+            .send(),
+    )
+    .await
+    .map_err(|_| "Remote binary upload timed out".to_string())?
+    .map_err(|e| format!("Remote binary upload failed: {}", e.without_url()))
+}
+
 pub(crate) async fn perform_update_and_restart(
     state: &Arc<crate::AppState>,
     id: &str,
@@ -132,20 +161,15 @@ pub(crate) async fn perform_update_and_restart(
                     )))
                 }
             });
-            let response = tokio::time::timeout(
-                UPLOAD_TIMEOUT,
-                client
-                    .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
-                    .query(&[("token", token.as_str())])
-                    .header("x-tuic-target", &preview.desktop_build.target)
-                    .header("x-tuic-sha256", &preview.desktop_build.sha256)
-                    .header("x-tuic-confirmed-sessions", confirmed_sessions)
-                    .body(reqwest::Body::wrap_stream(stream))
-                    .send(),
+            let response = send_binary_upload(
+                &client,
+                &base_url,
+                &token,
+                &preview.desktop_build,
+                confirmed_sessions,
+                reqwest::Body::wrap_stream(stream),
             )
-            .await
-            .map_err(|_| "Remote binary upload timed out".to_string())?
-            .map_err(|e| format!("Remote binary upload failed: {e}"))?;
+            .await?;
             if !response.status().is_success() {
                 let status = response.status();
                 let detail = tokio::time::timeout(UPLOAD_TIMEOUT, response.text())
@@ -204,19 +228,14 @@ pub(crate) async fn perform_update_and_restart(
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if let Ok(health) = crate::remote_runtime::read_health(&client, &base_url).await {
-            if health
+        if let Ok(health) = crate::remote_runtime::read_health(&client, &base_url).await
+            && health
                 .build
                 .as_ref()
                 .is_some_and(|build| build.sha256 == preview.desktop_build.sha256)
-            {
-                crate::remote_runtime::record_updated_build(
-                    state,
-                    id,
-                    preview.desktop_build.clone(),
-                );
-                return Ok(preview);
-            }
+        {
+            crate::remote_runtime::record_updated_build(state, id, preview.desktop_build.clone());
+            return Ok(preview);
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
@@ -260,11 +279,10 @@ pub(crate) struct RemoteUpdateState {
 
 pub(crate) async fn upload(
     State(state): State<Arc<crate::AppState>>,
-    uri: Uri,
     headers: HeaderMap,
     body: Body,
 ) -> (StatusCode, String) {
-    if !crate::mcp_http::auth::has_valid_token_query(&uri, &state.session_token.read()) {
+    if !crate::mcp_http::auth::has_valid_session_token(&headers, &state.session_token.read()) {
         return (
             StatusCode::UNAUTHORIZED,
             "remote session token required".to_string(),
@@ -414,11 +432,11 @@ async fn upload_inner(
             )
         })?;
         drop(file);
-        let actual: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        use std::fmt::Write as _;
+        let mut actual = String::with_capacity(64);
+        for byte in hasher.finalize() {
+            write!(actual, "{byte:02x}").expect("writing to a String cannot fail");
+        }
         if !actual.eq_ignore_ascii_case(digest) {
             return Err(error(
                 StatusCode::BAD_REQUEST,
@@ -487,6 +505,206 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, (StatusCode
 mod tests {
     use super::*;
 
+    fn daemon_upload_request(path: &str, cookie: Option<&str>) -> axum::http::Request<Body> {
+        let mut request = axum::http::Request::post(path)
+            .header(axum::http::header::HOST, "127.0.0.1:9876")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16",
+            )
+            .header("x-tuic-confirmed-sessions", "0");
+        if let Some(cookie) = cookie {
+            request = request.header(axum::http::header::COOKIE, cookie);
+        }
+        let mut request = request.body(Body::from("replacement executable")).unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        request
+    }
+
+    // Catches: the upload handler rejects a cookie already admitted by middleware,
+    // or a stray query token overrides the cookie decision.
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn daemon_upload_credentials_cookie_installs_the_binary() {
+        use tower::ServiceExt;
+        for (path, cookie) in [
+            (
+                "/remote/update",
+                Some("other=value; tui-session=update-secret; last=value"),
+            ),
+            (
+                "/remote/update?token=wrong",
+                Some("tui-session=update-secret"),
+            ),
+        ] {
+            let directory = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let executable = directory.path().join("tuic-remote");
+            std::fs::write(&executable, b"old executable").unwrap();
+            let mut state = crate::state::tests_support::make_test_app_state();
+            *state.session_token.write() = "update-secret".to_string();
+            state.remote_update = Some(RemoteUpdateState {
+                executable: executable.clone(),
+                restart: Arc::new(tokio::sync::Notify::new()),
+                in_progress: tokio::sync::Mutex::new(()),
+                installed: std::sync::atomic::AtomicBool::new(false),
+            });
+            let response = crate::mcp_http::build_remote_router(Arc::new(state))
+                .oneshot(daemon_upload_request(path, cookie))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            assert_eq!(
+                std::fs::read(&executable).unwrap(),
+                b"replacement executable"
+            );
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+    }
+
+    // Catches: the shared middleware still admits a query-only token on
+    // /fs/upload-copy (the release N compatibility path), or rejects the cookie.
+    #[tokio::test]
+    async fn daemon_upload_credentials_copy_reaches_validation_only_with_a_valid_cookie() {
+        use tower::ServiceExt;
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        *state.session_token.write() = "update-secret".to_string();
+        let app = crate::mcp_http::build_remote_router(state);
+        for (path, cookie, expected) in [
+            (
+                "/fs/upload-copy",
+                Some("tui-session=update-secret"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/fs/upload-copy?token=wrong",
+                Some("tui-session=update-secret"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/fs/upload-copy?token=update-secret",
+                None,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/fs/upload-copy?token=update-secret",
+                Some("tui-session=wrong"),
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("/fs/upload-copy", None, StatusCode::UNAUTHORIZED),
+            (
+                "/fs/upload-copy?token=wrong",
+                Some("tui-session=wrong"),
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            // Missing destDir/name must reach the real query extractor only after auth.
+            let response = app
+                .clone()
+                .oneshot(daemon_upload_request(path, cookie))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path} {cookie:?}");
+        }
+    }
+
+    // Catches: Basic auth or a valid query token accidentally replaces the cookie
+    // requirement, or an empty/retired token authorizes an executable replacement.
+    #[tokio::test]
+    async fn daemon_upload_credentials_missing_wrong_empty_and_rotated_tokens_are_401() {
+        use base64::Engine;
+        use tower::ServiceExt;
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        *state.session_token.write() = "update-secret".to_string();
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("known-password", 4).unwrap();
+        }
+        let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
+        let app = crate::mcp_http::build_remote_router(Arc::clone(&state));
+        for (path, cookie) in [
+            ("/remote/update", None),
+            ("/remote/update?token=wrong", None),
+            ("/remote/update?token=update-secret", None),
+            (
+                "/remote/update?token=update-secret",
+                Some("tui-session=wrong"),
+            ),
+            ("/remote/update", Some("tui-session=wrong")),
+            ("/remote/update?token=wrong", Some("tui-session=wrong")),
+            ("/remote/update?token=", Some("tui-session=")),
+            (
+                "/remote/update",
+                Some("other=update-secret; tui-session=update-secret-extra"),
+            ),
+        ] {
+            for basic in [false, true] {
+                let mut request = daemon_upload_request(path, cookie);
+                if basic {
+                    request.headers_mut().insert(
+                        axum::http::header::AUTHORIZATION,
+                        format!("Basic {credentials}").parse().unwrap(),
+                    );
+                }
+                assert_eq!(
+                    app.clone().oneshot(request).await.unwrap().status(),
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        *state.session_token.write() = "rotated-secret".to_string();
+        let request = daemon_upload_request("/remote/update", Some("tui-session=update-secret"));
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        state.session_token.write().clear();
+        let request = daemon_upload_request("/remote/update?token=", Some("tui-session="));
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // Catches: the upload connect error carrying the request URL, and with it the
+    // session token, into the message the UI shows.
+    #[tokio::test]
+    async fn upload_connect_failure_never_reports_the_session_token() {
+        // Reserve the port without listening, so connect fails and no parallel
+        // server can claim the address before the upload attempts it.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = socket.local_addr().unwrap();
+        let build = BuildIdentity {
+            version: "1.7.7".to_string(),
+            target: "t".to_string(),
+            sha256: "a".repeat(64),
+        };
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(100))
+            .no_proxy()
+            .build()
+            .unwrap();
+        let error = send_binary_upload(
+            &client,
+            &format!("http://{address}"),
+            "super-secret-token",
+            &build,
+            0,
+            reqwest::Body::from("x"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.starts_with("Remote binary upload failed"), "{error}");
+        assert!(!error.contains("super-secret-token"), "{error}");
+    }
+
     #[tokio::test]
     async fn direct_update_waits_until_the_new_build_answers_health() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -531,7 +749,8 @@ mod tests {
                     let installed = installed.clone();
                     let upload_seen = upload_seen.clone();
                     async move {
-                        assert_eq!(uri.query(), Some("token=test-token"));
+                        assert_eq!(uri.query(), None);
+                        assert_eq!(headers["cookie"], "tui-session=test-token");
                         assert_eq!(headers["x-tuic-confirmed-sessions"], "0");
                         assert_eq!(headers["x-tuic-target"], env!("TUIC_TARGET_TRIPLE"));
                         assert_eq!(body.as_ref(), b"remote binary");
@@ -663,6 +882,102 @@ mod tests {
         assert!(error.contains("Direct daemon does not report a build target"));
     }
 
+    #[cfg(not(windows))]
+    fn upload_headers(content_length: Option<u64>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tuic-target", env!("TUIC_TARGET_TRIPLE").parse().unwrap());
+        headers.insert("x-tuic-sha256", "0".repeat(64).parse().unwrap());
+        headers.insert("x-tuic-confirmed-sessions", "0".parse().unwrap());
+        if let Some(length) = content_length {
+            headers.insert(
+                axum::http::header::CONTENT_LENGTH,
+                length.to_string().parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    /// Streams `sizes` bytes per chunk into `upload_inner` against a scratch daemon
+    /// executable. The digest never matches, so an upload that passes the size
+    /// limit ends in the sha256 check instead of replacing anything.
+    #[cfg(not(windows))]
+    async fn upload_chunks(sizes: &[usize]) -> (StatusCode, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"daemon").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        state.remote_update = Some(RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let largest = *sizes.iter().max().unwrap();
+        let shared = axum::body::Bytes::from(vec![0u8; largest]);
+        let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> =
+            sizes.iter().map(|size| Ok(shared.slice(..*size))).collect();
+        let body = Body::from_stream(futures_util::stream::iter(chunks));
+        let error = upload_inner(&state, &upload_headers(None), body)
+            .await
+            .expect_err("a zero-filled upload never matches the digest");
+        assert_eq!(std::fs::read(&executable).unwrap(), b"daemon");
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            1,
+            "a rejected upload must not leave its staging file behind"
+        );
+        error
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `>=` in the declared Content-Length check: an upload of exactly
+    // the limit would be refused with 413 before the daemon state is even read.
+    #[tokio::test]
+    async fn declared_length_equal_to_limit_is_not_rejected_but_one_more_is() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let (status, _) = upload_inner(
+            &state,
+            &upload_headers(Some(MAX_UPDATE_BYTES)),
+            Body::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+        let (status, _) = upload_inner(
+            &state,
+            &upload_headers(Some(MAX_UPDATE_BYTES + 1)),
+            Body::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `>=` and `>` -> `==` on the streamed byte count: exactly the
+    // limit reaches the sha256 check (`>=` and `==` reject it as too large).
+    #[tokio::test]
+    async fn streamed_body_of_exactly_the_limit_reaches_the_digest_check() {
+        const MIB: usize = 1024 * 1024;
+        let (status, message) = upload_chunks(&[MIB; 512]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(message, "remote binary sha256 mismatch");
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `==` on the streamed byte count: the running total steps over
+    // the limit without ever landing on it, so only a `>` comparison refuses it.
+    #[tokio::test]
+    async fn streamed_body_that_steps_past_the_limit_is_rejected() {
+        const MIB: usize = 1024 * 1024;
+        let mut sizes = vec![MIB; 511];
+        sizes.push(MIB + 1);
+        let (status, message) = upload_chunks(&sizes).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(message, "remote binary too large");
+    }
+
     #[test]
     fn identity_detects_an_older_binary_even_with_the_same_version() {
         let remote = BuildIdentity {
@@ -677,5 +992,70 @@ mod tests {
         };
         assert!(build_is_out_of_date(&remote, &selected));
         assert!(!build_is_out_of_date(&selected, &selected));
+    }
+}
+
+#[cfg(test)]
+mod cookie_critic_tests {
+    use super::*;
+    use axum::extract::ConnectInfo;
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+
+    fn request(uri: &str, cookie: &str, body: Body) -> Request<Body> {
+        Request::post(uri)
+            .header(header::HOST, "127.0.0.1:9876")
+            .header(header::COOKIE, cookie)
+            .extension(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))))
+            .body(body)
+            .unwrap()
+    }
+
+    /// Catches ambient cookie auth letting a foreign browser origin replace the daemon.
+    #[tokio::test]
+    async fn foreign_origin_cookie_update_cannot_replace_the_executable() {
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let executable = scratch.path().join("tuic-remote");
+        std::fs::write(&executable, b"original executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "current-secret".into();
+        state.remote_update = Some(RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = crate::mcp_http::build_remote_router(Arc::new(state));
+        let binary = b"unwanted replacement";
+        let digest = "f602ffe15523d9d24bf76461d09e2836933cf4efd30e1a6e09eb3df13129e38a";
+        for (origin, site) in [
+            ("https://foreign.example", "cross-site"),
+            ("http://127.0.0.1:9999", "same-site"),
+        ] {
+            let mut req = request(
+                "/remote/update",
+                "tui-session=current-secret",
+                Body::from(binary.to_vec()),
+            );
+            for (name, value) in [
+                ("origin", origin),
+                ("sec-fetch-site", site),
+                ("x-tuic-target", env!("TUIC_TARGET_TRIPLE")),
+                ("x-tuic-sha256", digest),
+                ("x-tuic-confirmed-sessions", "0"),
+            ] {
+                req.headers_mut().insert(
+                    axum::http::HeaderName::from_static(name),
+                    value.parse().unwrap(),
+                );
+            }
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{origin}");
+            assert_eq!(std::fs::read(&executable).unwrap(), b"original executable");
+            assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
+        }
     }
 }

@@ -1,5 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
+import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 
 interface MachineSelectorProps {
@@ -29,7 +30,8 @@ export const MachineSelector: Component<MachineSelectorProps> = (props) => {
 		<Show when={connections().length > 0}>
 			<div class={s.group}>
 				<label for="machine-selector">{props.label ?? "Machine"}</label>
-				<select
+				<Select
+					data-non-setting="Select the machine whose settings are displayed"
 					id="machine-selector"
 					class={s.input}
 					value={props.value ?? ""}
@@ -44,7 +46,7 @@ export const MachineSelector: Component<MachineSelectorProps> = (props) => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 			</div>
 		</Show>
 	);

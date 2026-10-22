@@ -168,11 +168,6 @@
   border: 1px solid var(--success);
 }
 
-.designModeStopped {
-  color: var(--fg-primary);
-  border: 1px solid var(--fg-primary);
-}
-
 .tabName {
   font-size: var(--font-md);
   color: var(--fg-secondary);
@@ -225,6 +220,12 @@
 
 @media (hover: hover) {
   .tab:hover .tabClose {
+    opacity: 1;
+  }
+}
+
+@media (hover: none) {
+  .tabClose {
     opacity: 1;
   }
 }
@@ -334,6 +335,16 @@
 
 .standbyBadge {
   opacity: 0.6;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.tab.suspended {
+  opacity: 0.6;
+}
+
+.suspendedBadge {
+  opacity: 0.8;
   margin-left: 4px;
   vertical-align: middle;
 }

@@ -10,6 +10,9 @@ Before loading plans, the dialog checks whether the running backend has native s
 
 "Won't fix" cancels a story without delivering its output. It never satisfies a dependency or releases a dependent story for work. The Rust service marks a story **abandoned** when it or any dependency path reaches a cancelled story; the dialog renders that label. A human can remove a direct cancelled prerequisite from a Backlog story; this changes that story's requirements and makes it Ready only when every remaining prerequisite is Done. A separate Blocked story is never automatically unblocked. A plan remains Active while an unfinished dependent remains. A nonempty plan becomes Done when every story is either Done or Won't fix; an empty plan stays Draft. The service supplies the cancellation count and **All cancelled** flag to the dialog.
 
+Select a Ready, unclaimed story and choose **Start story workflow**. Select an immutable published workflow revision, then choose **Start published workflow**. Unpublished drafts cannot be selected. Start errors appear in the dialog. **Start plan workflow · unavailable** indicates that this dialog does not yet select plan workflows. Published plan workflows can start through the owning daemon API with a plan target.
+
+Select **Run history** for the selected plan to inspect persisted workflow runs. A run shows its status, story and attempt counts, and ordered events. Use **Load more events** to continue beyond the first page. The timeline follows run change notifications while the dialog is open; **Refresh** reloads the list of runs. Manual story work does not require a run. Graph runs also show their pinned node activations, decisions with evidence, repair counts and pause reasons/targets. Expand **Event details** for the complete recorded payload. Use **Pause run** or **Cancel run** for an active graph. For recovery, answer any pending input, select the execution and activation, write an explicit **Resolution**, then choose **Resume run**. The backend refuses unresolved effects or invalid recovery targets. Legacy runs can be inspected and cancelled, but the UI cannot resume them.
 
 Use `tuic story '<JSON action>' --project /absolute/project` to call the story service. For example:
 
@@ -26,10 +29,54 @@ The result is JSON with a `type` and `value`. Supply the returned plan ID when c
 tuic story '{"action":"create_story","input":{"planId":"PLAN_ID","title":"Implement","criteria":["Behavior verified"],"priority":1,"origin":{"type":"native"},"fileScope":[]}}' --project /absolute/project
 ```
 
-Changes to an existing story take its current `revision` as `expected_revision`; a stale request is rejected. The user-only `start_manual` transition moves a Ready story into progress without a PTY claim. A terminal `claim` instead takes `--session-id` with a live PTY ID from the same project. Closing that tab releases its claim. A session-bound agent can check criteria and submit review only on its own claim; a user performs review and administrative transitions.
+Changes to an existing story take its current `revision` as `expected_revision`; a stale request is rejected. The `start_manual` transition moves a Ready story into progress without a PTY claim. A terminal `claim` instead takes `--session-id` with a live PTY ID from the same project. Closing that tab releases its claim. A session-bound agent can perform the same transitions as other trusted callers. `transition_history` shows who performed each committed transition, including approval. Any trusted caller can approve after checking the acceptance criteria. Sessionless local HTTP records `local_api` provenance; a valid token records `human` provenance. These labels describe the transport, not a verified person. The desktop and browser dialogs both offer approval.
 
 To remove a cancelled prerequisite, send `{"action":"remove_dependency","story_id":"DEPENDENT_ID","dependency_id":"CANCELLED_ID","expected_revision":2}` as a user action. Session-bound agent calls, stale revisions, non-Backlog dependents, and prerequisites other than Won't fix are rejected.
 
 This follows the native workflow trust model: a managed MCP call carries a session identity and cannot remove a dependency. CLI and HTTP requests without a session identity are treated as user actions. This is a local workflow convention, not an authentication or security boundary; a local caller can omit a session identity.
 
-The same records are available through desktop IPC, authenticated HTTP, and the `story` MCP tool. Import, export, and external sync are not part of this feature.
+The same records are available through desktop IPC, guarded HTTP, and the `workflow action=story` MCP entry. `Done` records an approval with actor provenance. In a manual plan with no workflow run, approval immediately releases dependents whose other prerequisites are Done. Once a workflow run owns the plan, a dependent remains held until its accepted prerequisite has a current integration receipt: the checked source commit must be merged into the canonical branch and TUIC must pass the published checks on the merge result. A later unrecorded ref or tree change invalidates that proof. Import, export, and external sync are not part of this feature.
+
+## Which caller can do what
+
+| Caller | Scope | Reads | Story actions (claim, check criteria, submit review, add dependency, create, approve) | Administrative actions (reject, block, unblock, won't fix, start manual, remove dependency) |
+|---|---|---|---|---|
+| `workflow action=story` MCP entry in a managed session | The session's own registered project only | Yes | Yes | Yes |
+| Plans and Stories dialog | The open project | Yes | Yes | Yes |
+| `tuic story ... --project /abs/path` (HTTP `POST /stories/action?path=...`, loopback or authenticated) | Any project named by `--project` | Yes | Yes | Yes (actor provenance follows the session or credentials) |
+
+An orchestrating session in another project cannot read or approve this repo's plan through its `workflow action=story` MCP entry: the tool resolves the project from the calling session, so a plan id of another project is refused with `plan does not belong to project`. It can do both from a shell with `tuic story '{"action":"plan_view","plan_id":"..."}' --project /abs/path/of/the/repo` and, for review, `{"action":"transition","story_id":"...","expected_revision":N,"command":"approve"}`. That path carries no session identity, so it records local API provenance unless credentials are supplied; as stated above, this is a workflow convention, not a security boundary. No cross-project MCP path exists, and none was added.
+
+## MCP tool schema
+
+Send the service action under `input`, for example `{"action":"story","input":{"action":"list_plans"}}`. The `workflow action=story` variant publishes the full `StoryAction` JSON Schema (actions, fields, types, enums, the `origin` tag shape, priority range 1 to 3) in its `inputSchema`. It is generated from the Rust types, so it follows the code. Inside `input` the story fields are camelCase (`planId`, `fileScope`) while the action fields are snake_case (`story_id`, `expected_revision`).
+
+Actor identity is tracking only and never restricts an action. Localhost remains trusted, including local token exchange. Administrative story decisions use the same state and revision rules for human, local API and managed callers.
+
+A workflow plan reaches Done after all stories are approved and their integration checks are current. Moving the canonical branch or committing new work returns the plan to Active until those checks are recertified. Manual plans continue to finish through approval.
+
+The graph runtime is being delivered in stages. The first stage stores replayable graph positions and requires explicit pause destinations and final checks for executable definitions, but does not automatically run the Designer's graph. Existing pre-contract runs remain available for inspection and cancellation; resuming one requires starting a new run instead. New record-only runs retain the existing explicit command controls during rollout. Fork/all-Join settings and automatic execution are not yet Designer capabilities.
+
+The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+## Workflow graph rollout
+
+The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. It needs run profiles named sol (implementation) and sonnet (review/validation). Missing profiles and failed effects pause with a repository progress notice. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
+
+The Designer refuses new publications containing unsupported Gate or plan create/dispatch/coordinator nodes. Keep those graphs as drafts. Existing built-in publications remain readable; public graph start controls and full Resolve plan execution are still in development. A completed graph does not approve or merge a story by itself.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.
+
+
+### Workflow plan dispatch (slice E)
+
+The owning daemon executes pinned plan coordinator and Create Stories visits through the existing proposal effects. Disjoint story children share a bounded project wave; overlapping or unknown scopes wait. A dependency starts only after its accepted revision has a current explicit Git integration receipt. Done alone and WontFix never release it. Approved children wait for an operator merge. The final plan Judge runs the pinned canonical checks and binds verification to the current plan fingerprint. Failed checks route through a bounded replan with a fresh coordinator attempt. Public start/history controls and parallel graph branches follow in later slices.
+
+### Incidents and next steps
+
+Select a plan, open **Run history**, and select a run. **Incidents and next steps** shows recorded failures, interruptions, unanswered input, and the next operator action. Each entry identifies its run and, where available, story, attempt, node, session and task. Report summaries and input questions come from workflow reports. Active bound attempts can also show session exit codes, awaiting-input state, pending initial-prompt delivery failures and failed, cancelled or input-required task records. A working session alone is not classified as stuck.
+
+Suggestions do not run commands or retry work. Use the existing input form or **Resume run** when ready. A timed-out initial prompt remains in the existing delivery queue: inspect the session before sending it again. **Refresh incidents** reloads transient session/task evidence; run changes refresh the section automatically. Report outcomes persist with the run, while session/task evidence exists only while retained. A paused run without retained cause says so. Agents not bound to the selected native run are outside this view.

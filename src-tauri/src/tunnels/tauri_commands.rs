@@ -26,11 +26,8 @@ pub(crate) fn save_tunnel_profile(
     {
         profile["id"] = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
     }
-    let mut profile: TunnelProfile = serde_json::from_value(profile).map_err(|e| e.to_string())?;
-    profile.validate()?;
-    let id = profile.id.clone();
-    ProfileStore::save(&state.data_dir, &profile).map_err(|e| e.to_string())?;
-    Ok(id)
+    let profile: TunnelProfile = serde_json::from_value(profile).map_err(|e| e.to_string())?;
+    super::commands::save_profile(&state, profile)
 }
 
 #[tauri::command]
@@ -38,8 +35,7 @@ pub(crate) fn delete_tunnel_profile(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, String> {
-    state.tunnel_manager.stop_if_running(&id);
-    ProfileStore::delete(&state.data_dir, None, &id).map_err(|e| e.to_string())
+    super::commands::delete_profile(&state, &id)
 }
 
 #[tauri::command]
@@ -102,6 +98,19 @@ pub(crate) fn get_tunnel_status(
 #[tauri::command]
 pub(crate) fn list_ssh_config_hosts() -> Vec<String> {
     super::commands::load_ssh_config_hosts().unwrap_or_default()
+}
+
+#[tauri::command]
+pub(crate) fn list_discovered_ssh_hosts() -> Result<super::discovery::DiscoveredHosts, String> {
+    super::commands::load_discovered_hosts()
+}
+
+#[tauri::command]
+pub(crate) async fn probe_discovered_ssh_host(
+    target: String,
+    port: Option<u16>,
+) -> Result<super::commands::SshHostStatus, String> {
+    super::commands::probe_discovered_host(&target, port).await
 }
 
 #[tauri::command]

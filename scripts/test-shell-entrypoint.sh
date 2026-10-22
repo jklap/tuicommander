@@ -7,10 +7,17 @@ mkdir -p "$test_tmp"
 fixture_dir="$(mktemp -d "$test_tmp/shell-entrypoint.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
 
-fixture="$fixture_dir/test-failing-fixture.sh"
+# Catches: a repository-local .tmp fixture being skipped by the parent ignore rules.
+# Exercise the unchanged runner in its own checkout, including its temp wrapper.
+fixture_checkout="$fixture_dir/checkout"
+git init --quiet "$fixture_checkout"
+mkdir -p "$fixture_checkout/scripts"
+cp "$project_root/Makefile" "$fixture_checkout/Makefile"
+cp "$project_root/scripts/with-test-tmp.sh" "$fixture_checkout/scripts/with-test-tmp.sh"
+fixture="$fixture_checkout/test-failing-fixture.sh"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$fixture"
 
-if output="$(SHELL_TEST_DIR="$fixture_dir" make -C "$project_root" test-shell 2>&1)"; then
+if output="$(SHELL_TEST_DIR="$fixture_checkout" make -C "$fixture_checkout" test-shell 2>&1)"; then
   echo "expected the shell test runner to fail" >&2
   exit 1
 fi
@@ -22,7 +29,7 @@ if ! printf '%s\n' "$output" | grep -Fq "$fixture"; then
 fi
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture"
-SHELL_TEST_DIR="$fixture_dir" make -C "$project_root" test-shell
+SHELL_TEST_DIR="$fixture_checkout" make -C "$fixture_checkout" test-shell
 
 # A local script that .gitignore hides (scripts/* is ignored unless
 # allowlisted) is not a repository test and must not run (#883-5967).

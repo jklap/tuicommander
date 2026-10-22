@@ -35,8 +35,7 @@ use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
     AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoCompactRequest,
-    EgoHoldRequest,
+    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -44,6 +43,8 @@ use crate::acp_commands;
 /// router so a phone drives ego exactly as the desktop app does.
 pub(super) fn acp_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/workspace", get(workspace_root))
+        .route("/chat/open", post(chat_open))
         .route("/connections", post(connect))
         .route(
             "/connections/{connection_id}",
@@ -278,6 +279,10 @@ async fn one_shot_prompt(
     answer(crate::acp::oneshot::run_prompt(&state, body.root, body.prompt).await)
 }
 
+async fn workspace_root(State(state): State<Arc<AppState>>) -> Response {
+    answer(acp_commands::workspace_root(&state).await)
+}
+
 async fn connection_snapshot(
     Path(connection_id): Path<AcpConnectionId>,
     State(state): State<Arc<AppState>>,
@@ -308,7 +313,7 @@ async fn session_new(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AuthorityBody>,
 ) -> Response {
-    answer(state.acp.new_session(connection_id, body.authority).await)
+    answer(crate::acp_commands::session_new(&state, connection_id, body.authority).await)
 }
 
 async fn session_list(
@@ -319,7 +324,12 @@ async fn session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = query.cwd;
     request.cursor = query.cursor;
-    answer(state.acp.list_sessions(connection_id, request).await)
+    answer(
+        state
+            .acp
+            .list_sessions_for_display(connection_id, request)
+            .await,
+    )
 }
 
 /// The three ways to attach differ only in the kind, so they share one body.
@@ -368,19 +378,28 @@ async fn session_resume(
     .await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ForkBody {
+    authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
+}
+
 async fn session_fork(
     Path((connection_id, session_id)): Path<(AcpConnectionId, v1::SessionId)>,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<AuthorityBody>,
+    Json(body): Json<ForkBody>,
 ) -> Response {
-    attach(
-        &state,
-        AcpAttachKind::Fork,
-        connection_id,
-        session_id,
-        body.authority,
+    answer(
+        crate::acp_chat::fork(
+            &state,
+            connection_id,
+            session_id,
+            body.authority,
+            body.at_message_id,
+        )
+        .await,
     )
-    .await
 }
 
 async fn session_delete(
@@ -502,18 +521,7 @@ async fn session_compact(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RequestIdBody>,
 ) -> Response {
-    answer(
-        state
-            .acp
-            .compact(
-                connection_id,
-                EgoCompactRequest {
-                    session_id,
-                    request_id: body.request_id,
-                },
-            )
-            .await,
-    )
+    answer(crate::acp_chat::compact(&state, connection_id, session_id, body.request_id).await)
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +623,19 @@ async fn pump(socket: WebSocket, mut frames: UnboundedReceiver<AcpStreamFrame>) 
     let _ = sender.close().await;
 }
 
+/// Conversation-specific executable authority uses the same spawn guard as connect.
+async fn chat_open(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::acp_chat::ChatOpenRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(crate::acp_chat::open(&state, request).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,9 +675,9 @@ mod tests {
     /// No `mcpServers`: the field is synthesised server-side and a body that
     /// names one is refused, so sending it here would test the refusal on every
     /// row instead of the route.
-    fn authority() -> serde_json::Value {
+    fn authority(cwd: &str) -> serde_json::Value {
         serde_json::json!({
-            "authority": {"cwd": "/tmp", "additionalDirectories": []}
+            "authority": {"cwd": cwd, "additionalDirectories": []}
         })
     }
 
@@ -668,24 +689,30 @@ mod tests {
     /// call the Tauri command makes — the parts a browser could silently get
     /// wrong. `connect` and `reconnect` stop earlier, on the unset executable,
     /// because process authority is checked before anything is looked up.
-    fn table() -> Vec<(
+    fn table(
+        cwd: &str,
+    ) -> Vec<(
         &'static str,
         String,
         Option<serde_json::Value>,
         AcpClientErrorCode,
     )> {
         let session = format!("/acp/connections/{CID}/sessions/{SID}");
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("cwd", cwd)
+            .append_pair("cursor", "next")
+            .finish();
         vec![
             (
                 "POST",
                 "/acp/connections".to_string(),
-                Some(serde_json::json!({"root": "/tmp"})),
+                Some(serde_json::json!({"root": cwd})),
                 AcpClientErrorCode::InvalidInput,
             ),
             (
                 "POST",
                 format!("/acp/connections/{CID}/reconnect"),
-                Some(serde_json::json!({"root": "/tmp"})),
+                Some(serde_json::json!({"root": cwd})),
                 AcpClientErrorCode::InvalidInput,
             ),
             (
@@ -709,31 +736,31 @@ mod tests {
             (
                 "POST",
                 format!("/acp/connections/{CID}/sessions"),
-                Some(authority()),
+                Some(authority(cwd)),
                 AcpClientErrorCode::NotFound,
             ),
             (
                 "GET",
-                format!("/acp/connections/{CID}/sessions?cwd=/tmp&cursor=next"),
+                format!("/acp/connections/{CID}/sessions?{query}"),
                 None,
                 AcpClientErrorCode::NotFound,
             ),
             (
                 "POST",
                 format!("{session}/load"),
-                Some(authority()),
+                Some(authority(cwd)),
                 AcpClientErrorCode::NotFound,
             ),
             (
                 "POST",
                 format!("{session}/resume"),
-                Some(authority()),
+                Some(authority(cwd)),
                 AcpClientErrorCode::NotFound,
             ),
             (
                 "POST",
                 format!("{session}/fork"),
-                Some(authority()),
+                Some(authority(cwd)),
                 AcpClientErrorCode::NotFound,
             ),
             (
@@ -807,7 +834,7 @@ mod tests {
             (
                 "POST",
                 "/acp/one-shot".to_string(),
-                Some(serde_json::json!({"root": "/tmp", "prompt": "hi"})),
+                Some(serde_json::json!({"root": cwd, "prompt": "hi"})),
                 AcpClientErrorCode::InvalidInput,
             ),
         ]
@@ -834,7 +861,9 @@ mod tests {
     async fn every_acp_route_answers_its_own_command_with_an_acp_error_body() {
         let state = super::super::tests::test_state();
         let app = super::super::shared_routes().with_state(state);
-        for (method, path, body, expected) in table() {
+        // A rooted Unix literal is not an absolute Windows session authority.
+        let cwd = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for (method, path, body, expected) in table(cwd.path().to_str().unwrap()) {
             let resp = app
                 .clone()
                 .oneshot(request(method, &path, body))
@@ -861,6 +890,43 @@ mod tests {
             };
             assert_eq!(status, wanted, "{method} {path}");
         }
+    }
+
+    /// Catches: the browser transport answering with a client-composed root, or
+    /// hiding the refusal that names the setting.
+    #[tokio::test]
+    async fn the_workspace_route_answers_from_the_hosts_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::tests::test_state();
+        let app = super::super::shared_routes().with_state(state.clone());
+
+        state.config.write().ai_chat_workspace = dir.path().to_string_lossy().into_owned();
+        let resp = app
+            .clone()
+            .oneshot(request("GET", "/acp/workspace", None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let root: String = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(root),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+
+        state.config.write().ai_chat_workspace = "relative".to_string();
+        let resp = app
+            .oneshot(request("GET", "/acp/workspace", None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: AcpClientError = serde_json::from_slice(&bytes).unwrap();
+        assert!(error.message.contains("ai_chat_workspace"));
     }
 
     /// A body that names an MCP server is refused, not quietly stripped.

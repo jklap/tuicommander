@@ -13,18 +13,19 @@ const { rpc, mockSessions, mockRepos, outputMounts } = vi.hoisted(() => ({
 	outputMounts: { count: 0 },
 }));
 
-vi.mock("../../transport", () => ({ rpc }));
+vi.mock("../../transport", () => ({ rpc, subscribeEvents: vi.fn(async () => () => {}) }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), info: vi.fn() } }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => mockSessions.current,
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
+		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 	}),
 }));
 vi.mock("../useMobileNotifications", () => ({ useMobileNotifications: vi.fn() }));
@@ -53,9 +54,14 @@ function session(cwd: string | null, worktreePath: string | null = null): Sessio
 }
 
 beforeAll(async () => {
-	// MobileApp loads Files lazily after Browse. Finish its transform before
-	// behavior waits; the unrelated initial Chat route is mocked above.
-	await import("../screens/FilesScreen");
+	// MobileApp loads its screens lazily. Finish every transform before behavior
+	// waits, so a cold Vite transform on a loaded machine is not mistaken for a
+	// missing screen by waitFor's UI deadline; the Chat route is mocked above.
+	await Promise.all([
+		import("../screens/FilesScreen"),
+		import("../screens/SessionDetailScreen"),
+		import("../screens/SettingsScreen"),
+	]);
 });
 
 beforeEach(() => {
@@ -123,7 +129,8 @@ describe("session Files navigation", () => {
 				subdir: "",
 			}),
 		);
-		expect(view.getByRole("button", { name: "README.md" })).toBeTruthy();
+		// The listing renders after the rpc resolves, not when it is called.
+		await waitFor(() => expect(view.getByRole("button", { name: "README.md" })).toBeTruthy());
 		expect(view.queryByRole("button", { name: /repo\/nested/ })).toBeNull();
 		expect(rpc.mock.calls.filter(([command]) => command === "write_pty")).toHaveLength(writesBeforeBrowse);
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
@@ -183,7 +190,7 @@ describe("session Files navigation", () => {
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
 		await openSessionFiles(view);
-		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/permission denied/i));
+		await waitFor(() => expect(view.getByRole("alert").textContent).toBe("Could not open directory. Try again."));
 		expect(view.queryByText("Empty directory")).toBeNull();
 	});
 

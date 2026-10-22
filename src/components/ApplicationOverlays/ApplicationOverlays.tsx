@@ -1,4 +1,4 @@
-import { type Accessor, createEffect, lazy, onCleanup, type Setter, Show, Suspense } from "solid-js";
+import { type Accessor, lazy, type Setter, Show, Suspense } from "solid-js";
 import releaseNotes from "../../assets/release-notes.json";
 import type { useConfirmDialog } from "../../hooks/useConfirmDialog";
 import type { FolderDropRequest } from "../../hooks/useFileDrop";
@@ -21,7 +21,7 @@ import {
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { ProcessManagerModal } from "../ProcessManagerModal/ProcessManagerModal";
 import { PromptDialog } from "../PromptDialog";
-import qd from "../QuitDialog/QuitDialog.module.css";
+import { CloseDialog } from "../QuitDialog/CloseDialog";
 import { RemoteQrDialog } from "../RemoteQrDialog";
 import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
@@ -122,9 +122,6 @@ interface ApplicationOverlaysProps {
 	confirmations: ConfirmationOverlaysContract;
 	utilities: UtilityOverlaysContract;
 	cleanup: CleanupOverlayContract;
-	quitVisible: Accessor<boolean>;
-	setQuitVisible: Setter<boolean>;
-	forceQuit: () => void | Promise<void>;
 }
 
 export function folderDropMessage(request: FolderDropRequest | null): string {
@@ -132,21 +129,6 @@ export function folderDropMessage(request: FolderDropRequest | null): string {
 	const verb = request.mode === "copy" ? "copy" : "move";
 	const items = request.paths.length === 1 ? "1 item" : `${request.paths.length} items`;
 	return `About to recursively ${verb} ${items} into ${request.destDir}. Existing files with the same name will be skipped.`;
-}
-
-export function useQuitDialogKeyCapture(visible: Accessor<boolean>, setVisible: Setter<boolean>): void {
-	createEffect(() => {
-		if (!visible()) return;
-		const cancelQuit = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" && event.key !== "Enter") return;
-			event.preventDefault();
-			event.stopPropagation();
-			event.stopImmediatePropagation();
-			setVisible(false);
-		};
-		document.addEventListener("keydown", cancelQuit, true);
-		onCleanup(() => document.removeEventListener("keydown", cancelQuit, true));
-	});
 }
 
 function GitDialogOverlays(props: { contract: GitOverlaysContract }) {
@@ -262,8 +244,6 @@ function CleanupOverlay(props: { contract: CleanupOverlayContract }) {
 
 /** Renders application dialogs and owns overlay-only keyboard behavior. */
 export function ApplicationOverlays(props: ApplicationOverlaysProps) {
-	useQuitDialogKeyCapture(props.quitVisible, props.setQuitVisible);
-
 	const whatsNewEntry = () => {
 		const version = props.utilities.whatsNewVersion();
 		if (!version) return null;
@@ -317,11 +297,9 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 				onClose={() => props.prompts.resolveOpenPath(null)}
 				onConfirm={props.prompts.resolveOpenPath}
 			/>
-			<PromptDialog
+			<RemoteRepoPicker
 				visible={props.prompts.repoPathVisible()}
-				title="Add Repository"
-				placeholder="Enter absolute path to repository"
-				confirmLabel="Add"
+				connectionName={window.location.host}
 				onClose={() => props.prompts.resolveRepoPath(null)}
 				onConfirm={props.prompts.resolveRepoPath}
 			/>
@@ -362,25 +340,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			<Suspense>
 				<HelpPanel visible={props.panels.helpVisible()} onClose={props.panels.closeHelp} />
 			</Suspense>
-			<Show when={props.quitVisible()}>
-				<div class={qd.overlay} onClick={() => props.setQuitVisible(false)}>
-					<div class={qd.dialog} onClick={(event) => event.stopPropagation()}>
-						<h3>Quit TUICommander?</h3>
-						<p>
-							You have {terminalsStore.getIds().filter((id) => terminalsStore.get(id)?.sessionId).length} active
-							terminal session(s). Quitting will close all sessions.
-						</p>
-						<div class={qd.actions}>
-							<button class={qd.cancel} onClick={() => props.setQuitVisible(false)}>
-								Cancel
-							</button>
-							<button class={qd.quit} onClick={() => void props.forceQuit()}>
-								Quit
-							</button>
-						</div>
-					</div>
-				</div>
-			</Show>
+			<CloseDialog />
 		</>
 	);
 }

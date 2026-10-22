@@ -129,6 +129,12 @@ pub(super) async fn get_speech_voices_http(
     json_result(dictation::commands::get_speech_voices(query.language))
 }
 
+pub(super) async fn get_edge_voices_http(
+    axum::extract::Query(query): axum::extract::Query<SpeechVoicesQuery>,
+) -> Response {
+    json_result(dictation::commands::get_edge_voices(query.language).await)
+}
+
 /// The same keys as the IPC twin's arguments, which Tauri spells in
 /// camelCase (`dataBase64`). It is the whole voice file, which is why its
 /// route has a larger body limit than the rest (see
@@ -236,6 +242,24 @@ pub(super) async fn stop_speech_http(State(state): State<Arc<AppState>>) -> Resp
     json_result(dictation::commands::stop_speech(dictation))
 }
 
+pub(super) async fn pause_speech_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::pause_speech(dictation))
+}
+
+pub(super) async fn resume_speech_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::resume_speech(dictation))
+}
+
 pub(super) async fn get_speech_status_http(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<SpeechStatusQuery>,
@@ -265,12 +289,16 @@ pub(super) async fn start_dictation_http(
     let Some(app) = app_handle else {
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
-    let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::start_dictation(
-        app.clone(),
-        dictation,
-        body.and_then(|body| body.0.source),
-    ))
+    let source = body.and_then(|body| body.0.source);
+    // Opening the capture stream is a synchronous CoreAudio call; keep it off
+    // the async workers.
+    let result = tokio::task::spawn_blocking(move || {
+        let dictation = app.state::<DictationState>();
+        dictation::commands::start_dictation(app.clone(), dictation, source)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("starting dictation failed: {error}")));
+    json_result(result)
 }
 
 pub(super) async fn stop_dictation_http(State(state): State<Arc<AppState>>) -> Response {
@@ -304,11 +332,15 @@ pub(super) async fn set_correction_map_http(
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
     let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::set_correction_map(dictation, body.map))
+    let result = dictation::commands::save_correction_map(&dictation.corrections, body.map);
+    if result.is_ok() {
+        crate::settings::api::publish_change(&state, "corrections", true);
+    }
+    json_result(result)
 }
 
-pub(super) async fn list_audio_devices_http() -> impl IntoResponse {
-    Json(dictation::commands::list_audio_devices())
+pub(super) async fn list_audio_devices_http() -> Response {
+    json_result(dictation::commands::list_audio_devices().await)
 }
 
 #[derive(serde::Deserialize)]
@@ -343,17 +375,18 @@ pub(super) async fn arm_hands_free_http(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ArmHandsFreeRequest>,
 ) -> Response {
-    let app_handle = state.app_handle.read();
-    let Some(app) = app_handle.as_ref() else {
+    let Some(app) = state.app_handle.read().clone() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
-    let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::arm_hands_free(
-        &state,
-        &dictation,
-        &body.session_id,
-        &body.owner,
-    ))
+    // Arming opens the capture stream (synchronous CoreAudio); keep it off the
+    // async workers.
+    let result = tokio::task::spawn_blocking(move || {
+        let dictation = app.state::<DictationState>();
+        dictation::commands::arm_hands_free(&state, &dictation, &body.session_id, &body.owner)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("arming hands-free failed: {error}")));
+    json_result(result)
 }
 
 pub(super) async fn disarm_hands_free_http(State(state): State<Arc<AppState>>) -> Response {
@@ -390,13 +423,19 @@ pub(super) async fn set_dictation_config_http(
     // browser cancels the reply being spoken on the desktop. Before startup
     // finishes there is no conversation to cancel, and the file is still
     // written — the setting is not lost, it simply has nothing live to affect.
-    let app_handle = state.app_handle.read();
-    let dictation = app_handle.as_ref().map(|app| app.state::<DictationState>());
-    json_result(dictation::commands::save_dictation_config(
-        request.base,
-        request.config,
-        dictation.as_deref(),
-    ))
+    let result = {
+        let app_handle = state.app_handle.read();
+        let dictation = app_handle.as_ref().map(|app| app.state::<DictationState>());
+        dictation::commands::save_dictation_config(
+            request.base,
+            request.config,
+            dictation.as_deref(),
+        )
+    };
+    if result.is_ok() {
+        crate::settings::api::publish_change(&state, "voice", true);
+    }
+    json_result(result)
 }
 
 /// The audio socket a browser client holds while it wants a conversation.
@@ -483,6 +522,12 @@ async fn serve_hands_free_audio(
                     dictation::browser::Downlink::Stop => {
                         Message::Text(r#"{"type":"stop"}"#.into())
                     }
+                    dictation::browser::Downlink::Pause => {
+                        Message::Text(r#"{"type":"pause"}"#.into())
+                    }
+                    dictation::browser::Downlink::Resume => {
+                        Message::Text(r#"{"type":"resume"}"#.into())
+                    }
                 };
                 if sender.send(frame).await.is_err() {
                     break;
@@ -524,7 +569,9 @@ async fn serve_hands_free_audio(
 /// it, which is a worse answer than one missing sample.
 fn decode_samples(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }

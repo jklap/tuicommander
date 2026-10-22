@@ -1,19 +1,25 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
+import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import MobileApp from "../MobileApp";
 import { SettingsScreen } from "../screens/SettingsScreen";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock("../../utils/windowBackground", () => ({ syncWindowBackground: vi.fn() }));
 vi.mock("../../invoke", () => ({ invoke, listen: vi.fn() }));
+vi.mock("../useMobileVoice", () => ({ useMobileVoice: () => ({ available: () => false }) }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [],
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
+		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 		markSeen: vi.fn(),
 	}),
 }));
@@ -59,6 +65,7 @@ let serverPrefs: Record<string, unknown>;
 
 beforeEach(() => {
 	localStorage.clear();
+	vi.mocked(appLogger.warn).mockClear();
 	serverPrefs = { mobile_theme: "commander", sidebar_visible: true };
 	invoke.mockImplementation(async (command: string, args?: { config?: Record<string, unknown> }) => {
 		if (command === "list_themes") return themes;
@@ -78,6 +85,28 @@ afterEach(() => {
 });
 
 describe("mobile Settings", () => {
+	// Catches: desktop Telegram setup being offered again in mobile Settings, even offline.
+	it.each([true, false])("does not offer Telegram setup when connected=%s", async (isConnected) => {
+		render(() => <SettingsScreen isConnected={isConnected} />);
+		await waitFor(() =>
+			expect((screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement).disabled).toBe(false),
+		);
+		expect(screen.queryByRole("button", { name: /telegram/i })).toBeNull();
+		expect(screen.queryByText(/telegram/i)).toBeNull();
+		expect(screen.getByText("Open Desktop UI").tagName).toBe("A");
+	});
+
+	// Catches: mobile rendering the indicator without offering a working opt-out.
+	it("lets the mobile client disable and persist the new-text indicator", async () => {
+		transcriptPreferences.setEnabled(true);
+		render(() => <SettingsScreen isConnected />);
+		await screen.findByRole("combobox", { name: "Theme" });
+		fireEvent.click(screen.getByRole("button", { name: "New text indicator" }));
+		expect(screen.getByRole("button", { name: "New text indicator" }).getAttribute("aria-pressed")).toBe("false");
+		expect(localStorage.getItem("tui-commander-new-text-indicator")).toBe("false");
+		transcriptPreferences.setEnabled(true);
+	});
+
 	it("applies the desktop Paper theme and restores it after Settings remounts", async () => {
 		const first = render(() => <SettingsScreen isConnected />);
 		const theme = await screen.findByRole("combobox", { name: "Theme" });
@@ -128,6 +157,7 @@ describe("mobile Settings", () => {
 		await screen.findByRole("alert");
 		expect(theme.value).toBe("commander");
 		expect(serverPrefs.mobile_theme).toBe("commander");
+		expect(appLogger.warn).toHaveBeenCalledWith("app", "Could not save mobile theme", expect.any(Error));
 		expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#1e1e1e");
 	});
 
@@ -141,5 +171,8 @@ describe("mobile Settings", () => {
 		render(() => <SettingsScreen isConnected={false} />);
 		expect(screen.getByText(__APP_VERSION__)).toBeTruthy();
 		expect(screen.getByText("Unavailable")).toBeTruthy();
+		await waitFor(() =>
+			expect(appLogger.warn).toHaveBeenCalledWith("network", "Could not load server version", expect.any(Error)),
+		);
 	});
 });
