@@ -118,10 +118,13 @@ export const McpAuditPanel: Component = () => {
 									{(row) => {
 										const outcome = () => OUTCOMES[row.outcome];
 										const effect = () => EFFECTS[row.effect] ?? EFFECTS.unknown;
+										const time = () => new Date(row.started_ms).toLocaleTimeString(locale(), { hour12: false });
+										const outcomeLabel = () => outcome()?.label() ?? row.outcome;
+										const bytes = () => String(row.response_text_bytes ?? "—");
 										return (
 											<tr>
-												<td class={css.mono}>
-													{new Date(row.started_ms).toLocaleTimeString(locale(), { hour12: false })}
+												<td class={css.mono} title={time()}>
+													{time()}
 												</td>
 												<td class={`${css.mono} ${css.clip}`} title={row.operation}>
 													{row.operation}
@@ -132,11 +135,13 @@ export const McpAuditPanel: Component = () => {
 												>
 													{row.target_digest ? row.target_digest.slice(0, DIGEST_CHARS) : "—"}
 												</td>
-												<td>
-													<StatusBadge label={outcome()?.label() ?? row.outcome} variant={outcome()?.variant} />
+												<td title={outcomeLabel()}>
+													<StatusBadge label={outcomeLabel()} variant={outcome()?.variant} />
 												</td>
-												<td class={`${css.mono} ${css.num}`}>{row.response_text_bytes ?? "—"}</td>
-												<td>
+												<td class={`${css.mono} ${css.num}`} title={bytes()}>
+													{bytes()}
+												</td>
+												<td title={effect().label()}>
 													<StatusBadge label={effect().label()} variant={effect().variant} />
 												</td>
 											</tr>
