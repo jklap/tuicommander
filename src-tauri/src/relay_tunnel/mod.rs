@@ -15,6 +15,7 @@
 pub(crate) mod bridge;
 pub(crate) mod bundle;
 pub(crate) mod daemon;
+pub(crate) mod desktop;
 pub(crate) mod frames;
 pub(crate) mod mux;
 pub(crate) mod secure;
