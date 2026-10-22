@@ -116,7 +116,7 @@ pub struct StoryRead {
 }
 
 /// Progress over the active plans of a project: plans not yet complete, stories being worked on,
-/// and accepted (done) against countable (not won't-fix) stories.
+/// and accepted (done) against countable stories (neither won't-fix nor abandoned behind one).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StorySummary {

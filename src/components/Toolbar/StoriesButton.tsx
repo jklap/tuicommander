@@ -30,8 +30,8 @@ export const StoriesButton: Component<{ repoPath: string }> = (props) => {
 			});
 			if (current === request) setSummary(reply?.type === "summary" ? reply.value : null);
 		} catch {
-			// No story backend (or the call failed): the button stays the plain icon.
-			if (current === request) setSummary(null);
+			// No story backend, or a transient failure: keep the last counts so the button does not
+			// collapse and jump. Only a repo change clears them; before any success it is the plain icon.
 		}
 	};
 

@@ -170,6 +170,9 @@ fn story_action_with_source(
                 }
                 summary.active_plans += 1;
                 for read in &view.stories {
+                    if read.abandoned {
+                        continue;
+                    }
                     match read.story.status {
                         StoryStatus::WontFix => continue,
                         StoryStatus::InProgress => summary.in_progress += 1,

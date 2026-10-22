@@ -94,6 +94,22 @@ describe("Plans and Stories toolbar button", () => {
 		resolveB(idle);
 	});
 
+	it("keeps the last counts when a later poll fails", async () => {
+		let calls = 0;
+		vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+			if (cmd !== "story_action_command") return undefined;
+			if (++calls > 1) throw new Error("offline");
+			return reply(busy);
+		});
+		render(() => <Toolbar repoPath="/repo" />);
+		await screen.findByRole("button", { name: /active plans 2/ });
+		storiesUi.open("/repo");
+		storiesUi.close();
+		await waitFor(() => expect(calls).toBe(2));
+		await new Promise((r) => setTimeout(r, 20));
+		expect(document.querySelector("[data-testid='stories-pill']")).not.toBeNull();
+	});
+
 	it("keeps the bare icon when the summary call fails", async () => {
 		vi.mocked(invoke).mockImplementation(async (cmd: string) => {
 			if (cmd === "story_action_command") throw new Error("no backend");
