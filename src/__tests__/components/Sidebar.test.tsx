@@ -233,7 +233,14 @@ describe("Sidebar", () => {
 		mockLastActivityAt.mockReturnValue(0);
 		// Nested terminal tabs are opt-in and off by default — reset per test so the
 		// feature-behavior block can enable it and the gating block can rely on off.
+		const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		settingsStore.setTabTreeEnabled(false);
+		for (const call of errors.mock.calls)
+			expect(call).toEqual([
+				"config",
+				"Refusing to persist settings: store not hydrated — would clobber config.json with defaults",
+			]);
+		errors.mockRestore();
 		_resetMergedActivityAccum();
 		// Rich rows cache fetch times; cases that move the clock must not inherit them.
 		progressStore.resetForTests();
@@ -2609,8 +2616,127 @@ describe("Sidebar", () => {
 	describe("branch tab list", () => {
 		// The nested terminal-tab list is opt-in; this block verifies behavior with it enabled.
 		beforeEach(() => {
+			const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 			settingsStore.setTabTreeEnabled(true);
+			for (const call of errors.mock.calls)
+				expect(call).toEqual([
+					"config",
+					"Refusing to persist settings: store not hydrated — would clobber config.json with defaults",
+				]);
+			errors.mockRestore();
 		});
+
+		// Catches: copying the active tab, a stale store alias, or a same-ID session on another host.
+		it("sidebar_session_row_context_menu_copies_ids", async () => {
+			mockTerminalsGet.mockImplementation((id) => ({
+				id,
+				name: id === "t1" ? "Agent" : "Shell",
+				alias: "stale-store-alias",
+				sessionId: `pty-${id}`,
+				agentType: id === "t1" ? "ego" : null,
+				shellState: "idle",
+				unseen: false,
+			}));
+			mockInvoke.mockImplementation(async (command: string) =>
+				command === "list_active_sessions"
+					? [
+							{ session_id: "pty-t1", child_pid: 999, alias: "wrong-host", connection_id: "remote-other" },
+							{ session_id: "pty-t1", child_pid: 731, alias: "orc-1" },
+							{ session_id: "pty-t2", child_pid: 947, alias: "tu-2" },
+						]
+					: undefined,
+			);
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+						feature: {
+							workspaceId: "feature",
+							branchName: "feature",
+							isMain: false,
+							worktreePath: "/wt/feature",
+							terminals: ["t2"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const view = render(() => <Sidebar {...defaultProps()} />);
+			for (const [index, sessionId, pid, alias] of [
+				[0, "pty-t1", "731", "orc-1"],
+				[1, "pty-t2", "947", "tu-2"],
+			] as const) {
+				const row = view.container.querySelectorAll(".branchTabItem")[index];
+				expect(fireEvent.contextMenu(row, { clientX: 100, clientY: 120 })).toBe(false);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy session ID"));
+				await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: sessionId });
+				fireEvent.contextMenu(row);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy process ID"));
+				for (let n = 0; n < 5; n++) await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: pid });
+				fireEvent.contextMenu(row);
+				await Promise.resolve();
+				await Promise.resolve();
+				expect(view.getByText("Copy alias").closest("button")).toHaveAttribute("title", alias);
+				fireEvent.click(view.getByText("Copy alias"));
+				for (let n = 0; n < 5; n++) await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: alias });
+			}
+			expect(mockNavigateToTerminal).not.toHaveBeenCalled();
+			mockInvoke.mockResolvedValue(undefined);
+		});
+
+		// Catches: offering a null PID for a live session, or retaining a PID for an exited/suspended tab.
+		it.each(["idle", "exited", "suspended"])(
+			"sidebar_session_row_context_menu_hides_missing_process_%s",
+			async (state) => {
+				mockTerminalsGet.mockReturnValue({
+					id: "t1",
+					name: "Unknown PID",
+					sessionId: "unknown",
+					shellState: state === "suspended" ? "idle" : state,
+					suspended: state === "suspended",
+				});
+				mockInvoke.mockImplementation(async (command: string) =>
+					command === "list_active_sessions" ? [{ session_id: "unknown", child_pid: null }] : undefined,
+				);
+				setRepos({
+					"/repo1": makeRepo({
+						workspaces: {
+							main: {
+								workspaceId: "main",
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: ["t1"],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const view = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(view.container.querySelector(".branchTabItem")!);
+				await Promise.resolve();
+				await Promise.resolve();
+				expect(view.queryByText("Copy process ID")).not.toBeInTheDocument();
+				expect(view.queryByText("Copy alias")).not.toBeInTheDocument();
+			},
+		);
 
 		/** Find the .branchItem row whose name matches. */
 		function branchRow(container: HTMLElement, name: string): HTMLElement {

@@ -356,3 +356,20 @@ mod tests {
         );
     }
 }
+
+#[derive(Deserialize)]
+pub(crate) struct FrameWorkloadBody {
+    recording: String,
+}
+
+/// Same bounded, serialized writer as desktop IPC. Existing HTTP auth applies.
+pub(crate) async fn save_frame_workload(Json(body): Json<FrameWorkloadBody>) -> impl IntoResponse {
+    match crate::frame_workload::save_frame_workload(body.recording).await {
+        Ok(path) => Json(serde_json::json!(path)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+    }
+}

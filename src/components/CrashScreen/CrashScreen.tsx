@@ -47,23 +47,23 @@ export const CrashScreen: Component<CrashScreenProps> = (props) => {
 			style={{
 				padding: "24px",
 				"font-family": "monospace",
-				color: "#f44",
-				background: "#1e1e1e",
+				color: "var(--error, #f44)",
+				background: "var(--bg-primary, #1e1e1e)",
 				height: "100vh",
 				overflow: "auto",
 			}}
 		>
 			<h2 style={{ margin: "0 0 12px" }}>{props.title}</h2>
-			<pre style={{ "white-space": "pre-wrap", color: "#ccc" }}>{props.error.message}</pre>
-			<pre style={{ "white-space": "pre-wrap", color: "#888", "font-size": "12px" }}>{stack()}</pre>
+			<pre style={{ "white-space": "pre-wrap", color: "var(--fg-primary, #ccc)" }}>{props.error.message}</pre>
+			<pre style={{ "white-space": "pre-wrap", color: "var(--fg-muted, #888)", "font-size": "12px" }}>{stack()}</pre>
 			<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-top": "16px" }}>
 				<button
 					type="button"
 					style={{
 						padding: "8px 16px",
-						background: "#333",
-						color: "#fff",
-						border: "1px solid #555",
+						background: "var(--bg-tertiary, #333)",
+						color: "var(--fg-primary, #fff)",
+						border: "1px solid var(--border, #555)",
 						"border-radius": "4px",
 						cursor: "pointer",
 					}}
@@ -75,9 +75,9 @@ export const CrashScreen: Component<CrashScreenProps> = (props) => {
 					type="button"
 					style={{
 						padding: "8px 16px",
-						background: "#333",
-						color: "#fff",
-						border: "1px solid #555",
+						background: "var(--bg-tertiary, #333)",
+						color: "var(--fg-primary, #fff)",
+						border: "1px solid var(--border, #555)",
 						"border-radius": "4px",
 						cursor: "pointer",
 					}}
@@ -86,10 +86,10 @@ export const CrashScreen: Component<CrashScreenProps> = (props) => {
 					Copy error
 				</button>
 				<Show when={copyState() === "copied"}>
-					<span style={{ color: "#4ec9b0" }}>Copied</span>
+					<span style={{ color: "var(--success, #4ec9b0)" }}>Copied</span>
 				</Show>
 				<Show when={copyState() === "failed"}>
-					<span style={{ color: "#f48771" }}>Copy failed</span>
+					<span style={{ color: "var(--error, #f48771)" }}>Copy failed</span>
 				</Show>
 			</div>
 		</div>

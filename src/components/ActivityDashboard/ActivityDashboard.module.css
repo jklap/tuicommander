@@ -255,13 +255,3 @@
   font-size: var(--font-sm);
   color: var(--fg-muted);
 }
-
-.footerHint {
-  margin-left: auto;
-}
-
-@media (max-width: 540px) {
-  .footerHint {
-    display: none;
-  }
-}

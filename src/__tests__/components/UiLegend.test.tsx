@@ -60,3 +60,19 @@ describe("UiLegend covers every marker kind the sidebar can render", () => {
 		expect(BRANCH_ICON_SHAPES.filter((k) => !legendShapes.has(k))).toEqual([]);
 	});
 });
+
+// Catches: section captions return beside the actual legend entries.
+it("renders the legend without invented guidance", () => {
+	const view = render(() => <UiLegend />);
+	expect(view.container.textContent).toContain("Terminal Status Dots");
+	for (const caption of [
+		"The colored dot on each terminal tab",
+		"Background tint and bottom border color by tab type",
+		"Right-side panel accent colors",
+		"The icon at the start of each sidebar row",
+		"Shown at the end of a sidebar branch row",
+		"Shown next to branches with a pull request. Hover the marker for the state name",
+		"Next to the branch name in the toolbar",
+	])
+		expect(view.container.textContent).not.toContain(caption);
+});

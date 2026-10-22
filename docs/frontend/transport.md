@@ -16,6 +16,7 @@ OS drops are a cross-machine operation: desktop-only `fs_transfer_remote_paths` 
 | `src/transport.ts` | Public transport entry point (re-exports) |
 | `src/transport/http.ts` | RPC routing, coalescing, cached IPC invocation and HTTP requests |
 | `src/transport/ipc.ts` | Event and PTY subscriptions, including their browser WS/SSE branches |
+| `src/transport/sse.ts` | One reference-counted browser event stream per backend, shared by both event APIs |
 | `src/transport/commandTable.ts` | Command-to-endpoint mappings and native/WS exclusions |
 | `src/transport/types.ts` | Shared transport and upstream MCP types |
 | `src/transport/environment.ts` | Shared Tauri environment detection |
@@ -128,6 +129,28 @@ signal (`pty-activity-{id}` on desktop, the `{"type":"activity"}` WS frame in th
 browser). It is the only activity signal that works for a background tab: the
 canvas stops acking grid frames while a terminal is hidden, so frame traffic
 cannot stand in for it.
+
+### Shared browser event subscriptions
+
+Browser `listen()` and `subscribeEvents()` share one SSE connection per backend
+URL in each page. Two mobile tabs therefore use two long-lived HTTP connections,
+not one for each session, Chat, Markdown, dictation or speech consumer. This
+leaves capacity for state reads and permission answers under the observed
+six-connection HTTP/1.1 budget. Tabs do not share JavaScript state; this is not a
+guarantee for an unlimited number of tabs.
+
+Startup registrations are coalesced. The server filter is the union of consumer
+event types, widened in place with serialized `POST /events/types` requests.
+Each consumer receives only its registered types. A late consumer receives its
+`onResync("connect")` after its filter is live; reconnect restores the widened
+filter before resync. `lagged` also requests a snapshot. The server cannot replay
+missed events, so snapshots remain authoritative. Local HTTP-response events use
+the same registry and never reach another backend's consumers.
+
+Unsubscribe is idempotent and removes only that consumer. The final unsubscribe
+closes the stream; a mount disposed before the queued open creates no connection.
+Late filter replies cannot resurrect a stream after cleanup. Desktop Tauri
+listeners are unchanged and do not use this SSE registry.
 
 ### URL Building
 

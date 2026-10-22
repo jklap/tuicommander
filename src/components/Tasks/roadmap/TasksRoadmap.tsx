@@ -51,8 +51,6 @@ export function TasksRoadmap(props: TasksRoadmapProps) {
 			new Date(window().start.getFullYear(), window().start.getMonth() + direction * (zoom() === "month" ? 1 : 3), 1),
 		);
 	}
-	const fieldName = (id: string | undefined) =>
-		props.provider?.fields.find((field) => field.id === id)?.name ?? "Not set";
 	return (
 		<section class={s.roadmap} aria-label="Tasks roadmap">
 			<div class={s.toolbar}>
@@ -104,9 +102,6 @@ export function TasksRoadmap(props: TasksRoadmapProps) {
 					<span class={s.error}>{model.state().error}</span>
 				</Show>
 			</div>
-			<p class={s.mapping}>
-				Start: {fieldName(projection().startFieldId)} · Target: {fieldName(projection().targetFieldId)} · Local time
-			</p>
 			<Show when={props.provider} fallback={<p class={s.empty}>Install a work-item provider to show the roadmap.</p>}>
 				<div class={s.content}>
 					<div class={s.dated}>
@@ -122,7 +117,6 @@ export function TasksRoadmap(props: TasksRoadmapProps) {
 					</div>
 					<aside class={`${s.undated} ${listStyles.list}`} aria-label="Tasks without usable dates">
 						<h3>Without usable dates ({projection().undated.length})</h3>
-						<p class={s.help}>Unset, invalid or reversed dates stay here. One date shows as a one-day milestone.</p>
 						<TaskRows
 							items={projection().undated}
 							groups={[]}
