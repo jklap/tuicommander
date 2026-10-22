@@ -1,5 +1,5 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import { t } from "../../../../i18n";
+import { locale, t } from "../../../../i18n";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { Select } from "../../../ui/Select";
@@ -113,7 +113,7 @@ export const McpAuditPanel: Component = () => {
 										return (
 											<tr>
 												<td class={css.mono}>
-													{new Date(row.started_ms).toLocaleTimeString("en-GB", { hour12: false })}
+													{new Date(row.started_ms).toLocaleTimeString(locale(), { hour12: false })}
 												</td>
 												<td class={css.mono}>{row.operation}</td>
 												<td

@@ -239,12 +239,13 @@ export const LocalMcpPanel: Component = () => {
 							class={s.rowSwitch}
 							type="checkbox"
 							checked={callAuditEnabled()}
-							onChange={(e) => {
+							onChange={async (e) => {
 								const enabled = e.currentTarget.checked;
-								setCallAuditEnabled(enabled);
-								saveConfigField((c) => {
+								// The view fetches on mount: persist first, or it reads "disabled".
+								await saveConfigField((c) => {
 									c.mcp_call_audit_enabled = enabled;
 								});
+								setCallAuditEnabled(enabled);
 							}}
 						/>
 					)}
