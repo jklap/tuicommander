@@ -81,6 +81,14 @@ export function extractSettingControls(file: string, source: string): SettingCon
 					? idAttribute.initializer.expression
 					: undefined;
 			const resolvedIds: string[] = [];
+			if (
+				expression &&
+				ts.isConditionalExpression(expression) &&
+				ts.isStringLiteral(expression.whenTrue) &&
+				ts.isStringLiteral(expression.whenFalse)
+			) {
+				resolvedIds.push(expression.whenTrue.text, expression.whenFalse.text);
+			}
 			if (expression && ts.isTemplateExpression(expression) && expression.templateSpans.length === 1) {
 				const prefix = expression.head.text;
 				const span = expression.templateSpans[0];

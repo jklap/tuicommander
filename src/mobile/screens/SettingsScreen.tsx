@@ -1,10 +1,11 @@
-import { createEffect, createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Select } from "../../components/ui/Select";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import { KEEP_AWAKE_KEY } from "../../utils/screenWakeLock";
 import { setDesktopUI } from "../../utils/tabletRouting";
+import { MAX_MOBILE_FONT_SIZE, MIN_MOBILE_FONT_SIZE, mobileFontSizes } from "../mobileFontSize";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
 import { useKeyboardCorrection } from "../useKeyboardCorrection";
 import { useMobileVoice } from "../useMobileVoice";
@@ -285,6 +286,41 @@ export function SettingsScreen(props: SettingsScreenProps) {
 
 			<section class={styles.section}>
 				<h3 class={styles.sectionTitle}>APPEARANCE</h3>
+				<For
+					each={
+						[
+							{ surface: "terminal", label: "Terminal" },
+							{ surface: "chat", label: "Chat" },
+						] as const
+					}
+				>
+					{({ surface, label }) => (
+						<div class={styles.row}>
+							<span class={styles.label}>{label}</span>
+							<div class={styles.fontSizeControl} role="group" aria-label={`${label} font size`}>
+								<button
+									type="button"
+									aria-label={`Smaller ${label} font`}
+									disabled={mobileFontSizes[surface]() === MIN_MOBILE_FONT_SIZE}
+									onClick={() => mobileFontSizes.step(surface, -1)}
+								>
+									−
+								</button>
+								<output aria-label={`${label} font size`} aria-live="polite">
+									{mobileFontSizes[surface]()} px
+								</output>
+								<button
+									type="button"
+									aria-label={`Larger ${label} font`}
+									disabled={mobileFontSizes[surface]() === MAX_MOBILE_FONT_SIZE}
+									onClick={() => mobileFontSizes.step(surface, 1)}
+								>
+									+
+								</button>
+							</div>
+						</div>
+					)}
+				</For>
 				<div class={styles.row}>
 					<span class={styles.label}>New text indicator</span>
 					<button

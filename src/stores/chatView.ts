@@ -44,7 +44,7 @@ export function chatViewKey(sessionId: string): string {
 	return `pty:${sessionId}`;
 }
 
-/** Claude binding is decided by the backend; other adapters retain their exact-binding gates. */
+/** Claude and ego binding is decided by the backend; other adapters retain their binding gates. */
 export type ChatViewWake = (sessionId: string, wake: () => void) => Promise<() => void> | (() => void);
 
 const defaultWake: ChatViewWake = (sessionId, wake) =>
@@ -52,23 +52,25 @@ const defaultWake: ChatViewWake = (sessionId, wake) =>
 		if (event.payload.session_id === sessionId) wake();
 	});
 
+/** Adapter support is shared by desktop and mobile; binding checks stay separate. */
+export function supportsTerminalChatView(agentType: string | null | undefined): boolean {
+	return agentType === "claude" || agentType === "grok" || agentType === "codex" || agentType === "ego";
+}
+
 export function chatViewAvailability(
 	term:
 		| Pick<TerminalData, "agentType" | "agentSessionId" | "exactAgentSessionId" | "sessionId" | "isRemote">
 		| undefined,
 ): { available: true } | { available: false; reason: string } {
 	if (!term?.agentType) return { available: false, reason: "No agent is running in this terminal" };
-	if (
-		term.agentType !== "claude" &&
-		term.agentType !== "grok" &&
-		term.agentType !== "codex" &&
-		term.agentType !== "ego"
-	)
+	if (!supportsTerminalChatView(term.agentType))
 		return { available: false, reason: "The chat view supports Claude, Grok, Codex and ego only" };
 	if (term.isRemote) return { available: false, reason: "The chat view is not available for remote terminals" };
 	if (!term.sessionId) return { available: false, reason: "The terminal has no session yet" };
 	const boundId = term.agentType === "codex" ? term.exactAgentSessionId : term.agentSessionId;
-	if (term.agentType !== "claude" && !boundId)
+	// Claude and ego resolve their live binding in chat_view_snapshot. A saved
+	// frontend id is neither required nor authoritative after re-adoption.
+	if (term.agentType !== "claude" && term.agentType !== "ego" && !boundId)
 		return { available: false, reason: "The agent session is not bound to a transcript yet" };
 	return { available: true };
 }

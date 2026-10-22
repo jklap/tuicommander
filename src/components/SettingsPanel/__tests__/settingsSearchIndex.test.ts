@@ -27,7 +27,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	"remote-machines": ["tabs/RemoteMachinesTab.tsx", "tabs/services/RemoteMachinesPanel.tsx"],
 	plugins: ["tabs/PluginsTab.tsx"],
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
-	agents: ["tabs/AgentsTab.tsx"],
+	agents: ["tabs/AgentsTab.tsx", "tabs/LaunchModuleSettings.tsx"],
 	"ai-chat": ["tabs/EgoPerimeterSection.tsx", "tabs/AiChatTab.tsx"],
 };
 
@@ -74,7 +74,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 1, orphans: 18 },
+	agents: { dynamic: 2, orphans: 18 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

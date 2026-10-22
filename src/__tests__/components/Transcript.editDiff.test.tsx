@@ -69,3 +69,28 @@ it("renders a new-file diff without inventing an old version or interpreting cod
 	expect(view.getByLabelText("New text").textContent).toBe("<script>unsafe()</script>");
 	expect(view.container.querySelector("script")).toBeNull();
 });
+
+// Catches: structured edit disclosures reintroduce an always-visible scrolling caption.
+it("renders edit diffs without invented guidance", () => {
+	const view = render(() => (
+		<Transcript
+			entries={() => [
+				{
+					id: "edit",
+					kind: "tool",
+					call: {
+						toolCallId: "edit",
+						title: "Edit",
+						status: "completed",
+						content: [{ type: "diff", path: "file.txt", oldText: "before", newText: "after" }],
+					},
+				},
+			]}
+			busy={() => false}
+			emptyMessage=""
+		/>
+	));
+	for (const details of view.container.querySelectorAll("details")) details.open = true;
+	expect(view.getByLabelText("New text").textContent).toBe("after");
+	expect(view.container.textContent).not.toContain("Scroll horizontally to read long lines →");
+});

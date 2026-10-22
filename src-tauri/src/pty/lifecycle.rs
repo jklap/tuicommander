@@ -2149,6 +2149,19 @@ impl SilenceState {
         self.completion_turn_epoch = 0;
     }
 
+    /// Working evidence retracts completion, not an undelivered choice list.
+    /// Claude's idle hook can precede its last Stop-hook spinner repaint; the
+    /// pending choices still belong to this turn and must reach the ready UI.
+    /// Submitted input uses reset_suggest_memory and discards them instead.
+    pub(super) fn reopen_suggest_completion(&mut self) {
+        if self.pending_suggest_emitted {
+            self.reset_suggest_memory();
+        } else {
+            self.completion_declared = false;
+            self.completion_turn_epoch = 0;
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn completion_declared(&self) -> bool {
         self.completion_declared
@@ -2615,7 +2628,7 @@ pub(super) fn apply_working_evidence(
             // Claude can emit Stop/suggest before a blocking Stop hook finishes;
             // Codex can start an internal continuation without a PTY submission.
             // Current semantic movement is stronger than either stale boundary.
-            sl.reset_suggest_memory();
+            sl.reopen_suggest_completion();
         }
         sl.note_working_screen();
         invalidate_background_probe_boundary_locked(state, session_id);
@@ -3046,61 +3059,6 @@ pub(super) fn is_cc_tool_call_header(text: &str) -> bool {
     })
 }
 
-/// Emit an `Inferred` command outcome for shells that don't speak OSC 133.
-/// Called right after a busy→idle transition; no-op once we've ever observed
-/// a marker for this session (shell-integration path is authoritative then).
-/// The command text is unknown in this mode, but cwd + snippet still populate
-/// context summary and cwd history.
-pub(super) fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id: &str) {
-    use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass};
-
-    if state
-        .session_maps
-        .has_osc133_integration
-        .contains_key(session_id)
-    {
-        return;
-    }
-    // try_lock to avoid blocking the timer thread if write_pty holds
-    // the session lock. Inferred outcomes are best-effort — missing cwd
-    // for one record is acceptable vs risking contention.
-    let cwd = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|s| s.try_lock().and_then(|s| s.cwd.clone()))
-        .unwrap_or_default();
-    let output_snippet = state
-        .grid
-        .vt_log_buffers
-        .get(session_id)
-        .map(|b| {
-            let buf = b.lock();
-            buf.screen_rows().join("\n")
-        })
-        .unwrap_or_default();
-    let mut tail_start = output_snippet.len().saturating_sub(500);
-    while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    let output_snippet = output_snippet[tail_start..].to_string();
-
-    let outcome = CommandOutcome {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        command: String::new(),
-        cwd,
-        exit_code: None,
-        output_snippet,
-        classification: OutcomeClass::Inferred,
-        duration_ms: 0,
-        id: 0,
-    };
-    state.record_outcome(session_id, outcome);
-}
-
 /// Retract a low-confidence `awaiting_input` once the screen is quiet and no
 /// question is visible any more.
 ///
@@ -3386,8 +3344,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
 }
 
 /// Per-session state a tombstone keeps readable after the process is gone: the
-/// buffers, the exit code, the alias the tab still shows, and the accumulated
-/// knowledge a background task has yet to flush. Reaped when the tombstone ages
+/// buffers, the exit code, and the alias the tab still shows. Reaped when the tombstone ages
 /// out — or immediately, when the session is closed outright.
 ///
 /// See [`remove_live_session_state`] for why these are the only two lists.
@@ -3419,16 +3376,6 @@ fn trim_unused_session_heap() {
         let _ = unsafe { libc::malloc_trim(0) };
     }
 }
-
-// NOT A DEFERRAL — two session-keyed maps are deliberately NOT reaped by
-// either half, because the session is not what owns them:
-//   * `session_knowledge` / `knowledge_dirty` ARE the cross-session memory:
-//     `knowledge::summarize_for_repo` and the agent prompt builder read the live
-//     map, never the files, so reaping a closed session removes knowledge the
-//     next session in that repo is supposed to inherit. Residency is bounded at
-//     startup (40 newest), not during a run.
-// They need an owner-scoped lifetime, not a session-scoped one: tie them to a
-// running residency bound.
 
 /// Remove the live session and transfer any pending child wait out of its maps.
 fn remove_pty_session(session_id: &str, state: &AppState) {
@@ -3478,6 +3425,7 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
+#[cfg(test)]
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);

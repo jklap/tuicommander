@@ -24,6 +24,13 @@ afterEach(() => {
 const october = () => new Date(2026, 9, 1);
 
 describe("Tasks roadmap", () => {
+	// Catches: field-name narration returning beneath the useful loaded-task summary.
+	it("does not repeat the date field names as a legend", async () => {
+		const view = render(() => <TasksRoadmap provider={roadmapDemo()} initialDate={october()} onOpen={() => {}} />);
+		await screen.findByText("8 loaded · 5 dated · 3 without usable dates");
+		expect(view.queryByText("Start: Start date · Target: Target date · Local time")).not.toBeInTheDocument();
+	});
+
 	// Catches: dropping unset/invalid/reversed dates rather than retaining clickable tasks.
 	it("item_without_dates_listed_not_dropped", async () => {
 		const open = vi.fn();
@@ -125,4 +132,14 @@ describe("Tasks roadmap", () => {
 		await Promise.resolve();
 		expect(screen.queryByRole("button", { name: /UTC boundary/ })).not.toBeInTheDocument();
 	});
+});
+
+// Catches: the undated section reintroduces an always-visible explanatory paragraph.
+it("renders the roadmap without invented guidance", async () => {
+	const view = render(() => <TasksRoadmap provider={roadmapDemo()} initialDate={october()} onOpen={() => {}} />);
+	await screen.findByText("8 loaded · 5 dated · 3 without usable dates");
+	expect(view.getByRole("complementary", { name: "Tasks without usable dates" })).not.toBeNull();
+	expect(view.container.textContent).not.toContain(
+		"Unset, invalid or reversed dates stay here. One date shows as a one-day milestone.",
+	);
 });

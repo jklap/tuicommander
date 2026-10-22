@@ -19,6 +19,8 @@ use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
 };
 
+mod bg_wake_diagnostics;
+pub(crate) mod frame_priority;
 mod injection;
 mod lifecycle;
 mod screen;
@@ -735,7 +737,6 @@ fn spawn_silence_timer(
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
-                    record_inferred_outcome_if_no_osc133(&state, &session_id);
                 } else if transition.screen_confirms_idle
                     && !shell_is_busy
                     && queued_command_count(&state, &session_id) > 0
@@ -815,6 +816,15 @@ fn spawn_silence_timer(
                         emit_question_cleared_if_stale(&state, &session_id);
                     }
                 }
+            }
+
+            // Chat-question heuristics, like open-dialog recovery in the reader,
+            // require a live agent. Its old title can remain above the returned
+            // shell prompt and must not become a new wait after ten quiet seconds.
+            if agent_type.is_none() {
+                silence.lock().clear_stale_question();
+                emit_question_cleared_if_stale(&state, &session_id);
+                continue;
             }
 
             // Check temporal conditions first (shared by both strategies).
@@ -1224,7 +1234,7 @@ fn managed_claude_trust_dialog(screen: &[String]) -> bool {
             .or_else(|| row.strip_prefix('>'));
         choice.is_some_and(|choice| choice.trim_start().contains("No, exit"))
     });
-    matches!((yes, selected_no), (Some(yes), Some(no)) if yes < no)
+    matches!((yes, selected_no), (Some(yes), Some(no)) if no < yes)
 }
 
 #[cfg(test)]
@@ -1243,7 +1253,6 @@ mod managed_claude_trust_tests {
             vec![
                 "Quick safety check: Is this a project you created or one you trust?",
                 "❯ No, exit",
-                "  Yes, I trust this folder",
             ],
         ] {
             assert!(
@@ -1263,7 +1272,7 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
     let mut writer = writer.lock();
     state.retire_turn_interrupt(session_id);
     writer
-        .write_all(b"\x1b[A")
+        .write_all(b"\x1b[B")
         .and_then(|()| writer.flush())
         .map_err(|error| format!("Trust selection failed: {error}"))?;
     std::thread::sleep(INJECT_ENTER_GAP);
@@ -1303,6 +1312,8 @@ struct ChunkProcessor {
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
     /// Prevents re-emit on repaint while the dialog stays on screen.
     last_choice_prompt_sig: Option<String>,
+    /// Whether a published slash menu still needs an explicit retraction.
+    slash_menu_visible: bool,
     /// A busy hook cleared the choice; wait for a dialog-row repaint before
     /// admitting the same signature again, so stale screen cells cannot re-arm it.
     choice_prompt_needs_repaint: bool,
@@ -1323,14 +1334,6 @@ struct ChunkProcessor {
     pub(crate) in_alt_buffer: bool,
     /// Structured terminal mode with nesting depth and app detection.
     terminal_mode: crate::ai_agent::tui_detect::TerminalMode,
-    /// One-shot flag: inject ESC[2J before the next ESC[H cursor-home.
-    /// Set on alt-buffer entry and when content may have shrunk (detected via
-    /// cursor-up ESC[nA with n > previous). Consumed after inject fires.
-    alt_buffer_needs_clear: bool,
-    /// Tracks the largest cursor-up (ESC[nA) value seen since last clear.
-    /// When a new ESC[nA arrives with n < last_cursor_up_n, content has shrunk
-    /// and we need a clear to prevent ghost artifacts.
-    last_cursor_up_n: u16,
     /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
     /// scrolled in new output from one that only repainted existing rows.
     last_vt_log_total: usize,
@@ -1340,11 +1343,6 @@ struct ChunkProcessor {
     startup_deadline: std::time::Instant,
     /// The startup toast is shown once per PTY.
     alt_screen_toasted: bool,
-    /// Command text captured on OSC 133 C — used when the matching D arrives
-    /// to build a `CommandOutcome`. Cleared after D.
-    pending_command: Option<String>,
-    /// `Instant` when OSC 133 C arrived; used for `duration_ms`.
-    pending_command_started: Option<std::time::Instant>,
     /// TUIC_SESSION UUID for this PTY — used to create flag files that
     /// signal the shell wrapper to stop injecting `--session-id`.
     tuic_session: Option<String>,
@@ -1455,6 +1453,7 @@ impl ChunkProcessor {
             last_question_text: None,
             raw_carry: String::new(),
             last_choice_prompt_sig: None,
+            slash_menu_visible: false,
             choice_prompt_needs_repaint: false,
             session_cwd,
             pending_planfiles: Vec::new(),
@@ -1462,14 +1461,10 @@ impl ChunkProcessor {
             gaveup_planfiles: std::collections::HashSet::new(),
             in_alt_buffer: false,
             terminal_mode: crate::ai_agent::tui_detect::TerminalMode::Shell,
-            alt_buffer_needs_clear: false,
-            last_cursor_up_n: 0,
             last_vt_log_total: 0,
             alt_screen_warned: false,
             startup_deadline: std::time::Instant::now() + ALT_SCREEN_STARTUP_WINDOW,
             alt_screen_toasted: false,
-            pending_command: None,
-            pending_command_started: None,
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
@@ -1490,20 +1485,14 @@ impl ChunkProcessor {
         transition_explicit_shell_state(state, session_id, target, label, true);
     }
 
-    /// Handle a single OSC 133 event from the VTE handler.
-    /// On 'C' captures the command text; on 'D' builds a `CommandOutcome`.
+    /// Apply shell activity transitions from OSC 133 markers.
     fn handle_osc133_event(
         &mut self,
         command: char,
-        params: &str,
+        _params: &str,
         session_id: &str,
         state: &AppState,
     ) {
-        use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass, classify_error};
-
-        // Deterministic state transitions from shell integration markers.
-        // A = prompt shown (idle), C = command execution started (busy).
-        // These bypass the silence timer entirely when OSC 133 is available.
         match command {
             'A' => {
                 crate::codex_binding::revoke(state, session_id);
@@ -1511,82 +1500,13 @@ impl ChunkProcessor {
             }
             'C' => {
                 transition_explicit_shell_state(state, session_id, SHELL_BUSY, "busy", false);
-                let cmd = state
-                    .session_maps
-                    .input_buffers
-                    .get(session_id)
-                    .map(|b| b.lock().content())
-                    .unwrap_or_default();
-                self.pending_command = Some(cmd);
-                self.pending_command_started = Some(std::time::Instant::now());
-            }
-            'D' => {
-                // A 'D' (command finished) with no preceding 'C' (command
-                // started) means no command actually ran — e.g. Enter on an
-                // empty prompt, where the shell still emits D carrying the
-                // previous command's exit code. Recording it would create a
-                // phantom outcome with an empty command and "unknown" error
-                // type, polluting both the knowledge panel and the agent's
-                // injected prompt. Skip it.
-                if self.pending_command_started.is_none() {
-                    self.pending_command = None;
-                    return;
-                }
-                let exit_code = params.parse::<i32>().unwrap_or(0);
-                let command = self.pending_command.take().unwrap_or_default();
-                let duration_ms = self
-                    .pending_command_started
-                    .take()
-                    .map(|t| t.elapsed().as_millis() as u64)
-                    .unwrap_or(0);
-                let cwd = self.session_cwd.clone().unwrap_or_default();
-                let output_snippet = state
-                    .grid
-                    .vt_log_buffers
-                    .get(session_id)
-                    .map(|b| {
-                        let buf = b.lock();
-                        buf.screen_rows().join("\n")
-                    })
-                    .unwrap_or_default();
-                let mut tail_start = output_snippet.len().saturating_sub(500);
-                while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
-                    tail_start += 1;
-                }
-                let output_snippet = output_snippet[tail_start..].to_string();
-
-                let classification = if exit_code == 0 {
-                    OutcomeClass::Success
-                } else if let Some(error_type) = classify_error(&output_snippet) {
-                    OutcomeClass::Error { error_type }
-                } else {
-                    OutcomeClass::Error {
-                        error_type: "unknown".into(),
-                    }
-                };
-
-                let outcome = CommandOutcome {
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                    command,
-                    cwd,
-                    exit_code: Some(exit_code),
-                    output_snippet,
-                    classification,
-                    duration_ms,
-                    id: 0,
-                };
-                state.knowledge_entry(session_id).lock().terminal_mode = self.terminal_mode.clone();
-                state.record_outcome(session_id, outcome);
             }
             _ => {}
         }
     }
 
     /// Classify an inline TUI (mouse reporting on the primary screen) the same
-    /// way `transform_xterm` classifies `1049h`. Alt-screen nesting still owns
+    /// way `observe_alt_buffer` classifies `1049h`. Alt-screen nesting still owns
     /// `terminal_mode` once `1049h` has been seen; this only covers the
     /// `grok --no-alt-screen` case that never sends it.
     fn apply_inline_tui_mode(
@@ -1615,55 +1535,15 @@ impl ChunkProcessor {
         }
     }
 
-    /// Colorize `intent:` tokens and apply alternate-buffer fixes on the xterm
-    /// stream. Suggest tokens are NOT concealed here — the frontend's
-    /// `eraseSuggestFromBuffer()` handles that via rAF after xterm renders.
-    fn transform_xterm<'a>(&mut self, data: &'a str) -> Option<std::borrow::Cow<'a, str>> {
-        // Track alternate screen buffer state for the clear-before-home fix below.
+    /// Track terminal mode without changing the bytes sent to output watchers.
+    fn observe_alt_buffer(&mut self, data: &str) {
         if data.contains("\x1b[?1049h") {
             self.in_alt_buffer = true;
-            self.alt_buffer_needs_clear = true;
             self.terminal_mode = self.terminal_mode.on_alt_enter();
         } else if data.contains("\x1b[?1049l") {
             self.in_alt_buffer = false;
-            self.alt_buffer_needs_clear = false;
             self.terminal_mode = self.terminal_mode.on_alt_exit();
         }
-
-        // Detect render-height change in alternate buffer: when Ink's cursor-up
-        // (ESC[nA) value changes, the chrome area may have shifted vertically.
-        // Ink never sends ESC[K (erase to end of line), so rows that were chrome
-        // in the previous render but aren't overwritten in the new one persist as
-        // ghost artifacts — starting from the bottom and expanding upward.
-        if self.in_alt_buffer
-            && let Some(n) = extract_largest_cursor_up(data)
-        {
-            if n != self.last_cursor_up_n && self.last_cursor_up_n > 0 {
-                self.alt_buffer_needs_clear = true;
-            }
-            self.last_cursor_up_n = n;
-        }
-
-        // Inject ESC[2J (clear screen) before the first positioning sequence when
-        // needed. Tries cursor-home (ESC[H) first, then falls back to cursor-up
-        // (ESC[nA). Ink re-renders use cursor-up for repositioning, not cursor-home,
-        // so the fallback is essential — without it the flag accumulates forever.
-        // Borrowed unless an injection actually fires: the overwhelming majority
-        // of chunks pass straight through, and this used to copy every one.
-        if !self.alt_buffer_needs_clear {
-            return Some(std::borrow::Cow::Borrowed(data));
-        }
-        let injected = inject_clear_before_cursor_home(data);
-        if injected.len() != data.len() {
-            self.alt_buffer_needs_clear = false;
-            return Some(std::borrow::Cow::Owned(injected));
-        }
-        let injected = inject_clear_before_cursor_up(data);
-        if injected.len() != data.len() {
-            self.alt_buffer_needs_clear = false;
-            return Some(std::borrow::Cow::Owned(injected));
-        }
-        Some(std::borrow::Cow::Borrowed(data))
     }
 
     /// Resolve a relative plan-file path to absolute using session CWD.
@@ -1774,7 +1654,7 @@ impl ChunkProcessor {
     /// silence state, last_output_ms, and shell state transitions.
     ///
     /// Returns true when the chunk was non-empty, i.e. the caller should hand
-    /// the SAME borrowed bytes to `transform_xterm`. It used to return an owned
+    /// the SAME borrowed bytes to the output watchers. It used to return an owned
     /// copy of the chunk, which allocated and memcpy'd up to 64 KB per PTY read
     /// for a value the caller already held.
     /// `app` is Some for desktop mode (emits Tauri IPC), None for headless.
@@ -2350,6 +2230,33 @@ impl ChunkProcessor {
                             &payload,
                         ),
                         "state" => {
+                            // Codex can emit completion while an approval or /plan
+                            // question is still unanswered. Require the same currently
+                            // rendered dialog and its active controls. Real answer input
+                            // retires the controls before subsequent idle is accepted.
+                            let open_codex_dialog = payload == "idle"
+                                && agent_type.as_deref() == Some("codex")
+                                && state
+                                    .session_maps
+                                    .session_states
+                                    .get(session_id)
+                                    .is_some_and(|session| {
+                                        session.awaiting_input
+                                            && session.choice_prompt.as_ref().is_some_and(|prompt| {
+                                                matches!(
+                                                    crate::output_parser::parse_choice_prompt(&screen_buf),
+                                                    Some(ParsedEvent::ChoicePrompt { title, .. })
+                                                        if title == prompt.title
+                                                )
+                                            })
+                                    });
+                            if open_codex_dialog {
+                                tracing::warn!(
+                                    session_id,
+                                    "Ignoring delayed idle while native Codex dialog is unanswered"
+                                );
+                                continue;
+                            }
                             // idle/busy drive the shell-state machine; awaiting is
                             // ignored here (it's a separate field). The awaiting_input
                             // field is driven by Question/UserInput events instead.
@@ -2632,9 +2539,23 @@ impl ChunkProcessor {
             );
         }
         let rows = structured_rows.as_deref().unwrap_or(&changed_rows);
+        // Claude redraws earlier responses while submitting the next composer.
+        // Only suggestions below the latest submitted prompt belong to this
+        // turn. Exclude the live input box so an unsent draft is not a boundary.
+        let suggest_floor = if agent_type.as_deref() == Some("claude") && screen_present {
+            let refs: Vec<&str> = screen_buf.iter().map(String::as_str).collect();
+            let end = crate::chrome::find_agent_chrome_cutoff(&refs, Some("claude"))
+                .unwrap_or(refs.len());
+            refs[..end].iter().rposition(|row| {
+                row.strip_prefix('❯')
+                    .is_some_and(|draft| !draft.trim().is_empty())
+            })
+        } else {
+            None
+        };
         events.extend(
             self.parser
-                .parse_clean_lines(rows, agent_active_for_parse)
+                .parse_clean_lines_with_suggest_floor(rows, agent_active_for_parse, suggest_floor)
                 .into_iter()
                 .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
         );
@@ -2689,13 +2610,18 @@ impl ChunkProcessor {
             .slash_mode
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
-        if slash_on && let Some(screen) = screen_cache {
-            // This runs in the per-PTY-chunk hot path. Do not log each parse:
-            // a stale slash-mode flag during sustained output previously sent
-            // thousands of identical records through the application logger,
-            // adding avoidable lock/contention pressure to terminal delivery.
-            if let Some(evt) = crate::output_parser::parse_slash_menu(screen) {
-                events.push(evt);
+        if let Some(screen) = screen_cache {
+            let menu = slash_on
+                .then(|| crate::output_parser::parse_slash_menu(screen))
+                .flatten();
+            if let Some(event) = menu {
+                self.slash_menu_visible = true;
+                events.push(event);
+            } else if self.slash_menu_visible {
+                // Exact commands and zero matches close completion without a
+                // submitted line. Retract once, not on every busy output chunk.
+                self.slash_menu_visible = false;
+                events.push(ParsedEvent::SlashMenu { items: Vec::new() });
             }
         }
 
@@ -2717,12 +2643,22 @@ impl ChunkProcessor {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else if agent_type.as_deref() == Some("ego") {
-                crate::output_parser::parse_ego_question(
-                    ego_question_rows.as_deref().unwrap_or(screen),
-                )
+                let rows = ego_question_rows.as_deref().unwrap_or(screen);
+                crate::output_parser::parse_ego_question(rows)
+                    .or_else(|| crate::output_parser::parse_ego_approval(rows))
+            } else if agent_type.as_deref() == Some("grok") {
+                crate::output_parser::parse_grok_question(screen)
+                    .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };
+            // A native radio form can switch to free text without leaving the
+            // question. Retire old buttons before publishing the text-only wait.
+            if matches!(choice, Some(ParsedEvent::Question { .. }))
+                && self.last_choice_prompt_sig.take().is_some()
+            {
+                events.push(ParsedEvent::ChoiceCleared);
+            }
             match choice {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
@@ -2800,7 +2736,11 @@ impl ChunkProcessor {
         // spurious clear, never one per frame. This applies to hooked sessions
         // too: later busy hooks can clear awaiting while the dialog stays open,
         // and a multi-question tool emits its awaiting hook only once.
-        if let Some(screen) = screen_cache {
+        // A returned shell can retain the agent's footer above its prompt. Only
+        // a live agent identity makes those retained rows an open agent dialog.
+        if agent_type.is_some()
+            && let Some(screen) = screen_cache
+        {
             let (awaiting, has_choice) = state
                 .session_maps
                 .session_states
@@ -2911,7 +2851,12 @@ impl ChunkProcessor {
             // soon as the prompt leaves the screen (see the screen-absence reset
             // above), so this guards one pending prompt, not the whole session.
             if let ParsedEvent::Question { prompt_text, .. } = event {
-                if self.last_question_text.as_deref() == Some(prompt_text.as_str()) {
+                // Ego's empty title is a native awaiting marker, not screen
+                // content. Each marker establishes a wait independently of the
+                // previous dialog's presence, shape or repaint bookkeeping.
+                if self.last_question_text.as_deref() == Some(prompt_text.as_str())
+                    && !(agent_type.as_deref() == Some("ego") && prompt_text.is_empty())
+                {
                     continue;
                 }
                 self.last_question_text = Some(prompt_text.clone());
@@ -2955,8 +2900,26 @@ impl ChunkProcessor {
                                 || options.iter().any(|option| row.contains(&option.label))
                         })
                 });
+                // Ego emits awaiting for each native question. After busy has
+                // retired an answer, scrolling its retained rows is not a new
+                // wait. A fresh protocol question can still restore the same
+                // signature; other agents retain their screen-only recovery.
+                let repaint_can_rearm = agent_type.as_deref() != Some("ego")
+                    || events
+                        .iter()
+                        .rev()
+                        .find_map(|event| match event {
+                            ParsedEvent::Question { confident, .. } => Some(*confident),
+                            ParsedEvent::UserInput { .. } => Some(false),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            silence.lock().awaiting_rank() == Some(EvidenceRank::Protocol)
+                        });
                 if self.last_choice_prompt_sig.as_deref() == Some(sig.as_str())
-                    && !(self.choice_prompt_needs_repaint && dialog_row_repainted)
+                    && !(self.choice_prompt_needs_repaint
+                        && dialog_row_repainted
+                        && repaint_can_rearm)
                 {
                     continue;
                 }
@@ -3309,7 +3272,7 @@ impl ChunkProcessor {
                         // finishes; Codex can start an internal continuation
                         // without a PTY submission. Current semantic movement is
                         // stronger than either stale boundary.
-                        sl.reset_suggest_memory();
+                        sl.reopen_suggest_completion();
                         reopened_completion = true;
                     }
                     sl.note_working_screen();
@@ -3607,196 +3570,6 @@ type VtProcessResult = (
 #[cfg(feature = "dictation")]
 pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 
-/// Detect anomalous ANSI sequences that may cause scroll-jump-to-top or viewport resets.
-/// Returns a list of human-readable labels for each detected sequence.
-/// These are logged as warnings for diagnostic purposes — data is never modified.
-fn detect_anomalous_sequences(data: &str) -> Vec<&'static str> {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut found = Vec::new();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            i += 2; // skip ESC[
-
-            // Check for ESC[? private mode sequences (alt screen)
-            if i < len && bytes[i] == b'?' {
-                i += 1;
-                let num_start = i;
-                while i < len && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                if i < len {
-                    let num_str = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                    match (num_str, bytes[i]) {
-                        ("1049", b'h') => found.push("ESC[?1049h (Alt Screen Enter)"),
-                        ("1049", b'l') => found.push("ESC[?1049l (Alt Screen Exit)"),
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                // No continue — let the outer while loop re-evaluate i < len
-            } else {
-                // Parse numeric params: n or n;m
-                let num_start = i;
-                while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
-                    i += 1;
-                }
-                if i < len {
-                    let params = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                    match bytes[i] {
-                        b'J' => match params {
-                            "2" => found.push("ESC[2J (Clear Screen)"),
-                            "3" => found.push("ESC[3J (Clear Scrollback)"),
-                            _ => {}
-                        },
-                        b'H' => {
-                            // ESC[H or ESC[1;1H = Cursor Home
-                            if params.is_empty() {
-                                found.push("ESC[H (Cursor Home)");
-                            } else if params == "1;1" {
-                                found.push("ESC[1;1H (Cursor Home)");
-                            }
-                            // Other ESC[n;mH = regular cursor position, not anomalous
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    found
-}
-
-/// Extract the largest ESC[nA (cursor-up) value from `data`.
-/// Ink emits ESC[nA where n equals the previous render height before redrawing.
-/// A decrease in n between consecutive redraws signals content shrinkage.
-fn extract_largest_cursor_up(data: &str) -> Option<u16> {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    let mut max_n: Option<u16> = None;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            i += 2;
-            let num_start = i;
-            while i < len && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i < len
-                && bytes[i] == b'A'
-                && i > num_start
-                && let Ok(n) = std::str::from_utf8(&bytes[num_start..i])
-                    .unwrap_or("")
-                    .parse::<u16>()
-            {
-                max_n = Some(max_n.map_or(n, |prev: u16| prev.max(n)));
-            }
-            if i < len {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    max_n
-}
-
-/// Inject ESC[2J (clear screen) before the first ESC[H or ESC[1;1H (cursor home) in `data`.
-///
-/// Ink-based TUIs render differentially: they position the cursor at home and overwrite
-/// changed cells but never send ESC[K (erase to end of line). When output shrinks between
-/// redraws, old characters — especially box-drawing separators — persist as ghost artifacts.
-///
-/// Injecting a single ESC[2J before the cursor-home ensures the screen is blank before
-/// the redraw starts. Because xterm.js processes the entire write() atomically (clear +
-/// cursor home + new content happen before the next paint), no intermediate blank frame
-/// is ever rendered to the user.
-///
-/// Only injects once per call (before the first cursor-home) to avoid unnecessary clears
-/// for chunks that contain multiple ESC[H sequences (common in Ink's rapid redraws).
-fn inject_clear_before_cursor_home(data: &str) -> String {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            let seq_start = i;
-            i += 2; // skip ESC[
-            // Parse optional numeric parameters
-            let num_start = i;
-            while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
-                i += 1;
-            }
-            if i < len && bytes[i] == b'H' {
-                let params = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                // ESC[H (no params) or ESC[1;1H — both mean cursor home
-                if params.is_empty() || params == "1;1" {
-                    // Inject ESC[2J before this cursor-home sequence
-                    let mut result = String::with_capacity(len + 4);
-                    result.push_str(&data[..seq_start]);
-                    result.push_str("\x1b[2J");
-                    result.push_str(&data[seq_start..]);
-                    return result;
-                }
-            }
-            if i < len {
-                i += 1; // skip command byte
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // No cursor-home found — return as-is
-    data.to_string()
-}
-
-/// Inject ESC[2J before the first ESC[nA (cursor-up, n > 0) in `data`.
-///
-/// Fallback for `inject_clear_before_cursor_home`: Ink re-renders reposition via
-/// cursor-up (ESC[nA), not cursor-home (ESC[H). Without this path the
-/// `alt_buffer_needs_clear` flag is set but never consumed, and ghost rows
-/// from previous renders accumulate from the bottom upward.
-fn inject_clear_before_cursor_up(data: &str) -> String {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            let seq_start = i;
-            i += 2; // skip ESC[
-            let num_start = i;
-            while i < len && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i < len && bytes[i] == b'A' && i > num_start {
-                // ESC[nA with n > 0 — inject ESC[2J before it
-                let mut result = String::with_capacity(len + 4);
-                result.push_str(&data[..seq_start]);
-                result.push_str("\x1b[2J");
-                result.push_str(&data[seq_start..]);
-                return result;
-            }
-            if i < len {
-                i += 1; // skip command byte
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    data.to_string()
-}
-
 /// Spawn a reader thread that reads from a PTY, processes output, and emits events.
 /// Unified for both desktop (Tauri IPC) and headless (event_bus only) modes.
 /// 1-minute system load average divided by the online CPU count — a measure of
@@ -3847,9 +3620,18 @@ fn grid_send_min_interval_ms(input_recent: bool, dirty_run: u32) -> u64 {
 /// Stamp the per-session last-input timestamp (epoch ms). Read by the grid
 /// ticker to throttle frame sends while the user types under CPU saturation,
 /// keeping the WebView/browser main thread free for keystroke dispatch + echo.
-/// Called from every interactive input entry point (desktop `write_pty` +
-/// HTTP/PWA `write_to_session`).
+/// Called before an interactive PTY write (desktop and HTTP/PWA), so a fast
+/// echo cannot beat priority arming. Only reader-applied output wakes the ticker.
 pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
+    record_input_ms(state, session_id);
+    if let Some(priority) = state.grid.input_frame_priority.get(session_id) {
+        priority.arm(std::time::Instant::now());
+    }
+}
+
+/// Timestamp-only bookkeeping after successful writes, including automated input.
+/// It must not re-arm priority after the reader already applied a fast echo.
+pub(crate) fn record_input_ms(state: &AppState, session_id: &str) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -3906,6 +3688,13 @@ pub(crate) fn spawn_reader_thread(
     state: Arc<AppState>,
     tuic_session: Option<String>,
 ) {
+    // HTTP/MCP and generic shell spawns already bind the child's inherited
+    // TUIC_SESSION before starting this reader. Use that same live identity
+    // when the caller has no explicit one, including restored stable identities
+    // that differ from the PTY key. Native hook ownership stays fail-closed.
+    let tuic_session = tuic_session.or_else(|| {
+        crate::mcp_http::session::live_tuic_sessions_by_pty(&state).remove(&session_id)
+    });
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     let running = Arc::new(AtomicBool::new(true));
 
@@ -3926,7 +3715,7 @@ pub(crate) fn spawn_reader_thread(
     );
 
     // Frame ticker: decouples PTY read() from frame serialization.
-    // Reader sets dirty flag; ticker serializes+sends at fixed interval.
+    // Reader sets dirty flag; ticker serializes+sends on paced or input wakes.
     // Coalesces rapid writes (spinner erase+rewrite) into a single frame.
     let frame_dirty = Arc::new(AtomicBool::new(false));
     state
@@ -3942,6 +3731,12 @@ pub(crate) fn spawn_reader_thread(
         .grid
         .pending_scroll
         .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
+    let input_priority = Arc::new(frame_priority::InputFramePriority::default());
+    state
+        .grid
+        .input_frame_priority
+        .insert(session_id.clone(), input_priority.clone());
+    let ticker_priority = input_priority.clone();
     let sync_active = Arc::new(AtomicBool::new(false));
     state
         .grid
@@ -3981,8 +3776,21 @@ pub(crate) fn spawn_reader_thread(
         let mut last_sent: Option<std::time::Instant> = None;
         let mut last_load_check: Option<std::time::Instant> = None;
         let mut system_saturated = false;
+        ticker_priority.bind_ticker();
+        let mut next_tick = std::time::Instant::now() + TICK;
+        let mut priority_retry: Option<std::time::Instant> = None;
         while ticker_running.load(Ordering::Relaxed) {
-            std::thread::sleep(TICK);
+            let wake_at = priority_retry.map_or(next_tick, |retry| retry.min(next_tick));
+            std::thread::park_timeout(wake_at.saturating_duration_since(std::time::Instant::now()));
+            let now = std::time::Instant::now();
+            let periodic_tick = now >= next_tick;
+            priority_retry = None;
+            if periodic_tick {
+                next_tick = now + TICK;
+            } else if ticker_priority.request(now, last_sent).is_none() {
+                // Spurious/late notifications do not accelerate background output.
+                continue;
+            }
             // Drain a watcher-line tail the reader left batched. read() blocks, so
             // without this the last line of a burst waits for output that may
             // never arrive and a rare-line watcher matches minutes late. It must
@@ -4048,14 +3856,6 @@ pub(crate) fn spawn_reader_thread(
             // holding a grid WebSocket is exactly the browser/PWA case. It costs
             // the vt lock only when a client actually asked for a scroll.
             //
-            // DEFERRED (2026-08-20) — parking the THREAD itself, which is what
-            // F28 asked for. What is left after the skip above is timer churn, not
-            // work: ~62.5 wakeups/s per session, each an atomic load and two
-            // checks, and macOS coalesces them. Parking needs a condvar the PTY
-            // writer signals, plus a `wait_timeout` for the DEC 2026 sync flush
-            // above, which must keep running headlessly — and a missed notify
-            // shows up as a terminal that silently stops painting. Small win,
-            // worst failure mode of the group.
             if !grid_has_subscriber(&ticker_state, &ticker_sid) {
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
                     && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
@@ -4165,13 +3965,20 @@ pub(crate) fn spawn_reader_thread(
             } else {
                 grid_send_min_interval_ms(input_recent, dirty_run)
             };
-            if min_interval > 0
-                && let Some(last) = last_sent
-                && (now.duration_since(last).as_millis() as u64) < min_interval
-            {
-                ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
+            let floor_pending = min_interval > 0
+                && last_sent.is_some_and(|last| {
+                    now.duration_since(last).as_millis() < min_interval as u128
+                });
+            let priority_request = ticker_priority.request(now, last_sent);
+            let priority_due = priority_request.is_some_and(|request| request.ready_at <= now);
+            if !sync_timeout_flush && (floor_pending || !periodic_tick) && !priority_due {
+                // Retry only a coalescing deadline, never a closed gate. The
+                // periodic tick still owns gate/sync maintenance and background frames.
+                priority_retry = priority_request.map(|request| request.ready_at);
+                ticker_dirty.store(true, Ordering::Relaxed);
                 continue;
             }
+            let priority_bypass = !sync_timeout_flush && (floor_pending || !periodic_tick);
             // The WebView missed frames while its gate was closed and has caught
             // up: those rows went to the WebSocket subscribers and left the shared
             // damage, so a delta now would land on a row map with holes in it.
@@ -4198,6 +4005,9 @@ pub(crate) fn spawn_reader_thread(
                 let _ = repair;
                 send_grid_frame(&ticker_state, &ticker_sid, frame);
                 last_sent = Some(now);
+                if let Some(request) = priority_request {
+                    ticker_priority.sent(request, now, priority_bypass);
+                }
             }
         }
         // Final flush after reader exits. Session teardown is the other "no more
@@ -4216,6 +4026,7 @@ pub(crate) fn spawn_reader_thread(
         }
         ticker_state.grid.frame_dirty.remove(&ticker_sid);
         ticker_state.grid.sync_update_active.remove(&ticker_sid);
+        ticker_state.grid.input_frame_priority.remove(&ticker_sid);
     });
 
     std::thread::spawn(move || {
@@ -4245,6 +4056,9 @@ pub(crate) fn spawn_reader_thread(
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        // A chunk already being processed before input cannot
+                        // consume the new input's wake hint.
+                        let input_generation = input_priority.generation();
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
@@ -4285,30 +4099,8 @@ pub(crate) fn spawn_reader_thread(
 
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                        if processor.process_chunk(&data, &silence, &session_id, &state)
-                            && let Some(xterm_data) = processor.transform_xterm(&data)
-                        {
-                            let clamped_data = xterm_data;
-
-                            let agent_active = state
-                                .session_maps
-                                .session_states
-                                .get(&session_id)
-                                .map(|s| s.agent_type.is_some())
-                                .unwrap_or(false);
-                            // Also diagnostic-only: the ESC scan plus
-                            // `detect_anomalous_sequences` ran on every shell-session
-                            // chunk purely to emit a warning nothing acts on.
-                            if crate::cpu_watchdog::diagnostic_mode()
-                                && !processor.in_alt_buffer
-                                && !agent_active
-                                && clamped_data.as_bytes().contains(&0x1b)
-                            {
-                                let anomalies = detect_anomalous_sequences(&clamped_data);
-                                for label in &anomalies {
-                                    tracing::warn!(source = "terminal", session_id = %session_id, "Anomalous ANSI sequence: {label}");
-                                }
-                            }
+                        if processor.process_chunk(&data, &silence, &session_id, &state) {
+                            processor.observe_alt_buffer(&data);
 
                             // Plugin OutputWatcher matching. The canvas renders
                             // from grid frames and never read this text; the only
@@ -4324,7 +4116,7 @@ pub(crate) fn spawn_reader_thread(
                             assemble_watcher_lines(
                                 &state,
                                 &session_id,
-                                &clamped_data,
+                                &data,
                                 &mut watcher_lines,
                                 &watcher_batcher,
                                 false,
@@ -4348,6 +4140,7 @@ pub(crate) fn spawn_reader_thread(
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);
+                        input_priority.applied(input_generation, std::time::Instant::now());
                     }
                     Err(e) => {
                         tracing::error!(session_id = %session_id, "PTY reader error: {e}");
@@ -4452,14 +4245,6 @@ pub(crate) fn spawn_reader_thread(
             mark_session_exited(&sid_for_panic, &state_for_panic);
         }
     });
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VtLogChunk {
-    pub lines: Vec<crate::state::LogLine>,
-    pub screen: Vec<crate::state::LogLine>,
-    pub total_lines: usize,
-    pub oldest: usize,
 }
 
 /// Consume the coalesced scroll target a client left for this session.
@@ -4767,3 +4552,13 @@ where
 
 #[cfg(test)]
 mod tests;
+
+/// Read-only launch receipt evidence. Silence/output movement alone cannot prove
+/// a new agent has reached its native composer.
+pub(crate) fn managed_launch_screen_ready(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().cached_screen_activity == AgentScreenActivity::Ready)
+}

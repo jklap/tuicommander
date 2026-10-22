@@ -6,6 +6,7 @@ import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { ChoicePrompt, SessionInfo } from "../useSessions";
 
 vi.mock("../../transport", () => ({
+	subscribeEvents: vi.fn(async () => () => {}),
 	rpc: vi.fn().mockResolvedValue(undefined),
 	buildHttpUrl: (path: string) => `http://localhost${path}`,
 	HttpRpcError: class extends Error {},

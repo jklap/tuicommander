@@ -2863,10 +2863,6 @@ fn populate_unowned_session_maps(state: &crate::state::AppState, sid: &str) {
         .session_maps
         .marker_stats
         .insert(sid.to_string(), crate::state::MarkerStats::default());
-    state.ai.session_knowledge.insert(
-        sid.to_string(),
-        Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()),
-    );
     state
         .session_maps
         .session_visibility
@@ -2946,11 +2942,6 @@ fn closing_a_session_reaps_the_maps_no_phase_owned() {
     assert!(!state.session_maps.marker_stats.contains_key(sid));
     assert!(!state.session_maps.session_visibility.contains_key(sid));
     assert!(!state.session_maps.term_aliases.contains_key(sid));
-
-    // Owned elsewhere, deliberately untouched — see the DEFERRED note on
-    // remove_post_mortem_session_state. Knowledge is what the next session
-    // inherits.
-    assert!(state.ai.session_knowledge.contains_key(sid));
 }
 
 #[test]
@@ -2978,10 +2969,6 @@ fn a_tombstone_drops_live_process_state_and_keeps_the_post_mortem_maps() {
     assert!(
         state.session_maps.marker_stats.contains_key(sid),
         "marker tallies are exactly what a post-mortem question asks for"
-    );
-    assert!(
-        state.ai.session_knowledge.contains_key(sid),
-        "knowledge is flushed to disk by a 2s task — reaping it here loses it"
     );
     assert!(
         state.session_maps.term_aliases.contains_key(sid),
@@ -3574,5 +3561,23 @@ fn standby_observer_disconnect_retains_timeout_grace() {
                 .unwrap()
         );
         assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(false));
+    }
+}
+
+// Catches: completion reopening loses unpublished choices, or reoffers delivered ones.
+#[test]
+fn suggest_reopen_preserves_only_undelivered_choices_and_submission_discards_them() {
+    for delivered in [false, true] {
+        let mut sl = SilenceState::new();
+        sl.mark_suggest_candidate(vec!["Reply alpha".into(), "Reply beta".into()], 7);
+        sl.pending_suggest_emitted = delivered;
+        sl.reopen_suggest_completion();
+        assert!(!sl.completion_declared_for_epoch(7));
+        assert_eq!(sl.pending_suggest_items.is_some(), !delivered);
+        if !delivered {
+            assert_eq!(sl.pending_suggest_turn_epoch, 7);
+        }
+        sl.reset_suggest_memory();
+        assert!(sl.drain_pending_suggest().is_none());
     }
 }

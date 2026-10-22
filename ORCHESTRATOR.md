@@ -110,7 +110,7 @@ Verify process arguments or the settled footer. Close and replace any fallback.
 
 - Use one event-driven `agent action=wait`.
 - Lifecycle messages are state, not results.
-- Use `task action=get` beyond the wait ceiling.
+- Use `agent action=task_get` beyond the wait ceiling.
 - Inspect status only for missing or anomalous delivery.
 - Read terminal output only if inbox handoff failed.
 - Answer awaiting input through `session action=input`, or stop the child.

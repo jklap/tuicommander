@@ -59,6 +59,13 @@ git-subprocess = { max-threads = 1 }
 filter = 'test(/^git_reads::tests::/)'
 test-group = 'git-subprocess'
 
+# Explicitly ignored request-volume measurement: two real 60s windows plus
+# rate-limit checks need more than the routine 120s bound. Its own hang bound
+# is 300s; the outer harness must be strictly larger.
+[[profile.default.overrides]]
+filter = 'test(=github_poller::volume_measurement_1995::measure_github_client_fixture_1995)'
+slow-timeout = { period = "30s", terminate-after = 12 }
+
 [profile.ci]
 # On CI, keep going after a failure so a run reports every failing test, and
 # retry twice to absorb infrastructure flakiness (shared runners, port races).

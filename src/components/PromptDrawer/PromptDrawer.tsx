@@ -794,7 +794,6 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 								<input type="checkbox" checked={autoExecute()} onChange={() => setAutoExecute(!autoExecute())} />
 								<span>Send immediately</span>
 							</label>
-							<span class={s.fieldHint}>Uncheck to review before sending</span>
 						</div>
 					</Show>
 				</div>
@@ -829,7 +828,6 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							placeholder="Instructions for the LLM (e.g. 'You are a Git expert.')"
 							onInput={(e) => setSystemPrompt(e.currentTarget.value)}
 						/>
-						<span class={s.fieldHint}>Sent as the system message to the LLM</span>
 					</div>
 				</Show>
 
