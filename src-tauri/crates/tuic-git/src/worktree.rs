@@ -3679,12 +3679,16 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
             };
             if rev_at(repo, &format!("{reference}^{{commit}}")).is_ok() {
                 if let Some(short) = reference.strip_prefix("refs/remotes/") {
-                    // git resolves a short name to refs/heads/ before
-                    // refs/remotes/, so a local branch literally named
-                    // `<remote>/<branch>` would shadow the remote ref. Keep the
-                    // qualified name then; `integration_bases`,
+                    // git resolves a short name through refs/<name>,
+                    // refs/tags/<name>, refs/heads/<name> and only then
+                    // refs/remotes/<name>, so a tag or a local branch literally
+                    // named `<remote>/<branch>` would shadow the remote ref.
+                    // Keep the qualified name then; `integration_bases`,
                     // `list_base_ref_options` and `fetch_if_remote` accept it.
-                    if rev_at(repo, &format!("refs/heads/{short}^{{commit}}")).is_ok() {
+                    if ["refs/heads/", "refs/tags/"]
+                        .iter()
+                        .any(|p| rev_at(repo, &format!("{p}{short}^{{commit}}")).is_ok())
+                    {
                         return Some(reference);
                     }
                     return Some(short.to_string());
@@ -6203,6 +6207,29 @@ mod tests {
             2,
             "the shadowing local branch stays listed separately: {options:?}"
         );
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_tag_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A tag literally named `upstream/develop` wins over
+        // refs/remotes/upstream/develop for the short name.
+        git_cmd(repo.path())
+            .args(["tag", "upstream/develop"])
+            .run()
+            .unwrap();
+        let path = repo.path().to_string_lossy().into_owned();
+        let got = get_remote_default_branch(&path).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+        assert_eq!(
+            integration_bases(repo.path(), &got),
+            vec!["refs/remotes/upstream/develop".to_string()]
+        );
+        let options = list_base_ref_options(path).unwrap();
+        assert_eq!(options[0].name, got);
+        assert!(options[0].is_default);
     }
 
     #[test]
