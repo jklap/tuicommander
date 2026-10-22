@@ -562,6 +562,29 @@ describe("FileBrowserPanel create file", () => {
 		await waitFor(() => expect(queryByText(".env")).not.toBeNull(), { timeout: 2000 });
 	});
 
+	it("opens the root menu on the empty area below the tree entries and creates at the root", async () => {
+		listings.set("/repo|.", [dir("src"), file("README.md")]);
+		listings.set("/repo|src", [file("main.ts", "src/main.ts")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		clickTreeViewButton(container);
+		await waitFor(() => expect(queryByText("src")).not.toBeNull());
+		clickRow(container, "src");
+		await waitFor(() => expect(queryByText("main.ts")).not.toBeNull());
+
+		const empty = container.querySelector(".content") as HTMLElement;
+		const notPrevented = fireEvent.contextMenu(empty);
+		expect(notPrevented).toBe(false);
+		clickMenuItem("New Folder\u2026");
+		const input = document.querySelector("input[placeholder='Folder name']") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "docs" } });
+		const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Create");
+		fireEvent.click(confirm as HTMLButtonElement);
+
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("create_directory", { repoPath: "/repo", dir: "docs" }));
+	});
+
 	it("creates a dotfile typed into the New File dialog", async () => {
 		listings.set("/repo|.", [file("README.md")]);
 		const { container, queryByText } = render(() => (
