@@ -1,3 +1,8 @@
+## Nil-safe WebView URL reads (2120-9f3f) — Rust restart required
+
+- [x] Isolated `agent-test-2120` backend survived multiple recovery periods and detached-panel snapshot/main unload through uptime 171s; the native nil-NSURL contract test passed. Evidence: `~/Gits/.tmp/results/tuic-2120-live.log` and `tuic-2120-native-tests.log`. No live nil-URL fault injection was performed.
+- [ ] After Boss manually rebuilds and restarts the daily backend, verify document recovery and detached-panel background unload/restore. This Rust fix does not hot-reload; the peer does not restart the daily app.
+
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
 - [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.

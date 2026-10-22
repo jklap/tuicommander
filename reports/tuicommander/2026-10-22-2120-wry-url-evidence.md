@@ -2,9 +2,11 @@
 
 ## Status
 
-Evidence collection is incomplete. No production code was changed. The historical
-panic message and its calling frame were not found in the inspected sources.
-Do not identify the recovery thread as the historical caller from this report.
+The historical panic message and its calling frame were not found in the
+inspected sources. Do not identify the recovery thread as the historical caller.
+The coordinator revised the assignment to a preventive fix of both native URL
+getter callers and authorized the exact isolated `agent-test-2120` directory.
+The shared nil-safe adapter is implemented; verification is recorded below.
 
 ## Read-only evidence
 
@@ -50,6 +52,9 @@ pub fn url_from_webview(webview: &WKWebView) -> Result<String> {
 
 Thus, a nil URL or absolute string panics before a `Result` can be returned.
 This establishes a possible failure path, not a historical calling frame.
+The coordinator identified the IPS reports as stale-signature failures of the
+`tuic` CLI, not the reported desktop crash; that attribution is coordinator
+context, separate from the quoted report fields.
 
 A source-wide search for `.url(` in `src-tauri/src` finds these native desktop
 getters:
@@ -64,11 +69,20 @@ are not native URL lookups. The async `candidate.url()` in
 `design_mode/manager.rs` reads a CDP page. Other `.url()` matches are HTTP
 requests, redirect attempts, or test-server addresses, not WKWebView getters.
 
-A prospective fix can use `with_webview` to read the nullable native `URL` and
-`absoluteString` values on the event-loop thread without `unwrap`. Both native
-getter callers need to use that path. The native callback must return only
-owned Rust data across threads. Catching an unwind in the poller is not a
-suitable first choice: the Wry getter executes on the event-loop thread.
+The fix uses `webview_url::read` and `with_webview` to read the nullable native
+`URL` and `absoluteString` values on the event-loop thread without `unwrap`.
+Both native getter callers use that path. The callback returns only an owned
+Rust URL across the reply channel. A missing or unparseable native URL returns
+`None`; the recovery poll skips it without changing the saved boot URL, and the
+panel snapshot returns `WebView has no committed URL` before destroying its
+window. Non-macOS getters retain their original Tauri implementation.
+
+Catching an unwind in the poller is not suitable: Wry reads the URL on the
+event-loop thread, not the worker waiting for the reply. No `catch_unwind` was
+added. Tauri runtime dispatch executes callbacks inline when already on the
+main thread; the detached-panel snapshot therefore does not wait for a callback
+queued behind itself. A worker waits just as it did with the old Tauri getter.
+The poll schedule and recovery backoff are unchanged.
 
 ## Black screen
 
@@ -94,19 +108,56 @@ listener: 127.0.0.1:19880 (no port fallback)
 ```
 
 This is under the assignment's explicitly read-only application support root.
-A real launch would write there. No live instance was launched, and no request
-was sent to Boss's app or port 9876. Permission for this exact isolated instance
-directory, or an approved Gits-only configuration arrangement, is needed before
-that required verification can run.
+A real launch writes there. The coordinator subsequently authorized this exact
+instance directory, and no other application-support writes. The daily app and
+port 9876 remain off limits.
 
-## Validation and next input
+## Validation
 
 - Instruction-link checker: passed, two instruction pairs.
-- `git diff --check`: required before commit.
-- RED/GREEN, Rust builds, mutation, and desktop execution: not run.
-- Needed evidence: the original panic stderr or an exact log path that contains
-  it; if no backtrace exists, the historical caller must remain unknown.
-- Needed decision: whether to proceed as a preventive fix of both proven source
-  exposures when the historical caller cannot be identified.
-- Needed authority: permit writes to the exact isolated instance directory above,
-  without changing permission for the daily instance.
+- `git diff --check`: passed.
+- rb command: `build-slot.sh --remote scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml --lib -E 'test(webview_url::tests) | test(webview_recovery::tests)'`.
+- rb result: six recovery tests passed; build 5m18s, test execution 0.043s.
+- Evidence: `~/Gits/.tmp/results/tuic-2120-targeted-rb.log`.
+- The three `webview_url::tests` cases are macOS-only and absent on rb, not
+  passed by the Linux run. The rb macOS-path allowlist does not cover these
+  native getter paths; the coordinator authorized targeted native tests and
+  will handle that allowlist gap separately.
+- Native command: `build-slot.sh scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml --lib -E 'test(webview_url::tests)'`, with the mbx cargo shim and Gits-local TMPDIR.
+- Native result: three tests passed; build 3m26s, test execution 0.034s.
+  Evidence: `~/Gits/.tmp/results/tuic-2120-native-tests.log`.
+  This tests nil NSURL, empty native URL, and retained app/about URLs against
+  Foundation, not a hand-written URL fixture. An unavailable absoluteString is
+  handled by `?`; that separate native state was not induced.
+- Native build warnings: existing deprecated `AtomicU32::fetch_update` in
+  `design_mode/manager.rs:970`, plus a linker compact-unwind-size warning.
+- Isolated desktop build: `make agent-test AGENT_TEST_INSTANCE=agent-test-2120 AGENT_TEST_PORT=19880`; 5m03s dev-profile build. The harness communicated only through that instance's Unix socket.
+- Live result: main and `panel-activity` existed; the same backend instance
+  `82aa68e2-b4cc-406c-91b0-6a8be3011aa4` answered through uptime 171s. It survived
+  the 30s startup delay and several 15s recovery polls, then a one-minute
+  background unload interval. `debug/invoke_js` finally returned
+  `main window not found` while health remained OK. `destroy_hidden` processes
+  panels before main and aborts on a failed snapshot: main destruction with the
+  detached panel present therefore exercises the panel URL snapshot successfully.
+  This is a healthy-URL lifecycle check, not live nil-URL fault injection.
+- Live evidence: `~/Gits/.tmp/results/tuic-2120-live.log`,
+  `~/Gits/.tmp/results/tuic-2120-live/{desktop.log,configured.json,initial-health.json,final-health.json,final-logs.json}`;
+  harness: `~/Gits/.tmp/results/tuic-2120-live.py`.
+- The harness stopped its own instance using `make agent-test-stop`; the
+  desktop exited on the requested SIGTERM (make reports Error 143), and the
+  harness returned 0. Its recorded supervisor PID 52350 no longer exists and
+  the instance PID file was removed.
+- Historical RED: unavailable because the original panic/caller is not retained.
+  The coordinator accepted the nil-NSURL contract test as a fallback, not as a
+  claim that the historical process crash was reproduced.
+- Mutation, a full suite, and a daily-app restart are not part of this peer run.
+
+## Isolation caveat discovered after the live run
+
+The dedicated instance's desktop log reports its debug credential-store path as
+`/Users/stefano.straus/.tuicommander-dev/instances/agent-test-2120/credentials.json`.
+This is outside the advertised application-support instance directory and outside
+Gits. No credential-store file was read or inspected. The approved agent-test
+preset produced this path automatically; no further live run is planned here.
+The coordinator must reconcile that preset isolation gap before reusing it under
+an exact-directory-only write grant. This is not evidence of a daily-store write.
