@@ -205,7 +205,7 @@ pub async fn mdkb_status(state: State<'_, Arc<AppState>>) -> Result<MdkbStatus, 
 
 /// The launch prompt carries the MDKB search rule only while mdkb is installed.
 fn refresh_launch_files() {
-    if let Err(error) = crate::launch_instructions::refresh_mdkb(&crate::config::config_dir()) {
+    if let Err(error) = crate::launch_instructions::write_files(&crate::config::config_dir()) {
         tracing::error!(source = "mdkb", "Failed to rewrite launch instructions: {error}");
     }
 }
