@@ -74,4 +74,11 @@ actions while stopped, but dispatch refuses them with
 `Design Mode not armed for this session`. Remote error capture starts on the next
 page load after an explicit host/eval grant and is removed for future loads when
 that grant is revoked. The capture-only all-sites option does not register remote
-error scripts.
+error scripts. Remote `design_errors` calls without a separate host grant refuse
+instead of reporting an unobserved empty list.
+
+Chrome can return success for a host permission request already covered by the
+capture grant without adding separate eval consent. The sidebar checks the granted
+origins and reports this case instead of claiming eval is enabled. If this occurs,
+remove the all-sites capture grant in Chrome, grant the host (or all sites) first,
+then enable capture again.

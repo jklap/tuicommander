@@ -584,3 +584,50 @@ refresh gap. S0 persistence, tab return, crop and cancellation chronology also
 remain open. Round 8's pending-consent status is historical and is superseded by
 the real consent and boundary GREEN above; it must not be used to claim a still
 pending Allow click.
+
+
+## Round 10: critic fixes and bridge-only diagnosis (2026-10-22)
+
+- Restored critic probe `1625eed38` before production edits. The targeted test
+  failed with `promise resolved "{ errors: [] }" instead of rejecting` at
+  `033609f6d`; log `~/Gits/.tmp/results/design-critic-f1-red.log`.
+- Remote error reads now require an explicit host origin, using the same consent
+  matcher as eval. Static localhost reads and explicit host grants remain valid.
+  The capture button directly requests permission without a redundant `contains`.
+  The recorded Chrome-denial regression moved into ordinary Vitest; the separate
+  Node/CDP test script was removed. This spike record remains tracked.
+- Host/eval buttons now inspect the actual granted origins after request success.
+  If Chrome has not added separate eval consent, the panel explains the required
+  revoke/grant/capture order rather than claiming a grant. Live verification of
+  this sequence is still pending; its unit protection is not Chrome evidence.
+- Targeted GREEN: 15 tests in four files, 1.18 s; TypeScript passed. Scheduler wait
+  was 460 s. Log: `~/Gits/.tmp/results/design-critic-followup-green-build.log`.
+- Authorized bridge-only build after touching `native_assets.rs` took 11.07 s.
+  Cargo dep-info includes every embedded extension file: no missing
+  `rerun-if-changed` was demonstrated. An include-only HTML marker was rebuilt and
+  removed correctly in two further bridge-only builds. The temporary marker is
+  restored away. That probe did not reproduce a general included-file cache bug.
+- A second normal multi-package agent-test build again produced the exact old
+  bridge hash from Round 9. The bridge-only rebuilt binary
+  `8676b0fcb32518c72dc8cfaa6ed8dd7a508e6573b52c583e14a047204a6dce07`
+  installed assets equal to all current source files. The repeated multi-package
+  versus bridge-only discrepancy is reproducible here; its cache-layer cause is
+  not yet isolated. The include probe and copied dep-info are retained under
+  `~/Gits/.tmp/design-web/optionc/bridge-*` and `include-*`.
+- Opening `panel.html` as a regular browser tab is not a real sidebar: its sender
+  has a tab identity and the worker deliberately refuses panel-only operations.
+  The genuine browser-action side panel fixed `no_reviewed_tab`; real MCP
+  navigation then succeeded. A matching screenshot is still not available.
+- MCP still returned the raw denial after file replacement, although a document
+  fetch read the fixed source; a retained worker module is an inference. An owned
+  extension reload was followed by Chrome signal 11 (`SEGV_ACCERR`), recorded in
+  `optionc/chrome.log`; causality beyond that sequence is unknown. A controlled
+  restart recovered the owned browser. No daily browser/app was touched.
+- The old installer had removed the literal `<all_urls>` grant. The correctly
+  reinstalled extension now needs another genuine Allow click. The real capture
+  button was clicked with an unlocked display, but the request remains pending;
+  no consent state was fabricated. Current owned Chrome PID 15598 and fixture PID
+  5969 remain open for that prompt. The isolated instance is
+  `8d2404b1-6f8f-4e8a-b45a-7fb317ce894e`, supervisor 92408, desktop PID 3459,
+  owner `fd35d011-8234-4ef6-9bf8-31392ce9d596`. After Allow, verify MCP screenshot
+  matching and the real host/eval click before claiming either acceptance.
