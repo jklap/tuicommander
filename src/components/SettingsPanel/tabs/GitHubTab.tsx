@@ -132,7 +132,13 @@ export const GitHubTab: Component = () => {
 	const unexplainedNotFound = () => {
 		const d = diagnostics();
 		const explained = new Set(
-			(d?.repo_access_errors ?? []).flatMap((group) => group.repos.map((repo) => `${group.owner}/${repo.repo}`)),
+			(d?.repo_access_errors ?? []).flatMap((group) =>
+				group.repos.flatMap((repo) => {
+					const key = `${group.owner}/${repo.repo}`;
+					// Non-ambient (GHE/named) accounts key their cooldown as `<account_id>:owner/repo`.
+					return [key, `${group.account_id}:${key}`];
+				}),
+			),
 		);
 		return (d?.repos_not_found ?? []).filter((key) => !explained.has(key));
 	};

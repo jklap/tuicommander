@@ -527,4 +527,25 @@ describe("GitHubTab — access diagnostics", () => {
 		const { findByText } = render(() => <GitHubTab />);
 		expect(await findByText(/2 repo\(s\) tracked/)).toBeTruthy();
 	});
+
+	// Catches: dedupe keyed owner/repo only, so a GHE or named-account repo ("<account>:owner/repo" in repos_not_found) is still listed twice.
+	it("does not list an account-scoped not-found repo again when an access error already explains it", async () => {
+		const GitHubTab = await loadTab();
+		mockDiagnostics({
+			repos_monitored: 0,
+			repos_not_found: ["ghe.acme.com:team/project"],
+			repo_access_errors: [
+				{
+					owner: "team",
+					host: "ghe.acme.com",
+					account_id: "ghe.acme.com",
+					repos: [{ repo: "project", reason: "not_found", message: "Could not resolve team/project" }],
+					oauth_app_url: null,
+				},
+			],
+		});
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		expect(await findByText(/Could not resolve/)).toBeTruthy();
+		expect(queryByText(/Cannot access/)).toBeNull();
+	});
 });
