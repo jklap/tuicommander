@@ -27,6 +27,13 @@ authors = ["Stefano Straus <github.com/sstraus>"]
 edition = "2024"
 default-run = "tuicommander"
 
+# This native WebKit reality probe must execute on the process main thread.
+[[test]]
+name = "webkit_nil_url"
+path = "tests/webkit_nil_url.rs"
+harness = false
+required-features = ["desktop"]
+
 [package.metadata.cargo-machete]
 # Used from build.rs behind the desktop feature; cargo-machete does not inspect
 # feature-gated build scripts.
