@@ -1192,6 +1192,7 @@
 	"stories.createPlan": "Create plan",
 	"stories.addFromPath": "Add from path or link",
 	"stories.existingPlans": "Plans in this project",
+	"stories.pill.label": "{title}: active plans {plans}, stories in progress {working}, stories done {done} of {total}",
 	"stories.refreshPlans": "Refresh",
 	"stories.createStory": "Create story",
 	"stories.criteria": "Acceptance criteria",
