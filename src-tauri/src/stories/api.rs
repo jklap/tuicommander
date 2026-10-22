@@ -1,6 +1,6 @@
 use super::{
-    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStore,
-    StoryStatus, StorySummary, StoryTransition,
+    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStatus,
+    StoryStore, StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -535,7 +535,9 @@ mod tests {
         // Active plan: one in progress, one won't fix, one ready.
         let (first, second) = two_stories(project);
         let third = {
-            let StoryReply::Plans(plans) = story_action(project, StoryAction::ListPlans, None).unwrap() else {
+            let StoryReply::Plans(plans) =
+                story_action(project, StoryAction::ListPlans, None).unwrap()
+            else {
                 panic!("expected plans");
             };
             story_of(
@@ -576,7 +578,10 @@ mod tests {
         // Finished plan: its done story must not count.
         let StoryReply::Plan(done_plan) = story_action(
             project,
-            StoryAction::CreatePlan { title: "Old".into(), source: "plans/old.md".into() },
+            StoryAction::CreatePlan {
+                title: "Old".into(),
+                source: "plans/old.md".into(),
+            },
             None,
         )
         .unwrap() else {
@@ -602,17 +607,27 @@ mod tests {
         let old = transition(project, &old, StoryCommand::StartManual);
         let old = transition(project, &old, StoryCommand::CheckCriterion(0));
         let old = transition(project, &old, StoryCommand::SubmitReview);
-        assert_eq!(transition(project, &old, StoryCommand::Approve).status, StoryStatus::Done);
+        assert_eq!(
+            transition(project, &old, StoryCommand::Approve).status,
+            StoryStatus::Done
+        );
 
         // Another project with its own active plan.
         two_stories(other_path);
 
-        let StoryReply::Summary(summary) = story_action(project, StoryAction::Summary, None).unwrap() else {
+        let StoryReply::Summary(summary) =
+            story_action(project, StoryAction::Summary, None).unwrap()
+        else {
             panic!("expected summary");
         };
         assert_eq!(
             summary,
-            StorySummary { active_plans: 1, in_progress: 1, done: 0, total: 1 }
+            StorySummary {
+                active_plans: 1,
+                in_progress: 1,
+                done: 0,
+                total: 1
+            }
         );
         let StoryReply::Summary(empty) = story_action(
             tempfile::tempdir().unwrap().path().to_str().unwrap(),
