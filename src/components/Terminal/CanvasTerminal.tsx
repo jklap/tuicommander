@@ -3363,7 +3363,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			handleScrollDelta(dy);
 
 			clearTimeout(scrollGestureEndTimer);
-			scrollGestureEndTimer = setTimeout(resetScrollGesture, 200);
+			// Same handler as the forwarded branch: this timer replaced that one, so it must
+			// also drop any forwarded sub-notch residual or it leaks into the next gesture.
+			scrollGestureEndTimer = setTimeout(onWheelGestureEnd, WHEEL_GESTURE_END_MS);
 		}
 		bindings.listen(canvasRef, "wheel", handleWheel, { passive: false });
 		bindings.listen(scrollbarRef, "wheel", handleWheel, { passive: false });

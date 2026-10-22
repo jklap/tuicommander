@@ -40,11 +40,15 @@ const HEADER_SIZE = 26;
 const CELL_SIZE = 11;
 
 /** A blank full screen with mouse reporting (SGR, button-event tracking) on unless `mouseMode` is 0. */
-function frame(mouseMode: number): ArrayBuffer {
+function frame(mouseMode: number, history = 0): ArrayBuffer {
 	const buffer = new ArrayBuffer(HEADER_SIZE + ROWS * (4 + COLS * CELL_SIZE));
 	const view = new DataView(buffer);
 	view.setUint16(0, ROWS, true);
 	view.setUint8(6, 1);
+	if (history > 0) {
+		view.setUint32(7, Math.floor(history / 2), true);
+		view.setUint32(11, history, true);
+	}
 	view.setUint8(17, mouseMode === 0 ? 0 : (mouseMode << 3) | 0x20);
 	view.setUint16(18, ROWS, true);
 	view.setUint16(20, COLS, true);
@@ -80,11 +84,11 @@ describe("CanvasTerminal wheel forwarded to a mouse-reporting app", () => {
 		canvas.dispatchEvent(e);
 	}
 
-	async function mount(mouseMode: number) {
+	async function mount(mouseMode: number, history = 0) {
 		const view = render(() => <CanvasTerminal sessionId="wheel-1" terminalId="wheel-1" />);
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
-		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(mouseMode));
+		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(mouseMode, history));
 		const found = view.container.querySelector('canvas[tabindex="0"]');
 		if (!found) throw new Error("terminal canvas not mounted");
 		canvas = found;
@@ -183,6 +187,17 @@ describe("CanvasTerminal wheel forwarded to a mouse-reporting app", () => {
 		await mount(2);
 		wheel({ deltaY: 100, shiftKey: true });
 		wheel({ deltaX: 100, deltaY: 0, shiftKey: true });
+		expect(ptyWrites()).toEqual([]);
+	});
+
+	// Catches: a Shift+wheel event (scrollback branch) replacing the forwarded gesture's idle
+	// timer, so the sub-notch residual survives the 200 ms idle gap and fires a notch early.
+	it("drops the forwarded residual after idle even when a Shift+wheel arrived in between", async () => {
+		await mount(2, 1000);
+		wheel({ deltaY: 14 });
+		wheel({ deltaY: 14, shiftKey: true });
+		await new Promise((r) => setTimeout(r, 300));
+		wheel({ deltaY: 14 });
 		expect(ptyWrites()).toEqual([]);
 	});
 
