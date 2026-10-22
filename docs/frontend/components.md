@@ -895,3 +895,7 @@ Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard r
 Context menus use their unscaled layout size to stay within an 8px viewport margin.
 Oversized menus scroll; their minimum width also shrinks in narrow windows.
 Shell workspace rows do not offer branch workflow actions or Git smart prompts.
+
+Shell-folder rows offer the same available-agent menu as Git workspace rows.
+Launching an agent uses the folder as its working directory, without creating a
+branch or worktree. The Add Terminal button also offers agents on a long press.
