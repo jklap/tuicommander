@@ -25,7 +25,7 @@ const TAG_LEN: usize = 16;
 pub(crate) const MAX_RECORD_PLAINTEXT: usize = 17 * 1024;
 const MAX_HANDSHAKE_MESSAGE: usize = 256;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SecureError {
     /// The handshake message did not verify: wrong secret or binding, or garbage.
     Handshake,

@@ -57,7 +57,7 @@ impl fmt::Debug for Frame {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FrameError {
     Truncated,
     UnknownType(u8),

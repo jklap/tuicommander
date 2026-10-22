@@ -14,4 +14,5 @@
 
 pub(crate) mod bundle;
 pub(crate) mod frames;
+pub(crate) mod mux;
 pub(crate) mod secure;
