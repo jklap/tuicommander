@@ -441,6 +441,27 @@ describe("GitHubTab — access diagnostics", () => {
 		);
 	});
 
+	// Catches the always-on summary claiming "PR monitoring active" while the circuit breaker has paused every API request.
+	it("does not claim monitoring is active while the circuit breaker pauses API requests", async () => {
+		const GitHubTab = await loadTab();
+		h.rpc.mockImplementation((cmd, args) => {
+			if (cmd === "github_auth_status")
+				return Promise.resolve({ authenticated: true, login: "sstraus", source: "oauth" });
+			if (cmd === "github_diagnostics")
+				return Promise.resolve({
+					circuit_breaker_open: true,
+					circuit_breaker_status: "Rate limited",
+					repos_not_found: [],
+					repos_monitored: 3,
+					repo_access_errors: [],
+				});
+			return h.defaultRpc(cmd, args);
+		});
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		expect(await findByText(/API requests paused/)).toBeTruthy();
+		expect(queryByText(/PR monitoring active/)).toBeNull();
+	});
+
 	const mockDiagnostics = (diag: Record<string, unknown>) =>
 		h.rpc.mockImplementation((cmd, args) => {
 			if (cmd === "github_auth_status")

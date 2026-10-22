@@ -690,7 +690,10 @@ export const GitHubTab: Component = () => {
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
 									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
 								</svg>
-								<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
+								<span>
+									{diagnostics()?.circuit_breaker_open ? "" : "PR monitoring active — "}
+									{diagnostics()?.repos_monitored} repo(s) tracked
+								</span>
 							</div>
 						</Show>
 					</div>
