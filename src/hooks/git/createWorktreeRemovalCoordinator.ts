@@ -44,7 +44,9 @@ function describeRemoveWorktreeSuccess(branchName: string, outcome: RemoveWorktr
 /** Owns worktree removal locking, force recovery, and store cleanup. */
 /** Mirrors the backend: recycling and keeping the branch leave its label alone. */
 function branchWasDeleted(outcome: RemoveWorktreeResult | undefined): boolean {
-	return !outcome?.branch_delete_warning && outcome?.removal_rule !== "recyclable" && outcome?.removal_rule !== "kept_branch";
+	return (
+		!outcome?.branch_delete_warning && outcome?.removal_rule !== "recyclable" && outcome?.removal_rule !== "kept_branch"
+	);
 }
 
 export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinatorDeps) {
@@ -168,7 +170,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				const outcome = await removeConfirmed(false);
 				appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 				shouldRemoveFromStore = true;
-				shouldClearBranchLabel = branchWasDeleted(outcome);
+				shouldClearBranchLabel = deleteBranch && branchWasDeleted(outcome);
 				deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
 			} catch (err) {
 				const reason = err instanceof Error ? err.message : String(err);
@@ -203,7 +205,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 						const outcome = await removeConfirmed(true);
 						appLogger.info("git", `handleRemoveWorkspace: force remove_worktree SUCCESS`, { workspaceId });
 						shouldRemoveFromStore = true;
-						shouldClearBranchLabel = branchWasDeleted(outcome);
+						shouldClearBranchLabel = deleteBranch && branchWasDeleted(outcome);
 						deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
 					} catch (forceErr) {
 						const forceReason = forceErr instanceof Error ? forceErr.message : String(forceErr);
