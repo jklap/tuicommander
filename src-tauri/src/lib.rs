@@ -165,6 +165,7 @@ mod codex_binding;
 mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
+pub(crate) mod relay_tunnel;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod remote_deploy;
