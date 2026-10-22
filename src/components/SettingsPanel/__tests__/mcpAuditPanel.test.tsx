@@ -32,6 +32,17 @@ describe("McpAuditPanel", () => {
 	beforeEach(() => rpc.mockReset());
 	afterEach(cleanup);
 
+	// Catches: a long opaque operation name widening the table with no way to read it in full.
+	it("clips a 64-hex operation and keeps the full name in a title tooltip", async () => {
+		const operation = "ab".repeat(32);
+		rpc.mockResolvedValue(projection([row({ operation })]));
+		const { container } = render(() => <McpAuditPanel />);
+		await waitFor(() => expect(container.querySelector("tbody tr")).toBeTruthy());
+		const cell = Array.from(container.querySelectorAll("tbody td")).find((td) => td.textContent === operation);
+		expect(cell?.getAttribute("title")).toBe(operation);
+		expect(cell?.className).toMatch(/clip/);
+	});
+
 	// Catches: a row rendering response bodies or secrets instead of the body-free whitelist.
 	it("renders only the body-free columns even when a row carries extra fields", async () => {
 		rpc.mockResolvedValue(

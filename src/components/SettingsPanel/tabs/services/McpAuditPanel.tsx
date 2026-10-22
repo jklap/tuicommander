@@ -95,6 +95,14 @@ export const McpAuditPanel: Component = () => {
 				<Show when={rows().length} fallback={<p class={css.empty}>{t("mcpAudit.empty", "No calls recorded yet.")}</p>}>
 					<div class={css.tableWrap}>
 						<table class={css.table}>
+							<colgroup>
+								<col class={css.colTime} />
+								<col class={css.colOperation} />
+								<col class={css.colTarget} />
+								<col class={css.colOutcome} />
+								<col class={css.colBytes} />
+								<col class={css.colEffect} />
+							</colgroup>
 							<thead>
 								<tr>
 									<th>{t("mcpAudit.col.time", "Time")}</th>
@@ -115,9 +123,11 @@ export const McpAuditPanel: Component = () => {
 												<td class={css.mono}>
 													{new Date(row.started_ms).toLocaleTimeString(locale(), { hour12: false })}
 												</td>
-												<td class={css.mono}>{row.operation}</td>
+												<td class={`${css.mono} ${css.clip}`} title={row.operation}>
+													{row.operation}
+												</td>
 												<td
-													class={css.mono}
+													class={`${css.mono} ${css.clip}`}
 													title={t("mcpAudit.targetTitle", "SHA-256 digest of the target; not the target")}
 												>
 													{row.target_digest ? row.target_digest.slice(0, DIGEST_CHARS) : "—"}
