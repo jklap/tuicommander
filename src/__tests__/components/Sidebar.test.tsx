@@ -4548,6 +4548,11 @@ describe("Sidebar", () => {
 	});
 
 	describe("branch label dialog (Set Label / Clear Label)", () => {
+		// Runs even when an assertion throws, so a stubbed label can't leak into later tests.
+		afterEach(() => {
+			vi.mocked(repoSettingsStore.getEffectiveField).mockReturnValue(undefined);
+		});
+
 		it("opens a prompt dialog on Set Label and saves via repoSettingsStore.setLabel", async () => {
 			setRepos({ "/repo1": makeRepo() });
 			const { container, findByText, getByPlaceholderText } = render(() => <Sidebar {...defaultProps()} />);
@@ -4577,7 +4582,6 @@ describe("Sidebar", () => {
 			const clearItem = items.find((i) => i.querySelector(".label")!.textContent === "Clear Label")!;
 			fireEvent.click(clearItem);
 			expect(repoSettingsStore.setLabel).toHaveBeenCalledWith("/repo1", "main", null);
-			vi.mocked(repoSettingsStore.getEffectiveField).mockReturnValue(undefined);
 		});
 	});
 
@@ -4606,11 +4610,14 @@ describe("Sidebar", () => {
 	});
 
 	describe("StatsBadge onClick wiring (via Sidebar)", () => {
+		// Restores the uiStore spies even when an assertion throws.
+		afterEach(() => vi.restoreAllMocks());
+
 		it("selects the branch, then opens the Git panel's changes tab, when the stats badge is clicked", () => {
 			// Sidebar hardwires RepoSection's onShowChanges to the git panel opener
 			// internally (not an overridable prop) — spy on the real uiStore methods
 			// it calls rather than trying to inject a fake handler.
-			const isDetachedSpy = vi.spyOn(uiStore, "isDetached").mockReturnValue(false);
+			vi.spyOn(uiStore, "isDetached").mockReturnValue(false);
 			const openGitPanelSpy = vi.spyOn(uiStore, "openGitPanelOnTab").mockImplementation(() => {});
 			setRepos({
 				"/repo1": makeRepo({
@@ -4634,9 +4641,6 @@ describe("Sidebar", () => {
 
 			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "main");
 			expect(openGitPanelSpy).toHaveBeenCalledWith("changes");
-
-			isDetachedSpy.mockRestore();
-			openGitPanelSpy.mockRestore();
 		});
 	});
 });

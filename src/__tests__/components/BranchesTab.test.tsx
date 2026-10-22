@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BranchDetail } from "../../components/GitPanel/types";
 
 const h = vi.hoisted(() => ({
@@ -118,6 +118,12 @@ describe("BranchesTab", () => {
 		h.appLoggerWarn.mockReset();
 		h.appLoggerInfo.mockReset();
 		mockInvokeDefaults();
+	});
+
+	afterEach(() => {
+		// Restore vi.spyOn spies (e.g. repositoriesStore.bumpGitRevision) so one test's
+		// calls can never satisfy another test's assertion.
+		vi.restoreAllMocks();
 	});
 
 	describe("rendering", () => {
@@ -766,17 +772,35 @@ describe("BranchesTab", () => {
 	});
 
 	describe("keyboard navigation", () => {
-		it("ArrowDown/ArrowUp move the selected index and wrap", async () => {
+		it("ArrowDown/ArrowUp move the selected row and wrap", async () => {
 			const { findByText, container } = render(() => <BranchesTab repoPath={REPO} />);
 			await findByText("main");
 			const root = container.querySelector('[tabindex="-1"]') as HTMLElement;
+			const selectedRows = () =>
+				Array.from(container.querySelectorAll<HTMLElement>('[class*="selected"]')).map((el) => el.textContent ?? "");
+			const total = container.querySelectorAll('[class*="branchRow"]').length;
+			expect(total).toBeGreaterThan(1);
+			expect(selectedRows()).toEqual([]);
 
 			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("main");
+
 			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("feature/foo");
+
 			fireEvent.keyDown(root, { key: "ArrowUp" });
-			// No assertion on internal index directly (private signal) — this exercises
-			// the handler without throwing and without touching DOM outside the panel.
-			expect(root).toBeTruthy();
+			expect(selectedRows()[0]).toContain("main");
+
+			// ArrowUp from the first row wraps to the last row.
+			fireEvent.keyDown(root, { key: "ArrowUp" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("origin/feature/bar");
+
+			// ArrowDown from the last row wraps back to the first.
+			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()[0]).toContain("main");
 		});
 
 		it("'/' focuses the search input", async () => {
