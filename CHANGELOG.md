@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Run every Rust test's git process against a fixed hermetic gitconfig (`tuic-test-support` points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail tests.
+- Run the git processes of every Rust test binary that links `tuic-test-support` against a fixed hermetic gitconfig (it points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, and drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail those tests. `tuic-ipc`'s one git-running test does not link it and is not covered.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
