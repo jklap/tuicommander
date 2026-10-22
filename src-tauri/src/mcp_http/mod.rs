@@ -2007,6 +2007,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 .get(config_routes::get_remote_connection_password_exists),
         )
         .route(
+            "/config/remote-connections/{id}/relay-pairing",
+            put(config_routes::put_remote_connection_relay_pairing),
+        )
+        .route(
             "/config/remote-connections/{id}/token",
             post(config_routes::post_remote_connection_token),
         )
@@ -5263,6 +5267,67 @@ mod tests {
             );
         }
         assert!(!payload.to_string().contains("secret-canary"));
+    }
+
+    // Catches: the HTTP relay-pairing import storing an unparsable bundle, skipping
+    // the Settings refresh the IPC command shares, or echoing the bundle in the hint.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn relay_pairing_import_route_validates_and_refreshes() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "relay-pairing-import";
+        let request = |bundle: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/relay-pairing"),
+                &serde_json::json!({ "bundle": bundle }),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let rejected = app.clone().oneshot(request("not-a-bundle")).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            crate::remote_connection::relay_bundle(id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "a rejected bundle must not publish"
+        );
+
+        let bearer = crate::relay_tunnel::bundle::RelayBearer::new("R".into()).unwrap();
+        let bundle =
+            crate::relay_tunnel::bundle::PairingBundle::generate("ws://127.0.0.1:1", bearer)
+                .unwrap();
+        let accepted = app
+            .oneshot(request(bundle.to_text().as_str()))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(
+            crate::remote_connection::relay_bundle(id)
+                .unwrap()
+                .unwrap()
+                .room,
+            bundle.room
+        );
+        let crate::state::AppEvent::SettingsChanged(notice) =
+            events.try_recv().expect("an import must refresh Settings")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(notice.section, "connections");
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains(&bundle.room)
+        );
+        crate::remote_connection::set_relay_pairing(id, "").unwrap();
     }
 
     // Catches: a successful direct credential write leaving other Settings readers stale.

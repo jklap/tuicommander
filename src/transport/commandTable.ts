@@ -2127,6 +2127,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { password: args.password },
 		}),
 	},
+	set_remote_connection_relay_pairing: {
+		map: (args, p) => ({
+			method: "PUT",
+			path: `/config/remote-connections/${p("id")}/relay-pairing`,
+			body: { bundle: args.bundle },
+		}),
+	},
 	remote_connection_password_exists: {
 		map: (_args, p) => ({ method: "GET", path: `/config/remote-connections/${p("id")}/password` }),
 	},

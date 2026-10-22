@@ -1004,6 +1004,16 @@ describe("transport", () => {
 				expect(result.body).toEqual({ password: "hunter2" });
 			});
 
+			it("maps set_remote_connection_relay_pairing to PUT with the bundle in the body", () => {
+				const result = mapCommandToHttp("set_remote_connection_relay_pairing", {
+					id: "c1",
+					bundle: "tuic-pair-v1:abc",
+				});
+				expect(result.method).toBe("PUT");
+				expect(result.path).toBe("/config/remote-connections/c1/relay-pairing");
+				expect(result.body).toEqual({ bundle: "tuic-pair-v1:abc" });
+			});
+
 			it("maps remote_connection_password_exists to a GET that carries no secret", () => {
 				const result = mapCommandToHttp("remote_connection_password_exists", { id: "c1" });
 				expect(result.method).toBe("GET");

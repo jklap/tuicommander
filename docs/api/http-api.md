@@ -1522,6 +1522,7 @@ GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
 PUT    /config/remote-connections/{id}/password
+PUT    /config/remote-connections/{id}/relay-pairing
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
 POST   /config/remote-connections/{id}/install
@@ -1538,6 +1539,13 @@ daemon's in-memory session token. Successful password set/clear requests publish
 a value-free `settings-changed` event for `connections` after vault persistence;
 a failed vault write publishes nothing. Deployment pairing-token creation and
 persisted deployment-mode changes invalidate the same Settings section.
+`PUT .../relay-pairing` takes `{ "bundle": "tuic-pair-v1:..." }`, the text printed
+by `tuic-remote --relay-pair`. The bundle is parsed first; an unparsable one is
+rejected, nothing is stored and nothing is published. It is kept in the vault
+only (it holds the end-to-end secret) and an empty string forgets it. A
+successful change publishes the same value-free `connections` event. The
+connection status of a `relay` connection carries `relay_failure`
+(`relay_unreachable`, `daemon_offline`, `pairing_rejected`, `link_lost`).
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
