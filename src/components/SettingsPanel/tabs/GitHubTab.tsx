@@ -58,17 +58,14 @@ interface RepoAccessErrorGroup {
 	owner: string;
 	repos: {
 		repo: string;
-		reason: "not_found" | "organization_restriction" | "sso" | "forbidden" | "unknown";
+		reason: "not_found" | "forbidden" | "unknown";
 		message: string;
-		sso_url: string | null;
 	}[];
 	oauth_app_url: string | null;
 }
 
 const ACCESS_REASONS = {
 	not_found: "Not found or not visible to this token",
-	organization_restriction: "Organization OAuth app restriction",
-	sso: "SSO authorization required",
 	forbidden: "Access forbidden",
 	unknown: "Access reason unknown",
 };
@@ -641,17 +638,6 @@ export const GitHubTab: Component = () => {
 													<li>
 														<strong>{repo.repo}</strong>: {ACCESS_REASONS[repo.reason]}
 														<div class={g.diagHint}>{repo.message}</div>
-														<Show when={repo.sso_url}>
-															{(url) => (
-																<button
-																	class={g.btn}
-																	data-non-setting="Open GitHub SSO authorization"
-																	onClick={() => handleOpenUrl(url())}
-																>
-																	Authorize SSO
-																</button>
-															)}
-														</Show>
 													</li>
 												)}
 											</For>

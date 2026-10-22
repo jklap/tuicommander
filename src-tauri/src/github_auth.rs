@@ -421,11 +421,11 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
     for entry in &state.git_cache.github_repo_access_errors {
         let failure = entry.value();
         if failure.error.reason == tuic_git::github_access::RepoAccessReason::NotFound
-            && !state
+            && state
                 .git_cache
                 .github_repo_cooldown
                 .get(entry.key())
-                .is_some_and(|expiry| *expiry > now)
+                .is_none_or(|expiry| *expiry <= now)
         {
             continue;
         }
@@ -442,14 +442,7 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
                 repos: Vec::new(),
                 oauth_app_url: None,
             });
-        if failure.oauth_app
-            && failure.host == "github.com"
-            && matches!(
-                failure.error.reason,
-                tuic_git::github_access::RepoAccessReason::OrganizationRestriction
-                    | tuic_git::github_access::RepoAccessReason::Sso
-            )
-        {
+        if failure.oauth_app && failure.host == "github.com" {
             group.oauth_app_url = Some(format!(
                 "https://github.com/settings/connections/applications/{CLIENT_ID}"
             ));

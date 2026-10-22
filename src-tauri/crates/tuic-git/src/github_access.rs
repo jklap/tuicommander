@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum RepoAccessReason {
     NotFound,
-    OrganizationRestriction,
-    Sso,
     Forbidden,
     Unknown,
 }
@@ -16,7 +14,6 @@ pub struct RepoAccessError {
     pub repo: String,
     pub reason: RepoAccessReason,
     pub message: String,
-    pub sso_url: Option<String>,
 }
 
 /// Preserve errors belonging to this alias, including nested-field failures.
@@ -44,22 +41,7 @@ pub fn repo_access_error(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    // DEFERRED (2026-10-22) — the OAuth app page confirms pending org approval,
-    // but its repository errors still need capture after an isolated-instance login.
-    // The audit-log fixture proves only the wire shape; see fixtures/github/access-errors.md.
-    let lower = message.to_ascii_lowercase();
-    let reason = if lower.contains("saml")
-        || lower.contains("single sign-on")
-        || lower
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| word == "sso")
-    {
-        RepoAccessReason::Sso
-    } else if lower.contains("oauth app access restriction")
-        || lower.contains("oauth application access restriction")
-    {
-        RepoAccessReason::OrganizationRestriction
-    } else if errors
+    let reason = if errors
         .iter()
         .any(|e| e["type"].as_str() == Some("FORBIDDEN"))
     {
@@ -74,25 +56,10 @@ pub fn repo_access_error(
     } else {
         RepoAccessReason::Unknown
     };
-    let sso_url = if reason == RepoAccessReason::Sso {
-        message
-            .split_whitespace()
-            .map(|s| {
-                s.trim_matches(|c: char| {
-                    matches!(c, '\'' | '"' | '(' | ')' | '<' | '>' | ',' | '.')
-                })
-            })
-            .find(|s| s.starts_with("https://") && (s.contains("/sso") || s.contains("/saml")))
-            .map(str::to_string)
-            .or_else(|| response["_tuic_sso_url"].as_str().map(str::to_string))
-    } else {
-        None
-    };
     Some(RepoAccessError {
         repo: repo.to_string(),
         reason,
         message,
-        sso_url,
     })
 }
 
@@ -113,30 +80,6 @@ mod tests {
             denied.message,
             "sstraus does not have permission to retrieve auditLog information."
         );
-    }
-
-    #[test]
-    fn policy_labels_require_message_evidence_and_keep_sso_authorization_url() {
-        // Catches labelling generic permission denials as org restrictions or dropping SSO links.
-        // These are parser boundary strings, not a claimed capture of GitHub policy wording.
-        for (message, reason, url) in [
-            (
-                "OAuth App access restrictions",
-                RepoAccessReason::OrganizationRestriction,
-                None,
-            ),
-            (
-                "SAML https://github.com/orgs/example/sso?authorization_request=example",
-                RepoAccessReason::Sso,
-                Some("https://github.com/orgs/example/sso?authorization_request=example"),
-            ),
-            ("permission denied", RepoAccessReason::Forbidden, None),
-        ] {
-            let response = serde_json::json!({"data":{"repo0":null},"errors":[{"type":"FORBIDDEN","path":["repo0"],"message":message}]});
-            let error = repo_access_error(&response, "repo0", "repo").unwrap();
-            assert_eq!(error.reason, reason, "{message}");
-            assert_eq!(error.sso_url.as_deref(), url, "{message}");
-        }
     }
 
     #[test]

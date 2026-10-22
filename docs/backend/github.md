@@ -549,10 +549,9 @@ not prove that the repository was deleted.
 
 `github_diagnostics` (IPC and HTTP) retains `repos_not_found` and adds
 `repo_access_errors`, grouped by account, host and owner. Each repository carries
-`repo`, `reason`, `message` and optional `sso_url`. Reasons are `not_found`,
-`organization_restriction`, `sso`, `forbidden` and `unknown`. Organization and SSO
-labels require corresponding message evidence, not just `FORBIDDEN`.
-The OAuth recovery page uses the app's client ID. An SSO URL from the error
-message or `X-GitHub-SSO` header is retained for an SSO failure. Settings renders
-these backend groups without reclassifying them. Refresh status reads the latest
+`repo`, `reason` and `message`. Reasons are `not_found`, `forbidden` and
+`unknown`; message wording does not infer organization policy or SSO.
+Every github.com OAuth group offers the app's authorized-app page, including
+NOT_FOUND groups because GitHub can hide private repositories until org approval.
+Settings renders these backend groups without reclassifying them. Refresh status reads the latest
 poll diagnostics; it does not log in, grant access or bypass the monitoring cadence.

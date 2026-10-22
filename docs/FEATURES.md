@@ -3321,4 +3321,4 @@ Desktop sidebar session rows and mobile session cards mark a parentless plain sh
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
 
-GitHub access diagnostics group exact API messages by account and owner, distinguish NOT_FOUND from retriable denials, and offer OAuth organization/SSO authorization actions.
+GitHub access diagnostics group exact API messages by account and owner, distinguish NOT_FOUND from retriable denials, and offer the OAuth organization authorization action for every github.com OAuth group.

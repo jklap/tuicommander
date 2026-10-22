@@ -416,9 +416,8 @@ describe("GitHubTab — access diagnostics", () => {
 							repos: [
 								{
 									repo: "gate-os",
-									reason: "organization_restriction",
-									message: "Organization has enabled OAuth App access restrictions.",
-									sso_url: null,
+									reason: "not_found",
+									message: "Could not resolve to a Repository with the name 'Lansweeper/gate-os'.",
 								},
 							],
 							oauth_app_url: "https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl",
@@ -429,53 +428,12 @@ describe("GitHubTab — access diagnostics", () => {
 		});
 		const { findByText, getByText } = render(() => <GitHubTab />);
 		expect(await findByText("Lansweeper")).toBeTruthy();
-		expect(getByText(/Organization has enabled OAuth App access restrictions/)).toBeTruthy();
+		expect(getByText(/Could not resolve to a Repository/)).toBeTruthy();
 		fireEvent.click(getByText("Grant or request organization access"));
 		expect(h.rpc).not.toHaveBeenCalledWith("github_start_login");
 		const { handleOpenUrl } = await import("../../utils/openUrl");
 		expect(handleOpenUrl).toHaveBeenCalledWith(
 			"https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl",
 		);
-	});
-});
-
-// Backend-owned DTO strings below test rendering, not GitHub's external wire shape.
-describe("GitHubTab — SSO recovery", () => {
-	beforeEach(resetState);
-	it("opens the supplied SSO authorization URL rather than starting another login", async () => {
-		const GitHubTab = await loadTab();
-		h.rpc.mockImplementation((cmd, args) => {
-			if (cmd === "github_auth_status")
-				return Promise.resolve({ authenticated: true, login: "sstraus", source: "oauth" });
-			if (cmd === "github_diagnostics")
-				return Promise.resolve({
-					circuit_breaker_open: false,
-					repos_not_found: [],
-					repos_monitored: 0,
-					repo_access_errors: [
-						{
-							owner: "example",
-							host: "github.com",
-							account_id: "github.com",
-							repos: [
-								{
-									repo: "private",
-									reason: "sso",
-									message: "SAML authorization required",
-									sso_url: "https://github.com/orgs/example/sso?authorization_request=test",
-								},
-							],
-							oauth_app_url: null,
-						},
-					],
-				});
-			return h.defaultRpc(cmd, args);
-		});
-		const { findByText, queryByText } = render(() => <GitHubTab />);
-		fireEvent.click(await findByText("Authorize SSO"));
-		const { handleOpenUrl } = await import("../../utils/openUrl");
-		expect(handleOpenUrl).toHaveBeenCalledWith("https://github.com/orgs/example/sso?authorization_request=test");
-		expect(queryByText(/PR monitoring active/)).toBeNull();
-		expect(h.rpc).not.toHaveBeenCalledWith("github_start_login");
 	});
 });

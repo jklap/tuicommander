@@ -437,17 +437,6 @@ pub(crate) async fn graphql_request(
     let ratelimit_reset = header_as_u64(response.headers(), "x-ratelimit-reset");
     let retry_after = header_as_u64(response.headers(), "retry-after");
 
-    let sso_url = response
-        .headers()
-        .get("x-github-sso")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| {
-            h.split(';')
-                .find_map(|part| part.trim().strip_prefix("url="))
-        })
-        .filter(|url| url.starts_with("https://"))
-        .map(str::to_string);
-
     // 1. HTTP 429 → always a rate limit
     if status.as_u16() == 429 {
         return Err(GqlError::RateLimit {
@@ -501,7 +490,7 @@ pub(crate) async fn graphql_request(
         return Err(GqlError::Other(err_msg));
     }
 
-    let mut json = parsed.ok_or_else(|| {
+    let json = parsed.ok_or_else(|| {
         GqlError::Other(format!(
             "Failed to parse GraphQL response (HTTP {status}, {} bytes): {}",
             body.len(),
@@ -512,9 +501,6 @@ pub(crate) async fn graphql_request(
     // 4. HTTP 200 + GraphQL errors
     check_graphql_errors(&json, ratelimit_reset, retry_after)?;
 
-    if let (Some(url), Some(object)) = (sso_url, json.as_object_mut()) {
-        object.insert("_tuic_sso_url".into(), serde_json::Value::String(url));
-    }
     Ok(json)
 }
 
@@ -5650,7 +5636,14 @@ mod tests {
             "errors": [{"type": "NOT_FOUND", "path": ["repo0"],
                 "message": "Could not resolve to a Repository with the name 'Lansweeper/gate-os'."}]
         });
-        record_repo_access(&state, &cloud_account(), "Lansweeper", "gate-os", &response, "repo0");
+        record_repo_access(
+            &state,
+            &cloud_account(),
+            "Lansweeper",
+            "gate-os",
+            &response,
+            "repo0",
+        );
         let diagnostics = crate::github_auth::compute_diagnostics(&state);
         let group = diagnostics
             .repo_access_errors
