@@ -253,6 +253,23 @@ async fn desktop_attaches_through_the_relay_and_runs_a_command() {
         json_get(&client, &base, &token, "/sessions").await,
         serde_json::json!([])
     );
+    // A repository handler answers through the relay exactly as it does on a
+    // direct connection: the daemon reads a repo on its own disk.
+    let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "trunk"])
+        .arg(repo.path())
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let branches = client
+        .get(format!("{base}/repo/branches"))
+        .query(&[("path", repo.path().to_str().unwrap())])
+        .header("cookie", format!("tui-session={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert!(branches.status().is_success(), "{}", branches.status());
 
     let created: serde_json::Value = client
         .post(format!("{base}/sessions"))
