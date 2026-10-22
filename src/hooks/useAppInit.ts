@@ -21,6 +21,7 @@ import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
 import { promptLibraryStore } from "../stores/promptLibrary";
+import { resumeStrandedAutoCloseTabs, scheduleRemoteAutoClose } from "../stores/remoteAutoClose";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
 import { repoDefaultsStore } from "../stores/repoDefaults";
 import { repoSettingsStore } from "../stores/repoSettings";
@@ -64,12 +65,6 @@ export const locallyCreatedSessions = new Set<string>();
 /** Remote (MCP) sessionId → termId. Persists even after Terminal.tsx nulls sessionId
  *  on exit, so the session-closed listener can find the tab to auto-remove. */
 const remoteSessionTabs = new Map<string, string>();
-
-/** Delay before auto-removing a remote tab after the backend reports session-closed.
- *  Gives the user time to see "[Process exited]" in the terminal before it vanishes. */
-const REMOTE_TAB_AUTOCLOSE_MS = 30_000;
-/** Shorter delay for agent-spawned sessions — they finish their task and can be cleaned up faster. */
-const AGENT_TAB_AUTOCLOSE_MS = 10_000;
 
 interface McpToastListenerState {
 	generation: number;
@@ -207,6 +202,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 			if (branch.terminals.length === 0) continue;
 
 			const saved: SavedTerminal[] = [];
+			let excluded = 0;
 			for (const termId of branch.terminals) {
 				const t = terminalsStore.get(termId);
 				if (!t) continue;
@@ -226,6 +222,17 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 							},
 						},
 					}).catch((error) => appLogger.warn("terminal", "Failed to sync suspend metadata", { error: String(error) }));
+				// Never persist a tab that must not auto-restore: an exited tab lingers
+				// in `branch.terminals` only so the user can review it, and an
+				// agent-created tab (`isExternallyCreated`: MCP/tmux-shim/HTTP, e.g. a subagent or
+				// teammate pane) is respawned by its lead, so restoring it yields a
+				// sessionless ghost. Never-spawned restore placeholders (`sessionId`
+				// null, state null) are NOT excluded — they are real tabs the user
+				// simply hasn't clicked yet.
+				if (t.shellState === "exited" || t.isExternallyCreated) {
+					excluded++;
+					continue;
+				}
 				saved.push({
 					frontendId: t.id,
 					sessionId: t.sessionId,
@@ -240,10 +247,13 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 					agentIntent: t.agentIntent ?? null,
 					lastPrompt: t.lastPrompt ? t.lastPrompt.slice(0, SAVED_PROMPT_MAX_CHARS) : null,
 					suspended: t.suspended,
+					agentSessionTitle: t.pendingResumeTitle ?? null,
 				});
 			}
 
-			if (saved.length > 0) {
+			// An empty list is still recorded when tabs were deliberately excluded —
+			// otherwise the previous snapshot (which may contain them) would survive.
+			if (saved.length > 0 || excluded > 0) {
 				if (!snapshots.has(repoPath)) {
 					snapshots.set(repoPath, new Map());
 				}
@@ -1291,42 +1301,11 @@ export async function initApp(deps: AppInitDeps) {
 		handleAgentExitCompletion(termId, parsedAgentType != null);
 		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
 
-		// Agent-spawned sessions get a shorter grace period — they finish their task
-		// and can be cleaned up faster than manually-opened remote sessions. Keyed
-		// off the PARSED type, not the raw field's truthiness — an unrecognized
-		// agent name string must not accidentally pick the short timer.
-		const autoCloseMs = parsedAgentType != null ? AGENT_TAB_AUTOCLOSE_MS : REMOTE_TAB_AUTOCLOSE_MS;
-
-		appLogger.info("app", `Remote session closed: ${session_id} — tab ${termId} auto-close in ${autoCloseMs}ms`);
-
-		// Countdown in the tab name so the user sees when it will vanish. `{
-		// echo: false }`: this is cosmetic-only display text, never the
-		// session's real display name — previously this relied on `sessionId`
-		// already being nulled above to implicitly suppress the echo, which
-		// broke silently if that write's ordering ever changed.
-		const baseName = t0?.name ?? termId;
-		let remaining = Math.round(autoCloseMs / 1000);
-		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
-		const ticker = setInterval(() => {
-			remaining--;
-			const t = terminalsStore.get(termId);
-			if (!t?.isExternallyCreated || remaining <= 0) {
-				clearInterval(ticker);
-				return;
-			}
-			terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
-		}, 1000);
-
-		setTimeout(() => {
-			clearInterval(ticker);
-			const t = terminalsStore.get(termId);
-			// Only remove if the tab still exists and is still the remote tab for this
-			// session (user may have closed it manually or re-used the slot).
-			if (t?.isExternallyCreated) {
-				appLogger.info("app", `Auto-removing remote tab ${termId} for closed session ${session_id}`);
-				terminalsStore.remove(termId);
-			}
-		}, autoCloseMs);
+		// Keyed off the PARSED type, not the raw field's truthiness — an
+		// unrecognized agent name string must not accidentally pick the short
+		// timer. Passed explicitly because the store's own `agentType` may have
+		// just been cleared above (the `hadAgent` branch) by the time this runs.
+		scheduleRemoteAutoClose(termId, parsedAgentType);
 	}).catch((err) => appLogger.error("app", "Failed to register session-closed listener", err));
 
 	// Close HTML tabs whose creator session has exited
@@ -1512,6 +1491,14 @@ export async function initApp(deps: AppInitDeps) {
 	// non-git repo had no branch to claim its own terminals and they were parked
 	// elsewhere. Ask again now that every repo can answer.
 	reconcileTerminalOwnership();
+
+	// Self-heal: a remote tab can be sitting here already `shellState: "exited"`
+	// with no countdown ever having run (an exit-detection path that doesn't
+	// call `scheduleRemoteAutoClose`, or one whose countdown timer died with a
+	// previous page reload/HMR before it finished) — see
+	// `resumeStrandedAutoCloseTabs`'s own doc comment for why a fresh sweep is
+	// the fix rather than trying to resume a persisted deadline.
+	resumeStrandedAutoCloseTabs();
 
 	// Refresh git stats for persisted repos
 	deps.refreshAllBranchStats();

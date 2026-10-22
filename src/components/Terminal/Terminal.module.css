@@ -81,6 +81,13 @@
   font-style: italic;
 }
 
+.resumeBannerText {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Visual bell flash — applied as raw class on the container DOM element */
 :global(.bell-flash) {
   animation: bell-flash-anim 150ms ease-out;

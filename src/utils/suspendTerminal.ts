@@ -84,6 +84,8 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 		standby: false,
 		pendingInitCommand: null,
 		pendingResumeCommand: null,
+		pendingResumeTitle: null,
+		pendingResumeSource: null,
 	});
 	terminalsStore.setSessionId(id, null);
 	return { ok: true };
