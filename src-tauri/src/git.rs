@@ -371,16 +371,23 @@ pub(crate) async fn get_repo_diff_stats_impl(
         move || {
             let mut diff_stats = HashMap::new();
             let mut workspace_statuses = HashMap::new();
+            let branches: Vec<_> = worktree_paths.values().map(|w| w.branch.clone()).collect();
+            let ref_keys = tuic_git::worktree::monitoring_ref_keys(Path::new(&path), &branches);
             for (id, workspace) in &worktree_paths {
-                diff_stats.insert(
-                    workspace.path.clone(),
-                    git_reads().diff_stats(Path::new(&workspace.path), None),
-                );
+                let (diff, dirty) =
+                    crate::monitoring_status::CACHE.read(Path::new(&workspace.path));
+                diff_stats.insert(workspace.path.clone(), diff);
                 workspace_statuses.insert(
                     id.clone(),
-                    tuic_git::worktree::inspect_workspace_monitoring_with_pr(
+                    tuic_git::worktree::inspect_workspace_monitoring_with_status(
                         Path::new(&path),
                         workspace,
+                        ref_keys.as_ref().map_err(String::as_str).and_then(|keys| {
+                            keys.get(&workspace.branch)
+                                .map(String::as_str)
+                                .ok_or("missing monitoring ref key")
+                        }),
+                        dirty,
                         |repo, branch, tip| {
                             crate::worktree::merged_github_pr_proves_tip_monitoring(
                                 &proof_state,
@@ -430,20 +437,6 @@ pub(crate) async fn branches_detail_cached(
     let p = path.clone();
     cached_try(state.git_cache.branches_detail.clone(), path, move || {
         git_reads().branches_detail(Path::new(&p))
-    })
-    .await
-}
-
-/// Get rich git panel context in a single IPC call (cached, 5s TTL).
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn get_git_panel_context(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-) -> Result<GitPanelContext, String> {
-    let p = path.clone();
-    cached_get(state.git_cache.git_panel_context.clone(), path, move || {
-        get_git_panel_context_impl(Path::new(&p))
     })
     .await
 }

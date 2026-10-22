@@ -43,9 +43,8 @@ pub fn execute(
         DefinitionAction::Get { id } => {
             serde_json::to_value(store.get(&id)?).map_err(|error| error.to_string())
         }
-        DefinitionAction::Create { mut definition } => {
-            definition.created_by_session = creator_session.map(str::to_owned);
-            store.create(definition)?;
+        DefinitionAction::Create { definition } => {
+            create_saved(store, definition, creator_session, false)?;
             Ok(json!({"ok": true}))
         }
         DefinitionAction::Update { id, definition } => {
@@ -64,5 +63,20 @@ pub fn execute(
             store.remove(&id)?;
             Ok(json!({"ok": true}))
         }
+    }
+}
+
+/// Stamp host provenance for both ordinary creates and generated retry-safe creates.
+pub(super) fn create_saved(
+    store: &DefinitionStore,
+    mut definition: AutomationDefinition,
+    creator_session: Option<&str>,
+    idempotent: bool,
+) -> Result<AutomationDefinition, String> {
+    definition.created_by_session = creator_session.map(str::to_owned);
+    if idempotent {
+        store.create_idempotent(definition)
+    } else {
+        store.create_saved(definition)
     }
 }

@@ -226,10 +226,6 @@ describe("CommandInput code structure", () => {
 		expect(tsx).toContain('"Tab"');
 		expect(tsx).toContain("\\t");
 	});
-
-	it("legacy choice prompts retain immediate numeric submission behavior", () => {
-		expect(tsx).toContain("!props.choicePrompt?.dismiss_key");
-	});
 });
 
 describe("isPostSendGuardActive", () => {

@@ -4,7 +4,7 @@ pub const PLUGIN_DOCS: &str = r###"# TUICommander Plugin Development Reference
 
 ## Settings startup authority
 
-Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents the separate owner workflows and current publication limits (docs/backend/settings-startup.md).
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority (docs/backend/settings-startup.md).
 
 ## Installation
 
@@ -13,7 +13,7 @@ Create directory `{id}/` containing `manifest.json` + `main.js` under the platfo
 - Linux: `~/.config/tuicommander/plugins/`
 - Windows: `%APPDATA%/com.tuic.commander/plugins/`
 
-Hot reload: editing any file in the plugin directory triggers automatic unload + re-import. Adding a new plugin directory or symlink after the app has started is also discovered live — no restart needed.
+Hot reload: editing any file in the plugin directory triggers automatic unload + re-import. Adding a new plugin directory or symlink after the app has started is also discovered live — no restart needed. Reload batches deduplicate changed enabled IDs and share a serialized queue. Discovery reads only those plugin roots; unchanged payload file hashes are reused by modification time and size. Startup still uses full discovery.
 
 ## manifest.json
 
@@ -356,6 +356,10 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
 
+`httpFetch(url, { signal })` accepts a host-local `AbortSignal`. A pre-aborted signal starts no request; abort cancels the Rust request while waiting for headers or collecting the body and rejects with `AbortError`. Unloading the plugin also cancels its active HTTP requests. Signals never cross IPC/HTTP: the host sends a generated UUID and a plugin-scoped cancel command. Requests without a signal keep the same response contract.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
 **httpFetch notes:** Localhost blocked unless declared in `allowedUrls`. Max 5 redirects. 30s timeout, 10 MB limit. An empty `allowedUrls` list grants no HTTP access.
 
 **Account requests:** `httpFetch(url, { account: "<account id>" })` makes Rust inject that account's credential (`Authorization: Bearer <token>`, or `Basic` for Basic accounts). The plugin never sees the token. Rules: the manifest `providers` list must contain the account's provider; the URL must be under the account host (same scheme, host and port, path prefix of the site URL; GitHub accounts use their API base, `https://api.github.com/` or `https://<ghe>/api/`); the account host rule replaces the `allowedUrls` check for the first URL; you must not set `Authorization` yourself. Each redirect hop must be under the account host or match `allowedUrls`, and a hop to another scheme, host or port loses the `Authorization` header. The token is read again for each request, so a re-entered credential applies at once; a 401 comes back to you as a normal response. Token values in the response body and headers are replaced with `[redacted]`.
@@ -462,7 +466,7 @@ await host.invoke("delete_plugin_data", {
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `contentSha256`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
@@ -481,7 +485,7 @@ The expanded Logs view shows the plugin ring buffer's timestamp, level and messa
 
 #### BrowseRow
 
-The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available, or Installed for the current version. Registry metadata is separate from the installed manifest.
+The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available or same-version payload identities differ, or Installed otherwise. Registry metadata is separate from the installed manifest. `contentSha256` is derived by Rust from installed payload files, not accepted from manifest input. Mutable data and packaging files are excluded. Unknown identities retain version-only comparison, and newer installed versions are never downgraded.
 
 ### Settings schema and Tasks views
 

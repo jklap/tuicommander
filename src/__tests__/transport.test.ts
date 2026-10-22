@@ -3,6 +3,16 @@ import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Catches: browser reload dropping the changed-ID filter and scanning every plugin.
+it("maps targeted plugin discovery with the same ID array as IPC", () => {
+	const ids = ["plugin-a", "odd,id"];
+	const mapping = mapCommandToHttp("list_user_plugins", { pluginIds: ids });
+	const url = new URL(mapping!.path, "http://localhost");
+	expect(url.pathname).toBe("/plugins/list");
+	expect(JSON.parse(url.searchParams.get("plugin_ids")!)).toEqual(ids);
+	expect(mapCommandToHttp("list_user_plugins", {})?.path).toBe("/plugins/list");
+});
+
 // Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps scoped plugin settings actions without adding host authority", () => {
 	const action = { action: "get", paths: ["/retryDelayMs"] };
@@ -87,6 +97,15 @@ function extractCommandTableCommands(transportSource = readRepoFile("src/transpo
 }
 
 describe("COMMAND_TABLE source scan", () => {
+	it("catches launch preview drafts being dropped by the HTTP defaults mapping", () => {
+		const preview = { agents: { agents: { claude: { suggest_followups: false } } }, intent_tab_title: false };
+		expect(mapCommandToHttp("get_config_defaults", { preview })).toMatchObject({
+			method: "POST",
+			path: "/config/defaults",
+			body: preview,
+		});
+	});
+
 	it("finds space-indented commands without treating a nested object key as a command", () => {
 		const source = `const COMMAND_TABLE = {
   first_command: { map: () => ({ body: {
@@ -813,6 +832,7 @@ describe("transport", () => {
 				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["get_config_defaults", {}, "GET", "/config/defaults"],
+				["get_config_defaults", { preview: { agents: { agents: {} } } }, "POST", "/config/defaults"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
 				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
 			])("maps %s to %s %s", (command, args, method, path) => {
@@ -1178,14 +1198,6 @@ describe("transport", () => {
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
-		});
-
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
 		});
 
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
@@ -2144,6 +2156,12 @@ describe("transport", () => {
 				body: { account: "selected", reference: githubReference, request: githubRequest },
 			});
 
+			// Catches: cancellation losing plugin/request identity in browser transport.
+			expect(mapCommandToHttp("plugin_http_cancel", { pluginId: "my-plugin", requestId: "req-1" })).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/http/cancel",
+				body: { requestId: "req-1" },
+			});
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {
 				pluginId: "my-plugin",
@@ -2152,6 +2170,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
@@ -2162,6 +2181,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines
@@ -4222,5 +4242,31 @@ it("maps the shared settings envelope unchanged", () => {
 		method: "POST",
 		path: "/settings/action",
 		body: request,
+	});
+});
+
+// Catches: browser managed launch bypasses the shared keyed transaction boundary.
+it("maps managed launch unchanged to its shared HTTP boundary", () => {
+	const request = {
+		idempotency_key: "one",
+		parent_session_id: "parent",
+		name: "child",
+		keep_open: true,
+		workspace: { existing_path: "/workspace" },
+		spawn: { prompt: "task" },
+	};
+	expect(mapCommandToHttp("managed_agent_launch", { request })).toEqual({
+		method: "POST",
+		path: "/agents/launch",
+		body: request,
+	});
+});
+
+// Catches: browser dumps failing while desktop IPC persists the same recording.
+it("maps frame workload persistence without changing the recording", () => {
+	expect(mapCommandToHttp("save_frame_workload", { recording: "{}" })).toEqual({
+		method: "POST",
+		path: "/debug/frame-workload",
+		body: { recording: "{}" },
 	});
 });

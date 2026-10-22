@@ -64,8 +64,8 @@ describe("worktree placement lifecycle regressions", () => {
 		});
 	});
 
-	// Catches: cold restart trusts a stale declaration instead of the saved cwd.
-	it("restores a saved root agent under main despite a stale worktree declaration", async () => {
+	// Catches: cold restart undoes an explicit declaration because saved cwd stayed at root.
+	it.each([true, false])("restores only a declaration matching the current checkout (valid=%s)", async (valid) => {
 		await testInScopeAsync(async () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
@@ -89,7 +89,11 @@ describe("worktree placement lifecycle regressions", () => {
 						[REPO]: {
 							...repo,
 							declaredWorktrees: {
-								"stable-peer": { workspaceId: "feature", branch: "feature", worktreePath: WORKTREE },
+								"stable-peer": {
+									workspaceId: "feature",
+									branch: "feature",
+									worktreePath: valid ? WORKTREE : "/removed-checkout",
+								},
 							},
 						},
 					},
@@ -110,16 +114,13 @@ describe("worktree placement lifecycle regressions", () => {
 			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 			const id = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.tuicSession === "stable-peer");
 			if (!id) throw new Error("saved agent was not restored");
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe(valid ? "feature" : "main");
 			reconcileTerminalOwnership();
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe(valid ? "feature" : "main");
 			expect(terminalsStore.get(id)?.cwd).toBe(REPO);
-			// Catches: reconciliation moves the tab to main, but feature still activates it outside its tab strip.
 			expect(repositoriesStore.getActive()?.activeWorkspaceId).toBe("feature");
-			const visibleIds = repositoriesStore.getActive()?.workspaces.feature.terminals ?? [];
-			expect(terminalsStore.state.activeId).not.toBe(id);
-			expect(visibleIds).toEqual([]);
-			expect(terminalsStore.state.activeId).toBeNull();
+			expect(repositoriesStore.getActive()?.workspaces.feature.terminals).toEqual(valid ? [id] : []);
+			expect(terminalsStore.state.activeId).toBe(valid ? id : null);
 		});
 	});
 

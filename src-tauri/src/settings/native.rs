@@ -136,7 +136,19 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
             reason: "This build has no native dictation backend".into(),
         }
     };
-    catalogue.register("voice", "machine", Some(&DictationConfig::default()), voice)?;
+    catalogue.register(
+        "voice",
+        "machine",
+        Some(&DictationConfig::default()),
+        voice.clone(),
+    )?;
+    catalogue.register_schema(
+        "corrections",
+        "machine",
+        &super::corrections::catalogue_schema(),
+        None,
+        voice,
+    )?;
     super::ego_schema::register(&mut catalogue)?;
     super::keybindings::register(&mut catalogue)?;
     super::layout::register(&mut catalogue);

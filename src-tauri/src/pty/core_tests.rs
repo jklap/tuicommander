@@ -315,7 +315,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
         .expect("silence state is registered before the threads start");
     assert!(
         state.grid.frame_dirty.contains_key(&sid)
-            && state.grid.sync_update_active.contains_key(&sid),
+            && state.grid.sync_update_active.contains_key(&sid)
+            && state.grid.input_frame_priority.contains_key(&sid),
         "precondition: the ticker owns both per-session entries"
     );
 
@@ -324,7 +325,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let ticker_alive = state.grid.frame_dirty.contains_key(&sid)
-            || state.grid.sync_update_active.contains_key(&sid);
+            || state.grid.sync_update_active.contains_key(&sid)
+            || state.grid.input_frame_priority.contains_key(&sid);
         let timer_alive = Arc::strong_count(&silence) > 1;
         if !ticker_alive && !timer_alive {
             break;
@@ -4924,64 +4926,6 @@ fn test_chunk_processor_planfile_normalizes_dotdot() {
     );
 }
 
-// --- transform_xterm tests ---
-
-#[test]
-fn test_transform_xterm_no_token_passes_through() {
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("just regular output");
-    assert_eq!(result.as_deref(), Some("just regular output"));
-}
-
-#[test]
-fn test_transform_xterm_intent_passes_through() {
-    // Intent coloring is now handled by the frontend MutationObserver.
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("intent: Fix the bug\n");
-    assert!(result.is_some());
-    let data = result.unwrap();
-    assert!(
-        data.contains("intent: Fix the bug"),
-        "intent must pass through to frontend"
-    );
-}
-
-#[test]
-fn test_transform_xterm_suggest_passes_through() {
-    // Suggest lines are no longer concealed in Rust — the frontend handles it.
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("suggest: A | B | C\n");
-    assert!(result.is_some());
-    let data = result.unwrap();
-    assert!(
-        data.contains("suggest:"),
-        "suggest must pass through to frontend"
-    );
-}
-
-#[test]
-fn test_transform_xterm_incomplete_intent_passes_through() {
-    let mut cp = ChunkProcessor::new(None, None);
-    let r1 = cp.transform_xterm("intent: doing so");
-    assert!(r1.is_some(), "incomplete intent must pass through");
-}
-
-// --- alt buffer clear injection tests ---
-
-#[test]
-fn test_transform_xterm_alt_buffer_injects_clear() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer
-    cp.transform_xterm("\x1b[?1049h");
-    assert!(cp.in_alt_buffer);
-    // Cursor home should get ESC[2J injected
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        result.contains("\x1b[2J\x1b[H"),
-        "clear should be injected before cursor home"
-    );
-}
-
 #[test]
 fn test_inline_tui_mouse_mode_sets_fullscreen_without_1049() {
     let mut cp = ChunkProcessor::new(None, None);
@@ -5001,7 +4945,7 @@ fn test_inline_tui_mouse_mode_sets_fullscreen_without_1049() {
 #[test]
 fn test_inline_tui_does_not_override_alt_screen_mode() {
     let mut cp = ChunkProcessor::new(None, None);
-    cp.transform_xterm("\x1b[?1049h");
+    cp.observe_alt_buffer("\x1b[?1049h");
     cp.apply_inline_tui_mode(true, true, Some("grok"));
     match &cp.terminal_mode {
         crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { depth, .. } => {
@@ -5009,299 +4953,6 @@ fn test_inline_tui_does_not_override_alt_screen_mode() {
         }
         other => panic!("expected FullscreenTui, got {other:?}"),
     }
-}
-
-#[test]
-fn test_transform_xterm_normal_buffer_no_inject() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // NOT in alt buffer — no injection
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        !result.contains("\x1b[2J"),
-        "should not inject clear in normal buffer"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_exit_stops_inject() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter then exit alt buffer
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[?1049l");
-    assert!(!cp.in_alt_buffer);
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        !result.contains("\x1b[2J"),
-        "should not inject after leaving alt buffer"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_no_clear_on_subsequent_redraws() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer — first cursor-home gets clear
-    cp.transform_xterm("\x1b[?1049h");
-    let r1 = cp.transform_xterm("\x1b[Hfirst redraw").unwrap();
-    assert!(r1.contains("\x1b[2J"), "first redraw must inject clear");
-
-    // Subsequent redraws must NOT inject clear (prevents per-keystroke flicker)
-    let r2 = cp.transform_xterm("\x1b[Hsecond redraw").unwrap();
-    assert!(
-        !r2.contains("\x1b[2J"),
-        "subsequent redraws must not inject clear"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_clear_on_shrink() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer, consume initial clear
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit"); // consumes one-shot
-
-    // Simulate growing content: cursor-up 50 lines
-    cp.transform_xterm("\x1b[50A redraw tall");
-    assert_eq!(cp.last_cursor_up_n, 50);
-
-    // Simulate shrink: cursor-up only 20 lines (content got shorter)
-    let r = cp.transform_xterm("\x1b[20A\x1b[Hredraw short").unwrap();
-    assert!(
-        r.contains("\x1b[2J"),
-        "clear must be injected when content shrinks"
-    );
-    assert_eq!(cp.last_cursor_up_n, 20);
-
-    // Next redraw at same height — no clear
-    let r2 = cp.transform_xterm("\x1b[20A\x1b[Hsame height").unwrap();
-    assert!(!r2.contains("\x1b[2J"), "no clear when height stays same");
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_clear_on_growth() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer, consume initial clear via cursor-home
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit");
-
-    // Establish baseline height
-    cp.transform_xterm("\x1b[20Aredraw");
-    assert_eq!(cp.last_cursor_up_n, 20);
-
-    // Height grows — clear must fire (chrome shifted down, old top row is ghost)
-    let r = cp.transform_xterm("\x1b[25A\x1b[Hredraw taller").unwrap();
-    assert!(
-        r.contains("\x1b[2J"),
-        "clear must be injected when content grows"
-    );
-}
-
-#[test]
-fn test_transform_xterm_cursor_up_fallback_on_entry() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer (sets alt_buffer_needs_clear)
-    cp.transform_xterm("\x1b[?1049h");
-
-    // Ink re-renders with cursor-up only, no cursor-home.
-    // The fallback must inject ESC[2J before the cursor-up.
-    let r = cp.transform_xterm("\x1b[30Acontent").unwrap();
-    assert!(
-        r.contains("\x1b[2J\x1b[30A"),
-        "clear must inject before cursor-up fallback"
-    );
-    assert!(!cp.alt_buffer_needs_clear, "flag must be consumed");
-}
-
-#[test]
-fn test_transform_xterm_cursor_up_fallback_on_shrink() {
-    let mut cp = ChunkProcessor::new(None, None);
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit"); // consume entry flag
-
-    // Establish height
-    cp.transform_xterm("\x1b[40Aredraw");
-
-    // Shrink with cursor-up only (no cursor-home) — fallback path
-    let r = cp.transform_xterm("\x1b[25Aredraw short").unwrap();
-    assert!(
-        r.contains("\x1b[2J\x1b[25A"),
-        "cursor-up fallback must fire on shrink"
-    );
-}
-
-#[test]
-fn test_transform_xterm_no_clear_on_normal_buffer_cursor_up() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // NOT in alt buffer — cursor-up must NOT trigger clear injection
-    let r = cp.transform_xterm("\x1b[10Acontent").unwrap();
-    assert!(!r.contains("\x1b[2J"), "must not inject in normal buffer");
-}
-
-#[test]
-fn test_extract_largest_cursor_up() {
-    assert_eq!(extract_largest_cursor_up("\x1b[5A"), Some(5));
-    assert_eq!(extract_largest_cursor_up("\x1b[10Afoo\x1b[3A"), Some(10));
-    assert_eq!(extract_largest_cursor_up("no cursor up here"), None);
-    assert_eq!(extract_largest_cursor_up("\x1b[H"), None); // cursor home, not up
-}
-
-// --- inject_clear_before_cursor_up tests ---
-
-#[test]
-fn test_inject_clear_before_cursor_up_basic() {
-    let result = inject_clear_before_cursor_up("\x1b[20Acontent");
-    assert_eq!(result, "\x1b[2J\x1b[20Acontent");
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_preserves_prefix() {
-    let result = inject_clear_before_cursor_up("prefix\x1b[10Acontent");
-    assert_eq!(result, "prefix\x1b[2J\x1b[10Acontent");
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_no_match() {
-    let input = "no cursor up \x1b[H here";
-    let result = inject_clear_before_cursor_up(input);
-    assert_eq!(
-        result, input,
-        "cursor-home must NOT match cursor-up injection"
-    );
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_bare_esc_a_ignored() {
-    // ESC[A (no number) means cursor-up 1, but has no digit before A
-    let input = "\x1b[Acontent";
-    let result = inject_clear_before_cursor_up(input);
-    assert_eq!(
-        result, input,
-        "bare ESC[A (no n) should not trigger injection"
-    );
-}
-
-// --- log_anomalous_sequences tests ---
-
-#[test]
-fn log_anomalous_detects_clear_screen() {
-    let found = detect_anomalous_sequences("\x1b[2J");
-    assert_eq!(found, vec!["ESC[2J (Clear Screen)"]);
-}
-
-#[test]
-fn log_anomalous_detects_cursor_home() {
-    let found = detect_anomalous_sequences("\x1b[H");
-    assert_eq!(found, vec!["ESC[H (Cursor Home)"]);
-}
-
-#[test]
-fn log_anomalous_detects_cursor_home_explicit() {
-    let found = detect_anomalous_sequences("\x1b[1;1H");
-    assert_eq!(found, vec!["ESC[1;1H (Cursor Home)"]);
-}
-
-#[test]
-fn log_anomalous_detects_clear_scrollback() {
-    let found = detect_anomalous_sequences("\x1b[3J");
-    assert_eq!(found, vec!["ESC[3J (Clear Scrollback)"]);
-}
-
-#[test]
-fn log_anomalous_detects_alt_screen_enter() {
-    let found = detect_anomalous_sequences("\x1b[?1049h");
-    assert_eq!(found, vec!["ESC[?1049h (Alt Screen Enter)"]);
-}
-
-#[test]
-fn log_anomalous_detects_alt_screen_exit() {
-    let found = detect_anomalous_sequences("\x1b[?1049l");
-    assert_eq!(found, vec!["ESC[?1049l (Alt Screen Exit)"]);
-}
-
-#[test]
-fn log_anomalous_multiple_in_one_chunk() {
-    let found = detect_anomalous_sequences("hello\x1b[2J\x1b[Hworld\x1b[3J");
-    assert_eq!(
-        found,
-        vec![
-            "ESC[2J (Clear Screen)",
-            "ESC[H (Cursor Home)",
-            "ESC[3J (Clear Scrollback)",
-        ]
-    );
-}
-
-#[test]
-fn log_anomalous_ignores_normal_sequences() {
-    let found = detect_anomalous_sequences("\x1b[5A\x1b[10B\x1b[32mhello\x1b[0m");
-    assert!(found.is_empty());
-}
-
-#[test]
-fn log_anomalous_ignores_cursor_position_not_home() {
-    // ESC[5;10H is a regular cursor position, not anomalous
-    let found = detect_anomalous_sequences("\x1b[5;10H");
-    assert!(found.is_empty());
-}
-
-// --- inject_clear_before_cursor_home tests ---
-
-#[test]
-fn inject_clear_no_cursor_home() {
-    let data = "hello world\x1b[5A\x1b[32mgreen\x1b[0m";
-    assert_eq!(inject_clear_before_cursor_home(data), data);
-}
-
-#[test]
-fn inject_clear_before_bare_home() {
-    let data = "\x1b[Hcontent after home";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "\x1b[2J\x1b[Hcontent after home"
-    );
-}
-
-#[test]
-fn inject_clear_before_explicit_home() {
-    let data = "\x1b[1;1Hcontent";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "\x1b[2J\x1b[1;1Hcontent"
-    );
-}
-
-#[test]
-fn inject_clear_preserves_prefix() {
-    let data = "prefix output\x1b[Hredraw content";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "prefix output\x1b[2J\x1b[Hredraw content"
-    );
-}
-
-#[test]
-fn inject_clear_only_first_home() {
-    // Only one ESC[2J should be injected, before the first ESC[H
-    let data = "\x1b[Hline1\x1b[Hline2";
-    let result = inject_clear_before_cursor_home(data);
-    assert_eq!(result, "\x1b[2J\x1b[Hline1\x1b[Hline2");
-    // Count occurrences of ESC[2J
-    assert_eq!(result.matches("\x1b[2J").count(), 1);
-}
-
-#[test]
-fn inject_clear_ignores_non_home_cursor_position() {
-    // ESC[5;10H is a regular cursor position, not home — should NOT inject
-    let data = "\x1b[5;10Hcontent";
-    assert_eq!(inject_clear_before_cursor_home(data), data);
-}
-
-#[test]
-fn inject_clear_preserves_utf8() {
-    let data = "héllo → \x1b[Hworld 🌍";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "héllo → \x1b[2J\x1b[Hworld 🌍"
-    );
 }
 
 // --- is_wsl_shell tests ---
@@ -10999,6 +10650,85 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     }
 }
 
+// Catches: an imperative native title sets awaiting but exports no named controls.
+#[tokio::test(flavor = "current_thread")]
+async fn claude_imperative_title_exports_native_choices() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-imperative-title-2074.tcap",
+    ))
+    .expect("authentic Claude capture");
+    let (rows, cols) = capture.geometry.expect("observed PTY geometry");
+    let sid = "claude-imperative";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
+        .session_states
+        .insert("other-session".into(), Default::default());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut answered = false;
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Output => {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+            }
+            crate::pty_capture::CaptureDirection::Input if record.data == b"\x1b[B\r" => {
+                assert!(await_session(&state, sid, |s| {
+                    s.awaiting_input && s.question_text.as_deref() == Some("Pick a colour")
+                        && s.choice_prompt.as_ref().is_some_and(|prompt| {
+                            prompt.title == "Pick a colour"
+                                && prompt.selection_mode == Some(
+                                    crate::output_parser::ChoiceSelectionMode::NavigateEnter,
+                                )
+                                && prompt.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>()
+                                    == ["Red", "Green", "Blue", "Type something.", "Chat about this"]
+                        })
+                }).await, "imperative title must export its native ordered choices");
+                let snapshot =
+                    serde_json::to_value(&*state.session_maps.session_states.get(sid).unwrap())
+                        .unwrap();
+                assert_eq!(snapshot["choice_prompt"]["title"], "Pick a colour");
+                assert_eq!(snapshot["choice_prompt"]["options"][1]["label"], "Green");
+                crate::state::resolve_choice_prompt_input(&state, sid, "\x1b[B");
+                crate::state::resolve_choice_prompt_input(&state, sid, "\r");
+                answered = true;
+            }
+            crate::pty_capture::CaptureDirection::Input => {}
+        }
+    }
+    assert!(answered, "capture must contain the native Green answer");
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await,
+        "answered form must release the question controls"
+    );
+    let other = state
+        .session_maps
+        .session_states
+        .get("other-session")
+        .unwrap();
+    assert!(
+        !other.awaiting_input && other.choice_prompt.is_none(),
+        "the answer must not modify another session"
+    );
+}
+
 /// Live Claude 2.1.286 two-question AskUserQuestion (`Lista`, `Branch`, `Submit`
 /// tabs) answered with Enter, Down+Enter, Enter. Every step must expose the
 /// dialog that is on screen to the mobile overlay: the second question, and the
@@ -11646,63 +11376,6 @@ fn osc133_d_does_not_transition_alone() {
     );
 }
 
-#[test]
-fn osc133_d_without_c_records_no_outcome() {
-    // A 'D' (command finished) without a preceding 'C' (command started) —
-    // e.g. Enter on an empty prompt — must NOT record a phantom outcome
-    // (empty command, "unknown" error) that would pollute the knowledge
-    // panel and the agent's injected prompt.
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-osc133-d-no-c";
-    state
-        .session_maps
-        .has_osc133_integration
-        .insert(session_id.to_string(), ());
-
-    let mut proc = ChunkProcessor::new(None, None);
-    proc.handle_osc133_event('D', "1", session_id, &state);
-
-    let recorded = state
-        .ai
-        .session_knowledge
-        .get(session_id)
-        .map(|k| k.lock().commands.len())
-        .unwrap_or(0);
-    assert_eq!(recorded, 0, "D without C must not record an outcome");
-}
-
-#[test]
-fn osc133_c_then_d_records_outcome() {
-    // Regression guard: the normal path still records — C captures the
-    // command start, D finalizes the outcome.
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-osc133-c-then-d";
-    state.session_maps.shell_states.insert(
-        session_id.to_string(),
-        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
-    );
-    state
-        .session_maps
-        .shell_state_since_ms
-        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
-    state
-        .session_maps
-        .has_osc133_integration
-        .insert(session_id.to_string(), ());
-
-    let mut proc = ChunkProcessor::new(None, None);
-    proc.handle_osc133_event('C', "", session_id, &state);
-    proc.handle_osc133_event('D', "0", session_id, &state);
-
-    let recorded = state
-        .ai
-        .session_knowledge
-        .get(session_id)
-        .map(|k| k.lock().commands.len())
-        .unwrap_or(0);
-    assert_eq!(recorded, 1, "C→D should record exactly one outcome");
-}
-
 // --- is_cc_tool_call_header tests ---
 
 #[test]
@@ -12016,7 +11689,7 @@ fn query_process_stats_empty_input_is_empty() {
 
 #[test]
 fn captured_codex_request_user_input_reaches_choice_prompt() {
-    let bytes = agent_prompt_fixture("codex-request-user-input-20260929.tcap");
+    let bytes = agent_prompt_fixture("codex-native-question-2026.tcap");
     let capture = crate::pty_capture::decode_capture(&bytes).expect("real Codex capture");
     let (rows, cols) = capture.geometry.expect("capture records terminal geometry");
     let sid = "codex-question-capture";
@@ -12055,12 +11728,11 @@ fn captured_codex_request_user_input_reaches_choice_prompt() {
 
     assert!(
         prompts.iter().any(|prompt| {
-            prompt.get("title").and_then(serde_json::Value::as_str)
-                == Some("Boss, scegli rosso o blu?")
+            prompt.get("title").and_then(serde_json::Value::as_str) == Some("Pick a color.")
                 && prompt["options"].as_array().is_some_and(|options| {
                     options
                         .iter()
-                        .any(|option| option["key"] == "2" && option["label"] == "Blu")
+                        .any(|option| option["key"] == "3" && option["label"] == "Blue")
                 })
         }),
         "captured Codex question must reach the mobile choice-prompt state"
@@ -12586,6 +12258,134 @@ fn the_ack_prefixed_intent_reaches_a_session() {
         intent.get("title").and_then(|t| t.as_str()),
         Some("Count"),
         "the (title) is the tab name — losing it is the whole cost of the bug"
+    );
+}
+
+fn replay_ego_slash_menu(name: &str, expected: &[&str], final_commands: &[&str]) {
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture(name)).expect("real ego capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let sid = "ego-slash-filter";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut draft = String::new();
+    let mut checked = Vec::new();
+    for record in capture.records {
+        if record.direction == Input && !record.data.starts_with(b"\x1b") {
+            // Inspect the settled output before the next recorded user edit.
+            let items = state
+                .session_maps
+                .session_states
+                .get(sid)
+                .unwrap()
+                .slash_menu_items
+                .clone()
+                .unwrap_or_default();
+            match draft.as_str() {
+                "/" if record.data == b"g" => {
+                    assert!(items.iter().any(|item| item.command == "/help"));
+                    checked.push("broad");
+                }
+                "/g" | "/go" | "/goa" if !record.data.contains(&0x7f) => {
+                    assert_eq!(
+                        items
+                            .iter()
+                            .map(|item| item.command.as_str())
+                            .collect::<Vec<_>>(),
+                        ["/goal"],
+                        "draft {draft}"
+                    );
+                    checked.push("single");
+                }
+                "/goal" => {
+                    assert!(
+                        items.is_empty(),
+                        "exact command must retract the previous menu"
+                    );
+                    checked.push("exact");
+                }
+                "/gz" => {
+                    assert!(
+                        items.is_empty(),
+                        "zero matches must retract the single result"
+                    );
+                    checked.push("zero");
+                }
+                "/zz" => {
+                    assert!(
+                        items.is_empty(),
+                        "unmatched text must not restore an old menu"
+                    );
+                    checked.push("unmatched");
+                }
+                _ => {}
+            }
+            for byte in record.data {
+                match byte {
+                    0x7f => {
+                        draft.pop();
+                    }
+                    0x15 => draft.clear(),
+                    _ => draft.push(char::from(byte)),
+                }
+            }
+            state
+                .session_maps
+                .slash_mode
+                .insert(sid.into(), AtomicBool::new(draft.starts_with('/')));
+        } else if record.direction == Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+            while let Ok(event) = events.try_recv() {
+                crate::state::tests_support::apply_replay_event(&state, &event);
+            }
+        }
+    }
+    assert_eq!(checked, expected);
+    let items = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .slash_menu_items
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.command.as_str())
+            .collect::<Vec<_>>(),
+        final_commands
+    );
+}
+
+// Catches: the accumulator retains a broad menu after single matches or exact completion.
+#[test]
+fn recorded_ego_slash_menu_replaces_and_retracts_cached_items() {
+    replay_ego_slash_menu(
+        "ego-slash-filter-2030.tcap",
+        &["broad", "single", "single", "single", "exact", "unmatched"],
+        &[],
+    );
+}
+
+// Catches: zero matches keep the previous result, or clearing prevents a new menu from appearing.
+#[test]
+fn recorded_ego_slash_menu_zero_matches_clear_and_reopen() {
+    replay_ego_slash_menu(
+        "ego-slash-zero-2030.tcap",
+        &["broad", "single", "zero", "broad", "single"],
+        &["/goal"],
     );
 }
 
@@ -13279,6 +13079,222 @@ mod grid_delivery_tests {
         stop
     }
 
+    struct ChunkReader(std::sync::mpsc::Receiver<Vec<u8>>);
+    impl Read for ChunkReader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.recv() {
+                Ok(chunk) => {
+                    bytes[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+    fn carries_echo(bytes: &[u8]) -> bool {
+        if bytes.len() < 26 {
+            return false;
+        }
+        let rows = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let mut at = 26usize;
+        for _ in 0..rows {
+            let flagged = u16::from_le_bytes([bytes[at + 2], bytes[at + 3]]);
+            at += 4;
+            if flagged & 0x4000 != 0 {
+                at += 2;
+            }
+            for _ in 0..(flagged & 0x3fff) {
+                let codepoint = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                if codepoint == '⑤' as u32 {
+                    return true;
+                }
+                at += 11;
+            }
+        }
+        false
+    }
+
+    /// Catches: post-input echo remaining behind the sustained/typing rate floor
+    /// even though the real reader applied it and the subscriber is caught up.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_echo_reaches_grid_before_animation_floor() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-echo";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        let stop_feed = feed_continuously(&state, sid);
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            // Warm through ten actual publications. This guarantees the ticker
+            // has crossed six dirty ticks; setup speed is not the assertion.
+            for _ in 0..10 {
+                rx.changed().await.unwrap();
+                rx.borrow_and_update();
+            }
+            // The last publication just reset last_sent. Submit a controlled
+            // PTY chunk through the real reader, not by setting grid damage.
+            let submitted = std::time::Instant::now();
+            stamp_input_ms(&state, sid);
+            tx.send("⑤".as_bytes().to_vec()).unwrap();
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break submitted.elapsed();
+                }
+            }
+        })
+        .await;
+        stop_feed.store(true, Ordering::Relaxed);
+        drop(tx); // EOF stops the owned reader/ticker even when the assertion fails.
+        let elapsed = observed.expect("the real reader/ticker never delivered the echo");
+        // One 16ms tick plus 8ms scheduling tolerance, still well below the
+        // 33/50ms floor. The bound is the behavior, not a setup deadline.
+        assert!(
+            elapsed < std::time::Duration::from_millis(24),
+            "post-input echo waited {elapsed:?} for the animation/typing floor"
+        );
+    }
+
+    /// Catches: a fast echo arriving before arming, or post-write bookkeeping
+    /// replacing its already-applied generation. Exercises both write adapters.
+    #[cfg(all(unix, feature = "desktop"))]
+    #[tokio::test]
+    async fn input_priority_is_armed_before_desktop_and_http_writes() {
+        struct ImmediateOutput(Arc<frame_priority::InputFramePriority>);
+        impl Write for ImmediateOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let generation = self.0.generation();
+                assert_ne!(generation, 0, "PTY write preceded priority arming");
+                self.0.applied(generation, std::time::Instant::now());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        for desktop in [true, false] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "fast-input-arming";
+            let priority = Arc::new(frame_priority::InputFramePriority::default());
+            state
+                .grid
+                .input_frame_priority
+                .insert(sid.into(), priority.clone());
+            insert_session_with_writer(
+                &state,
+                sid,
+                Box::new(ImmediateOutput(priority.clone())),
+                TtyMode::Raw,
+            );
+            if desktop {
+                write_pty_parts_off_thread(state.clone(), sid.into(), vec!["x".into()])
+                    .await
+                    .unwrap();
+            } else {
+                crate::mcp_http::session::write_pty_input_parts(&state, sid, &["x"]).unwrap();
+            }
+            let retained = priority.request(std::time::Instant::now(), None).is_some();
+            close_pty_core(&state, sid, false);
+            assert!(retained, "post-write bookkeeping erased the fast echo hint");
+        }
+    }
+
+    /// Catches: an input-priority wake flushing DEC-2026 content before ESU.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_preserves_synchronized_output_until_esu() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-sync";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("\x1b[?2026h⑤".as_bytes().to_vec()).unwrap();
+        // Shorter than the protocol's 150ms safety timeout: no ESU was sent.
+        let premature = tokio::time::timeout(std::time::Duration::from_millis(60), async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await
+        .is_ok();
+        tx.send(b"\x1b[?2026l".to_vec()).unwrap();
+        let completed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await;
+        drop(tx);
+        assert!(
+            !premature,
+            "input priority exposed a partial synchronized update"
+        );
+        completed.expect("ESU did not release synchronized content");
+    }
+
+    /// Catches: input priority bypassing the desktop receipt gate.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_cannot_open_a_stalled_desktop_gate() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-gate";
+        let rx = grid_session(&state, sid);
+        let (gate, received) = subscribe_a_frozen_webview(&state, sid);
+        let initial = cut_frame(&state, sid, "initial");
+        send_grid_frame(&state, sid, initial);
+        drop(rx);
+        state.grid.watch.remove(sid); // Desktop is the sole subscriber.
+        assert!(!gate.is_open());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let applied = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .read_rows_in_range(0, 24)
+            .join("\n")
+            .contains('⑤');
+        let frames = received.lock().len();
+        drop(tx);
+        assert!(
+            applied,
+            "the controlled reader did not apply the input echo"
+        );
+        assert_eq!(
+            frames, 1,
+            "priority sent through an unacknowledged desktop frame"
+        );
+    }
+
     /// Every frame a subscriber was handed, in the order it was handed them.
     #[cfg(feature = "desktop")]
     type RecordedFrames = Arc<Mutex<Vec<Vec<u8>>>>;
@@ -13442,6 +13458,115 @@ mod grid_delivery_tests {
             "show changed grid or scroll position"
         );
         assert_eq!(u32::from_le_bytes(expected[7..11].try_into().unwrap()), 5);
+    }
+
+    /// Catches: synchronous session discovery blocking input and unrelated frame
+    /// consumers on the transport thread while a busy terminal keeps redrawing.
+    /// The FIFO supplies controlled filesystem backpressure, not agent output.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn slow_session_discovery_does_not_stall_input_echo_or_other_frames() {
+        use std::io::{Read, Write};
+        use std::os::unix::ffi::OsStrExt;
+        use std::time::{Duration, Instant};
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _busy_rx = grid_session(&state, "redrawing-agent");
+        let mut other_rx = grid_session(&state, "other-terminal");
+        let stop_busy = start_ticker(&state, "redrawing-agent");
+        let stop_other = start_ticker(&state, "other-terminal");
+        let feed_busy = feed_continuously(&state, "redrawing-agent");
+        let feed_other = feed_continuously(&state, "other-terminal");
+        other_rx.changed().await.unwrap();
+
+        // A real kernel PTY with its slave retained: the line discipline echoes
+        // input without a shell, executable scan, or invented application reply.
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (echo_tx, echo_rx) = tokio::sync::oneshot::channel();
+        let echo_thread = std::thread::spawn(move || {
+            let mut byte = [0];
+            let result = reader.read_exact(&mut byte).map(|()| byte);
+            let _ = echo_tx.send(result);
+        });
+
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let session_dir = dir
+            .path()
+            .join("sessions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let lease = session_dir.join("lease");
+        let c_path = std::ffi::CString::new(lease.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+        let lease_thread = std::thread::spawn(move || {
+            // open() returns only when production discovery reaches this lease.
+            let file = std::fs::OpenOptions::new().write(true).open(lease).unwrap();
+            let _ = opened_tx.send(Instant::now());
+            std::thread::sleep(Duration::from_millis(800));
+            drop(file);
+        });
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/agent/discover-session")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "agentType": "ego", "cwd": dir.path(), "claimedIds": [],
+                    "agentPid": u32::MAX,
+                    "envOverrides": { "EGO_HOME": dir.path() }
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let router = crate::mcp_http::build_router(state.clone(), false, true);
+        let discovery = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+        let blocked_at = opened_rx.await.expect("discovery must reach the lease");
+        other_rx.borrow_and_update();
+        let (echo, next_frame) = tokio::join!(
+            async {
+                run_bounded_pty_input(move || writer.write_all(b"x").map_err(|e| e.to_string()))
+                    .await
+                    .unwrap();
+                let bytes = echo_rx.await.unwrap().unwrap();
+                (bytes, blocked_at.elapsed())
+            },
+            async {
+                other_rx.changed().await.unwrap();
+                blocked_at.elapsed()
+            }
+        );
+        let response = discovery.await.unwrap();
+        for stop in [stop_busy, stop_other, feed_busy, feed_other] {
+            stop.store(true, Ordering::Relaxed);
+        }
+        lease_thread.join().unwrap();
+        echo_thread.join().unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"null", "no match must retain the wire response");
+        assert_eq!(echo.0, *b"x", "kernel did not echo the submitted byte");
+        // This is a transport-service bound, NOT native keyboard-to-paint timing.
+        assert!(
+            echo.1 < Duration::from_millis(200),
+            "input echo waited {:?} behind discovery",
+            echo.1
+        );
+        assert!(
+            next_frame < Duration::from_millis(200),
+            "other session frame waited {next_frame:?} behind discovery"
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -15385,5 +15510,290 @@ async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
                 && title.as_deref() == Some("Initial task")
         ),
         "the first marker must also be observed"
+    );
+}
+
+fn assert_recorded_claude_suggestions(
+    fixture: &str,
+    expected: Option<&[&str]>,
+) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture)).unwrap();
+    let sid = "claude-suggest-2029";
+    let (state, silence) = chunk_trace_state(sid);
+    let (rows, cols) = capture.geometry.unwrap();
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    silence.lock().startup_settled = true;
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut trace = Vec::new();
+    for (index, record) in capture.records.iter().enumerate() {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            if record.data == b"\r" {
+                note_submitted_input(&state, sid);
+            }
+            continue;
+        }
+        let text = utf8.push(&record.data);
+        let escaped = escapes.push(&text);
+        let (clean, _) = crate::state::strip_kitty_sequences(&escaped);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let sl = silence.lock();
+        trace.push((
+            index,
+            sl.pending_suggest_items.clone(),
+            sl.completion_declared,
+            sl.cached_screen_activity,
+        ));
+    }
+    // Exercise the timer's publication boundary once the real final screen is ready.
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready
+    );
+    let previous = state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire);
+    if previous != SHELL_IDLE {
+        assert!(try_shell_transition(
+            &state, sid, previous, SHELL_IDLE, true
+        ));
+    }
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    let snapshot = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(
+        snapshot.suggested_actions,
+        expected.map(|items| items.iter().map(|item| (*item).to_string()).collect()),
+        "parsed choices must survive until REST publication; trace={trace:?}"
+    );
+
+    (state, silence)
+}
+
+// Catches: a hook idle followed by Stop-hook spinner repaints discards parsed choices.
+#[test]
+fn recorded_claude_suggest_survives_stop_hook_idle_then_spinner() {
+    let sid = "claude-suggest-2029";
+    let (state, silence) = assert_recorded_claude_suggestions(
+        "claude-suggest-stop-hooks-2029.tcap",
+        Some(&["Reply alpha", "Reply beta"]),
+    );
+    let mut events = state.event_bus.subscribe();
+    // Submission consumes the real published list. A subsequent timer/poll must
+    // not resurrect the retained payload from before the Stop hooks settled.
+    note_submitted_input(&state, sid);
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    assert!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .suggested_actions
+            .is_none()
+    );
+}
+
+// Catches: a full Claude repaint republishes the first turn instead of its latest choices.
+#[test]
+fn recorded_claude_latest_suggest_replaces_repainted_history() {
+    assert_recorded_claude_suggestions(
+        "claude-suggest-two-turns-2029.tcap",
+        Some(&["Test another marker", "Test the 💬 prefix", "Done testing"]),
+    );
+}
+
+// Catches: a response without choices resurrects the consumed historical marker.
+#[test]
+fn recorded_claude_reply_without_suggest_keeps_consumed_history_cleared() {
+    assert_recorded_claude_suggestions("claude-suggest-consumed-2029.tcap", None);
+}
+
+/// Catches: the native ego title closure leaking following prose into the
+/// accumulated intent consumed by desktop CONTEXT and remote/mobile snapshots.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ego_recorded_joined_intent_ends_at_title_closure_2060() {
+    for (fixture, expected, title, trailing) in [
+        (
+            "ego-intent-joined-2060.tcap",
+            "Verifying joined title closure",
+            "Intent boundary",
+            "This sentence must remain ordinary output after the title.",
+        ),
+        (
+            "ego-intent-aside-wrap-2060.tcap",
+            "Checking (local) configuration and preserving the full description while the terminal wraps an intentionally long title across physical rows without promoting the earlier aside into metadata",
+            "Configuration review across wrapped physical rows",
+            "Following prose remains ordinary output.",
+        ),
+    ] {
+        // Catches: a physical-row aside replacing the real title or swallowing its hard/soft wrap.
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture))
+            .expect("read-only native ego ring capture");
+        let (rows, cols) = capture.geometry.expect("observed geometry");
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        state.config.write().progress_tracking = false;
+        let sid = "ego-intent-2060";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        agent_session(&state, sid, SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("ego".into());
+        state.grid.vt_log_buffers.insert(
+            sid.into(),
+            Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+        );
+        let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+        let mut receiver = state.event_bus.subscribe();
+        let mut processor = ChunkProcessor::new(None, None);
+        let mut intents = Vec::new();
+        for record in capture.records {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 capture"),
+                &silence,
+                sid,
+                &state,
+            );
+            while let Ok(event) = receiver.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event
+                    && parsed["type"] == "intent"
+                {
+                    intents.push((
+                        parsed["text"].as_str().unwrap().to_string(),
+                        parsed["title"].as_str().map(str::to_string),
+                    ));
+                }
+                crate::state::tests_support::apply_replay_event(&state, &event);
+            }
+        }
+        assert_eq!(
+            intents.last(),
+            Some(&(expected.to_string(), Some(title.to_string())))
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(sid)
+                .unwrap()
+                .agent_intent
+                .as_deref(),
+            Some(expected)
+        );
+        let vt = state.grid.vt_log_buffers.get(sid).unwrap();
+        let vt = vt.lock();
+        let visible = vt
+            .lines()
+            .iter()
+            .map(|line| line.text())
+            .chain(vt.screen_rows())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            visible.contains(trailing),
+            "trailing prose must remain in terminal output: {visible}"
+        );
+    }
+}
+
+// Catches: a clipped native AskUserQuestion exporting no controls and falling back to binary Yes/No.
+#[tokio::test(flavor = "current_thread")]
+async fn captured_claude_narrow_question_remains_answerable() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-narrow-2093.tcap"))
+            .expect("authentic narrow Claude capture");
+    assert_eq!(capture.geometry, Some((14, 37)));
+    assert!(
+        capture
+            .records
+            .iter()
+            .any(|r| r.direction == crate::pty_capture::CaptureDirection::Input)
+    );
+    let sid = "claude-narrow-2093";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(14, 37, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+    }
+    assert!(
+        await_session(&state, sid, |s| {
+            s.awaiting_input
+                && s.question_text.as_deref() == Some("Pick a colour?")
+                && s.choice_prompt.as_ref().is_some_and(|p| {
+                    serde_json::to_value(p).unwrap()["selection_mode"] == "navigate-only"
+                        && p.options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>()
+                            == ["↑", "↓", "↵"]
+                        && p.options
+                            .iter()
+                            .map(|o| o.label.as_str())
+                            .collect::<Vec<_>>()
+                            == [
+                                "Previous option",
+                                "Next option",
+                                "Select highlighted option",
+                            ]
+                })
+        })
+        .await,
+        "clipped choices need explicit native navigation, never an invented complete list or binary fallback"
+    );
+    assert!(!crate::state::resolve_choice_prompt_input(
+        &state, sid, "\x1b[B"
+    ));
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(crate::state::resolve_choice_prompt_input(&state, sid, "\r"));
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await
     );
 }

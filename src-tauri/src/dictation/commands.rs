@@ -2162,10 +2162,30 @@ pub fn get_correction_map(dictation: State<'_, DictationState>) -> HashMap<Strin
 pub fn set_correction_map(
     dictation: State<'_, DictationState>,
     map: HashMap<String, String>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    let mut corrections = dictation.corrections.lock();
-    corrections.set_replacements(map);
-    corrections.save_to_file(&corrections::TextCorrector::default_path())
+    save_correction_map(&dictation.corrections, map)?;
+    crate::settings::api::publish_change(&state, "corrections", true);
+    Ok(())
+}
+
+/// Persist through the same TextCorrector owner lock before adopting live state.
+pub(crate) fn save_correction_map(
+    live: &parking_lot::Mutex<corrections::TextCorrector>,
+    map: HashMap<String, String>,
+) -> Result<(), String> {
+    let mut live = live.lock();
+    let next = corrections::TextCorrector::from_map(map);
+    next.validate()?;
+    corrections::TextCorrector::update_file(
+        &corrections::TextCorrector::default_path(),
+        |latest| {
+            *latest = next.clone();
+            Ok(((), true))
+        },
+    )?;
+    *live = next;
+    Ok(())
 }
 
 /// Shared by the IPC command and `GET /dictation/devices`.
@@ -2953,8 +2973,11 @@ pub fn set_dictation_config(
     base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    save_dictation_config(base, config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))?;
+    crate::settings::api::publish_change(&state, "voice", true);
+    Ok(())
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.

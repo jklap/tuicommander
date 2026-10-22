@@ -4,6 +4,7 @@ import { rpc } from "../../transport";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 
 vi.mock("../../transport", () => ({
+	subscribeEvents: vi.fn(async () => () => {}),
 	buildHttpUrl: (path: string) => `http://localhost${path}`,
 	rpc: vi.fn().mockResolvedValue(undefined),
 	HttpRpcError: class extends Error {},
