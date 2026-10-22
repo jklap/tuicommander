@@ -51,7 +51,9 @@ beforeEach(() => {
 	});
 	const ctx = new Proxy({} as Record<string, unknown>, {
 		get: (t, k: string) =>
-			k === "measureText" ? () => ({ width: 8, fontBoundingBoxAscent: 10, fontBoundingBoxDescent: 3 }) : (t[k] ?? (() => {})),
+			k === "measureText"
+				? () => ({ width: 8, fontBoundingBoxAscent: 10, fontBoundingBoxDescent: 3 })
+				: (t[k] ?? (() => {})),
 	});
 	vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
 	vi.stubGlobal(
