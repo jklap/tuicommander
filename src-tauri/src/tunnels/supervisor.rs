@@ -587,7 +587,6 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
         }
         let _ = child.kill().await;
         let _ = child.wait().await;
-        return;
     }
 
     // Wait up to 5s for clean exit after SIGTERM, then escalate to SIGKILL.
