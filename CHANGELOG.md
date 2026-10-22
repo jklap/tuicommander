@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
+
 ## [2.0.0-beta.1] - 2026-10-22
 
 - Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
@@ -216,8 +218,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
-
-- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
 ### Added
 
 - Discover and edit dictation correction records through their stable-key Settings owner, with shared atomic persistence and live dictionary refresh (#1992-d4fa).
