@@ -28,7 +28,8 @@ pub(super) fn project(
     for read in stories {
         let story = &read.story;
         let closed = matches!(story.status, StoryStatus::Done | StoryStatus::WontFix);
-        if matches!(filter.visibility, StoryVisibility::Open) && closed
+        if story.archived != filter.archived
+            || matches!(filter.visibility, StoryVisibility::Open) && closed
             || matches!(filter.visibility, StoryVisibility::Closed) && !closed
             || matches!(filter.visibility, StoryVisibility::Qa) && story.status != StoryStatus::Qa
             || filter
@@ -59,7 +60,7 @@ impl StoryStore {
         if filter.untyped_only && filter.story_type.is_some() {
             return Err("untypedOnly and storyType are mutually exclusive".into());
         }
-        let mut view = self.plan_view(plan_id)?;
+        let mut view = self.plan_view_archived(plan_id, filter.archived)?;
         (view.visible_story_ids, view.columns) = project(&view.stories, filter);
         Ok(view)
     }

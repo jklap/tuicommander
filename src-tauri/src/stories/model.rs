@@ -120,6 +120,8 @@ pub enum StoryVisibility {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoryFilter {
     #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
     pub visibility: StoryVisibility,
     pub story_type: Option<StoryType>,
     #[serde(default)]

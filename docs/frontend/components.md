@@ -610,6 +610,8 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
+Archive and restore controls send the selected record revision to the shared native service. Independent Archived plans and Archived stories toggles select archived records; Rust projects list ids and Kanban columns. Archived details stay readable, but work actions and new-story creation under archived plans are unavailable until restoration. Ownership refusals use the existing error banner.
+
 QA stories have a separate status label, QA-only filter and Kanban column. Criteria remain editable in QA. QA passed sends approval; QA failed returns development work to In progress. These controls use the shared revision-checked story service.
 
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.

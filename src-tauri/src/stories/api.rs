@@ -628,6 +628,11 @@ mod tests {
         assert!(call(serde_json::json!({"action":"unarchive_story","story_id":story.id,"expected_revision":story.revision})).unwrap_err().contains("stale"));
         let StoryReply::Stories(page) = call(serde_json::json!({"action":"list_stories","plan_id":story.plan_id,"archived":true,"limit":1})).unwrap() else { panic!("stories"); };
         assert_eq!(page.value, vec![archived.clone()]);
+        let StoryReply::PlanView(view) = call(serde_json::json!({"action":"filtered_plan_view","plan_id":story.plan_id,"filter":{"archived":true}})).unwrap() else { panic!("view"); };
+        assert_eq!(view.visible_story_ids, vec![story.id.clone()]);
+        assert_eq!(view.stories[0].story, archived);
+        assert_eq!(view.state, PlanState::Active);
+
         let restored = story_of(call(serde_json::json!({"action":"unarchive_story","story_id":story.id,"expected_revision":archived.revision})).unwrap());
         let mut expected = story.clone();
         expected.revision += 2;

@@ -456,6 +456,14 @@ impl StoryStore {
     }
 
     pub fn plan_view(&self, plan_id: &str) -> Result<PlanView, String> {
+        self.plan_view_archived(plan_id, false)
+    }
+
+    pub(super) fn plan_view_archived(
+        &self,
+        plan_id: &str,
+        archived: bool,
+    ) -> Result<PlanView, String> {
         let all_stories = self.list_stories(plan_id)?;
         let stories: Vec<_> = all_stories
             .iter()
@@ -497,8 +505,9 @@ impl StoryStore {
         } else {
             PlanState::Active
         };
-        let reads: Vec<StoryRead> = stories
+        let reads: Vec<StoryRead> = all_stories
             .iter()
+            .filter(|story| story.archived == archived)
             .map(|story| {
                 let mut stack = vec![story.id.as_str()];
                 let mut visited = HashSet::new();
@@ -521,7 +530,13 @@ impl StoryStore {
                 }
             })
             .collect();
-        let (visible_story_ids, columns) = super::filters::project(&reads, &Default::default());
+        let (visible_story_ids, columns) = super::filters::project(
+            &reads,
+            &super::StoryFilter {
+                archived,
+                ..Default::default()
+            },
+        );
         Ok(PlanView {
             visible_story_ids,
             columns,

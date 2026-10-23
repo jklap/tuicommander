@@ -132,3 +132,6 @@
 
 .editCriteria { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-secondary); font-size: var(--font-xs); }
 .editCriterion { display: flex; flex-direction: column; gap: 4px; }
+.filters .archiveToggle { flex-direction: row; align-items: center; flex-basis: 100%; }
+.archiveToggle input { accent-color: var(--accent); }
+.filters button:disabled { opacity: .5; cursor: default; }
