@@ -294,7 +294,9 @@ fn story_notes_upgrade_v1_and_v2_without_rewriting_existing_story_documents() {
         drop(store);
         // Restore the pre-note table set. QA tests separately cover the old CHECK constraint.
         let legacy = rusqlite::Connection::open(&db).unwrap();
-        legacy.execute_batch("DROP TABLE story_notes;").unwrap();
+        legacy
+            .execute_batch("DROP TABLE story_notes; ALTER TABLE plans DROP COLUMN revision;")
+            .unwrap();
         legacy.pragma_update(None, "user_version", version).unwrap();
         drop(legacy);
         let upgraded = StoryStore::open_at(&db).unwrap();

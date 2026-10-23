@@ -108,14 +108,14 @@ fn update_plan_preserves_omitted_fields_and_rejects_invalid_patches_atomically()
     assert_eq!(moved.revision, 3);
 }
 
-/// Catches: opening an existing v2 store losing plan data instead of supplying revision one.
+/// Catches: opening an existing v3 store losing plan data instead of supplying revision one.
 #[test]
-fn update_plan_migrates_version_two_without_changing_metadata() {
+fn update_plan_migrates_version_three_without_changing_metadata() {
     let (dir, store, plan) = setup();
     drop(store);
     let path = dir.path().join("stories.sqlite3");
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("ALTER TABLE plans DROP COLUMN revision; PRAGMA user_version=2;")
+    conn.execute_batch("ALTER TABLE plans DROP COLUMN revision; PRAGMA user_version=3;")
         .unwrap();
     drop(conn);
     let store = StoryStore::open_at(&path).unwrap();
