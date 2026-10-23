@@ -765,8 +765,8 @@ export const BranchItem: Component<{
 	const ctxMenu = createContextMenu();
 	// Long press only. The agent list on right click waits for Boss's approval of a
 	// change to a sidebar click (AGENTS.md "Sidebar clicks"), so right click keeps
-	// opening the row menu. Shell rows have no agents, so a long press does nothing.
-	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])), {
+	// opening the row menu. Agent launches also work in non-git shell folders.
+	const agentLaunchMenu = createAgentLaunchMenu(() => props.agentMenuItems?.() ?? [], {
 		rightClick: false,
 	});
 
@@ -924,12 +924,10 @@ export const BranchItem: Component<{
 			quick.push({ label: "Open in GitHub", action: () => handleOpenUrl(prUrl || branchUrl) });
 		}
 		quick.push({ label: "Add Terminal", action: props.onAddTerminal });
-		if (!isShell) {
-			const agentItems = props.agentMenuItems?.();
-			if (agentItems && agentItems.length > 0) quick.push(...agentItems);
-		}
+		const agentItems = props.agentMenuItems?.();
+		if (agentItems && agentItems.length > 0) quick.push(...agentItems);
 		// "Switch Branch" submenu — only on the main worktree row.
-		if (isMainWorktree && props.onSwitchBranch && props.switchBranchList && props.currentBranch) {
+		if (hasBranch && isMainWorktree && props.onSwitchBranch && props.switchBranchList && props.currentBranch) {
 			const switchBranch = props.onSwitchBranch;
 			const current = props.currentBranch();
 			const branchList = props.switchBranchList();
@@ -957,7 +955,7 @@ export const BranchItem: Component<{
 				branchOps.push({ label: "Create Branch…", action: props.onCreateBranch });
 			}
 			branchOps.push({
-				label: isLinkedWorktree ? "Rename Worktree" : "Rename Branch",
+				label: "Rename Branch",
 				action: props.onRename,
 				disabled: props.branch.isMain,
 			});
@@ -981,7 +979,7 @@ export const BranchItem: Component<{
 
 		// Group 3 — PR / workflow actions (plugin + built-in smart prompts).
 		const workflow: ContextMenuItem[] = [];
-		const branchActions = contextMenuActionsStore.getContextActions("branch");
+		const branchActions = isShell ? [] : contextMenuActionsStore.getContextActions("branch");
 		if (branchActions.length > 0) {
 			const ctx = { target: "branch" as const, repoPath: props.repoPath, branchName: props.branch.branchName };
 			for (const a of branchActions) {

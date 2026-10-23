@@ -1264,7 +1264,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: () => ({ method: "GET", path: "/github/auth/status" }),
 	},
 	github_diagnostics: {
-		map: () => ({ method: "GET", path: "/github/diagnostics" }),
+		map: (args) => ({ method: args.refresh === true ? "POST" : "GET", path: "/github/diagnostics" }),
 	},
 	// Multi-account: accounts + repo bindings
 	github_list_accounts: {
@@ -1920,6 +1920,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- MCP status ---
 	get_mcp_status: { map: () => ({ method: "GET", path: "/mcp/status" }) },
+	get_mcp_audit: { map: () => ({ method: "GET", path: "/mcp/audit" }) },
 
 	// --- Network ---
 	get_local_ip: { map: () => ({ method: "GET", path: "/system/local-ip" }) },
@@ -2124,6 +2125,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "PUT",
 			path: `/config/remote-connections/${p("id")}/password`,
 			body: { password: args.password },
+		}),
+	},
+	set_remote_connection_relay_pairing: {
+		map: (args, p) => ({
+			method: "PUT",
+			path: `/config/remote-connections/${p("id")}/relay-pairing`,
+			body: { bundle: args.bundle },
 		}),
 	},
 	remote_connection_password_exists: {

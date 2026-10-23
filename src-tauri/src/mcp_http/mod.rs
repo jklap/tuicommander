@@ -133,6 +133,22 @@ fn json_result<T: serde::Serialize>(result: Result<T, String>) -> Response {
     }
 }
 
+/// Like [`json_result`], but an error `is_user_error` accepts is the caller's mistake
+/// and answers 422, so clients show it as a plain message instead of a server fault.
+fn user_error_result<T: serde::Serialize>(
+    result: Result<T, String>,
+    is_user_error: fn(&str) -> bool,
+) -> Response {
+    match result {
+        Err(error) if is_user_error(&error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        result => json_result(result),
+    }
+}
+
 /// Shorthand for a 500 Internal Server Error with `{"error": msg}` body.
 fn err_500(msg: &str) -> Response {
     (
@@ -602,7 +618,7 @@ async fn post_story_action(
     .await
     .map_err(|error| format!("story task failed: {error}"))
     .and_then(|result| result);
-    json_result(result)
+    user_error_result(result, crate::stories::is_user_error)
 }
 
 async fn get_story_capabilities() -> Json<bool> {
@@ -627,14 +643,7 @@ async fn post_workflow_definition_action(
             .await
             .map_err(|error| format!("workflow definition task failed: {error}"))
             .and_then(|result| result);
-    match result {
-        Err(error) if error.starts_with(crate::workflows::WORKFLOW_VALIDATION_ERROR_PREFIX) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"error": error})),
-        )
-            .into_response(),
-        result => json_result(result),
-    }
+    user_error_result(result, crate::workflows::is_user_error)
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
@@ -1842,7 +1851,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/github/diagnostics",
-            get(github_routes::github_diagnostics),
+            get(github_routes::github_diagnostics).post(github_routes::github_refresh_diagnostics),
         )
         // Multi-account repo bindings (IPC/HTTP parity). Accounts + repo resolution
         // are gated to desktop below — their impls are #[cfg(feature = "desktop")].
@@ -1996,6 +2005,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/{id}/password",
             put(config_routes::put_remote_connection_password)
                 .get(config_routes::get_remote_connection_password_exists),
+        )
+        .route(
+            "/config/remote-connections/{id}/relay-pairing",
+            put(config_routes::put_remote_connection_relay_pairing),
         )
         .route(
             "/config/remote-connections/{id}/token",
@@ -3957,6 +3970,130 @@ mod tests {
         assert_eq!(reply["value"]["title"], "Route plan");
     }
 
+    async fn story_error_body(
+        app: &axum::Router,
+        path: &str,
+        action: serde_json::Value,
+    ) -> (StatusCode, String) {
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(
+                path,
+                &serde_json::json!({ "action": action }),
+                local,
+            ))
+            .await
+            .expect("story response");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read story response");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("story JSON");
+        (
+            status,
+            body["error"].as_str().unwrap_or_default().to_owned(),
+        )
+    }
+
+    // Catches: a missing plan file or unchecked criteria answered as HTTP 500 (a server fault)
+    // when the user made a fixable mistake.
+    #[tokio::test]
+    async fn story_user_errors_are_client_errors_with_a_plain_message() {
+        use crate::stories::{NewPlan, NewStory, StoryOrigin, StoryStore};
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let store = StoryStore::open().expect("stories");
+        let plan = store
+            .create_plan(NewPlan {
+                project: project
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let path = format!("/stories/action?path={}", project.path().display());
+        let app = build_router(test_state(), false, true);
+
+        let (status, error) = story_error_body(
+            &app,
+            &path,
+            serde_json::json!({"action": "add_plan_source", "source": "missing.md"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+        assert!(error.starts_with("plan document not found: "), "{error}");
+
+        let (status, _) = story_error_body(
+            &app,
+            &path,
+            serde_json::json!({"action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let started = store.get_story(&story.id).unwrap();
+        let (status, error) = story_error_body(
+            &app,
+            &path,
+            serde_json::json!({"action": "transition", "story_id": story.id, "expected_revision": started.revision, "command": "submit_review"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+        assert!(error.starts_with("criteria are incomplete"), "{error}");
+    }
+
+    // Catches: publishing an unchanged draft answered as HTTP 500.
+    #[tokio::test]
+    async fn publishing_an_unchanged_draft_is_a_client_error() {
+        use crate::workflows::{WorkflowAction, WorkflowKind, WorkflowStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = project.path().to_str().unwrap();
+        let draft = WorkflowStore::open()
+            .unwrap()
+            .seed_templates(project)
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == WorkflowKind::Story)
+            .unwrap();
+        // The seeded draft is already published, so publishing it again changes nothing.
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: project.into(),
+            }),
+            Json(WorkflowAction::Publish {
+                id: draft.id,
+                expected_revision: draft.draft_revision,
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(body.contains("already been published"), "{body}");
+    }
+
     #[tokio::test]
     async fn markdown_image_route_serves_nested_images_and_rejects_escapes_and_unauthenticated_peers()
      {
@@ -5130,6 +5267,67 @@ mod tests {
             );
         }
         assert!(!payload.to_string().contains("secret-canary"));
+    }
+
+    // Catches: the HTTP relay-pairing import storing an unparsable bundle, skipping
+    // the Settings refresh the IPC command shares, or echoing the bundle in the hint.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn relay_pairing_import_route_validates_and_refreshes() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "relay-pairing-import";
+        let request = |bundle: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/relay-pairing"),
+                &serde_json::json!({ "bundle": bundle }),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let rejected = app.clone().oneshot(request("not-a-bundle")).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            crate::remote_connection::relay_bundle(id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "a rejected bundle must not publish"
+        );
+
+        let bearer = crate::relay_tunnel::bundle::RelayBearer::new("R".into()).unwrap();
+        let bundle =
+            crate::relay_tunnel::bundle::PairingBundle::generate("ws://127.0.0.1:1", bearer)
+                .unwrap();
+        let accepted = app
+            .oneshot(request(bundle.to_text().as_str()))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(
+            crate::remote_connection::relay_bundle(id)
+                .unwrap()
+                .unwrap()
+                .room,
+            bundle.room
+        );
+        let crate::state::AppEvent::SettingsChanged(notice) =
+            events.try_recv().expect("an import must refresh Settings")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(notice.section, "connections");
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains(&bundle.room)
+        );
+        crate::remote_connection::set_relay_pairing(id, "").unwrap();
     }
 
     // Catches: a successful direct credential write leaving other Settings readers stale.

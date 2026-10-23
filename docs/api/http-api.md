@@ -28,7 +28,7 @@ A distinct second start on a plan with a running or paused run is refused with `
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`. Publishing a draft with no edit since its last publication also returns HTTP 422 (`draft revision has already been published`); each draft carries `lastPublishedDraftRevision`, and a client disables Publish while it equals `draftRevision`.
 
 ## Native stories
 
@@ -39,6 +39,8 @@ A distinct second start on a plan with a running or paused run is refused with `
 Story transition provenance comes from host-validated credentials: desktop IPC and credential-authenticated HTTP record `human`; sessionless local HTTP records `local_api`. Managed calls record their session identity, including when the claiming session approves its own story. Actor identity never restricts actions; state, revision, project and claim-conflict rules remain enforced.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
+
+`summary` returns `{type:"summary",value:{activePlans,inProgress,done,total}}` for the project: plans whose derived state is active, and over their stories those `in_progress`, those `done`, and all except `wont_fix` and abandoned ones. The Plans and Stories toolbar button reads it; it is also available over IPC through `story_action_command`.
 
 The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the `start_manual` command to begin a Ready story without a terminal. Actor identity is tracking only; managed, local API and human callers use the same transition rules. `remove_dependency` accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
 
@@ -1520,6 +1522,7 @@ GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
 PUT    /config/remote-connections/{id}/password
+PUT    /config/remote-connections/{id}/relay-pairing
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
 POST   /config/remote-connections/{id}/install
@@ -1536,6 +1539,13 @@ daemon's in-memory session token. Successful password set/clear requests publish
 a value-free `settings-changed` event for `connections` after vault persistence;
 a failed vault write publishes nothing. Deployment pairing-token creation and
 persisted deployment-mode changes invalidate the same Settings section.
+`PUT .../relay-pairing` takes `{ "bundle": "tuic-pair-v1:..." }`, the text printed
+by `tuic-remote --relay-pair`. The bundle is parsed first; an unparsable one is
+rejected, nothing is stored and nothing is published. It is kept in the vault
+only (it holds the end-to-end secret) and an empty string forgets it. A
+successful change publishes the same value-free `connections` event. The
+connection status of a `relay` connection carries `relay_failure`
+(`relay_unreachable`, `daemon_offline`, `pairing_rejected`, `link_lost`).
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
@@ -2926,6 +2936,8 @@ Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
 
+`POST /stories/action` answers a mistake the user can fix with HTTP 422 and `{ "error": "..." }`: `add_plan_source` for a missing plan file (`plan document not found: <path>`) and `submit_review` with unchecked criteria (`criteria are incomplete: unchecked indexes N`). Other failures stay HTTP 500.
+
 Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
 
 ### Stored terminal marker coordinates
@@ -3455,6 +3467,8 @@ and IPC use the same raw 500-Unicode-scalar text limit as MCP.
 
 ### GET /mcp/audit
 
+Gated by `mcp_call_audit_enabled` (default off in release, on in debug): when off the body is `{"enabled":false,"records":[]}`. Rows add `outcome`: `replied`, `error` or `cancelled`. IPC: `get_mcp_audit`.
+
 Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
 1024 retained per instance). Includes call/parent correlation UUIDs, recognized
 operation, target digest, UTF-8 response text bytes, application error and separate
@@ -3506,3 +3520,15 @@ and semantics apply to desktop IPC state.
 ### Remote session closure
 
 MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+GitHub diagnostics (`GET /github/diagnostics`) also returns `repo_access_errors`:
+owner/account/host groups with `repos: [{repo, reason, message}]` and an
+optional `oauth_app_url` for every github.com OAuth group, regardless of reason.
+`reason` is `not_found`, `forbidden` or `unknown`. Messages are the exact per-alias GraphQL errors.
+Only confirmed root `NOT_FOUND` responses enter `repos_not_found` and its 24-hour
+exclusion. Other denials are eligible for the next monitoring poll.
+
+Manual GitHub diagnostics refresh uses `POST /github/diagnostics` (no body). It
+clears the NOT_FOUND cooldown for all accounts and returns the same diagnostics
+DTO. `GET /github/diagnostics` remains read-only. This maps to
+`github_diagnostics` with `refresh: true` over IPC; omitted or false is read-only.

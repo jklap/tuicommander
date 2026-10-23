@@ -113,7 +113,7 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers
@@ -284,7 +284,7 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers
@@ -454,7 +454,8 @@ pub(crate) async fn resize_pty(
     cols: u16,
 ) -> Result<(), String> {
     let state = Arc::clone(&state);
-    let resize_frame = resize_session_off_thread(&state, session_id.clone(), rows, cols).await?;
+    let resize_frame =
+        resize_session_off_thread(&state, session_id.clone(), rows, cols, "ipc").await?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {

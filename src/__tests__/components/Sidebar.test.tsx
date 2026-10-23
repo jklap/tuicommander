@@ -150,6 +150,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
 import { appLogger } from "../../stores/appLogger";
+import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -1569,7 +1570,7 @@ describe("Sidebar", () => {
 				expect(menuLabels(container)).not.toContain("Claude Code");
 			});
 
-			it("a shell row has no agents, so a right click falls through to the row menu", () => {
+			it("a shell row right click keeps the row menu instead of directly listing agents", () => {
 				setRepos({
 					"/repo1": makeRepo({
 						workspaces: {
@@ -3428,6 +3429,76 @@ describe("Sidebar", () => {
 	});
 
 	describe("context menu", () => {
+		it("offers and invokes Add Agent for a non-git shell workspace", () => {
+			// Catches: shell/non-git gating drops an otherwise valid agent launch.
+			setRepos({
+				"/repo1": makeRepo({
+					isGitRepo: false,
+					activeWorkspaceId: "shell",
+					workspaces: {
+						shell: {
+							workspaceId: "shell",
+							branchName: "shell",
+							isShell: true,
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const launch = vi.fn();
+			const buildAgentMenuItems = vi.fn(() => [{ label: "Add Agent", action: launch }]);
+			const { container } = render(() => <Sidebar {...defaultProps({ buildAgentMenuItems })} />);
+			fireEvent.contextMenu(container.querySelector(".branchItem")!);
+			const agent = Array.from(container.querySelectorAll(".menu button")).find(
+				(button) => button.textContent === "Add Agent",
+			);
+			expect(agent).toBeDefined();
+			expect(container.querySelector(".menu")?.textContent).not.toContain("Create Worktree");
+			fireEvent.click(agent!);
+			expect(buildAgentMenuItems).toHaveBeenCalledWith("/repo1", "shell");
+			expect(launch).toHaveBeenCalledOnce();
+		});
+
+		it("hides branch workflow actions on non-git shell rows", () => {
+			// Catches: Create PR and other branch prompts offered without a Git branch.
+			const action = contextMenuActionsStore.registerContextAction("test", {
+				id: "create-pr",
+				label: "Create PR",
+				target: "branch",
+				action: vi.fn(),
+			});
+			try {
+				setRepos({
+					"/repo1": makeRepo({
+						isGitRepo: false,
+						activeWorkspaceId: "shell",
+						workspaces: {
+							shell: {
+								workspaceId: "shell",
+								branchName: "shell",
+								isShell: true,
+								isMain: true,
+								worktreePath: "/repo1",
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(container.querySelector(".branchItem")!);
+				expect(container.querySelector(".menu")?.textContent).toContain("Add Terminal");
+				expect(container.querySelector(".menu")?.textContent).not.toContain("Create PR");
+			} finally {
+				action.dispose();
+			}
+		});
+
 		it("opens context menu on right-click of branch item", () => {
 			setRepos({ "/repo1": makeRepo() });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);

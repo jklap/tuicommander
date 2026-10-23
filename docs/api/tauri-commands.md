@@ -319,6 +319,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
 | `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
+| `set_remote_connection_relay_pairing` | `id, bundle` | `()` | Parse and store the relay pairing bundle from `tuic-remote --relay-pair` in the OS credential vault, or forget it when `bundle` is empty. Same owner and value-free `connections` Settings change as the HTTP route |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json`. Publishes a value-free `connections` Settings change only after vault persistence, through the same owner as HTTP |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
@@ -683,6 +684,7 @@ empty result.
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
 | `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `get_mcp_audit` | -- | `JSON` | Body-free MCP tools/call outcome audit (same body as `GET /mcp/audit`); `{enabled:false,records:[]}` while `mcp_call_audit_enabled` is off |
 | `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
@@ -1058,3 +1060,11 @@ host-injected state routes both through the shared value-free Settings publisher
 only after owner persistence. Their HTTP equivalents use the same adapters.
 
 Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).
+
+`github_diagnostics` includes `repo_access_errors` grouped by account, host and
+owner, with per-repository reason (`not_found`, `forbidden` or `unknown`) and
+exact message, plus an OAuth app authorization URL for every github.com OAuth group. IPC and HTTP share this DTO.
+
+`github_diagnostics` accepts optional `refresh: boolean` (default false). True
+clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
+`POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.

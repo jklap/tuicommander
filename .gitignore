@@ -56,6 +56,9 @@ scripts/*
 !scripts/check-desktop-embedding.sh
 !scripts/github-work-live-check.mjs
 !scripts/github-work-live-check.test.mjs
+!scripts/github-work-desktop-e2e.mjs
+!scripts/github-work-desktop-e2e.test.mjs
+!scripts/plugin-review-desktop-e2e.mjs
 !scripts/observe-github-volume-1995.py
 !scripts/observe-github-volume-1995.vite.ts
 !scripts/check-mobile-session-chat-layout.mjs
@@ -74,6 +77,7 @@ scripts/fixtures/*
 !scripts/record-chat-fixtures.py
 !scripts/chat-view-follow-proof.mjs
 !scripts/design-mode-tokens.test.mjs
+!scripts/fixtures/design-mode-chrome149-capture-denial.json
 !scripts/build-docs.sh
 !scripts/dev-install.sh
 !scripts/dev-server.mjs

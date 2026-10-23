@@ -109,6 +109,8 @@ The app launches in standalone mode (no browser chrome) for a native-like experi
 
 **The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
 
+Long file paths in mobile **CLI** output wrap inline with the surrounding text and keep the line's hanging indent. Tap a path to open it, or focus it and press Enter or Space.
+
 At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
@@ -363,6 +365,18 @@ A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
 compares the `instance_id` in `GET /health` against this process's own, so a
 second daemon on the same machine (a different port) is still a valid peer.
+
+### Adding a Relay Connection
+
+Use this when the remote machine accepts no inbound connection.
+
+1. On the remote machine run `tuic-remote --relay-pair <relay-url> --relay-register`, or set `TUIC_RELAY_TOKEN` instead of `--relay-register`. Add `--relay-out <file>` to write the bundle to a private file.
+2. Restart `tuic-remote` so it registers with the relay.
+3. Copy the printed `tuic-pair-v1:` bundle to this machine over a trusted channel. It holds the end-to-end secret.
+4. Open **Settings** → **Remote Machines**, click **+**, and select **Relay**.
+5. Paste the bundle and save, then click **Connect**.
+
+If the status shows `pairing_rejected`, the daemon was paired again: import the new bundle. `daemon_offline` means the daemon is not connected to the relay. After `link_lost` or `relay_unreachable` TUICommander reconnects by itself. Running `--relay-pair` again replaces the pairing.
 
 ### Connect or Install
 

@@ -149,7 +149,7 @@ behavior.
 | Command | Description |
 |---------|-------------|
 | `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
-| `resize_pty(session_id, rows, cols)` | Resize the PTY terminal dimensions. `async`: the reflow it triggers is proportional to scrollback and runs on the blocking pool (`resize_session_off_thread`), never on the IPC thread. The HTTP route takes the same path. |
+| `resize_pty(session_id, rows, cols)` | Resize the PTY terminal dimensions. `async`: the reflow it triggers is proportional to scrollback and runs on the blocking pool (`resize_session_off_thread`), never on the IPC thread. The HTTP route takes the same path. Several viewers share one PTY and the last resize wins. Each change is logged at debug level as `PTY resize applied` with `origin` (`ipc`, `http`, `mcp`), the previous size and `child_rows`/`child_cols` (TIOCGWINSZ on the master, the size the child reads; on Windows ConPTY it is the cached size that was just set). A same-size request logs `PTY resize no-op`. The frontend logs every request as the diagnostic entry `resize_pty request <caller> <rows>x<cols>` with the viewer and the measured box, only while `perfDebug` is on. |
 | `pause_pty(session_id)` | Pause the reader thread (stops output emission). |
 | `resume_pty(session_id)` | Resume the reader thread. |
 | `close_pty(session_id, cleanup_worktree)` | Close PTY and optionally remove worktree. |
@@ -514,14 +514,14 @@ struct ChangedRow {
 
 **How it works:**
 
-1. Owns the session's `TerminalGrid`, backed by Alacritty (24 rows × 220 cols default); the same grid supplies rendered frames, scrollback, copy and search
+1. Owns the session's `TerminalGrid`, backed by Alacritty (initialized at the PTY spawn rows and columns); the same grid supplies rendered frames, scrollback, copy and search
 2. On each `process()` call, compares current screen rows against previous snapshot
 3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log. The extraction cursor uses the primary grid origin (`total_scrolled`), including evicted rows; bounded history length stops at 10,000 and would otherwise freeze this log while the live screen keeps changing
 4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
 5. The grid retains 10,000 history rows per screen; the separate log is bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines). Oldest entries are dropped when each buffer is full. The grid history cannot be reduced as an independent log scratch buffer
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
 
-**Resize:** When the PTY is resized, `VtLogBuffer.resize()` keeps the parser in sync and clears the previous-row snapshot (avoids false scroll detection after resize). If an alternate-screen app is active, the durable-log cursor is synchronized against the inactive primary grid, not the unrelated alternate history; normal shell capture therefore resumes on the first line after exit.
+**Resize:** The first resize seeds its no-op guard from `master.get_size()`, not the grid, so a grid-only match cannot suppress a required kernel resize. When the PTY is resized, `VtLogBuffer.resize()` keeps the parser in sync and clears the previous-row snapshot (avoids false scroll detection after resize). If an alternate-screen app is active, the durable-log cursor is synchronized against the inactive primary grid, not the unrelated alternate history; normal shell capture therefore resumes on the first line after exit.
 
 Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>`.
 
