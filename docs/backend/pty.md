@@ -302,7 +302,13 @@ the same ticker early. A priority frame waits at least 8ms after the previous
 frame; at most two priority bypasses are allowed in any rolling 100ms, even if
 input continues. Other output retains the sustained-animation 33ms floor and
 the typing-under-saturation 50ms floor. The desktop receipt gate, synchronized
-output buffering, frame ordering and shared-damage repair are unchanged.
+output buffering and frame ordering remain in force. Receipts only release the
+gate; they do not mark the terminal dirty. Real damage and repair debt remain
+pending while the desktop is paused. Recovery sends one private full frame to
+desktop and publishes the matching delta only to browsers. It does not offer that delta to desktop again or recreate
+the debt. Browsers retain their ordinary delta stream. These changes
+remove idle frame feedback, not the deliberate input budget or rate floors; native
+echo measurements still exceed one frame at p95 (story 2040-16b2).
 A generic PTY stream does not identify application echo: the second credit can
 serve later output if unrelated post-input output used the first. This is not a
 guarantee that every transient glyph survives viewport scrolling or that native

@@ -803,17 +803,27 @@ pub(crate) fn ack_terminal_frame(
     received: u64,
     visible: Option<bool>,
 ) {
+    ack_terminal_frame_core(&state, &session_id, epoch, received, visible);
+}
+
+#[cfg(feature = "desktop")]
+pub(super) fn ack_terminal_frame_core(
+    state: &AppState,
+    session_id: &str,
+    epoch: u64,
+    received: u64,
+    visible: Option<bool>,
+) {
     if let Some(visible) = visible
-        && let Some(channel) = state.grid.channels.get(&session_id)
+        && let Some(channel) = state.grid.channels.get(session_id)
         && channel.epoch == epoch
     {
         channel.visible.store(visible, Ordering::Relaxed);
     }
-    if let Some(gate) = state.grid.gates.get(&session_id)
-        && gate.ack(epoch, received)
-        && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
-    {
-        dirty.store(true, Ordering::Relaxed);
+    if let Some(gate) = state.grid.gates.get(session_id) {
+        // A receipt reopens delivery; it is not new terminal damage. The ticker
+        // retains actual reader damage and missed-frame repair debt while gated.
+        gate.ack(epoch, received);
     }
 }
 

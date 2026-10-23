@@ -44,6 +44,10 @@ output keeps its horizontal scrolling layout.
 
 New terminals inherit the working directory from the active branch's worktree path.
 
+Desktop frame receipts do not generate more terminal output. After a missed
+frame, desktop receives one full frame and connected browsers retain their delta stream. Output
+batching remains bounded; this does not guarantee echo within one display frame.
+
 ### CWD Tracking (OSC 7)
 
 When your shell reports directory changes via OSC 7, TUICommander updates the terminal's working directory in real time. If the new directory falls inside a different worktree, the terminal tab is automatically reassigned to the corresponding branch in the sidebar.

@@ -979,3 +979,198 @@ config or credential file was changed; no build or application suite ran.
 The same-producer help comparison remains within 2×. The echo half of criterion
 3 remains unsupported as a pass and exceeds one frame in these measurements.
 The coordinator owns criterion reconciliation and any next investigation.
+
+
+## Native reader-to-acceptance investigation and receipt feedback fix (2026-10-23)
+
+### Contract and scope
+
+A desktop receipt releases flow control but must not generate terminal damage.
+A caught-up desktop receives one complete recovery snapshot; browsers retain the
+matching ordinary delta. Real damage and recovery debt must survive a paused
+channel. The production state comes from the real PTY reader, Alacritty damage,
+the shared frame ticker and the counted desktop gate. The installed default ego
+and native WebKit remain observed external systems, not hand-written fixtures.
+
+The retained fix removes two proven feedback paths, not the deliberate 33/50 ms
+rate floors or two-bypasses-per-100-ms input budget. No story criterion changed.
+The one-frame echo requirement remains unmet. The pacing site contains an inline
+dated deferral for that remaining policy trade-off.
+
+### Stage localization
+
+A temporary observer traced read completion, VT parsing, reader completion,
+ticker decision, VT-lock acquisition, serialization, IPC send, frontend receipt,
+semantic acceptance and actual rAF. All observers were removed after acquisition.
+
+The first stage arm used 20 idle and 20 help candidates. Its idle reader-complete
+to frame-cut median/p95/max was **0.054/21.718/30.910 ms**. This was not a fixed
+13 ms parse or IPC cost. The refined pre-fix arm measured **0.068/34.846/37.628
+ms** at that same boundary. All 20 idle keys correlated through every stage.
+The largest observed VT-lock wait in that refinement was 1.366 ms and the largest
+serialization interval was 0.072 ms. They do not explain its slow tail.
+
+Final stage table, milliseconds, median / p95 / maximum:
+
+| Boundary | Idle, N=200 | Help candidates, N=200 unless noted |
+| --- | ---: | ---: |
+| Reader → VT parse complete | 0.052 / 0.081 / 0.123 | 0.049 / 0.072 / 0.187 |
+| VT parse complete → reader complete | 0.049 / 0.072 / 0.117 | 0.045 / 0.066 / 0.085 |
+| Reader complete → ticker frame cut | **0.062 / 20.026 / 38.767** | **13.882 / 23.664 / 24.157** (N=199) |
+| Frame cut → IPC begin | 0.010 / 0.013 / 0.087 | 0.010 / 0.014 / 0.077 (N=199) |
+| IPC begin → end | 0.018 / 0.030 / 0.116 | 0.020 / 0.033 / 0.136 |
+| Frontend receipt → semantic acceptance | 0 / 1 / 1 | 0 / 1 / 1 |
+| Acceptance → actual rAF | 7 / 17 / 17 | 6 / 16 / 17 |
+
+The help stage table includes candidates rather than claiming every key overlaps
+output. One final help key has no ticker cut but does have IPC and frontend
+correlations; another frame producer can serialize outside this observer seam.
+It remains unclassified, not silently dropped. IPC-end to frontend-receipt values
+can be slightly negative because the clocks retain approximately ±2 ms error;
+no physical negative latency or sub-millisecond transport attribution is claimed.
+
+Production seams: `ChunkProcessor::process_chunk` applies VT data; the reader
+marks applied output; `spawn_reader_thread` gates and paces the shared ticker
+before taking the VT lock; `send_grid_frame_to_consumers` publishes ordered
+browser deltas and admits desktop delivery; `ack_terminal_frame_core` releases
+the counted gate. The measured slow stage is ticker admission, not decode.
+
+### Proven defects and rejected hypotheses
+
+1. **Empty-frame bookkeeping was not the measured mechanism.** The refined
+   pre-fix arm recorded 533 ticker cuts and zero empty cuts. Alacritty's
+   `Term::damage()` always includes the current cursor, so nominally unchanged
+   serializations can still contain a 43-byte cursor span. No empty-frame quota
+   patch was retained.
+2. **A receipt manufactured new output.** The ACK command marked `frame_dirty`
+   after receipt progress. A subsequent serialization included the cursor and
+   sent another frame, whose receipt repeated the cycle. This could keep a quiet
+   terminal in sustained-output mode. ACKs now only release the gate. Paused
+   ticks retain actual pending damage instead of depending on invented ACK damage.
+3. **Recovery recreated its own debt.** An ACK-only trial exposed a second path:
+   the ticker sent a private full recovery frame, then offered its matching delta
+   to the now-closed desktop gate. That delta was withheld and marked missed
+   again. The trial captured **1095** private-6356-byte-repair/43-byte-delta cycles,
+   including cycles long after reader output stopped. The final path preserves
+   private recovery but publishes that matching delta only to browser consumers.
+   The same sequence count is **zero** in the final acquisition. No quota,
+   timer, wire format, additional send thread or persistent state was added.
+
+A trial that broadcast the recovery full frame to all clients also broke the
+cycle, but was not retained: the existing browser-delta regression explicitly
+protects browsers from desktop recovery overship. The final fix preserves that
+contract and its unchanged assertion. The ACK-only trial was not an echo win.
+
+### Native echo remeasurement
+
+Same authorized `agent-test-2040` instance/port, custom CanvasTerminal, default
+installed ego with no argv flags, synthetic native keydown events, guarded
+`/help` submission, unique CJK drafts and Ctrl+U clearing. No OS keyboard or
+physical-presentation claim. The final main arm contains 200 idle keys and 200
+help candidates. **196** main help keys and all **3** smoke help keys have a
+same-reader-clock help header before the key and an echo before the final help
+footer. The other four main candidates are excluded from overlap statistics.
+
+Milliseconds, median / p95 / maximum:
+
+| Measurement | Earlier pre-fix control | Final fix |
+| --- | ---: | ---: |
+| Idle key → glyph fill, N=200 each | 20.5 / 42 / 58 | **16 / 34 / 51** |
+| Idle reader → glyph fill, N=200 each | 19.179 / 40.838 / 56.301 | **14.164 / 32.232 / 48.621** |
+| Verified-help key → glyph fill | 11 / 26 / 36 (N=201) | **23 / 39 / 41** (N=199) |
+| Verified-help reader → glyph fill | 9.129 / 23.746 / 33.878 | **20.807 / 37.065 / 38.930** |
+| Verified-help key → reader | 1.836 / 2.493 / 2.871 | 2.357 / 2.938 / 3.245 |
+| Verified-help Enter → footer reader | 170.055 / 183.572 / 199.453 | 182.756 / 200.147 / 207.549 |
+
+The more closely instrumented 20-key pre-fix arm had idle key-to-fill p95 45 ms
+and verified-help p95 37 ms (N=22, including smoke). Workloads and unrelated
+machine load are not paired or controlled; the large help-arm variation prevents
+claiming a general echo speedup. Final p95 is above one frame in both arms and
+above the separate under-33-ms visible-input target. The two feedback bugs are
+fixed, but they were not the entire remaining echo delay. With priority credits
+spent, the existing floor and gate can still admit reader-complete output later.
+All final keys painted on the first strictly subsequent sentinel-observed rAF.
+
+### Matching paced bulk and heartbeat control
+
+The native control emits 12 UTF-8 rows per batch, sleeps 100 ms between batches,
+and ends with an accepted `BULK-END-2040` marker. First run 20 batches, then 120;
+only batch count changes. All output bytes match the known producer stream
+exactly before and after, including the PTY's CRLF translation. The 120-batch
+body is **181474 bytes / 1440 rows** in both runs, SHA-256
+`b85c17e2ff4daf1a919b760eb2d114622e4a0a108c320ae94ef6c516c203a20b`.
+
+| Control | Before | Final |
+| --- | ---: | ---: |
+| 20-batch reader throughput | 14070.628 B/s | 14013.341 B/s |
+| 120-batch reader throughput | **13988.454 B/s** | **14006.104 B/s** |
+| 120-batch final reader → marker acceptance | 25.237 ms | 20.402 ms |
+| 120-batch rAF interval p95 / maximum | 18 / 21 ms | 18 / 27 ms |
+| 120-batch 100-ms timer p95 / maximum | 106 / 106 ms | 105 / 106 ms |
+| 20-batch rAF interval p95 / maximum | 19 / 22 ms | 18 / 24 ms |
+| 20-batch 100-ms timer p95 / maximum | 106 / 111 ms | 105 / 106 ms |
+
+This preserves the measured paced workload's bytes and rate, with unchanged main
+rAF p95 and timer maximum. The rAF maximum increased by 6 ms in the main control;
+it is not a claim that every heartbeat statistic improved. This is a paced
+approximately 14 KB/s workload, not an unbounded saturation benchmark or proof of
+all throughput/heartbeat acceptance criteria. The first marker can be coalesced
+out of the visible viewport; throughput therefore uses actual first/final reader
+timestamps, not an absent first-acceptance timestamp. After each measured footer,
+owned session deletion interrupted the sleeping producer and logged a 173-byte
+`KeyboardInterrupt` traceback. It is retained and excluded after the measured
+footer; assertions validate both the measured body and that cleanup suffix.
+
+### Tests, failed validation and remaining gates
+
+New regressions drive the real reader/ticker/channel and the ACK core called by
+the production command, not a copied policy model:
+
+- `desktop_receipts_do_not_generate_output`: ordinary receipts and real withheld
+  browser-delivered damage must produce no extra quiet frames; subsequent real
+  echo must still arrive. The table also catches recovery recreating its own debt.
+- `paused_desktop_retains_reader_output_until_late_receipt`: three actually sent
+  and abandoned frames pause the real gate; newly read output remains withheld,
+  then a late real receipt releases it without new PTY bytes.
+
+The targeted filter also covers unchanged input arming, closed-gate protection,
+DEC-2026 buffering, echo priority, stalled-desktop/browser independence and private
+full recovery/browser delta. Native **8/8 PASS**, nextest run
+`5087faa1-7e4e-49df-a86d-96bd9d2b754b`, 1.327 s test time after a 1m47s build.
+No application test noise occurred; the linker warned that `__eh_frame` exceeded
+its compact-unwind size limit. The command used `build-slot.sh`, mbx and
+`scripts/with-test-tmp.sh` with repository-local TMPDIR and default features.
+
+Earlier validation attempts are not hidden: rb exited **78** before tests because
+this command path requires native macOS coverage first; the first native compile
+exited **101** because Tauri's optional test module is not enabled. No dependency
+or feature override was added. Tests instead call the extracted production ACK
+core; the corrected native targeted run passed. No cross-target or full-suite
+result, clippy, mutation or critic pass is claimed.
+
+**RED is not run.** The latest admitted adversarial-TDD instructions forbid
+in-story RED and require coordinator after-the-fact RED. The requested earlier
+RED-first evidence therefore remains unavailable. Pre-fix revision for the
+coordinator is `118ba8df8ef1b0a7f422beca1f92fb963b285d4a`; replay the new quiet
+receipt/recovery regression against that behavior (the shared core adapter may
+need the mechanical test-port when replaying). Do not treat compilation failure
+as behavioral RED. A separate critic is still required for this concurrency fix.
+
+Evidence under `~/Gits/.tmp/2040-web/`: `native-stages/` (first localization),
+`native-empty-stages/` (empty-cut discriminator), `native-bulk-before/`,
+`native-ack-fixed/` (failed ACK-only trial), `native-unified-fixed/` (rejected
+shared-full trial), and **`native-final-fixed/`** (retained implementation).
+Each retains helper source, raw logs, JSON acquisition and observer patch.
+`compare-receipt-fix.py` and `receipt-fix-comparison.json` reproduce exact byte,
+throughput, stage and heartbeat comparisons; final `analyze.py` verifies every
+reader/acceptance/paint correlation and records overlap exclusions. No synthetic
+observer is retained in production. Source restoration was verified; recorded
+supervisors and ego PIDs are absent, and the instance desktop PID file is absent.
+Only the named isolated instance was stopped; the daily backend was not restarted.
+This Rust change requires Boss's manual rebuild/restart to reach that backend.
+
+**Result: proven receipt/recovery defects fixed; the overall latency assignment
+and story acceptance remain incomplete.** Idle echo improved in this control,
+help-overlap echo did not. Criteria 3, 4 and 24 must not be marked passed from
+this evidence. The main story store remains untouched and the coordinator owns
+criterion reconciliation, after-the-fact RED and the separate critic.
