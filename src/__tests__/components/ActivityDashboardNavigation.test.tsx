@@ -7,7 +7,7 @@ import { appLogger } from "../../stores/appLogger";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
-import { savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { terminalsStore } from "../../stores/terminals";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { globalWorkspaceTabIds } from "../../utils/paneTabOrder";
@@ -151,6 +151,12 @@ describe("Activity Dashboard session navigation", () => {
 
 		expect(repositoriesStore.getActiveTerminals()).toEqual([agent]);
 		expect(terminalsStore.state.activeId).toBe(agent);
+		// The split being left is unchanged: saved under its own workspace (a layout
+		// belongs to a repo+branch, src/AGENTS.md), never docked into.
+		expect(savedPaneLayouts.get(paneLayoutKey(repoPath, "main"))).toEqual(previousLayout);
+		expect(paneLayoutStore.getGroupForTab(agent)).toBeNull();
+		// ...and it comes back exactly as it was.
+		navigateToTerminal(previous);
 		expect(paneLayoutStore.serialize()).toEqual(previousLayout);
 	});
 
