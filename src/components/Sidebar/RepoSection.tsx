@@ -955,7 +955,7 @@ export const BranchItem: Component<{
 				branchOps.push({ label: "Create Branch…", action: props.onCreateBranch });
 			}
 			branchOps.push({
-				label: isLinkedWorktree ? "Rename Worktree" : "Rename Branch",
+				label: "Rename Branch",
 				action: props.onRename,
 				disabled: props.branch.isMain,
 			});

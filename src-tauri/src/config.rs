@@ -3545,6 +3545,27 @@ pub(crate) fn set_branch_label(
     })
 }
 
+/// Follow a branch rename: move the label from `old_name` to `new_name`.
+/// No-op when the repo or the label is unknown; an existing label on `new_name`
+/// is replaced, because the renamed branch is the one the user labelled.
+pub(crate) fn move_branch_label(
+    repo_path: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), String> {
+    let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
+    file.update(|settings| {
+        let Some(entry) = settings.repos.get_mut(repo_path) else {
+            return false;
+        };
+        let Some(label) = entry.branch_labels.remove(old_name) else {
+            return false;
+        };
+        entry.branch_labels.insert(new_name.to_string(), label);
+        true
+    })
+}
+
 /// Remove a branch label — called by worktree deletion to keep config tidy.
 pub(crate) fn remove_branch_label(repo_path: &str, branch_name: &str) {
     let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);

@@ -735,6 +735,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-machines", section: "Name and transport", label: "Identity file" },
 	{ tab: "remote-machines", section: "Name and transport", label: "Remote daemon port" },
 	{ tab: "remote-machines", section: "Name and transport", label: "URL" },
+	{ tab: "remote-machines", section: "Name and transport", label: "Pairing bundle" },
 	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Deployment" },
 	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Keep ephemeral daemon alive (minutes)" },
 	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Auto-update remote daemons" },

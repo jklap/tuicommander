@@ -641,6 +641,23 @@ pub(crate) fn get_worktrees_dir(
     }
 }
 
+/// Branch labels are branch-keyed, so a removed worktree drops the label only
+/// when the branch itself is gone. Recycling and `delete_branch=false` keep it.
+fn drop_label_of_deleted_branch(repo_path: &str, outcome: &RemoveWorktreeOutcome) {
+    let branch_survives = git_cmd(Path::new(repo_path))
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", outcome.branch),
+        ])
+        .run()
+        .is_ok();
+    if !branch_survives {
+        crate::config::remove_branch_label(repo_path, &outcome.branch);
+    }
+}
+
 /// Remove one workspace's checkout by workspace id (Tauri command with cache invalidation)
 ///
 /// `delete_branch` defaults to `false` with force and `true` otherwise.
@@ -701,11 +718,7 @@ pub(crate) async fn remove_worktree(
     match result {
         Ok(outcome) => {
             tracing::info!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: SUCCESS — invalidating caches");
-            if outcome.branch_delete_warning.is_none() {
-                // Branch labels are branch-keyed, so a removed worktree drops the
-                // label only after the branch itself was deleted successfully.
-                crate::config::remove_branch_label(&repo_path, &outcome.branch);
-            }
+            drop_label_of_deleted_branch(&repo_path, &outcome);
             state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                 repo_path: repo_path.clone(),
                 workspace_id: workspace_id.clone(),
@@ -2479,6 +2492,102 @@ mod tests {
                 .args(["show-ref", "--verify", "refs/heads/feat-finalize-unmerged"])
                 .run()
                 .is_ok()
+        );
+    }
+
+    // Catches: label dropped on every removal regardless of branch survival (#2147-d735).
+    #[test]
+    fn recycling_a_clean_worktree_keeps_its_branch_label() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let path = repo.path().to_string_lossy().to_string();
+        worktree_with(repo.path(), "feat-keep-label", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-keep-label", "--no-edit"])
+            .run()
+            .expect("merge");
+        crate::config::save_repo_settings(Default::default(), {
+            let mut map = crate::config::RepoSettingsMap::default();
+            map.repos.insert(
+                path.clone(),
+                crate::config::RepoSettingsEntry {
+                    path: path.clone(),
+                    ..Default::default()
+                },
+            );
+            map
+        })
+        .expect("seed settings");
+        crate::config::set_branch_label(
+            path.clone(),
+            "feat-keep-label".into(),
+            Some("Keep".into()),
+        )
+        .expect("seed label");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let outcome = remove_worktree_with_presence_confirmation(
+            &state,
+            &path,
+            "feat-keep-label",
+            true,
+            None,
+            false,
+            false,
+            None,
+            false,
+        )
+        .expect("recycle");
+        drop_label_of_deleted_branch(&path, &outcome);
+
+        assert_eq!(outcome.removal_rule, "recyclable");
+        assert!(
+            git_cmd(repo.path())
+                .args(["show-ref", "--verify", "refs/heads/feat-keep-label"])
+                .run()
+                .is_ok(),
+            "recycling keeps the branch"
+        );
+        assert_eq!(
+            crate::config::load_repo_settings().repos[&path]
+                .branch_labels
+                .get("feat-keep-label"),
+            Some(&"Keep".to_string())
+        );
+    }
+
+    // Catches: a real branch deletion leaving a stale label behind.
+    #[test]
+    fn a_removal_that_deleted_the_branch_drops_its_label() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let path = repo.path().to_string_lossy().to_string();
+        crate::config::save_repo_settings(Default::default(), {
+            let mut map = crate::config::RepoSettingsMap::default();
+            map.repos.insert(
+                path.clone(),
+                crate::config::RepoSettingsEntry {
+                    path: path.clone(),
+                    ..Default::default()
+                },
+            );
+            map
+        })
+        .expect("seed settings");
+        crate::config::set_branch_label(path.clone(), "gone".into(), Some("Gone".into()))
+            .expect("seed label");
+        let outcome = RemoveWorktreeOutcome {
+            branch_delete_warning: None,
+            removal_rule: "in_sync".into(),
+            branch: "gone".into(),
+        };
+
+        drop_label_of_deleted_branch(&path, &outcome);
+
+        assert!(
+            crate::config::load_repo_settings().repos[&path]
+                .branch_labels
+                .is_empty()
         );
     }
 

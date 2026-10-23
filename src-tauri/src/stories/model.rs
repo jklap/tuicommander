@@ -135,6 +135,10 @@ pub struct PlanView {
     pub all_cancelled: bool,
 }
 
+/// Error prefixes of mistakes the user can fix; the HTTP route answers them 422, not 500.
+pub const PLAN_DOCUMENT_NOT_FOUND: &str = "plan document not found: ";
+pub const CRITERIA_INCOMPLETE: &str = "criteria are incomplete: unchecked indexes ";
+
 /// A status command. Unit commands are plain strings (`"submit_review"`); the criterion commands
 /// carry a zero-based index (`{"check_criterion":0}`).
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

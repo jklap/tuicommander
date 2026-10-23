@@ -76,7 +76,7 @@ A copied bundle is a capability: anyone holding it can impersonate either endpoi
 
 Use a versioned, reviewed PSK-authenticated handshake with fresh session keys and mutual key confirmation. Recommendation: evaluate a maintained Noise PSK implementation (for example the `NNpsk0` pattern) rather than inventing a handshake around the prototype's `encrypt` function. The exact suite/library, dependency/license impact, record limits and handshake transcript must be reviewed and fixed before the crypto implementation step. This note is not an assertion that such a library is installed or verified.
 
-Bind protocol version, pairing ID, room, expected roles and relay origin into the authenticated handshake context. Use separate directional keys and ordered authenticated records. Each new attachment uses a fresh handshake/epoch; reject reflected frames, duplicate/out-of-order records, unknown versions, and old-epoch data before opening upstream sockets. Bound handshake time and record length. Never fall back to bearer-derived v1 encryption after a handshake failure. Do not claim forward secrecy without checking the selected handshake's properties.
+Bind protocol version, pairing ID, room and expected roles into the authenticated handshake context. Use separate directional keys and ordered authenticated records. Each new attachment uses a fresh handshake/epoch; reject reflected frames, duplicate/out-of-order records, unknown versions, and old-epoch data before opening upstream sockets. Bound handshake time and record length. Never fall back to bearer-derived v1 encryption after a handshake failure. Do not claim forward secrecy without checking the selected handshake's properties.
 
 The relay sees R, room, IPs, timing, sizes, and attachment metadata. It can deny service, substitute peers, reorder/drop data, or lie about presence. It must not be able to authenticate an endpoint, derive P, decrypt payloads, or replay commands into a new epoch. Endpoint compromise or theft of the bundle is outside that guarantee. WSS protects each hop; endpoint authentication protects against an active relay. Native client distribution and the host setup channel are trusted. A future web client needs a separately trusted origin: relay-served JavaScript could steal P even if it arrives in a URL fragment.
 
@@ -113,6 +113,14 @@ Keep this pairing and its room separate from `services.relay` and the existing m
 The relay's current 32-entry queues must not silently discard tunnel records. Initially close the affected room/attachment on queue overflow and notify both peers; closing only one forwarding direction can leave the other endpoint falsely connected. Never continue a byte stream after loss. Endpoint detection of missing ordered records and authenticated heartbeat deadlines is a second protection, including against a malicious relay.
 
 Proposed initial limits, not measured performance claims: 32 logical streams, 16 KiB data chunks, and 64 KiB receive credit per stream. That is at most 2 MiB of credited data per receiving endpoint, plus separately bounded control, cipher and socket buffers. Charge queued bytes globally as well as per stream; queue counts alone do not bound memory. Bound outer WS message size before allocation. Reserve control capacity and schedule data fairly so one busy PTY cannot indefinitely block health replies or input. On credit exhaustion stop reading that socket; on a stalled peer close after a bounded deadline. These limits require integration tests before being treated as supported capacity.
+
+### Relay policy as implemented
+
+- A full peer queue waits up to 5 s (`peer_send_timeout`), then the relay closes the room with code 4004. No frame is dropped silently.
+- The relay pings every peer every 20 s and reaps a peer after 60 s of silence. A Pong counts as activity, so an idle but live peer is never reaped.
+- The queue-overflow close and the reaper apply to every room, including the phone rooms of the existing event bridge, not only tunnel rooms.
+- Outer WebSocket messages are capped at 1 MiB before allocation.
+- The Noise prologue binds protocol version, pairing ID and room, not the relay hostname, because the two ends may reach one relay under different names.
 
 ## 5. Failure, reconnect and session identity
 
