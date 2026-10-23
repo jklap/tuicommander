@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add append-only native story notes with backend actor/time/revision provenance and validated workflow receipt references through the shared story service (#2172-6dee).
+
 - Add server-side native story state/priority/type filters and optional bounded keyset pages without changing legacy full-list reads or workflow dispatch order (#2174-6b3f).
 - Show native ego selector controls on mobile when a question arrives or a waiting session opens. Reopen the question after a `selection_required` reply refusal without losing or sending the draft (#2176-03d3).
 

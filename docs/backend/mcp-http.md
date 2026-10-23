@@ -2931,3 +2931,8 @@ state for provisioning and Host trust. Settings and connect URLs use live TLS
 readiness, not that capability. The CLI provisioning fallback reads each PEM
 stream from stdout, because the sandboxed macOS app CLI cannot write into the
 caller's temporary directory.
+
+
+### Append-only story notes
+
+`add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](../api/http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.

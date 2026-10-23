@@ -1372,3 +1372,5 @@ ACP usage is unchanged.
 Worktree discovery preserves existing branch workspace IDs. Forced duplicates use a deterministic primary checkout and read-only diagnostics for additional paths. Missing registrations are non-selectable with repair guidance, never auto-pruned by discovery. Cached discovery errors remain errors. Bisect and relative-gitdir rebase retain the branch recorded by Git.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. The dialog integration remains a pending UI step.

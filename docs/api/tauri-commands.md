@@ -1092,3 +1092,8 @@ snapshot, not a zero quota or cost. No messages-generation fallback is used.
 `get_repo_structure` and `get_repo_summary` also return `worktree_diagnostics: Array<{path, branch: string | null, state: "missing" | "duplicate_branch", guidance}>`, identical to HTTP. Diagnostics are read-only and have no workspace ID. Discovery does not prune unavailable registrations.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+
+### Append-only story notes
+
+`add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.

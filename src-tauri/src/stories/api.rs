@@ -54,6 +54,20 @@ pub enum StoryAction {
         limit: Option<u16>,
         cursor: Option<String>,
     },
+    /// Append commentary without changing the subject revision or status.
+    AddNote {
+        story_id: String,
+        expected_revision: i64,
+        /// Nonblank text, at most 16000 characters.
+        text: String,
+        /// At most 16 distinct persisted workflow receipts in the same project and plan.
+        #[serde(default)]
+        receipts: Vec<super::StoryReceiptReference>,
+    },
+    /// Read immutable notes in append order.
+    ListNotes {
+        story_id: String,
+    },
     GetStory {
         story_id: String,
     },
@@ -101,6 +115,8 @@ pub enum StoryReply {
     Summary(StorySummary),
     Story(Story),
     Transitions(Vec<StoryTransition>),
+    Note(super::StoryNote),
+    Notes(Vec<super::StoryNote>),
     // This reply already contains its type tag so the cursor is beside, not inside, value.
     #[serde(untagged)]
     Stories(StoryListPage),
@@ -112,6 +128,7 @@ pub fn is_user_error(message: &str) -> bool {
         PLAN_DOCUMENT_NOT_FOUND,
         CRITERIA_INCOMPLETE,
         super::STORY_LIST_QUERY_INVALID,
+        super::STORY_NOTE_INVALID,
     ]
     .iter()
     .any(|prefix| message.starts_with(prefix))
@@ -241,6 +258,32 @@ fn story_action_with_source(
                 limit,
                 cursor.as_deref(),
             )?))
+        }
+        StoryAction::AddNote {
+            story_id,
+            expected_revision,
+            text,
+            receipts,
+        } => {
+            story_in_project(&story_id)?;
+            let actor = match actor_session {
+                Some(session_id) => super::StoryTransitionActor::ManagedSession {
+                    session_id: session_id.into(),
+                },
+                None if unauthenticated_http => super::StoryTransitionActor::LocalApi,
+                None => super::StoryTransitionActor::Human,
+            };
+            Ok(StoryReply::Note(store.add_note(
+                &story_id,
+                expected_revision,
+                &text,
+                actor,
+                receipts,
+            )?))
+        }
+        StoryAction::ListNotes { story_id } => {
+            story_in_project(&story_id)?;
+            Ok(StoryReply::Notes(store.list_notes(&story_id)?))
         }
         StoryAction::GetStory { story_id } => Ok(StoryReply::Story(story_in_project(&story_id)?)),
         StoryAction::TransitionHistory { story_id } => {
@@ -919,5 +962,59 @@ mod tests {
         assert_eq!(wire["value"]["inProgress"], 0);
         assert_eq!(wire["value"]["done"], 0);
         assert_eq!(wire["value"]["activePlans"], 1);
+    }
+
+    // Catches misattributing anonymous HTTP notes as Human or overriding a managed author.
+    #[test]
+    fn story_note_source_preserves_transport_actor_provenance() {
+        use super::super::StoryTransitionActor;
+        let config = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        for (anonymous, session, expected) in [
+            (false, None, StoryTransitionActor::Human),
+            (true, None, StoryTransitionActor::LocalApi),
+            (
+                false,
+                Some("managed"),
+                StoryTransitionActor::ManagedSession {
+                    session_id: "managed".into(),
+                },
+            ),
+            (
+                true,
+                Some("managed"),
+                StoryTransitionActor::ManagedSession {
+                    session_id: "managed".into(),
+                },
+            ),
+        ] {
+            let StoryReply::Note(note) = story_action_with_source(
+                project,
+                StoryAction::AddNote {
+                    story_id: story.id.clone(),
+                    expected_revision: story.revision,
+                    text: "Observed".into(),
+                    receipts: vec![],
+                },
+                session,
+                anonymous,
+            )
+            .unwrap() else {
+                panic!("note reply")
+            };
+            assert_eq!(note.actor, expected);
+            assert_eq!(
+                StoryStore::open()
+                    .unwrap()
+                    .list_notes(&story.id)
+                    .unwrap()
+                    .last()
+                    .unwrap(),
+                &note
+            );
+        }
     }
 }

@@ -253,3 +253,27 @@ pub struct StoryTransition {
     pub command: StoryCommand,
     pub actor: StoryTransitionActor,
 }
+
+/// Stable identity of an existing workflow event receipt, not a copied payload.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryReceiptReference {
+    pub run_id: String,
+    pub command_id: String,
+}
+
+/// Append-only commentary against the story revision observed by its author.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryNote {
+    pub id: String,
+    pub story_id: String,
+    pub story_revision: i64,
+    pub text: String,
+    pub actor: StoryTransitionActor,
+    /// Backend Unix timestamp in milliseconds.
+    pub created_at: i64,
+    pub receipts: Vec<StoryReceiptReference>,
+}
+
+pub const STORY_NOTE_INVALID: &str = "invalid story note: ";
