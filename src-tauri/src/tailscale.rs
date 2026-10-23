@@ -214,7 +214,7 @@ fn is_valid_fqdn(name: &str) -> bool {
 /// Returns (cert_pem, key_pem) as byte vectors.
 /// Uses platform-specific transport:
 /// - Unix: HTTP over Unix socket at /var/run/tailscale/tailscaled.sock
-/// - Windows: `tailscale cert` CLI (writes to temp files, reads back)
+/// - Windows/macOS: `tailscale cert` CLI (PEM read from stdout)
 pub(crate) async fn provision_cert(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     #[cfg(unix)]
     {
@@ -281,44 +281,38 @@ async fn provision_cert_unix(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 async fn provision_cert_cli(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let binary = find_binary().ok_or_else(|| anyhow::anyhow!("Tailscale binary not found"))?;
 
-    let temp_dir = std::env::temp_dir().join("tuicommander-certs");
-    tokio::fs::create_dir_all(&temp_dir).await?;
-
-    let cert_path = temp_dir.join(format!("{fqdn}.crt"));
-    let key_path = temp_dir.join(format!("{fqdn}.key"));
-
-    let cert_path_str = cert_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("cert path is not valid UTF-8: {cert_path:?}"))?;
-    let key_path_str = key_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("key path is not valid UTF-8: {key_path:?}"))?;
-
-    let output = tokio::process::Command::from(cli_command(&binary))
-        .args([
-            "cert",
-            "--cert-file",
-            cert_path_str,
-            "--key-file",
-            key_path_str,
-            fqdn,
-        ])
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("tailscale cert failed: {stderr}");
-    }
-
-    let cert_pem = tokio::fs::read(&cert_path).await?;
-    let key_pem = tokio::fs::read(&key_path).await?;
-
-    // Clean up temp files (best effort)
-    let _ = tokio::fs::remove_file(&cert_path).await;
-    let _ = tokio::fs::remove_file(&key_path).await;
+    // The signed macOS app CLI is sandboxed and cannot write into the
+    // caller's temp directory. Read PEM from stdout instead; no private key
+    // touches disk, and the same flags work with the standalone CLI.
+    let cert_pem = cert_cli_pem(&binary, fqdn, "--cert-file=-").await?;
+    let key_pem = cert_cli_pem(&binary, fqdn, "--key-file=-").await?;
 
     Ok((cert_pem, key_pem))
+}
+
+/// Request one PEM stream. Setting just one output flag suppresses the other
+/// file entirely (the CLI defaults to files only when both flags are unset).
+async fn cert_cli_pem(
+    binary: &std::path::Path,
+    fqdn: &str,
+    output_flag: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let output = tokio::process::Command::from(cert_command(binary, fqdn, output_flag))
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "tailscale cert failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output.stdout)
+}
+
+fn cert_command(binary: &std::path::Path, fqdn: &str, output_flag: &str) -> std::process::Command {
+    let mut command = cli_command(binary);
+    command.args(["cert", output_flag, fqdn]);
+    command
 }
 
 /// Background loop that re-provisions the TLS certificate every 24 hours.
@@ -464,6 +458,25 @@ mod tests {
                 .and_then(|(_, value)| value),
             Some(std::ffi::OsStr::new("1"))
         );
+    }
+
+    /// Catches file output returning to the sandboxed app CLI, which fails EPERM.
+    #[test]
+    fn cert_commands_read_one_pem_stream_without_file_writes() {
+        let binary = std::path::Path::new("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+        for output_flag in ["--cert-file=-", "--key-file=-"] {
+            let command = cert_command(binary, "host.ts.net", output_flag);
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                ["cert", output_flag, "host.ts.net"]
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == "TAILSCALE_BE_CLI"
+                        && value == Some(std::ffi::OsStr::new("1")))
+            );
+        }
     }
 
     #[test]

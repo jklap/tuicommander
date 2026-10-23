@@ -2839,6 +2839,7 @@ pub async fn start_server(
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
 ) -> bool {
     let config = state.config.read().clone();
+    *state.tls_listener.write() = std::sync::Weak::new();
 
     // Register shutdown channel so save_config can restart server. Only the
     // TCP listener + TLS renewal task listen to this signal: IPC listeners
@@ -2976,6 +2977,7 @@ pub async fn start_server(
 
             if let Some(tls) = tls_config.clone() {
                 tracing::info!(source = "mcp_http", %addr, "TCP listening with dual-protocol HTTP+HTTPS");
+                let tls_state = state.clone();
                 Some(tokio::spawn(async move {
                     use axum_server_dual_protocol::ServerExt;
                     // axum-server 0.8 moved the non-blocking-mode switch into
@@ -2993,9 +2995,14 @@ pub async fn start_server(
                                 return;
                             }
                         };
+                    // The weak token expires on error, cancellation, or shutdown. An
+                    // older task dropping its token cannot clear a replacement.
+                    let tls_lifetime = Arc::new(());
+                    *tls_state.tls_listener.write() = Arc::downgrade(&tls_lifetime);
                     if let Err(e) = server.set_upgrade(false).serve(svc).await {
                         tracing::error!(source = "mcp_http", "TCP/TLS server error: {e}");
                     }
+                    drop(tls_lifetime);
                 }))
             } else {
                 tracing::info!(source = "mcp_http", %addr, "TCP listening (HTTP only, remote access enabled)");
@@ -3278,6 +3285,25 @@ mod tests {
         state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
+    }
+
+    /// Catches CertDomains being mistaken for a successfully loaded TLS listener.
+    #[tokio::test]
+    async fn mcp_status_does_not_promote_tailscale_capability_to_active_tls() {
+        let state = test_state();
+        *state.tailscale_state.write() = crate::tailscale::parse_status_json(include_bytes!(
+            "../fixtures/tailscale-2165/status.json"
+        ));
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost("/mcp/status"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status["tls_active"], false);
     }
 
     #[tokio::test]

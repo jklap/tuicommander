@@ -9,6 +9,9 @@
 
 - [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.
 - [ ] Capture and inspect the detached window after the screen is unlocked. Its native window was created at 1120×800, but `screencapture -l` failed while `loginwindow` was frontmost. The shared bring-back button is covered by the component test; the live reattach check invoked its shared event/close path rather than clicking inside the locked detached window.
+## Tailscale HTTPS readiness (2165-b4de) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, confirm Remote Access reports HTTPS active only with a loaded TLS listener. Recheck retries unavailable TLS; certificate provisioning through the macOS app no longer writes into the caller's temp directory. The peer does not restart the daily app; Rust changes do not hot-reload.
 
 ## Tailscale app CLI mode (2164-4935) — Rust restart required
 

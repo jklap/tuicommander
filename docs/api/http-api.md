@@ -1652,7 +1652,7 @@ batch authentication with a five-second connect timeout, and caches results for
 GET /mcp/status
 ```
 
-Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
+Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `tls_active` is true only while the current TCP listener serves with a loaded TLS configuration; Tailscale certificate capability does not set it. It becomes false when that serving task stops or is replaced. `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
 ### Suspended Sessions
 

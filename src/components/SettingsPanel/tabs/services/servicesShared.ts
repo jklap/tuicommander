@@ -69,6 +69,8 @@ export interface McpCapability {
 }
 
 export interface McpStatus {
+	/** True only while the backend TCP task serves with loaded TLS configuration. */
+	tls_active: boolean;
 	native_capabilities: McpCapability[];
 	/** Unfiltered native registry, including tools disabled in config. */
 	native_tools: NativeMcpTool[];

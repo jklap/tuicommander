@@ -19,6 +19,18 @@ and certificate requests run the app executable with `TAILSCALE_BE_CLI=1`.
 You do not need to set this variable globally. A standalone CLI on PATH keeps
 its existing environment.
 
+The **Tailscale HTTPS** status reports **HTTPS active** only while the server
+has loaded a certificate and its TLS listener is running. Tailscale's HTTPS
+capability alone is not enough. If it says **Running (HTTPS unavailable)**,
+enable Remote Access and select **Recheck**. If it remains unavailable, inspect
+the Tailscale certificate errors in the app logs. Connect URLs use HTTPS only
+while that listener is active.
+
+The macOS app's CLI runs in a filesystem sandbox. TUICommander reads certificate
+and key PEM from its stdout instead of asking it to write into the caller's
+temporary directory; this avoids `operation not permitted` on certificate writes.
+
+
 ## Connecting from Another Device
 
 1. Open a browser on any device on the same network
