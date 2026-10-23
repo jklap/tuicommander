@@ -734,7 +734,8 @@ export const SmartPromptsTab: Component = () => {
 				}
 			>
 				<div class={s.transferRow}>
-					<select
+					<Select
+						compact
 						class={s.transferSelect}
 						data-testid="export-scope-select"
 						data-non-setting="Chooses which prompts the one-shot Export action writes"
@@ -744,7 +745,7 @@ export const SmartPromptsTab: Component = () => {
 						<option value="all">All prompts ({scopeCounts().all})</option>
 						<option value="modified">Modified only ({scopeCounts().modified})</option>
 						<option value="custom">Custom only ({scopeCounts().custom})</option>
-					</select>
+					</Select>
 					<button
 						class={s.transferBtn}
 						data-testid="export-btn"

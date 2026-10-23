@@ -160,7 +160,7 @@ const RuleRow: Component<{
 
 					<div class={s.ruleField}>
 						<label class={s.ruleFieldLabel}>Precision</label>
-						<select
+						<Select
 							data-setting-id="app.smart_selection_rules.{id}.precision"
 							class={s.rulePrecision}
 							value={props.rule.precision}
@@ -169,7 +169,7 @@ const RuleRow: Component<{
 							<For each={settingOptions("app.smart_selection_rules.{id}.precision", PRECISION_LABELS)}>
 								{(opt) => <option value={opt.value}>{opt.label}</option>}
 							</For>
-						</select>
+						</Select>
 					</div>
 
 					<Show when={props.rule.actions.length > 0}>
@@ -182,7 +182,7 @@ const RuleRow: Component<{
 							<Index each={props.rule.actions}>
 								{(action, index) => (
 									<>
-										<select
+										<Select
 											data-setting-id="app.smart_selection_rules.{id}.actions"
 											value={action().kind}
 											data-testid="smart-action-kind"
@@ -191,7 +191,7 @@ const RuleRow: Component<{
 											}
 										>
 											<For each={ACTION_KIND_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-										</select>
+										</Select>
 										<input
 											type="text"
 											data-setting-id="app.smart_selection_rules.{id}.actions"
