@@ -1,3 +1,7 @@
+## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
+
+- [x] Isolated `agent-test-2040` native measurements exercised real ego echo and matching paced bulk output before/after the fix. The private-repair-plus-delta cycle disappeared; native echo p95 still exceeds one frame. Evidence: `~/Gits/.tmp/2040-web/native-final-fixed/` and the browser-input measurement report. This does not certify the remaining story criteria.
+- [ ] After Boss manually rebuilds/restarts the daily backend, confirm a quiet terminal stays quiet after frame receipts, a recovered terminal retains its text, and typing remains usable during output. Rust does not hot-reload; this peer did not restart the daily app.
 ## PTY size on tab mount and reconnect (2128-153a) — rebuild required
 
 - [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.

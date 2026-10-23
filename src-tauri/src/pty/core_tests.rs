@@ -13138,6 +13138,127 @@ mod grid_delivery_tests {
         false
     }
 
+    /// Catches: an ordinary desktop receipt manufacturing cursor damage and
+    /// keeping an otherwise silent terminal in sustained-output throttling.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn desktop_receipts_do_not_generate_output() {
+        for missed in [false, true] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "receipt-is-not-damage";
+            let _rx = grid_session(&state, sid);
+            let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+            let (tx, reader) = std::sync::mpsc::channel();
+            spawn_reader_thread(
+                Box::new(ChunkReader(reader)),
+                Arc::new(AtomicBool::new(false)),
+                sid.into(),
+                state.clone(),
+                None,
+            );
+            tx.send(b"first".to_vec()).unwrap();
+            let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+                while frames.lock().is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                if missed {
+                    // Another real producer cuts damage while the desktop is
+                    // closed; the browser receives it, so desktop owes one repair.
+                    let frame = cut_frame(&state, sid, "missed while gated");
+                    send_grid_frame(&state, sid, frame);
+                }
+                commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 1, None);
+                if missed {
+                    while frames.lock().len() < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    }
+                    commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 2, None);
+                }
+                // This quiet interval is the behavior: a receipt must not produce
+                // even one new frame, regardless of the ticker's scheduling phase.
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let quiet_count = frames.lock().len();
+                tx.send("⑤".as_bytes().to_vec()).unwrap();
+                loop {
+                    if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                quiet_count
+            })
+            .await;
+            drop(tx);
+            assert_eq!(
+                observed.expect("real output did not reach the channel"),
+                if missed { 2 } else { 1 },
+                "desktop receipt or repair generated another frame without PTY output (missed={missed})"
+            );
+        }
+    }
+
+    /// Catches: retiring a paused tick's dirty hint, then depending on an ACK
+    /// to invent damage before a late real receipt can release retained output.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn paused_desktop_retains_reader_output_until_late_receipt() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "paused-retained-output";
+        let rx = grid_session(&state, sid);
+        let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+        drop(rx);
+        state.grid.watch.remove(sid);
+        for _ in 0..3 {
+            let frame = cut_frame(&state, sid, "unreceived");
+            send_grid_frame(&state, sid, frame);
+            gate.abandon();
+        }
+        assert!(gate.is_paused());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.into(),
+            state.clone(),
+            None,
+        );
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                let applied = state
+                    .grid
+                    .vt_log_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .read_rows_in_range(0, 24)
+                    .join("\n")
+                    .contains('⑤');
+                if applied {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            let before = frames.lock().len();
+            commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 3, None);
+            loop {
+                if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            before
+        })
+        .await;
+        drop(tx);
+        assert_eq!(
+            observed.expect("late receipt lost retained reader output"),
+            3,
+            "paused desktop received output before a real receipt"
+        );
+    }
+
     /// Catches: post-input echo remaining behind the sustained/typing rate floor
     /// even though the real reader applied it and the subscriber is caught up.
     #[tokio::test(flavor = "current_thread")]

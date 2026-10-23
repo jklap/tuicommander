@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Stop desktop receipt and recovery feedback from generating frames after terminal output goes quiet. Keep paused damage and bounded bulk-output pacing; native echo still exceeds one frame in measured p95 samples (#2040-16b2).
 - Delete Worktree on a clean, integrated checkout now says what happens: the confirm dialog is titled "Archive workspace?" with an Archive button, states that the branch is kept, and the status line reports "Archived … branch was kept". The backend behaviour (recycle into `__archived/`) is unchanged (#2139-3f05).
 - View the MCP call audit in Settings > MCP > Call audit. One setting, `mcp_call_audit_enabled`, gates both recording and the view: off by default in release builds, on in debug builds. While off, nothing is recorded and `GET /mcp/audit` reports `enabled:false` (#2136-dc79).
 - Clear NOT_FOUND retry delays for all GitHub accounts when Refresh status is selected, without changing read-only diagnostics (#2133-9213).
