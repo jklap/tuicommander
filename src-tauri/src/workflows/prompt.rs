@@ -328,6 +328,7 @@ mod tests {
             source: "plans/delivery.md".into(),
         };
         let story = Story {
+            story_type: None,
             id: "story-1".into(),
             plan_id: plan.id.clone(),
             title: "Build the service".into(),

@@ -360,6 +360,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Story".into(),
                 criteria: (0..criteria).map(|n| format!("Criterion {n}")).collect(),
