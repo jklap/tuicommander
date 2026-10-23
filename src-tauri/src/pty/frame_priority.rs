@@ -98,7 +98,12 @@ impl InputFramePriority {
 
     /// Consume quota only after the shared serializer cut a frame. A newer
     /// reader notification must survive a send of the preceding snapshot.
-    pub(super) fn sent(&self, request: PriorityRequest, now: Instant, bypassed: bool) {
+    pub(super) fn sent(
+        &self,
+        request: PriorityRequest,
+        now: Instant,
+        bypassed: bool,
+    ) -> Option<Instant> {
         let mut state = self.inner.lock();
         if state.output == request.output {
             state.pending = false;
@@ -107,6 +112,10 @@ impl InputFramePriority {
             state.sent[0] = state.sent[1];
             state.sent[1] = Some(now);
         }
+        // Newer reader work can arrive while the old request is pending, so
+        // applied() deliberately coalesces its wake. Keep its bounded retry on
+        // the existing ticker rather than stranding it until a periodic tick.
+        state.request(now, Some(now)).map(|next| next.ready_at)
     }
 }
 
@@ -153,6 +162,46 @@ mod tests {
         assert!(priority.request(now + WINDOW, None).is_none());
     }
 
+    /// Catches: a retained retry bypassing spacing, replenishing spent credits,
+    /// or resurrecting a hint whose remaining window cannot admit another send.
+    #[test]
+    fn retained_send_retry_preserves_spacing_quota_and_expiry() {
+        let mut failures = Vec::new();
+        for (spent, at_ms, expected_ms) in [
+            (false, 16, Some(24)),
+            (true, 16, Some(100)),
+            (false, 99, None),
+        ] {
+            let priority = InputFramePriority::default();
+            let start = Instant::now();
+            priority.arm(start);
+            if spent {
+                for ms in [0, 8] {
+                    let at = start + Duration::from_millis(ms);
+                    priority.applied(priority.generation(), at);
+                    let request = priority.request(at, None).unwrap();
+                    priority.sent(request, at, true);
+                }
+            }
+            let at = start + Duration::from_millis(at_ms);
+            if spent {
+                // A new keystroke extends expiry, but not the rolling quota.
+                priority.arm(at);
+            }
+            priority.applied(priority.generation(), at);
+            let previous = priority.request(at, None).unwrap();
+            priority.applied(priority.generation(), at);
+            let actual = priority.sent(previous, at, false);
+            let expected = expected_ms.map(|ms| start + Duration::from_millis(ms));
+            if actual != expected {
+                failures.push(format!(
+                    "spent={spent}, send at {at_ms}ms: expected {expected:?}, got {actual:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     #[test]
     fn priority_coalesces_output_and_preserves_newer_applied_damage() {
         let priority = InputFramePriority::default();
@@ -163,10 +212,15 @@ mod tests {
         let request = priority.request(now, Some(now)).unwrap();
         assert_eq!(request.ready_at, now + MIN_SPACING);
         priority.applied(generation, now);
-        priority.sent(request, now, true);
+        // Catches: preserving newer pending work but losing its ticker retry
+        // after its wake was coalesced into the send still in progress.
+        assert_eq!(
+            priority.sent(request, now, true),
+            Some(now + Duration::from_millis(8))
+        );
         assert!(priority.request(now, None).is_some());
         let newer = priority.request(now, None).unwrap();
-        priority.sent(newer, now + MIN_SPACING, true);
+        assert_eq!(priority.sent(newer, now + MIN_SPACING, true), None);
         assert!(priority.request(now + MIN_SPACING, None).is_none());
     }
 }

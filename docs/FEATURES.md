@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Desktop frame receipts no longer keep silent terminals redrawing; missed-frame recovery avoids offering the same desktop snapshot twice without recreating its own delivery debt (#2040-16b2).
+
 - Native MCP tools with long guidance expose compact action contracts and return the full guide through `action=help`; existing owner gates and Settings copy remain unchanged (#2069-7347).
 
 - Independent durable peer-mail readers filter routine lifecycle traffic, retain acknowledged cursors across reconnect, and support continuous HTTP/ACP notification delivery (#2004-4760).
@@ -132,7 +134,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-- **Bounded input frame priority** — Desktop and browser/PWA input can wake the existing grid ticker after reader-applied output, without waiting for animation rate floors. A rolling send budget preserves output coalescing; desktop receipt gates and synchronized output remain in force.
+- **Bounded input frame priority** — Desktop and browser/PWA input can wake the existing grid ticker after reader-applied output, without waiting for animation rate floors. A rolling send budget preserves output coalescing; newer reader work retains its bounded retry across a send. Desktop receipt gates and synchronized output remain in force.
 
 On desktop and mobile CLI views, adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. Mobile places this bar in a separate gutter outside the text box, so column-zero text stays clear and existing agent indentation stays unchanged. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. Fenced blocks keep a separate Copy row above the code on desktop and mobile, without covering wrapped text. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
@@ -2700,6 +2702,12 @@ partial work, and their child processes may continue.
     shell, no-shell, auth-failed and unreachable results; free text remains valid
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
   - Fields: URL, auth username
+- **Relay** — Reaches a `tuic-remote` daemon that has no inbound port through a
+  relay. Paste the bundle printed by `tuic-remote --relay-pair <url>`; the end-to-end
+  secret never reaches the relay. The desktop exposes the daemon on a loopback port, so
+  repos, sessions and terminals use the same handlers as a direct connection. A lost
+  link shows a typed state (`relay_unreachable`, `daemon_offline`, `pairing_rejected`,
+  `link_lost`) and reconnects as a new attachment, without replaying what was in flight
 - **Update & restart remote** — For either connection type, compare the
   daemon's `/health` build SHA-256 with the release asset or a matching local
   build, show an out-of-date badge, confirm the number of live sessions that
@@ -2720,6 +2728,7 @@ partial work, and their child processes may continue.
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- The relay pairing bundle goes to the vault (`Credential::RelayPairing`), keyed by the connection UUID, never to `connections.json`
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon
@@ -3140,6 +3149,8 @@ Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with 
 ### Tasks MCP access
 
 The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
+
+MCP call audit view (#2136-dc79): Settings > MCP > Call audit lists the body-free `GET /mcp/audit` rows behind the `mcp_call_audit_enabled` setting (off in release, on in debug). Off records nothing.
 
 ### Background tray and menu-bar icon
 

@@ -751,6 +751,12 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base: { font_family: "Menlo" }, config: cfg });
 		});
 
+		it("maps the MCP call audit read to GET /mcp/audit", () => {
+			const result = mapCommandToHttp("get_mcp_audit", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/mcp/audit");
+		});
+
 		it("maps upstream saves with both the loaded base and desired config", () => {
 			const base = { servers: [{ id: "a", enabled: true }] };
 			const config = { servers: [{ id: "a", enabled: false }] };
@@ -996,6 +1002,16 @@ describe("transport", () => {
 				expect(result.method).toBe("PUT");
 				expect(result.path).toBe("/config/remote-connections/c1/password");
 				expect(result.body).toEqual({ password: "hunter2" });
+			});
+
+			it("maps set_remote_connection_relay_pairing to PUT with the bundle in the body", () => {
+				const result = mapCommandToHttp("set_remote_connection_relay_pairing", {
+					id: "c1",
+					bundle: "tuic-pair-v1:abc",
+				});
+				expect(result.method).toBe("PUT");
+				expect(result.path).toBe("/config/remote-connections/c1/relay-pairing");
+				expect(result.body).toEqual({ bundle: "tuic-pair-v1:abc" });
 			});
 
 			it("maps remote_connection_password_exists to a GET that carries no secret", () => {

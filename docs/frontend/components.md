@@ -609,6 +609,8 @@ Ideas panel with per-repo filtering and terminal integration.
 
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
+The Plans and Stories toolbar button (`StoriesButton.tsx`) widens into a pill while the project has an active plan: active plans, stories in progress and a done/total bar, with the breakdown in its tooltip and `aria-label`. Counts come from the Rust `summary` story action. Nothing signals story changes, so it re-reads on repo change, window focus or visibility, dialog close, and every 60 s while the window is visible; a failed call leaves the plain icon.
+
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
 The project-scoped Plans and Stories dialog supports manual plan/story actions

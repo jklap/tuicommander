@@ -76,6 +76,7 @@ interface RunSnapshot {
 	id: string;
 	planId: string;
 	status: string;
+	pauseCause?: string;
 	sequence: number;
 	startedMs: number;
 	rootTarget?: { type: string; id: string } | null;
@@ -100,7 +101,8 @@ type RunReply =
 	| { type: "runs"; value: RunSnapshot[] }
 	| { type: "snapshot"; value: RunSnapshot }
 	| { type: "events"; value: RunEvent[] }
-	| { type: "receipt"; value: { snapshot: RunSnapshot; event?: RunEvent } };
+	| { type: "receipt"; value: { snapshot: RunSnapshot; event?: RunEvent } }
+	| { type: "readiness"; value: string[] };
 
 const missingBackendMessage = () =>
 	t(
@@ -188,6 +190,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		{ id: string; name: string; latestPublishedRevision: number }[]
 	>([]);
 	const [workflowChoice, setWorkflowChoice] = createSignal("");
+	const [startProblems, setStartProblems] = createSignal<string[]>([]);
+	// The definition whose readiness answer is in; Start waits for it.
+	const [readyFor, setReadyFor] = createSignal("");
 	const [recoveryExecution, setRecoveryExecution] = createSignal("");
 	const [recoveryActivation, setRecoveryActivation] = createSignal("");
 	const [resolution, setResolution] = createSignal("");
@@ -200,6 +205,19 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setResolution("");
 		}),
 	);
+	// One pending activation leaves nothing to choose: offer it, the operator still writes the resolution.
+	createEffect(() => {
+		const current = run();
+		if (current?.status !== "paused" || untrack(recoveryExecution)) return;
+		const pending = (current.graphExecutions ?? []).flatMap((graph) =>
+			graph.activations
+				.filter((activation) => activation.state === "ready" || activation.state === "running")
+				.map((activation) => ({ execution: graph.id, activation: activation.id })),
+		);
+		if (pending.length !== 1) return;
+		setRecoveryExecution(pending[0].execution);
+		setRecoveryActivation(pending[0].activation);
+	});
 	let closeButton: HTMLButtonElement | undefined;
 	let request = 0;
 	let runRequest = 0;
@@ -217,7 +235,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(cause instanceof Error ? cause.message : message);
+		setError(cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message);
 	};
 	const ensureCapabilities = async (): Promise<void> => {
 		if (capabilitiesReady) return;
@@ -259,6 +277,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			if (snapshot.type !== "snapshot" || events.type !== "events") throw new Error("Invalid run response");
 			if (current !== runRequest) return;
 			setRun(snapshot.value);
+			setRuns((previous) => previous.map((item) => (item.id === snapshot.value.id ? snapshot.value : item)));
 			setRunEvents((previous) => (after ? [...previous, ...events.value] : events.value));
 		} catch (cause) {
 			if (current === runRequest) setRunError(String(cause));
@@ -352,6 +371,27 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		}
 	}
 
+	async function checkStartReadiness(definitionId: string): Promise<void> {
+		const workflow = publishedChoices().find((item) => item.id === definitionId);
+		setStartProblems([]);
+		setReadyFor("");
+		if (!workflow) return;
+		try {
+			const reply = await callRun({
+				action: "start_readiness",
+				definition_id: workflow.id,
+				definition_revision: workflow.latestPublishedRevision,
+			});
+			if (reply.type !== "readiness") throw new Error("Invalid run response");
+			if (workflowChoice() === definitionId) {
+				setStartProblems(reply.value);
+				setReadyFor(definitionId);
+			}
+		} catch (cause) {
+			if (workflowChoice() === definitionId) setStartProblems([`Could not check the start requirements: ${cause}`]);
+		}
+	}
+
 	async function openStart(): Promise<void> {
 		setBusy(true);
 		setError("");
@@ -371,6 +411,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setWorkflowChoice(choices[0]?.id ?? "");
 			startRequestId = crypto.randomUUID();
 			setStartOpen(true);
+			void checkStartReadiness(choices[0]?.id ?? "");
 		} catch (cause) {
 			fail(cause);
 		} finally {
@@ -642,10 +683,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						>
 							Start story workflow
 						</button>
-						{/* DEFERRED (2026-10-06) — plan start awaits the slice E dispatch entry point. */}
-						<button type="button" disabled title="Plan dispatch is unavailable in this build">
-							Start plan workflow · unavailable
-						</button>
+						{/* DEFERRED (2026-10-22) — "Start plan workflow" is hidden until the slice E plan dispatch entry point exists (audit 2137 A11). */}
 						<button
 							type="button"
 							aria-pressed={showRuns()}
@@ -715,6 +753,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									onChange={(event) => {
 										setWorkflowChoice(event.currentTarget.value);
 										startRequestId = crypto.randomUUID();
+										void checkStartReadiness(event.currentTarget.value);
 									}}
 								>
 									<For each={publishedChoices()}>
@@ -726,7 +765,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</For>
 								</Select>
 							</label>
-							<button type="submit" disabled={busy() || !workflowChoice()}>
+							<Show when={startProblems().length > 0}>
+								<div role="alert" class={s.error}>
+									<For each={startProblems()}>{(problem) => <p>{problem}</p>}</For>
+								</div>
+							</Show>
+							<button type="submit" disabled={busy() || readyFor() !== workflowChoice() || startProblems().length > 0}>
 								Start published workflow
 							</button>
 						</Show>
@@ -842,6 +886,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												Cancel run
 											</button>
 										</Show>
+										<Show when={selected().status === "paused" && selected().pauseCause}>
+											<p role="status">Paused: {selected().pauseCause}</p>
+										</Show>
 										<For each={selected().graphExecutions ?? []}>
 											{(graph) => (
 												<section aria-label={`Graph ${graph.id}`}>
@@ -851,7 +898,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													<For each={graph.activations}>
 														{(activation) => (
 															<p>
-																{activation.id} · {activation.nodeId} · {activation.state}
+																{activation.id} · {activation.nodeId} ·{" "}
+																{selected().status === "cancelled" && activation.state !== "completed"
+																	? "cancelled"
+																	: activation.state}
 															</p>
 														)}
 													</For>

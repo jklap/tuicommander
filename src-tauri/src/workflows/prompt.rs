@@ -308,6 +308,7 @@ mod tests {
             started_ms: 1,
             paused_since_ms: None,
             paused_duration_ms: 0,
+            pause_cause: None,
             limits: RunLimits::default(),
             loops: 0,
             story_creations: 0,

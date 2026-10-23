@@ -1,3 +1,7 @@
+## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
+
+- [x] Isolated `agent-test-2040` native measurements exercised real ego echo and matching paced bulk output before/after the fix. The private-repair-plus-delta cycle disappeared; native echo p95 still exceeds one frame. Evidence: `~/Gits/.tmp/2040-web/native-final-fixed/` and the browser-input measurement report. This does not certify the remaining story criteria.
+- [ ] After Boss manually rebuilds/restarts the daily backend, confirm a quiet terminal stays quiet after frame receipts, a recovered terminal retains its text, and typing remains usable during output. Rust does not hot-reload; this peer did not restart the daily app.
 ## PTY size on tab mount and reconnect (2128-153a) — rebuild required
 
 - [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.
@@ -69,6 +73,8 @@
 
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
 ## Bounded input frame priority (2040-16b2) — Rust restart required
+
+- [ ] After a manual rebuild/restart, check repeated input while output races frame delivery. Newer applied output must retain its bounded retry; two credits per 100 ms, 8 ms spacing, receipt gates and synchronized redraws remain unchanged. Native idle/help proxy results and limits are in the browser-input measurement report; this is not a one-frame guarantee.
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
 
@@ -2805,3 +2811,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #2127-97f5: After a manual Rust rebuild/restart, inspect Settings > Git & GitHub. Record the exact Lansweeper repository error to distinguish OAuth app restrictions from SSO. In an isolated `make agent-test` instance, Boss must log in with GitHub and grant/request organization access at https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl. Confirm the next poll clears granted-access failures without another login; real NOT_FOUND entries remain separate. The daily Rust backend does not hot-reload.
 
 - [ ] #2133-9213: After a manual backend rebuild/restart, grant organization access, select Settings > Git & GitHub > Refresh status and verify the next monitoring poll retries prior NOT_FOUND repositories for all accounts. Opening Settings alone must not release the retry delay. Rust does not hot-reload.
+
+- [ ] #2085-721d: A real attach is unchecked. Evidence 2026-10-23 on `make agent-test` (agent-test-2085, :19900), driven over the unix socket with `/debug/invoke_js`: Settings > Remote Machines > Add, transport select set to Relay shows the bundle textarea and the hint and hides the SSH and Direct fields (no auth-username input); typing a name and pasting a bundle then Save closes the form and lists `relay-dom | RELAY | via relay`; `connections.json` holds no bundle or relay bearer; Connect shows `Error` with `relay unreachable: ...` in the row. `PUT .../relay-pairing` rejects `junk` and accepts a valid bundle. Still open: a real attach to a running relay and daemon (`relay_tests` cover it). The "Deployment and lifetime" card held only the auto-update switch for Relay; it is now hidden (window screenshots 2026-10-23: before showed the card, after goes from the bundle hint straight to Save/Cancel). Rust does not hot-reload.
+- [ ] #2136-dc79: After a manual backend rebuild/restart, open Settings > MCP > Call audit, enable the toggle, make agent MCP calls, press Refresh and confirm rows appear; disable and confirm no new rows are recorded. Rust does not hot-reload.

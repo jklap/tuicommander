@@ -2,6 +2,7 @@ import { type Component, createEffect, createMemo, createSignal, For, on, onClea
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
@@ -496,6 +497,8 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 		if (!newName || newName === oldName) return;
 		try {
 			await invoke("rename_branch", { path: props.repoPath, oldName, newName });
+			repositoriesStore.renameBranch(props.repoPath, oldName, newName);
+			repoSettingsStore.moveLabel(props.repoPath, oldName, newName);
 			repositoriesStore.bumpGitRevision(props.repoPath);
 			appLogger.info("git", `Renamed branch ${oldName} to ${newName}`);
 		} catch (err) {
@@ -766,7 +769,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 				{ label: "Fetch", shortcut: "f", action: () => void doFetch(branch) },
 				{ label: "Update from base (rebase)", action: () => void doUpdateFromBase(branch) },
 				sep,
-				{ label: "Rename", shortcut: "\u21E7R", action: () => startRename(branch) },
+				{ label: "Rename", shortcut: "\u21E7R", action: () => startRename(branch), disabled: branch.is_main },
 				sep,
 				copyName,
 			];
