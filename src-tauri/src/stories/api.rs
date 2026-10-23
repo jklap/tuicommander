@@ -209,6 +209,7 @@ fn story_action_with_source(
                     match read.story.status {
                         StoryStatus::WontFix => continue,
                         StoryStatus::InProgress => summary.in_progress += 1,
+                        StoryStatus::Qa => summary.qa += 1,
                         StoryStatus::Done => summary.done += 1,
                         _ => {}
                     }
@@ -678,6 +679,7 @@ mod tests {
             StorySummary {
                 active_plans: 1,
                 in_progress: 1,
+                qa: 0,
                 done: 0,
                 total: 1
             }
@@ -851,5 +853,69 @@ mod tests {
                 .unwrap();
             assert_eq!(history.last().unwrap().actor, expected);
         }
+    }
+    /// Catches: the shared MCP/HTTP/CLI boundary dropping manual commands or hiding QA in summaries.
+    #[test]
+    fn qa_actions_roundtrip_and_summary_separates_manual_work() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_str().unwrap();
+        let StoryReply::Plan(plan) = story_action(
+            project,
+            StoryAction::CreatePlan {
+                title: "QA".into(),
+                source: "plan.md".into(),
+            },
+            None,
+        )
+        .unwrap() else {
+            panic!("plan")
+        };
+        let StoryReply::Story(mut story) = story_action(
+            project,
+            StoryAction::CreateStory {
+                input: NewStory {
+                    plan_id: plan.id.clone(),
+                    title: "Manual work".into(),
+                    criteria: vec!["Development".into(), "Device".into()],
+                    priority: 1,
+                    origin: super::super::StoryOrigin::Native,
+                    file_scope: vec![],
+                },
+            },
+            None,
+        )
+        .unwrap() else {
+            panic!("story")
+        };
+        for command in [
+            serde_json::json!({"set_criterion_manual":{"index":1,"manual":true}}),
+            serde_json::json!("start_manual"),
+            serde_json::json!({"check_criterion":0}),
+        ] {
+            let action: StoryAction = serde_json::from_value(serde_json::json!({
+                "action":"transition", "story_id":story.id,
+                "expected_revision":story.revision, "command":command
+            }))
+            .unwrap();
+            let StoryReply::Story(updated) =
+                story_action(project, action, Some("managed")).unwrap()
+            else {
+                panic!("story")
+            };
+            story = updated;
+        }
+        let wire = serde_json::to_value(
+            story_action(project, StoryAction::ListStories { plan_id: plan.id }, None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wire["value"][0]["status"], "qa");
+        let wire = serde_json::to_value(story_action(project, StoryAction::Summary, None).unwrap())
+            .unwrap();
+        assert_eq!(wire["value"]["qa"], 1);
+        assert_eq!(wire["value"]["inProgress"], 0);
+        assert_eq!(wire["value"]["done"], 0);
+        assert_eq!(wire["value"]["activePlans"], 1);
     }
 }

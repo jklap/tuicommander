@@ -10,6 +10,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
 
+#[cfg(test)]
+mod qa_tests;
 mod records;
 mod transitions;
 
@@ -17,7 +19,7 @@ use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug)]
 pub struct StoryStore {
@@ -75,7 +77,7 @@ impl StoryStore {
     }
 
     fn open_connection(path: &Path) -> Result<Connection, String> {
-        let conn = Connection::open(path).map_err(|e| format!("open story store: {e}"))?;
+        let mut conn = Connection::open(path).map_err(|e| format!("open story store: {e}"))?;
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| format!("set story store timeout: {e}"))?;
         conn.pragma_update(None, "journal_mode", "WAL")
@@ -103,7 +105,7 @@ impl StoryStore {
                 plan_id TEXT NOT NULL REFERENCES plans(id),
                 document TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN
-                  ('backlog','ready','in_progress','review','done','blocked','wontfix')),
+                  ('backlog','ready','in_progress','review','qa','done','blocked','wontfix')),
                 revision INTEGER NOT NULL,
                 claim_session TEXT
             );
@@ -124,9 +126,43 @@ impl StoryStore {
                 actor_json TEXT NOT NULL,
                 PRIMARY KEY(story_id, revision)
             );
-            PRAGMA user_version = 1;",
+            ",
         )
         .map_err(|e| format!("prepare story schema: {e}"))?;
+        if version < SCHEMA_VERSION {
+            // SQLite cannot alter a CHECK constraint. Keep stored documents byte-identical.
+            conn.pragma_update(None, "foreign_keys", "OFF")
+                .map_err(|e| format!("disable foreign keys for story schema: {e}"))?;
+            let tx = immediate(&mut conn)?;
+            let current: i64 = tx
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .map_err(|e| format!("read locked story schema: {e}"))?;
+            if current < SCHEMA_VERSION {
+                tx.execute_batch(
+                    "CREATE TABLE stories_qa (
+                        id TEXT PRIMARY KEY,
+                        plan_id TEXT NOT NULL REFERENCES plans(id),
+                        document TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK(status IN
+                          ('backlog','ready','in_progress','review','qa','done','blocked','wontfix')),
+                        revision INTEGER NOT NULL,
+                        claim_session TEXT
+                    );
+                    INSERT INTO stories_qa SELECT * FROM stories;
+                    DROP TABLE stories;
+                    ALTER TABLE stories_qa RENAME TO stories;
+                    CREATE INDEX stories_by_plan ON stories(plan_id);
+                    CREATE UNIQUE INDEX one_story_per_session
+                      ON stories(claim_session) WHERE claim_session IS NOT NULL;"
+                ).map_err(|e| format!("expand story QA status constraint: {e}"))?;
+            }
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(|e| format!("save story schema version: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("commit story schema: {e}"))?;
+            conn.pragma_update(None, "foreign_keys", "ON")
+                .map_err(|e| format!("restore story foreign keys: {e}"))?;
+        }
         Ok(conn)
     }
 
@@ -397,8 +433,12 @@ impl StoryStore {
         if !dependencies_integrated(&tx, &story, &preflight)? {
             return Err("story dependency lacks a current integration receipt".into());
         }
-        story.status = StoryStatus::InProgress;
-        story.claim_session = Some(session.into());
+        story.status = if transitions::only_manual_pending(&story) {
+            StoryStatus::Qa
+        } else {
+            StoryStatus::InProgress
+        };
+        story.claim_session = (story.status != StoryStatus::Qa).then(|| session.into());
         save_story(&tx, &mut story, expected_revision)?;
         tx.commit().map_err(|e| format!("commit claim: {e}"))?;
         Ok(story)

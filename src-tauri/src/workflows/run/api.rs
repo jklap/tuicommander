@@ -159,9 +159,9 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         )?))),
         RunAction::Incidents { run_id } => {
             let run = scoped_snapshot(&store, &owner, &run_id)?;
-            Ok(RunReply::Incidents(super::incidents::project_incidents(
+            Ok(RunReply::Incidents(super::incidents::read_incidents(
                 &run, None,
-            )))
+            )?))
         }
         RunAction::Get { run_id } => Ok(RunReply::Snapshot(Box::new(scoped_snapshot(
             &store, &owner, &run_id,
@@ -281,10 +281,10 @@ pub fn run_action_with_events(
         else {
             unreachable!("get returns a snapshot")
         };
-        return Ok(RunReply::Incidents(super::incidents::project_incidents(
+        return Ok(RunReply::Incidents(super::incidents::read_incidents(
             &run,
             Some(state),
-        )));
+        )?));
     }
     let mutation = matches!(
         action,

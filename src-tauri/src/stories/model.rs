@@ -129,6 +129,7 @@ pub enum StoryStatus {
     Ready,
     InProgress,
     Review,
+    Qa,
     Done,
     Blocked,
     WontFix,
@@ -141,6 +142,7 @@ impl StoryStatus {
             Self::Ready => "ready",
             Self::InProgress => "in_progress",
             Self::Review => "review",
+            Self::Qa => "qa",
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::WontFix => "wontfix",
@@ -182,6 +184,7 @@ pub struct StoryRead {
 pub struct StorySummary {
     pub active_plans: usize,
     pub in_progress: usize,
+    pub qa: usize,
     pub done: usize,
     pub total: usize,
 }
@@ -207,15 +210,21 @@ pub const STORY_LIST_QUERY_INVALID: &str = "invalid story list query: ";
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
-    /// Ready -> in_progress without a session claim.
+    /// Ready -> in_progress (or QA for manual-only work) without a session claim.
     StartManual,
-    /// Only while in_progress.
+    /// Only while in_progress or QA.
     CheckCriterion(usize),
-    /// Only while in_progress.
+    /// Only while in_progress or QA.
     UncheckCriterion(usize),
-    /// Requires every criterion checked. Moves it to review.
+    /// Mark a criterion as manual with the [MANUAL] prefix, or remove that prefix.
+    SetCriterionManual { index: usize, manual: bool },
+    /// In progress/review -> QA, with no open non-manual criteria.
+    SubmitQa,
+    /// QA -> in progress after a failed manual check.
+    RejectQa,
+    /// Moves complete work to review, or manual-only pending work to QA.
     SubmitReview,
-    /// Review -> done; dependants whose dependencies are all done become ready.
+    /// Review/QA -> done when all criteria pass; releases eligible dependants.
     Approve,
     /// Review -> in_progress (claimed) or ready.
     RejectReview,

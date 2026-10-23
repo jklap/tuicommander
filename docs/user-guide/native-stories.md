@@ -43,6 +43,16 @@ The same records are available through desktop IPC, guarded HTTP, and the `workf
 
 API and CLI callers can filter `list_stories` by native `state`, `priority`, and `story_type`. Add `limit` (1–100) to page the results, then send the returned `next_cursor` as `cursor` with the same plan and filters. The `value` field stays an array; no cursor means the final page. Omitting `limit` preserves a complete filtered list. For example: `tuic story '{"action":"list_stories","plan_id":"<id>","state":"ready","priority":1,"story_type":"fix","limit":25}' --project /absolute/project`. Dispatch order is not affected.
 
+## Manual QA
+
+Use the **QA** state when development is complete and only human checks remain. Prefix a manual criterion with `[MANUAL]` when you create the story, or send a transition command such as `{"set_criterion_manual":{"index":1,"manual":true}}`. Set `manual` to `false` to remove the marker. Indexes start at zero. The marker is part of the criterion text, not a second checklist.
+
+Starting work, claiming a story, checking or unchecking a criterion, changing its manual marker, and submitting review evaluate QA readiness in the backend. An In progress or Review story enters QA when at least one criterion is unchecked and every unchecked criterion is manual. An open non-manual criterion prevents QA. An all-manual story enters QA when work starts. This automatic transition shares the triggering revision and transaction and releases its terminal claim.
+
+Use `"submit_qa"` to move an In progress or Review story to QA explicitly. It requires at least one manual criterion and no unchecked non-manual criteria. In QA, check each manual criterion after it passes, then send `"approve"` to reach Done. Approval refuses any unchecked criterion. Send `"reject_qa"` after a failed check to return to In progress. Unchecking a non-manual criterion or removing the manual marker from an unchecked criterion also returns the story to In progress. All commands require the current `expected_revision`.
+
+QA is not Done: it keeps a plan Active and does not release dependent stories. Story lists return `status:"qa"`; the project summary reports a separate `qa` count. Run history incidents identify QA stories with source `story_qa`, including after an agent attempt completes, and describe the next human action. Existing stored story documents, revisions and checks are retained without a JSON rewrite when the status constraint is upgraded.
+
 ## Which caller can do what
 
 | Caller | Scope | Reads | Story actions (claim, check criteria, submit review, add dependency, create, approve) | Administrative actions (reject, block, unblock, won't fix, start manual, remove dependency) |
