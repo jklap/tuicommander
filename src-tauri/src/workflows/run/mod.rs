@@ -2508,6 +2508,188 @@ mod tests {
         );
     }
 
+    /// Catches: a bound coordinator continuing to propose work from a replaced source document.
+    #[test]
+    fn update_plan_source_refuses_an_active_bound_coordinator() {
+        let (_config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open().unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let started = store
+            .command(
+                &run.id,
+                "coordinate",
+                RunCommand::StartPlanAgent {
+                    node_id: "coordinate".into(),
+                },
+            )
+            .unwrap();
+        let attempt_id = started.snapshot.attempts[0].id.clone();
+        let reserved = store
+            .command(
+                &run.id,
+                "spawn",
+                RunCommand::ReserveEffect {
+                    key: format!("spawn:{attempt_id}"),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap();
+        store
+            .bind_agent(
+                &run.id,
+                &attempt_id,
+                AgentBinding {
+                    session_id: "coordinator".into(),
+                    task_id: None,
+                    effect_id: reserved.snapshot.effects[0].id.clone(),
+                    prompt_contract_version: 1,
+                    prompt_sha256: "a".repeat(64),
+                    audit_preview: "redacted".into(),
+                },
+            )
+            .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let before = stories.get_plan(&plan_id).unwrap();
+        let error = stories
+            .update_plan(
+                &plan_id,
+                before.revision,
+                crate::stories::PlanPatch {
+                    title: Some("Must not partially apply".into()),
+                    source: Some("moved.md".into()),
+                },
+            )
+            .expect_err("source correction must not leave an old-source coordinator active");
+        assert!(error.contains("active plan coordinator"), "{error}");
+        assert_eq!(stories.get_plan(&plan_id).unwrap(), before);
+        assert!(crate::stories::is_user_error(&error));
+        // Title-only and unchanged-source patches do not replace the coordinator's document.
+        let renamed = stories
+            .update_plan(
+                &plan_id,
+                before.revision,
+                crate::stories::PlanPatch {
+                    title: Some("Corrected title".into()),
+                    source: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(renamed.source, before.source);
+        let unchanged = stories
+            .update_plan(
+                &plan_id,
+                renamed.revision,
+                crate::stories::PlanPatch {
+                    title: None,
+                    source: Some(format!(" {} ", before.source)),
+                },
+            )
+            .unwrap();
+        assert_eq!(unchanged.source, before.source);
+        let other = stories
+            .create_plan(NewPlan {
+                project: project_path,
+                title: "Other plan".into(),
+                source: "other.md".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            stories
+                .update_plan(
+                    &other.id,
+                    other.revision,
+                    crate::stories::PlanPatch {
+                        title: None,
+                        source: Some("unrelated.md".into()),
+                    }
+                )
+                .unwrap()
+                .source,
+            "unrelated.md"
+        );
+        store
+            .command(&run.id, "cancel", RunCommand::Cancel)
+            .unwrap();
+        assert_eq!(
+            stories
+                .update_plan(
+                    &plan_id,
+                    unchanged.revision,
+                    crate::stories::PlanPatch {
+                        title: None,
+                        source: Some("moved.md".into()),
+                    }
+                )
+                .unwrap()
+                .source,
+            "moved.md"
+        );
+    }
+
+    /// Catches: a not-yet-bound or paused coordinator being missed by a session-only guard.
+    #[test]
+    fn update_plan_source_refuses_unbound_and_paused_coordinators() {
+        let (_config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open().unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "coordinate",
+                RunCommand::StartPlanAgent {
+                    node_id: "coordinate".into(),
+                },
+            )
+            .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let before = stories.get_plan(&plan_id).unwrap();
+        for paused in [false, true] {
+            if paused {
+                store.command(&run.id, "pause", RunCommand::Pause).unwrap();
+            }
+            let error = stories
+                .update_plan(
+                    &plan_id,
+                    before.revision,
+                    crate::stories::PlanPatch {
+                        title: None,
+                        source: Some("moved.md".into()),
+                    },
+                )
+                .unwrap_err();
+            assert!(error.contains("active plan coordinator"), "{error}");
+            assert_eq!(stories.get_plan(&plan_id).unwrap(), before);
+        }
+    }
+
     /// Catches: a corrected plan source retaining closed planning and verified subjects.
     #[test]
     fn update_plan_source_reopens_planning_and_changes_verification_subject() {

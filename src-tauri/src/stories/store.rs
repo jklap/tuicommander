@@ -273,6 +273,23 @@ impl StoryStore {
         let revision = expected_revision
             .checked_add(1)
             .ok_or("plan revision exhausted")?;
+        // Pre-read only decides whether a run guard is needed. The locked revision check below
+        // rejects any plan change between this read and the metadata transaction.
+        let _source_guard = if let Some(source) = &patch.source {
+            if source.trim() != self.get_plan(id)?.source {
+                let path = self
+                    .db_path
+                    .parent()
+                    .ok_or("story store has no parent directory")?
+                    .join("workflow_runs.sqlite3");
+                Some(crate::workflows::guard_plan_source_update_in(&path, id)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         let mut plan = tx

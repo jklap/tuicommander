@@ -134,10 +134,11 @@ pub enum StoryReply {
     Stories(StoryListPage),
 }
 
-/// True for an error the user can fix (a missing plan file, unchecked criteria, invalid list filters).
+/// True for an error the user can fix, including a plan source still used by a coordinator.
 pub fn is_user_error(message: &str) -> bool {
     [
         PLAN_DOCUMENT_NOT_FOUND,
+        super::PLAN_SOURCE_IN_USE,
         CRITERIA_INCOMPLETE,
         super::STORY_LIST_QUERY_INVALID,
         super::STORY_NOTE_INVALID,

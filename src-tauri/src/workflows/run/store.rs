@@ -153,6 +153,39 @@ pub(crate) fn guard_story_amendment(
     Ok(conn)
 }
 
+/// Keep a source correction serialized with plan attempt start/bind and report writes.
+/// Open even an unused run store so a first run cannot race the source transaction.
+/// The caller holds this writer before acquiring the story writer, matching coordinator creation.
+pub(crate) fn guard_plan_source_update_in(
+    db_path: &Path,
+    plan_id: &str,
+) -> Result<Connection, String> {
+    let conn = RunStore::open_at(db_path)?.connect()?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("lock workflow plan source: {e}"))?;
+    {
+        let mut stmt = conn.prepare(
+            "SELECT snapshot_json FROM workflow_runs WHERE plan_id=?1 AND status IN ('running','paused')"
+        ).map_err(|e| format!("find source-dependent plan attempts: {e}"))?;
+        let rows = stmt
+            .query_map([plan_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("read source-dependent plan attempts: {e}"))?;
+        for row in rows {
+            let snapshot: RunSnapshot = decode(&row.map_err(|e| format!("read plan run: {e}"))?)?;
+            if snapshot.attempts.iter().any(|attempt| {
+                attempt.story_id == plan_id && attempt.state == AttemptState::Running
+            }) {
+                return Err(format!(
+                    "{}run {}; finish the coordinator or cancel the run before changing the source",
+                    crate::stories::PLAN_SOURCE_IN_USE,
+                    snapshot.id,
+                ));
+            }
+        }
+    }
+    Ok(conn)
+}
+
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 thread_local! {
