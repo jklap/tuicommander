@@ -73,6 +73,37 @@ describe("progressStore", () => {
 		});
 	});
 
+	// Catches: a deletion finishing in A advancing the epoch and stranding B's pending page.
+	it("applies the selected project page after a previous project deletion completes", async () => {
+		invokeMock.mockResolvedValue({ ...list([entry(1, 100)]), nextCursor: null });
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open("/repo", null);
+		await vi.waitFor(() => expect(store.state.projects["/repo"]?.loading).toBe(false));
+		let finishDelete!: (value: unknown) => void;
+		let finishPage!: (value: unknown) => void;
+		invokeMock.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishDelete = resolve;
+				}),
+		);
+		const deletion = store.deleteEntries("/repo", [1]);
+		invokeMock.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishPage = resolve;
+				}),
+		);
+		store.open("/other", null);
+		finishDelete({ deleted: 1 });
+		expect(await deletion).toBe(true);
+		finishPage({ ...list([{ ...entry(2, 200), project: "/other" }]), project: "/other", nextCursor: null });
+		await vi.waitFor(() => expect(store.state.projects["/other"].loading).toBe(false));
+		expect(store.requestedProject()).toBe("/other");
+		expect(store.state.projects["/other"].entries.map((item) => item.id)).toEqual([2]);
+	});
+
 	// Catches: a pending older page leaking into a changed filter or a reopened scope.
 	it.each(["blocked", "pty", "project", "reopen"])(
 		"discards an older page after a %s selection reset",

@@ -152,6 +152,8 @@ export function createProgressStore() {
 	}
 
 	async function readProject(project: string, older: boolean, freezeDivider = true): Promise<void> {
+		// A previous project's deletion may finish after selection moved elsewhere.
+		if (requestedProject() !== project) return;
 		ensure(project);
 		const current = state.projects[project];
 		if (older && (current.loading || current.nextCursor == null)) return;
