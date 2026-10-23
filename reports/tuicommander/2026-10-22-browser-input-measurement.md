@@ -804,3 +804,95 @@ passed. No production change ships in this report.
 Criteria 4 and 24 and throughput/heartbeat non-regression remain unsupported.
 No RED/GREEN, full suite, mutation, cross-target or production-fix claim is made.
 The coordinator owns the read-only main story and the next scope/fix decision.
+
+### Same-producer plain-PTY control — corrected help comparison
+
+The coordinator requested a bounded follow-up because replaying captured bytes
+removes ego from the baseline. The 36×/49× ratios above are valid descriptions
+of that byte-replay comparison, **not TUIC overhead or a valid same-producer
+2× verdict**. This section supersedes the earlier help-target failure verdict.
+It does not supersede the measured one-frame echo failure.
+
+The installed ego was launched directly by Python `subprocess.Popen` into a
+15×38 `pty.openpty` pair, with a controlling terminal. Its argv contained only
+`/Users/stefano.straus/.local/bin/ego`, the same as the native acquisition. It
+used the same default config, observed model `openai-codex/gpt-6-sol`, and cwd
+`~/Gits/.tmp/2040-web/native`. EGO_HOME and inherited TUIC variables were removed.
+No TUIC process, IPC or canvas was in this control. The coordinator explicitly
+authorized normal ego runtime session/history persistence, but no manual config,
+credential or models edits. None of those stores was read or edited by the
+helper.
+
+A cursor-only VT responder answered DSR requests from the actual output cursor
+position; no DSR was intentionally left to time out. This is a plain PTY with a
+small terminal-protocol responder, not a full terminal renderer. It is not a
+physical terminal or compositor baseline. Startup and a quiet settling period
+were outside the timing window. The helper typed only `/help`, pacing letters
+25 ms apart, checked the full displayed draft after removing SGR/CSI escapes,
+and only then sent Enter. It waited for the final help divider and a 250 ms
+quiet period to identify the last read; that quiet period is **not included**
+in the durations. A two-command calibration preceded the 20-command main run.
+No prompt text other than `/help` was submitted; the successful raw logs contain
+zero `Working` chunks.
+
+#### Body identity and endpoints
+
+Independently scheduled composer/status paints can occur between help chunks.
+Consequently, the total raw output is not byte-identical to the original
+7,148-byte native capture: the main trials contain 7,281 or 7,414 bytes. The
+helper retained these complete raw bytes, their hashes and read timestamps.
+
+For a strict **help-body** check, it selected the help printer's exact records
+(`CR + CSI K + wrapped text + CRLF`) from `εgo: εgo commands` through the final
+34-character divider, excluding independently interleaved composer/status paint
+sequences. This is an explicit framing extraction, not whitespace or content
+normalization. Every main trial's selected records equal the original native
+capture's selected records byte-for-byte: **6,792 bytes**, SHA-256:
+
+```text
+78992e537b2435f84ac7a6f56b1062e33e15de137bfca9339b93b1ce7185d051
+```
+
+| Plain installed ego, N=20 | Median | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Enter → last help byte (final divider read) | **205.189 ms** | **306.988 ms** | **307.472 ms** |
+| Enter → last PTY read, including final composer | 205.486 ms | 307.244 ms | 307.549 ms |
+
+The help-byte minimum was 202.383 ms; the all-output minimum was 202.670 ms.
+Against the **205.189 ms plain-producer help-byte median**:
+
+| Native endpoint from initial captured command | Native time | Native − plain median | Native / plain median |
+| --- | ---: | ---: | ---: |
+| Enter → last native PTY read | 103.946 ms | **−101.243 ms** | **0.507×** |
+| Enter → final native canvas paint_end | 142 ms | **−63.189 ms** | **0.692×** |
+
+Using the plain all-output median instead gives −101.540/−63.486 ms and
+0.506×/0.691× respectively. **Both comparisons are within 2× in this control.**
+The negative differences mean the sampled native command completed sooner than
+the plain control median; they are not a physical negative processing overhead
+or proof that TUIC accelerates ego. One native command versus 20 later plain
+commands is not a paired estimate of stable application overhead. The paint
+comparison still includes a native renderer endpoint absent from the plain PTY.
+Terminal-response implementation and unpaired timing are remaining confounders.
+No TUIC-only cause or statistical non-regression is inferred.
+
+Two helper attempts failed before the successful calibration: the first did not
+recognize `/help` across SGR sequences and correctly withheld Enter; the second
+caught interleaved status paint in its initial contiguous-body comparison. Its
+raw evidence led to the explicit help-record extraction above. Neither failed
+attempt submitted a provider prompt. All four recorded ego PIDs (two failed
+attempts, calibration and main) were terminated and reaped; SIGTERM did not stop
+the interactive loop within three seconds, so the helper killed only its own
+recorded child. Final PID checks found all four absent.
+
+Evidence under `~/Gits/.tmp/2040-web/native/`: `plain-producer.py`,
+`plain-producer-2.json`, `plain-producer-20.json`,
+`plain-producer-analysis.json`, `plain-producer-20-bg.log`,
+`plain-producer-draft-guard.json` and `plain-producer-interleaved-status.json`.
+The main background job exited 0; its ego child exit was −9 after owned cleanup.
+No application build or suite was run for this documentation follow-up.
+
+Criterion 3 stays unchecked: its help portion is within 2× against the requested
+same-producer control, but its one-frame echo portion is still unmet. Criteria
+4/24 and throughput/heartbeat non-regression remain unsupported. The coordinator
+owns all story reconciliation; this peer changed no criteria.
