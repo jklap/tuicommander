@@ -27,6 +27,7 @@ const stories = [1, 40].map((count, index) => ({
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockImplementation(async (command, args) => {
 		if (command === "story_capabilities") return true;
+		if (args.action.action === "transition_history") return { type: "transitions", value: [] };
 		if (args.action.action === "list_notes") return { type: "notes", value: [] };
 		if (args.action.action === "list_plans") return { type: "plans", value: plans };
 		if (args.action.action === "plan_view")
