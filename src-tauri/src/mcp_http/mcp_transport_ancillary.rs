@@ -722,8 +722,12 @@ fn handle_repo_listing(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                     entry["group"] = serde_json::json!(group_name);
                 }
                 super::mcp_transport_catalogue::tag_repo_connection(&mut entry, repo_entry);
-                if !worktrees.is_empty() {
-                    entry["worktrees"] = to_json_or_error(&worktrees);
+                match worktrees {
+                    Ok(worktrees) if !worktrees.is_empty() => {
+                        entry["worktrees"] = to_json_or_error(&worktrees)
+                    }
+                    Err(error) => entry["worktree_error"] = serde_json::json!(error),
+                    _ => {}
                 }
                 results.push(entry);
             }

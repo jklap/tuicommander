@@ -791,21 +791,19 @@ pub(crate) fn archive_pool_for_repo(repo_path: &Path, app_worktrees_dir: &Path) 
 pub(crate) fn get_worktree_paths_cached(
     state: &crate::state::AppState,
     repo_path: &str,
-) -> HashMap<String, WorkspaceWorktree> {
+) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let p = repo_path.to_string();
     let pool = archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
     state
         .git_cache
         .worktree_paths
-        .get_with(repo_path.to_string(), || {
-            std::sync::Arc::new(
-                crate::git_reads::git_reads()
-                    .worktree_inventory(std::path::Path::new(&p), Some(&pool))
-                    .unwrap_or_default(),
-            )
+        .try_get_with(repo_path.to_string(), || {
+            crate::git_reads::git_reads()
+                .worktree_inventory(Path::new(&p), Some(&pool))
+                .map(std::sync::Arc::new)
         })
-        .worktree_paths
-        .clone()
+        .map(|inventory| inventory.worktree_paths.clone())
+        .map_err(|error| format!("Worktree discovery failed: {error}"))
 }
 
 /// Remove an orphan checkout by path after the shared guard. Both the desktop
@@ -2981,6 +2979,64 @@ mod tests {
                 );
                 assert!(linked.join("README.md").exists());
             }
+        }
+
+        // Catches: missing detached registrations being marked safe and auto-pruned before repair.
+        #[test]
+        fn missing_detached_registrations_require_explicit_cleanup() {
+            let repo = setup_test_repo();
+            let deleted = detached(repo.path(), "deleted-detached");
+            let moved = detached(repo.path(), "moved-detached");
+            fs::remove_dir_all(&deleted).unwrap();
+            fs::rename(&moved, repo.path().join("new-location")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            let repo_path = repo.path().to_string_lossy();
+            let assessments = assess_orphan_cleanup_with_sessions(&state, &repo_path).unwrap();
+            // Transport fixture captured from real Git state, consumed by the refresh-coordinator test.
+            let inventory =
+                tuic_git::worktree::get_worktree_inventory_raw(&repo_path, None).unwrap();
+            println!(
+                "2157_MISSING_ORPHAN_ASSESSMENTS={}",
+                serde_json::json!({"diagnostics": inventory.worktree_diagnostics, "assessments": assessments})
+            );
+            assert_eq!(
+                inventory.worktree_diagnostics.len(),
+                2,
+                "repair diagnostics must remain visible"
+            );
+            assert!(
+                assessments.is_empty(),
+                "unavailable registrations entered automatic cleanup: {assessments:?}"
+            );
+            for path in [&deleted, &moved] {
+                assert!(
+                    remove_orphan_checkout(&state, &repo_path, &path.to_string_lossy(), true, &[])
+                        .is_err(),
+                    "automatic guard removed an unavailable registration"
+                );
+                remove_orphan_checkout(&state, &repo_path, &path.to_string_lossy(), false, &[])
+                    .expect("explicit removal remains available");
+            }
+            assert_eq!(
+                assess_orphan_cleanup_with_sessions(&state, &repo_path).unwrap(),
+                [] as [OrphanCleanupReview; 0]
+            );
+
+            // A checkout may disappear after a safe assessment; the automatic guard must recheck.
+            let late = detached(repo.path(), "vanishes-after-assessment");
+            assert!(
+                assess_orphan_cleanup_with_sessions(&state, &repo_path)
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry.assessment.safe)
+            );
+            fs::remove_dir_all(&late).unwrap();
+            assert!(
+                remove_orphan_checkout(&state, &repo_path, &late.to_string_lossy(), true, &[])
+                    .is_err()
+            );
+            remove_orphan_checkout(&state, &repo_path, &late.to_string_lossy(), false, &[])
+                .unwrap();
         }
 
         // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.

@@ -69,6 +69,14 @@ export interface DetachedWorktree {
 	state: "detached";
 }
 
+/** Read-only inventory entries that cannot safely use a branch workspace identity. */
+export interface WorktreeDiagnostic {
+	path: string;
+	branch: string | null;
+	state: "missing" | "duplicate_branch";
+	guidance: string;
+}
+
 /** Repository hook for git operations */
 export function useRepository() {
 	/** Get repository info */
@@ -342,6 +350,7 @@ export function useRepository() {
 	async function getRepoSummary(repoPath: string): Promise<{
 		worktree_paths: Record<string, WorkspaceWorktree>;
 		detached_worktrees: DetachedWorktree[];
+		worktree_diagnostics?: WorktreeDiagnostic[];
 		merged_branches: string[];
 		diff_stats: Record<string, { additions: number; deletions: number }>;
 		last_commit_ts: Record<string, number | null>;
@@ -367,6 +376,7 @@ export function useRepository() {
 	async function getRepoStructure(repoPath: string): Promise<{
 		worktree_paths: Record<string, WorkspaceWorktree>;
 		detached_worktrees: DetachedWorktree[];
+		worktree_diagnostics?: WorktreeDiagnostic[];
 		merged_branches: string[];
 	}> {
 		try {

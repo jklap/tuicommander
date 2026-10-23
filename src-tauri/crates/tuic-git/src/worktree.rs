@@ -1862,7 +1862,7 @@ pub fn resolve_any_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_worktree_workspace_paths(&listed.stdout)
@@ -1881,7 +1881,7 @@ fn resolve_archived_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_archived_workspace_paths(&listed.stdout)
@@ -2373,9 +2373,8 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
-/// Remove a detached orphan. A checkout whose directory is already gone holds
-/// nothing to lose, so dropping its registration is confirmed by the safety
-/// assessment instead of a `force` flag.
+/// Remove a detached orphan after the caller's removal guard. Missing checkout
+/// registrations require explicit confirmation; automatic safety rejects them.
 pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
     refuse_temporary_orphan(&worktree.path)?;
     remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
@@ -3760,13 +3759,10 @@ const IN_PROGRESS_MARKERS: [&str; 6] = [
     "BISECT_LOG",
 ];
 
-/// Admin dir of a linked worktree: its `.git` is a *file* holding
-/// `gitdir: <repo>/.git/worktrees/<name>`. Returns `None` for the main worktree (where `.git`
-/// is a directory) and for paths that no longer exist.
+/// Resolve a checkout's admin directory, including a relative gitdir file or the
+/// main checkout's .git directory. Unavailable directories return None.
 fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(Path::new(worktree_path).join(".git")).ok()?;
-    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
-    Some(PathBuf::from(gitdir))
+    crate::git::resolve_git_dir(Path::new(worktree_path))
 }
 
 /// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
@@ -3781,8 +3777,8 @@ fn has_operation_in_progress(worktree_path: &str) -> bool {
 
 /// Branch a detached worktree was on before the in-flight operation started. Git records it in
 /// `head-name` for both rebase backends; merge/cherry-pick/revert never detach, so they have no
-/// equivalent (and need none). Bisect records only a raw name in `BISECT_START`, which we do not
-/// trust as a branch — such a worktree stays alive as an in-progress op, just without a row.
+/// equivalent (and need none). Bisect records the original name in `BISECT_START`;
+/// accept it only if Git resolves it as an existing local branch, never as an OID.
 ///
 /// **Stays path-addressed on purpose (#726-5ac7).** Story 726 asked for this to
 /// take a `workspace_id` alongside `worktree_dirtiness` and `check_worktree_dirty`,
@@ -3803,7 +3799,14 @@ pub fn operation_head_branch(worktree_path: &str) -> Option<String> {
             return Some(branch.to_string());
         }
     }
-    None
+    let start = std::fs::read_to_string(admin.join("BISECT_START")).ok()?;
+    let branch = start
+        .trim()
+        .strip_prefix("refs/heads/")
+        .unwrap_or(start.trim());
+    let repo = gix::open(worktree_path).ok()?;
+    repo.find_reference(&format!("refs/heads/{branch}")).ok()?;
+    Some(branch.to_string())
 }
 
 /// One workspace's checkout, resolved by opaque workspace id.
@@ -3831,6 +3834,24 @@ pub struct WorkspaceWorktree {
 pub struct WorktreeInventory {
     pub worktree_paths: HashMap<String, WorkspaceWorktree>,
     pub detached_worktrees: Vec<DetachedWorktree>,
+    #[serde(default)]
+    pub worktree_diagnostics: Vec<WorktreeDiagnostic>,
+}
+
+/// Non-selectable registrations that cannot safely use the existing branch workspace id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeDiagnostic {
+    pub path: String,
+    pub branch: Option<String>,
+    pub state: WorktreeDiagnosticState,
+    pub guidance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeDiagnosticState {
+    Missing,
+    DuplicateBranch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3854,19 +3875,40 @@ pub(crate) fn checkout_inventory(
     archive_pool: Option<&Path>,
 ) -> WorktreeInventory {
     let mut inventory = WorktreeInventory::default();
+    // Use the same deterministic primary checkout in discovery and legacy lifecycle resolution.
+    let mut entries: Vec<_> = entries.into_iter().collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
     let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     for entry in entries {
         let path = Path::new(&entry.path);
-        if !path.exists() {
-            continue;
-        }
         let parent = path
             .parent()
             .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
         if pool.is_some() && parent == pool {
             continue;
         }
+        if !path.is_dir() || crate::git::resolve_git_dir(path).is_none() {
+            inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                path: entry.path,
+                branch: entry.branch,
+                state: WorktreeDiagnosticState::Missing,
+                guidance: "Checkout unavailable or registration broken. Restore the checkout or run git worktree repair from its new location. Review git worktree list --porcelain before manually pruning a deleted registration.".to_string(),
+            });
+            continue;
+        }
         if let Some(branch) = entry.branch.or_else(|| operation_head_branch(&entry.path)) {
+            if inventory
+                .worktree_paths
+                .contains_key(&workspace_id_of_worktree(&branch))
+            {
+                inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                    path: entry.path,
+                    branch: Some(branch),
+                    state: WorktreeDiagnosticState::DuplicateBranch,
+                    guidance: "Another checkout uses this branch workspace. Use a distinct branch to select this checkout independently; no checkout was removed.".to_string(),
+                });
+                continue;
+            }
             inventory.worktree_paths.insert(
                 workspace_id_of_worktree(&branch),
                 WorkspaceWorktree {
@@ -3893,6 +3935,9 @@ pub(crate) fn checkout_inventory(
     }
     inventory
         .detached_worktrees
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    inventory
+        .worktree_diagnostics
         .sort_by(|a, b| a.path.cmp(&b.path));
     inventory
 }
@@ -3950,26 +3995,27 @@ pub(crate) fn is_archived_checkout(path: &Path) -> bool {
 fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
-    for entry in parse_worktree_entries(porcelain) {
+    let mut entries = parse_worktree_entries(porcelain);
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    for entry in entries {
         let branch = match entry.branch {
             Some(branch) => Some(branch),
             None => operation_head_branch(&entry.path),
         };
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
-            && Path::new(&entry.path).exists()
+            && crate::git::resolve_git_dir(Path::new(&entry.path)).is_some()
             && is_archived_checkout(Path::new(&entry.path)) == archived
         {
-            result.insert(
-                workspace_id_of_worktree(&branch),
-                WorkspaceWorktree {
+            result
+                .entry(workspace_id_of_worktree(&branch))
+                .or_insert_with(|| WorkspaceWorktree {
                     branch,
                     path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
                     warm_artifacts: None,
                     lifecycle_status: None,
-                },
-            );
+                });
         }
     }
 
@@ -4015,7 +4061,7 @@ pub fn resolve_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
@@ -7283,9 +7329,9 @@ branch refs/heads/feat
     /// coupling callers to that representation.
     #[test]
     fn workspace_paths_are_keyed_by_id_and_carry_the_branch() {
-        // A real directory: the mapper drops entries whose path no longer exists,
-        // which is the post-prune safety guard, not something to work around.
-        let dir = TempDir::new().expect("temp dir");
+        // A real repository: the mapper requires resolvable Git metadata before
+        // making a checkout selectable.
+        let dir = setup_test_repo();
         let wt = dir.path().to_string_lossy().into_owned();
         let porcelain = format!("worktree {wt}\nHEAD abc123\nbranch refs/heads/main\n\n");
 
@@ -12632,7 +12678,7 @@ branch refs/heads/feat
     /// The directory was moved away but git still lists the worktree. Spawning
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
-    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
+    fn orphan_whose_directory_is_gone_requires_explicit_removal_to_drop_entry() {
         let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-moved-away");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
@@ -12644,13 +12690,15 @@ branch refs/heads/feat
 
         let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
 
-        let entry = assessments
-            .iter()
-            .find(|entry| entry.path.ends_with("orphan-moved-away"))
-            .expect("the tracked orphan is still listed");
-        assert!(entry.safe, "{entry:?}");
-        let reason = entry.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("already gone"), "{reason}");
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path.ends_with("orphan-moved-away")),
+            "unavailable registrations must stay out of automatic cleanup"
+        );
+        let reason =
+            orphan_cleanup_safety(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
+        assert!(reason.contains("git worktree repair"), "{reason}");
         assert!(!reason.contains("spawn"), "{reason}");
 
         let worktree = WorktreeInfo {
@@ -13609,18 +13657,27 @@ branch refs/heads/feat
         assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
-    // Catches (critic-1367): a vanished checkout reported with a fingerprint, so a Keep
-    // would hold for a directory nobody can inspect any more.
+    // Catches: a vanished checkout entering the fingerprint-based cleanup/Keep flow
+    // instead of remaining a repair diagnostic.
     #[test]
-    fn orphan_whose_directory_is_gone_has_no_fingerprint() {
+    fn orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup() {
         let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-vanished");
         fs::remove_dir_all(&path).unwrap();
 
-        let entry = orphan_entry(&repo, "orphan-vanished");
-
-        assert!(entry.safe, "{entry:?}");
-        assert_eq!(entry.dirty_fingerprint, None);
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
+        let inventory = get_worktree_inventory_raw(&repo.to_string_lossy(), None).unwrap();
+        assert!(
+            inventory
+                .worktree_diagnostics
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
     }
 
     // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"
@@ -13747,13 +13804,16 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
+            // An unavailable registration belongs to repair diagnostics, not the
+            // automatic sweep (including Ask mode's countdown confirmation).
+            .filter(|path| Path::new(path).is_dir())
             .map(|path| {
                 let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
                     .ok()
                     .map(|(fingerprint, _)| fingerprint);
                 match orphan_cleanup_safety(repo_path, &path) {
                     Ok(()) => OrphanCleanupAssessment {
-                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        reason: None,
                         path,
                         safe: true,
                         dirty_fingerprint,
@@ -13788,15 +13848,13 @@ fn non_default_local_branch_at_head(
     Ok(branches.stdout.lines().any(|branch| branch != default_ref))
 }
 
-const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
-
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
-    // Nothing to inspect: git cannot run in a missing cwd, and there is no
-    // work left to lose.
-    if !worktree.exists() {
-        return Ok(());
+    // Recheck at the automatic-removal boundary: the directory may have moved
+    // after assessment. Only an explicit removal may discard its registration.
+    if !worktree.is_dir() {
+        return Err("checkout unavailable; restore it or run git worktree repair; explicit removal is required to discard its registration".into());
     }
     let status = git_cmd(worktree)
         .args([

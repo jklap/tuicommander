@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).
+- Preserve duplicate-branch checkouts as read-only diagnostics, show missing registrations with repair guidance, propagate discovery errors without caching empty results, and retain bisect/relative-gitdir rebase identity (#2157-eb64). Missing detached registrations also stay out of automatic orphan cleanup, including Ask countdowns; explicit removal remains available.
+
 - Terminal Chat now limits its green answer bar to the CLI answer region instead of the whole assistant message on desktop and mobile (#2158-4b3d).
 
 - Identify symbolic links and their target kind/path in Files; explain outside-repository link refusals without adding read access (#2155-5da6).
@@ -27,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Publish each terminal Chat snapshot once instead of rendering every partial history during replay, reducing first-open and CLI-to-Chat latency without truncating the desktop or mobile transcript (#2163-a1db).
 - Automatically respawn dead stdio MCP upstreams during health recovery; preserve healthy processes after reply timeouts and discard late replies by request id (#2162-bf4a).
 - Restore empty or older pane layouts safely during settings refresh, and publish restored tree, groups and focus together (#2161-dc0d).
 - Show detached checkouts as informational sidebar rows without inventing branch workspaces; retain the main checkout for linked-input discovery, preserve newline paths, and exclude only the configured TUIC archive pool (#2156-2723).
