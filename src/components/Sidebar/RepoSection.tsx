@@ -1547,10 +1547,10 @@ export const RepoSection: Component<{
 					? (props.repo.workspaces[props.repo.activeWorkspaceId]?.branchName ?? null)
 					: null,
 				openPrs: githubStore.getAllOpenPrs(props.repo.path).length,
-				worktrees: countWorktrees(
-					props.repo.path,
-					branches().map((w) => w.worktreePath),
-				),
+				worktrees: countWorktrees(props.repo.path, [
+					...branches().map((w) => w.worktreePath),
+					...(props.repo.detachedWorktrees ?? []).map((w) => w.path),
+				]),
 				polledAt: githubStore.getLastPolled(props.repo.path),
 			},
 			now(),
@@ -1736,6 +1736,11 @@ export const RepoSection: Component<{
 					<span class={s.repoName} style={props.nameColor ? { color: props.nameColor } : undefined}>
 						{props.repo.displayName}
 					</span>
+					<Show when={props.repo.detachedWorktrees?.length}>
+						<span class={s.richChip} data-testid="detached-worktree-count">
+							{props.repo.detachedWorktrees?.length} {t("sidebar.detached", "detached")}
+						</span>
+					</Show>
 					<Show when={props.repo.connectionId}>
 						<span
 							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
@@ -1940,7 +1945,22 @@ export const RepoSection: Component<{
 							</div>
 						)}
 					</For>
-					<Show when={sortedBranches().length === 0}>
+					<For each={props.repo.detachedWorktrees ?? []}>
+						{(checkout) => (
+							<div
+								class={s.detachedWorktree}
+								data-testid="detached-worktree"
+								data-tooltip={`${checkout.path}
+${checkout.head}`}
+							>
+								<span class={s.detachedName}>{checkout.directory_name}</span>
+								<span class={s.detachedState}>
+									{checkout.short_head} {t("sidebar.detached", "detached")}
+								</span>
+							</div>
+						)}
+					</For>
+					<Show when={sortedBranches().length === 0 && !props.repo.detachedWorktrees?.length}>
 						<div class={s.repoEmpty}>{t("sidebar.noBranches", "No branches loaded")}</div>
 					</Show>
 				</div>

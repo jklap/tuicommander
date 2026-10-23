@@ -550,3 +550,7 @@ worktree.
 Explicit worktree removal uses the same current-cwd terminal cleanup as removal
 events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
 outside the removed checkout are rehomed after successful removal.
+
+### Checkout discovery inventory
+
+CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool; an unrelated directory with that name does not hide a checkout. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.

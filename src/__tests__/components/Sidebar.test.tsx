@@ -435,6 +435,33 @@ describe("Sidebar", () => {
 		});
 	});
 
+	// Catches detached metadata being omitted, made selectable, or hidden without a folded count.
+	it("renders detached checkouts without branch actions and keeps a folded indicator", () => {
+		const detached = {
+			path: "/external/detached-checkout",
+			head: "abcdef0123456789",
+			short_head: "abcdef0",
+			directory_name: "detached-checkout",
+			state: "detached",
+		};
+		setRepos({ "/repo1": makeRepo({ detachedWorktrees: [detached] }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const row = view.getByTestId("detached-worktree");
+		expect(row).toHaveTextContent("detached-checkout");
+		expect(row).toHaveTextContent("abcdef0 detached");
+		expect(row.getAttribute("data-tooltip")).toContain(detached.path);
+		expect(row.querySelector("button")).toBeNull();
+		expect(row.getAttribute("tabindex")).toBeNull();
+		fireEvent.click(row);
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, detachedWorktrees: [detached] }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("detached-worktree")).toBeNull();
+		expect(folded.getByTestId("detached-worktree-count")).toHaveTextContent("1 detached");
+	});
+
 	describe("density attribute", () => {
 		beforeEach(() => densityMode("auto"));
 		const manyBranches = (n: number) =>

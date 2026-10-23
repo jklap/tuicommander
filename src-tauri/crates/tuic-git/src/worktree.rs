@@ -3699,18 +3699,20 @@ pub fn delete_integrated_local_branch_with_pr(
 }
 
 /// One block of `git worktree list --porcelain` output.
-struct WorktreeEntry {
-    path: String,
+pub(crate) struct WorktreeEntry {
+    pub(crate) path: String,
+    pub(crate) head: String,
     /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
-    branch: Option<String>,
-    detached: bool,
+    pub(crate) branch: Option<String>,
+    pub(crate) detached: bool,
 }
 
 fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
     let mut entries = Vec::new();
 
-    for block in porcelain.split("\n\n") {
-        let block = block.trim();
+    let nul = porcelain.contains('\0');
+    for block in porcelain.split(if nul { "\0\0" } else { "\n\n" }) {
+        let block = if nul { block } else { block.trim() };
         if block.is_empty() {
             continue;
         }
@@ -3718,12 +3720,15 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut detached = false;
+        let mut head = String::new();
 
-        for line in block.lines() {
+        for line in block.split(if nul { '\0' } else { '\n' }) {
             if let Some(p) = line.strip_prefix("worktree ") {
                 path = Some(p.to_string());
             } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
                 branch = Some(b.to_string());
+            } else if let Some(oid) = line.strip_prefix("HEAD ") {
+                head = oid.to_string();
             } else if line == "detached" {
                 detached = true;
             }
@@ -3732,6 +3737,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         if let Some(path) = path {
             entries.push(WorktreeEntry {
                 path,
+                head,
                 branch,
                 detached,
             });
@@ -3819,6 +3825,91 @@ pub struct WorkspaceWorktree {
     pub lifecycle_status: Option<WorkspaceLifecycleStatus>,
 }
 
+/// Discovery inventory keeps detached checkouts outside branch-addressed workspaces.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeInventory {
+    pub worktree_paths: HashMap<String, WorkspaceWorktree>,
+    pub detached_worktrees: Vec<DetachedWorktree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetachedWorktreeState {
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedWorktree {
+    pub path: String,
+    pub head: String,
+    pub short_head: String,
+    pub directory_name: String,
+    pub state: DetachedWorktreeState,
+}
+
+/// The adapter supplies the configured TUIC pool; a basename alone is not ownership.
+pub(crate) fn checkout_inventory(
+    entries: impl IntoIterator<Item = WorktreeEntry>,
+    archive_pool: Option<&Path>,
+) -> WorktreeInventory {
+    let mut inventory = WorktreeInventory::default();
+    let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+    for entry in entries {
+        let path = Path::new(&entry.path);
+        if !path.exists() {
+            continue;
+        }
+        let parent = path
+            .parent()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+        if pool.is_some() && parent == pool {
+            continue;
+        }
+        if let Some(branch) = entry.branch.or_else(|| operation_head_branch(&entry.path)) {
+            inventory.worktree_paths.insert(
+                workspace_id_of_worktree(&branch),
+                WorkspaceWorktree {
+                    branch,
+                    path: entry.path,
+                    kind: WorkspaceKind::Worktree,
+                    warm_artifacts: None,
+                    lifecycle_status: None,
+                },
+            );
+        } else if entry.detached {
+            inventory.detached_worktrees.push(DetachedWorktree {
+                directory_name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                short_head: entry.head.chars().take(7).collect(),
+                path: entry.path,
+                head: entry.head,
+                state: DetachedWorktreeState::Detached,
+            });
+        }
+    }
+    inventory
+        .detached_worktrees
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    inventory
+}
+
+pub fn get_worktree_inventory_raw(
+    repo_path: &str,
+    archive_pool: Option<&Path>,
+) -> Result<WorktreeInventory, String> {
+    let output = git_cmd(Path::new(repo_path))
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .run()
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    Ok(checkout_inventory(
+        parse_worktree_entries(&output.stdout),
+        archive_pool,
+    ))
+}
+
 /// The workspace id a freshly created **git worktree** gets.
 ///
 /// The one place allowed to produce an id from a branch, and only because the
@@ -3896,7 +3987,7 @@ pub fn get_worktree_paths_raw(
 ) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let base_repo = PathBuf::from(&repo_path);
     let output = git_cmd(&base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     Ok(map_worktree_workspace_paths(&output.stdout))

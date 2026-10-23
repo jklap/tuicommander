@@ -4305,8 +4305,7 @@ pub(crate) struct GitCacheState {
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
-    pub(crate) worktree_paths:
-        GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
+    pub(crate) worktree_paths: GitCache<crate::worktree::WorktreeInventory>,
     /// Repos explicitly reported NOT_FOUND by GitHub GraphQL.
     /// Keyed by "owner/name", value is the cooldown expiry time.
     /// Excluded from batch queries until the cooldown expires (24 hours).

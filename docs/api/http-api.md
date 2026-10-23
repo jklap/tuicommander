@@ -3533,6 +3533,10 @@ clears the NOT_FOUND cooldown for all accounts and returns the same diagnostics
 DTO. `GET /github/diagnostics` remains read-only. This maps to
 `github_diagnostics` with `refresh: true` over IPC; omitted or false is read-only.
 
+### Detached checkout inventory
+
+`GET /repo/structure` and `GET /repo/summary` add `detached_worktrees` beside `worktree_paths`. Each record is `{path, head, short_head, directory_name, state: "detached"}`. The branch map and its workspace IDs do not change. `GET /worktrees/paths` remains a branch-only map for lifecycle and terminal placement. Both discovery backends retain detached checkouts in the additive inventory and exclude only the configured TUIC archive pool. Detached records are read-only sidebar information, not selectable workspaces.
+
 ### Directory listing link metadata
 
 `GET /fs/list?repoPath=…&subdir=…` returns the same `DirEntry` shape as `list_directory` IPC. Symbolic links include optional `symlink_target` (link text) and `symlink_target_kind` (`directory`, `file`, or `unavailable`) fields and size 0. These fields are metadata only; existing repository containment checks still gate reads. Outside-link reads return a target-specific refusal.

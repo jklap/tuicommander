@@ -1337,6 +1337,10 @@ Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close ab
 
 GitHub Settings preserves per-alias API access errors by owner/account. Only explicit root NOT_FOUND responses receive the 24-hour exclusion; other denials retry on the normal poll and clear on success.
 
+### Detached checkout inventory
+
+Structure and summary snapshots include a separate detached-checkout vector (path, HEAD SHA, short SHA, directory name, detached state). The sidebar renders it without branch selection or actions and retains a header count when folded. Existing branch-workspace IDs and rich idle-session folding stay unchanged. Discovery excludes the configured TUIC archive pool, not every directory named `__archived`.
+
 ### Session-owned mobile usage (#2150-4e0c)
 
 `get_session_usage(session_id)` / `GET /sessions/{id}/usage` returns display-ready

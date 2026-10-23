@@ -781,22 +781,30 @@ pub(crate) async fn delete_local_branch(
     Ok(())
 }
 
+/// Resolve TUIC's configured recycling pool against the canonical main checkout.
+pub(crate) fn archive_pool_for_repo(repo_path: &Path, app_worktrees_dir: &Path) -> PathBuf {
+    let root = tuic_git::git::canonical_repo_root(repo_path);
+    resolve_worktree_dir_for_repo(&root, app_worktrees_dir).join("__archived")
+}
+
 /// Cached workspaces (id -> checkout) for synchronous callers (MCP handlers, etc.).
 pub(crate) fn get_worktree_paths_cached(
     state: &crate::state::AppState,
     repo_path: &str,
 ) -> HashMap<String, WorkspaceWorktree> {
     let p = repo_path.to_string();
+    let pool = archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
     (*state
         .git_cache
         .worktree_paths
         .get_with(repo_path.to_string(), || {
             std::sync::Arc::new(
                 crate::git_reads::git_reads()
-                    .worktree_paths(std::path::Path::new(&p))
+                    .worktree_inventory(std::path::Path::new(&p), Some(&pool))
                     .unwrap_or_default(),
             )
         }))
+    .worktree_paths
     .clone()
 }
 
@@ -1440,12 +1448,17 @@ pub(crate) async fn get_workspace_lifecycle(
     .map_err(|e| format!("workspace lifecycle task failed: {e}"))?
 }
 
-#[cfg(feature = "desktop")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn get_worktree_paths(
     repo_path: String,
 ) -> Result<HashMap<String, WorkspaceWorktree>, String> {
-    tuic_git::worktree::get_worktree_paths(repo_path)
+    let pool = archive_pool_for_repo(
+        Path::new(&repo_path),
+        &crate::config::config_dir().join("worktrees"),
+    );
+    let mut inventory = tuic_git::worktree::get_worktree_inventory_raw(&repo_path, Some(&pool))?;
+    attach_warm_statuses(&mut inventory.worktree_paths);
+    Ok(inventory.worktree_paths)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

@@ -250,6 +250,7 @@ pub(crate) struct RepoStructure {
     /// Workspace id -> its checkout. Never keyed by branch: two workspaces may
     /// share one (#726-5ac7).
     worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
+    detached_worktrees: Vec<crate::worktree::DetachedWorktree>,
     merged_branches: Vec<String>,
 }
 
@@ -272,6 +273,7 @@ pub(crate) struct RepoSummary {
     /// Workspace id -> its checkout. Never keyed by branch: two workspaces may
     /// share one (#726-5ac7).
     worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
+    detached_worktrees: Vec<crate::worktree::DetachedWorktree>,
     merged_branches: Vec<String>,
     /// Per-worktree diff stats, keyed by worktree path (matches the `path` field
     /// of worktree_paths values).
@@ -294,12 +296,13 @@ pub(crate) struct RepoSummary {
 async fn cached_worktree_paths(
     state: &AppState,
     repo_path: String,
-) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
+) -> Result<crate::worktree::WorktreeInventory, String> {
     let p = repo_path.clone();
+    let pool = crate::worktree::archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
     cached_try(
         state.git_cache.worktree_paths.clone(),
         repo_path,
-        move || git_reads().worktree_paths(Path::new(&p)),
+        move || git_reads().worktree_inventory(Path::new(&p), Some(&pool)),
     )
     .await
     .map_err(|e| format!("get_worktree_paths failed: {e}"))
@@ -315,6 +318,7 @@ pub(crate) async fn get_repo_summary_impl(
     let stats = get_repo_diff_stats_impl(state, repo_path).await?;
     Ok(RepoSummary {
         worktree_paths: structure.worktree_paths,
+        detached_worktrees: structure.detached_worktrees,
         merged_branches: structure.merged_branches,
         diff_stats: stats.diff_stats,
         last_commit_ts: stats.last_commit_ts,
@@ -350,8 +354,10 @@ pub(crate) async fn get_repo_structure_impl(
         ),
     );
 
+    let inventory = worktree_paths?;
     Ok(RepoStructure {
-        worktree_paths: worktree_paths?,
+        worktree_paths: inventory.worktree_paths,
+        detached_worktrees: inventory.detached_worktrees,
         merged_branches: merged_branches?,
     })
 }
@@ -375,7 +381,9 @@ pub(crate) async fn get_repo_diff_stats_impl(
     let _permit = state.monitoring_git_permit().await;
     // Need worktree paths to know which directories to diff. Phase 1
     // (`get_repo_structure`) of this same refresh already read them.
-    let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
+    let worktree_paths = cached_worktree_paths(state, repo_path.clone())
+        .await?
+        .worktree_paths;
     let path = repo_path.clone();
     let proof_state = Arc::clone(state);
     cached_try(
@@ -1045,6 +1053,42 @@ mod tests {
         );
     }
 
+    /// Catches dropping detached inventory at the cached structure/summary boundary.
+    #[tokio::test]
+    async fn discovery_2156_structure_and_summary_keep_detached_metadata() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let linked = tempfile::tempdir().unwrap();
+        let checkout = linked.path().join("detached-visible");
+        git_cmd(&path)
+            .args(["worktree", "add", "--detach", checkout.to_str().unwrap()])
+            .run()
+            .unwrap();
+        let expected_head = git_cmd(&checkout)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo = path.to_string_lossy().into_owned();
+        let structure = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
+        assert_eq!(structure.detached_worktrees.len(), 1);
+        assert_eq!(structure.detached_worktrees[0].head, expected_head);
+        assert_eq!(
+            structure.detached_worktrees[0].directory_name,
+            "detached-visible"
+        );
+        assert!(
+            !structure
+                .worktree_paths
+                .values()
+                .any(|w| Path::new(&w.path) == checkout)
+        );
+        let summary = get_repo_summary_impl(&state, repo).await.unwrap();
+        assert_eq!(summary.detached_worktrees, structure.detached_worktrees);
+    }
+
     /// Progressive loading splits one refresh into `get_repo_structure` (phase 1)
     /// then `get_repo_diff_stats` (phase 2), and both need the branch→path map.
     /// Each was forking `git worktree list` for itself, so every repo-changed
@@ -1068,16 +1112,19 @@ mod tests {
         // git again would report the repo's real branch, never this sentinel.
         state.git_cache.worktree_paths.insert(
             repo.clone(),
-            Arc::new(HashMap::from([(
-                "sentinel-id".to_string(),
-                crate::worktree::WorkspaceWorktree {
-                    branch: "sentinel-branch".to_string(),
-                    path: repo.clone(),
-                    kind: crate::worktree::WorkspaceKind::Worktree,
-                    warm_artifacts: None,
-                    lifecycle_status: None,
-                },
-            )])),
+            Arc::new(crate::worktree::WorktreeInventory {
+                worktree_paths: HashMap::from([(
+                    "sentinel-id".to_string(),
+                    crate::worktree::WorkspaceWorktree {
+                        branch: "sentinel-branch".to_string(),
+                        path: repo.clone(),
+                        kind: crate::worktree::WorkspaceKind::Worktree,
+                        warm_artifacts: None,
+                        lifecycle_status: None,
+                    },
+                )]),
+                detached_worktrees: Vec::new(),
+            }),
         );
 
         let stats = get_repo_diff_stats_impl(&state, repo.clone())
