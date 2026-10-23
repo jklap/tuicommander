@@ -558,6 +558,9 @@ byte-for-byte, and no daily app/shared Chrome process was stopped or replaced.
 
 ## Native WebKit follow-up — 2026-10-23
 
+The first attempt below is historical. Its startup block was resolved with the
+coordinator-authorized default ego launch. The successful acquisition follows it.
+
 The coordinator authorized the isolated native target with instance
 `agent-test-2040` and port `19890`. All inspection used its Unix socket, not the
 orchestrator's debug interface. The application is **CanvasTerminal**, not xterm:
@@ -565,7 +568,7 @@ its keyboard target is a hidden `input[aria-hidden=true]`, and its output path i
 binary grid installation followed by the custom canvas renderer. There is no
 xterm textarea or xterm write callback to measure.
 
-### Verified native readiness, but no valid input distribution
+### Historical prerequisite failure — superseded by acquisition below
 
 The successful native preflight reports WebKit UA
 `AppleWebKit/605.1.15`, a 640×420 CSS viewport and DPR 2. This is the UA string,
@@ -642,3 +645,162 @@ The final lifecycle deleted the owned TUIC PTY, ran matching
 plain-PTY process and its recorded ego PID are gone. The native PID file is
 absent. Both temporarily modified production files were restored byte-for-byte.
 No shared Chrome, daily app, installed executable or other agent was stopped.
+
+### Successful native acquisition — 200 idle and 201 output-overlapping keys
+
+The coordinator subsequently authorized installed ego with its default home and
+remote model, without reading credential stores. The exec wrapper launched ego
+with no arguments, removed the EGO_HOME override and inherited TUIC variables,
+and ignored the shell's `-l`. The observed model was
+`openai-codex/gpt-6-sol`. A separate default-ego plain-PTY control reached a live
+composer at about 0.847 seconds and emitted real `/help` chunks about 100 and
+200 ms after submission. The isolated offline startup block is no longer current.
+
+The successful native session was `8997b835-d267-4bcb-9418-884b618b75c1`, on the
+same authorized instance and port. Its viewport was 640×420 CSS pixels, DPR 2,
+with 15×38 codepoint cells. The WebKit UA remained `AppleWebKit/605.1.15`.
+Six readiness callbacks ran at 2146, 2163, 2179, 2197, 2213 and 2229 ms.
+The main sentinel measured 7,958 frame intervals: median 17 ms, p95 19 ms,
+range 10–23 ms.
+
+All input events were synthetic (`isTrusted=false`). They target the real hidden
+input but **skip OS keyboard routing**. Unique CJK keys identify native PTY
+reads, installed semantic grid rows and actual `fillText` calls. Temporary
+frontend observers recorded acceptance, actual rAF entry and paint boundaries;
+the Rust observer timestamped actual PTY reads. The next callback after a glyph
+fill is an observation proxy, not compositor presentation or physical scanout.
+
+The main arm collected 200 idle keys and 200 `/help` key candidates, one
+outstanding echo at a time. Ctrl+U cleared drafts without submitting a model
+prompt. Each `/help` letter was paced 25 ms, and the full rendered composer had
+to equal `/help` before Enter. The unique key followed about 125–129 ms later.
+Exactly 198 main candidates overlapped real help output; two commands finished
+before the key and are excluded. All three smoke help keys also overlapped,
+giving **201 verified overlap samples (198 main + 3 smoke)** from this same
+instance/run and observer source.
+
+For every included help sample, the native reader saw the unique echo before
+the final help footer. The first help body preceded the key event by at least
+21.937 ms. The same-native-clock echo/footer ordering corroborates the overlap;
+frontend/native clock alignment is not the sole evidence. All 400 main keys
+correlated with reader, semantic acceptance and glyph fill. The final log has
+204 help headings (initial + 3 smoke + 200 main) and no `Working` chunks.
+
+#### Native distributions
+
+Values are milliseconds, shown as median / p95 / maximum. Native reader values
+are rounded to one decimal: WebKit's integer-ms timestamps and cross-clock
+alignment do not support sub-ms physical attribution. Apparent reader-to-grid
+negative values down to −1.574 ms demonstrate this uncertainty (approximately
+±2 ms), not reversed causality.
+
+| Boundary | 200 idle | 201 verified help-overlap |
+| --- | ---: | ---: |
+| Keydown → actual PTY reader | 1.4 / 1.9 / 2.0 | 1.8 / 2.5 / 2.9 |
+| Keydown → semantic grid accepted | 11 / 37 / 48 | 1 / 12 / 26 |
+| Accepted → actual rAF entry | 6 / 16 / 18 | 8 / 16 / 17 |
+| Keydown → glyph fill | **20.5 / 42 / 58** | **11 / 26 / 36** |
+| Keydown → next rAF after fill | 37 / 60 / 73 | 27 / 43 / 53 |
+| Help Enter → final footer read | not applicable | 170.1 / 183.6 / 199.5 |
+
+All 400 main keys and all three included smoke help keys painted in the first
+subsequent sentinel-observed production rAF, with zero strictly intervening
+sentinel callbacks. Integer timestamp ties limit finer ordering. This is not
+an end-to-end one-frame pass: idle and help glyph-fill p95 exceed the measured
+19 ms frame-interval p95.
+
+Acceptance phase after the preceding rAF was spread through the native period:
+idle median/p95/range **9/15/0–17 ms**, help **8/14/0–16 ms**. This does not
+reproduce Chrome's tight approximately 1 ms post-rAF acceptance concentration.
+Native median acceptance-to-rAF is 6–8 ms rather than approximately 16 ms.
+However, input trust, IPC versus HTTP/WS, viewport/DPR, workload and sample counts
+differ. This is a phase comparison, not OS-path or browser-engine equivalence.
+No extra native full-period queue was isolated, and no speculative scheduling or
+NODELAY fix is justified by these results.
+
+#### Exact captured-byte plain-shell replay
+
+The initial real `/help` supplied exactly **7,148 bytes**, including actual echo,
+status and cursor-control bytes. Every read in that initial command re-encoded
+to its logged byte length. SHA-256:
+
+```text
+3ee421cc671f61bd8af5c4002de0a5fb10bc72c0f15da6d97800036b4f395fe6
+```
+
+A real 15×38 plain-shell PTY waited for `go`, then used `cat` to emit that exact
+file and stayed alive. Echo and output postprocessing were disabled to prevent
+CRLF mutation. A two-trial calibration preceded 20 trials; each verified byte
+count, equality and hash. Submission-to-last-byte duration was median
+**2.885 ms**, p95 **3.329 ms**, range **2.565–3.444 ms**.
+
+The captured native command took **103.946 ms** from Enter to its last PTY read
+and **142 ms** to the verified final help `paint_end` (accepted at 4096 ms,
+paint ended at 4097 ms, submission at 3955 ms). Ratios to the shell median are
+**36.028×** for reader completion and **49.218×** for canvas completion. The
+latter compares different endpoints; the shell replay has no renderer or
+compositor endpoint. This is one captured native command against 20 exact-byte
+replays, not 20 paired native commands. Neither comparison meets 2×.
+
+The native producer already consumes about 104 ms before the last PTY read.
+The independent default-ego control also delayed help output. Thus the replay
+is a byte-throughput control, not proof that all excess is caused by TUIC.
+The 201 overlap commands are a separate arm; their footer distribution must not
+be substituted for repeated measurements of the initial command's final paint.
+
+#### Failed acquisitions, diagnostics and limits
+
+Failed attempts are retained but excluded from the successful distribution:
+
+- Early `/health` did not imply frontend readiness. The helper now retries fresh
+  DOM evaluations with a two-second per-attempt budget and a 90-second readiness
+  budget. It uses `#app`, not the earlier mistaken `#root`.
+- An initial rapid synthetic burst reordered `/help` into `h/elp`. Ego entered
+  `Working`, so a provider turn was attempted. No provider result was captured
+  in the inspected trace; billing and completion were not independently checked.
+  Its nominal idle arm is invalid and is not included here. It also lost the
+  main export because a console-warning prefix confused JSON parsing. The
+  helper now parses after the final `\n---\n`, paces input and verifies the
+  complete rendered slash command before Enter. This harness failure does not
+  establish an ordinary physical-typing defect. The earlier statement that no
+  model generation was used applies only to that historical isolated attempt,
+  not to all acquisition attempts.
+- A later guard caught a stale `| /hel` draft and aborted without submitting it.
+- Default ego then failed to parse a string decimal in `models.toml`. The
+  coordinator reported that another agent created and removed that configuration;
+  the subsequent run succeeded. This peer did not read or modify that store.
+- Logs include `canvas desync healed` and `Settings reload failed` warnings.
+  They are ancillary observations, not established latency root causes, and
+  were not silently fixed.
+
+Some later native reads split UTF-8 sequences and the observer's lossy text does
+not re-encode to the original byte count (`raw_utf8_exact=false` for the whole
+trace). Do not replay the entire decoded log as original bytes. This does not
+invalidate the individually verified initial 7,148-byte capture or the complete
+key correlations. Observer logging and row snapshots can perturb timing; there
+is no claim of controlled unrelated machine load or statistical engine parity.
+The reader-to-grid residual is not fully attributed without frame-cut/submit
+observations in this native arm.
+
+#### Evidence, cleanup and story status
+
+`~/Gits/.tmp/2040-web/native/` retains `main.json`, `smoke.json`, `probe.json`,
+`native.log`, `reader.json`, `timeline.json`, `analysis.json`, `analyze.py`,
+`analysis-validation.txt`, `captured-help.bin`, `replay.py`, `replay-2.json` and
+`replay-20.json`. The observer patch, original sources, acquisition helpers and
+named failed-attempt artifacts remain available. Re-running `analyze.py`
+validates counts, all correlations, overlap ordering, first-next-rAF results,
+zero Working chunks and replay hashes without rebuilding or reacquiring.
+
+The lifecycle deleted the owned session and stopped the exact instance with
+exit 0. The make supervisor returned 2 after the sanctioned app termination;
+the lifecycle/background wrapper returned 0. Temporary CanvasTerminal and PTY
+sources were restored byte-for-byte. Final checks found the recorded supervisor,
+helper, ego and all 20 replay PIDs absent, and the native PID file absent.
+The evidence Python scripts passed AST parsing, and the analyzer assertions
+passed. No production change ships in this report.
+
+**Criterion 3 remains unchecked and fails the measured one-frame and 2× targets.**
+Criteria 4 and 24 and throughput/heartbeat non-regression remain unsupported.
+No RED/GREEN, full suite, mutation, cross-target or production-fix claim is made.
+The coordinator owns the read-only main story and the next scope/fix decision.
