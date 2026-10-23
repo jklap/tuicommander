@@ -102,6 +102,7 @@ scripts/fixtures/*
 !scripts/test-check-gitlink-reachable.sh
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
+!scripts/check-chat-readability.mjs
 !scripts/check-make-instance-scope.sh
 !scripts/check-make-dev-builds-sibling.sh
 !scripts/mutants.sh

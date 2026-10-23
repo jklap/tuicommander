@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type ChatAppearance, captureChatReadability } from "./captureChatReadability";
 
-// Browser integration, opt in with a worktree Vite URL and an absolute evidence directory.
-// TUIC_CHAT_BROWSER_URL=http://127.0.0.1:19902 TUIC_CHAT_EVIDENCE_DIR=... pnpm vitest run src/__tests__/browser/ChatReadability.test.ts
+// Required local landing gate for Chat CSS: make check-chat-readability.
+// It starts fixture Vite on a free port, supplies these variables, and traps cleanup.
+// Ubuntu CI cannot use the approved macOS-only stealth wrapper; ordinary Vitest keeps this opt-in.
+// Direct use with an existing fixture Vite: TUIC_CHAT_BROWSER_URL=... TUIC_CHAT_EVIDENCE_DIR=... pnpm vitest run src/__tests__/browser/ChatReadability.test.ts
 const url = process.env.TUIC_CHAT_BROWSER_URL;
 describe.skipIf(!url)("browser-rendered Chat readability", () => {
 	let appearances: ChatAppearance[];
