@@ -549,6 +549,31 @@ fn readiness_refuses_every_effective_ego_yolo_default() {
 }
 
 #[test]
+fn readiness_refuses_claude_permission_mode_and_codex_full_access_defaults() {
+    // catches: fallback agents bypassing permissions via value-taking CLI options instead of --dangerously-*.
+    // Options confirmed by installed claude --help and codex --help on 2026-10-23.
+    let mut missed = Vec::new();
+    for (agent, args) in [
+        ("claude", vec!["--permission-mode", "bypassPermissions"]),
+        ("claude", vec!["--permission-mode=bypassPermissions"]),
+        ("codex", vec!["--sandbox", "danger-full-access"]),
+        ("codex", vec!["-s", "danger-full-access"]),
+        ("codex", vec!["--sandbox=danger-full-access"]),
+    ] {
+        let problems = readiness_under(serde_json::json!({"agents": {
+            "codex": {"codex_bypass_migrated": true},
+            (agent): {"codex_bypass_migrated": true, "run_configs": [
+                {"name": "Interactive", "command": agent, "args": args, "is_default": true}
+            ]}
+        }}));
+        if problems.is_empty() || problems.iter().any(|p| !p.contains("'Interactive'")) {
+            missed.push(format!("{agent} {args:?}: {problems:?}"));
+        }
+    }
+    assert!(missed.is_empty(), "unsafe defaults accepted: {missed:?}");
+}
+
+#[test]
 fn readiness_picks_the_one_safe_default_among_per_agent_defaults_and_names_real_ambiguity() {
     // catches: choosing the alphabetically first agent's default as if defaults were global.
     let seeded_and_safe = readiness_under(serde_json::json!({"agents": {
