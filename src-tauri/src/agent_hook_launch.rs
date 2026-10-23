@@ -251,8 +251,17 @@ pub(crate) fn permission_bypass_flag(
         if arg.starts_with("--dangerously-") || arg == "--yolo" || arg == "--mode=yolo" {
             return Some(arg.clone());
         }
-        if arg == "--mode" && rest.clone().next().is_some_and(|value| value == "yolo") {
-            return Some("--mode yolo".into());
+        for (flag, value) in [
+            ("--mode", "yolo"),
+            ("--permission-mode", "bypassPermissions"),
+            ("--sandbox", "danger-full-access"),
+            ("-s", "danger-full-access"),
+        ] {
+            if arg == &format!("{flag}={value}")
+                || (arg == flag && rest.clone().next().is_some_and(|next| next == value))
+            {
+                return Some(format!("{flag} {value}"));
+            }
         }
     }
     None
