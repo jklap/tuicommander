@@ -240,6 +240,67 @@ async fn manual_only_workflow_pauses_before_implementer_spawn() {
     assert!(result.unwrap());
 }
 
+/// Catches: a story-root run fencing unrelated siblings as if it owned the whole plan.
+#[test]
+fn archive_story_root_protects_target_but_allows_unrelated_sibling() {
+    let (config, project, plan, story, _template, _guard) = fixture();
+    let owner = RuntimeOwner::acquire(&config.path().join("workflow_runs.sqlite3")).unwrap();
+    let published = definition(project.path().to_str().unwrap(), false, true);
+    let run = owner
+        .store
+        .start_graph_run(&request(
+            project.path().to_str().unwrap(),
+            &story,
+            &published,
+            "archive-root",
+        ))
+        .unwrap();
+    let stories = StoryStore::open().unwrap();
+    let sibling = stories
+        .create_story(crate::stories::NewStory {
+            plan_id: plan.clone(),
+            title: "Unrelated duplicate".into(),
+            criteria: vec!["Unused".into()],
+            priority: 2,
+            story_type: None,
+            origin: crate::stories::StoryOrigin::Native,
+            file_scope: vec![],
+        })
+        .unwrap();
+    let actor = crate::stories::StoryTransitionActor::Human;
+    let archived = stories
+        .set_story_archived(&sibling.id, sibling.revision, true, actor.clone())
+        .expect("unrelated sibling is not owned by story root");
+    stories
+        .set_story_archived(&sibling.id, archived.revision, false, actor.clone())
+        .unwrap();
+    let target = stories.get_story(&story).unwrap();
+    assert!(
+        stories
+            .set_story_archived(&story, target.revision, true, actor.clone())
+            .is_err()
+    );
+    let plan_record = stories.get_plan(&plan).unwrap();
+    assert!(
+        stories
+            .set_plan_archived(&plan, plan_record.revision, true, actor.clone())
+            .is_err()
+    );
+    owner
+        .store
+        .command(&run.id, "pause-archive-root", RunCommand::Pause)
+        .unwrap();
+    let sibling = stories.get_story(&sibling.id).unwrap();
+    stories
+        .set_story_archived(&sibling.id, sibling.revision, true, actor.clone())
+        .unwrap();
+    assert!(
+        stories
+            .set_story_archived(&story, target.revision, true, actor)
+            .is_err()
+    );
+}
+
 #[test]
 fn start_story_activates_first_successor() {
     // catches: a Running snapshot with no runnable node (01), changed-key retries or skipped predecessors.

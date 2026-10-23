@@ -185,6 +185,7 @@ fn qa_schema_upgrade_preserves_existing_documents_and_history() {
         CREATE INDEX stories_by_plan ON stories(plan_id);
         CREATE UNIQUE INDEX one_story_per_session ON stories(claim_session) WHERE claim_session IS NOT NULL;
         ALTER TABLE plans DROP COLUMN revision;
+        ALTER TABLE plans DROP COLUMN archived;
         PRAGMA user_version=1;
         COMMIT;").unwrap();
     drop(conn);

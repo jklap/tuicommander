@@ -22,6 +22,7 @@ impl StoryStore {
         preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        require_active_story(&tx, &story)?;
         if story.claim_session.is_some() {
             return Err("claimed stories cannot be amended".into());
         }

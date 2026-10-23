@@ -326,12 +326,14 @@ mod tests {
         };
         let plan = Plan {
             revision: 1,
+            archived: false,
             id: "plan-1".into(),
             project: "/project".into(),
             title: "Project delivery".into(),
             source: "plans/delivery.md".into(),
         };
         let story = Story {
+            archived: false,
             story_type: None,
             id: "story-1".into(),
             plan_id: plan.id.clone(),

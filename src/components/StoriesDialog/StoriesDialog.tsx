@@ -21,6 +21,7 @@ import { StoryMetadata } from "./StoryMetadata";
 import { StoryNotes } from "./StoryNotes";
 
 interface Plan extends EditablePlan {
+	archived: boolean;
 	project: string;
 }
 interface PlanSource {
@@ -32,6 +33,7 @@ interface StoryColumn {
 	storyIds: string[];
 }
 interface Story extends EditableStory {
+	archived: boolean;
 	planId: string;
 	checked: boolean[];
 	status: StoryStatus;
@@ -188,11 +190,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [stories, setStories] = createSignal<Story[]>([]);
 	const [visibleIds, setVisibleIds] = createSignal<string[] | undefined>();
 	const [columns, setColumns] = createSignal<StoryColumn[]>([]);
+	const [archivedPlans, setArchivedPlans] = createSignal(false);
+	const [archivedStories, setArchivedStories] = createSignal(false);
 	const [newStoryType, setNewStoryType] = createSignal<StoryType | "untyped">("untyped");
 	const filter = () => ({
 		visibility: storiesUi.visibility(),
 		storyType: storiesUi.storyType() === "all" || storiesUi.storyType() === "untyped" ? null : storiesUi.storyType(),
 		untypedOnly: storiesUi.storyType() === "untyped",
+		...(archivedStories() ? { archived: true } : {}),
 	});
 	const storiesById = createMemo(() => new Map(stories().map((story) => [story.id, story])));
 	const listedStories = () =>
@@ -530,10 +535,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setError("");
 		try {
 			await ensureCapabilities();
-			const list = await call({ action: "list_plans" });
+			const list = await call({ action: "list_plans", ...(archivedPlans() ? { archived: true } : {}) });
 			if (list.type !== "plans") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			let available: PlanSource[] | undefined;
-			if (list.value.length === 0) {
+			if (list.value.length === 0 && !archivedPlans()) {
 				const sources = await call({ action: "list_plan_sources" });
 				if (sources.type !== "plan_sources") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 				available = sources.value;
@@ -548,7 +553,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			if (nextPlan) {
 				const selectedFilter = untrack(filter);
 				const filtering =
-					selectedFilter.visibility !== "all" || selectedFilter.storyType !== null || selectedFilter.untypedOnly;
+					selectedFilter.visibility !== "all" ||
+					selectedFilter.storyType !== null ||
+					selectedFilter.untypedOnly ||
+					selectedFilter.archived;
 				const view = await call(
 					filtering
 						? { action: "filtered_plan_view", plan_id: nextPlan, filter: selectedFilter }
@@ -843,7 +851,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</button>
 						<button
 							type="button"
-							disabled={busy() || selectedStory()?.status !== "ready" || !!selectedStory()?.claimSession}
+							disabled={
+								busy() ||
+								selectedPlan()?.archived ||
+								selectedStory()?.archived ||
+								selectedStory()?.status !== "ready" ||
+								!!selectedStory()?.claimSession
+							}
 							onClick={() => void openStart()}
 						>
 							Start story workflow
@@ -1211,6 +1225,40 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									{t("stories.newPlan", "New plan")}
 								</button>
 							</div>
+							<div class={s.filters}>
+								<label class={s.archiveToggle}>
+									<input
+										type="checkbox"
+										checked={archivedPlans()}
+										disabled={busy()}
+										onChange={(event) => {
+											setArchivedPlans(event.currentTarget.checked);
+											setNewPlan(false);
+											void refresh(null, null);
+										}}
+									/>
+									{t("stories.archive.plans", "Archived plans")}
+								</label>
+								<Show when={selectedPlan()}>
+									{(plan) => (
+										<button
+											type="button"
+											disabled={busy()}
+											onClick={() =>
+												void mutate({
+													action: plan().archived ? "unarchive_plan" : "archive_plan",
+													plan_id: plan().id,
+													expected_revision: plan().revision,
+												})
+											}
+										>
+											{plan().archived
+												? t("stories.archive.restorePlan", "Restore plan")
+												: t("stories.archive.archivePlan", "Archive plan")}
+										</button>
+									)}
+								</Show>
+							</div>
 							<Show when={selectedPlan()}>
 								<Show
 									when={editingPlan()}
@@ -1323,11 +1371,27 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<section class={s.storyColumn} aria-label={t("stories.stories", "Stories")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.stories", "Stories")}</h3>
-								<button type="button" disabled={!planId()} onClick={() => setNewStory(!newStory())}>
+								<button
+									type="button"
+									disabled={!planId() || selectedPlan()?.archived}
+									onClick={() => setNewStory(!newStory())}
+								>
 									{t("stories.newStory", "New story")}
 								</button>
 							</div>
 							<div class={s.filters}>
+								<label class={s.archiveToggle}>
+									<input
+										type="checkbox"
+										checked={archivedStories()}
+										disabled={busy()}
+										onChange={(event) => {
+											setArchivedStories(event.currentTarget.checked);
+											void refresh(planId(), null);
+										}}
+									/>
+									{t("stories.archive.stories", "Archived stories")}
+								</label>
 								<label>
 									{t("stories.filter.status", "Status")}
 									<Select
@@ -1374,7 +1438,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</button>
 								</div>
 							</div>
-							<Show when={newStory() && planId()}>
+							<Show when={newStory() && planId() && !selectedPlan()?.archived}>
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>
 									<label>
 										{t("stories.titleLabel", "Title")}
@@ -1556,7 +1620,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											when={editing()}
 											keyed
 											fallback={
-												<Show when={["backlog", "ready"].includes(story().status) && !story().claimSession}>
+												<Show
+													when={
+														!story().archived &&
+														!selectedPlan()?.archived &&
+														["backlog", "ready"].includes(story().status) &&
+														!story().claimSession
+													}
+												>
 													<div class={s.actions}>
 														<button
 															type="button"
@@ -1594,7 +1665,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																	<input
 																		type="checkbox"
 																		checked={story().checked[index()]}
-																		disabled={!["in_progress", "qa"].includes(story().status) || busy()}
+																		disabled={
+																			story().archived ||
+																			selectedPlan()?.archived ||
+																			!["in_progress", "qa"].includes(story().status) ||
+																			busy()
+																		}
 																		onChange={() =>
 																			transition({
 																				[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
@@ -1625,7 +1701,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																			{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
 																			{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
 																		</span>
-																		<Show when={story().status === "backlog" && dependency?.status === "wont_fix"}>
+																		<Show
+																			when={
+																				!story().archived &&
+																				!selectedPlan()?.archived &&
+																				story().status === "backlog" &&
+																				dependency?.status === "wont_fix"
+																			}
+																		>
 																			<button
 																				type="button"
 																				disabled={busy()}
@@ -1643,7 +1726,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 														</For>
 													</ul>
 												</Show>
-												<Show when={story().status === "ready" || story().status === "backlog"}>
+												<Show
+													when={
+														!story().archived &&
+														!selectedPlan()?.archived &&
+														(story().status === "ready" || story().status === "backlog")
+													}
+												>
 													<div class={s.inline}>
 														<Select
 															aria-label={t("stories.addDependency", "Add dependency")}
@@ -1678,57 +1767,74 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												</Show>
 											</section>
 											<div class={s.actions}>
-												<Show when={story().status === "ready"}>
-													<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
-														{t("stories.startWork", "Start work")}
-													</button>
+												<Show when={!story().archived && !selectedPlan()?.archived}>
+													<Show when={story().status === "ready"}>
+														<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
+															{t("stories.startWork", "Start work")}
+														</button>
+													</Show>
+													<Show when={story().status === "in_progress"}>
+														<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
+															{t("stories.submitReview", "Submit for review")}
+														</button>
+													</Show>
+													<Show when={story().status === "review"}>
+														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+															{t("stories.approve", "Approve")}
+														</button>
+														<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
+															{t("stories.requestChanges", "Request changes")}
+														</button>
+													</Show>
+													<Show when={["in_progress", "review"].includes(story().status)}>
+														<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
+															{t("stories.submitQa", "Submit for QA")}
+														</button>
+													</Show>
+													<Show when={story().status === "qa"}>
+														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+															{t("stories.qaPassed", "QA passed")}
+														</button>
+														<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
+															{t("stories.qaFailed", "QA failed")}
+														</button>
+													</Show>
+													<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
+														<button type="button" disabled={busy()} onClick={() => transition("block")}>
+															{t("stories.block", "Block")}
+														</button>
+													</Show>
+													<Show when={story().status === "blocked"}>
+														<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
+															{t("stories.unblock", "Unblock")}
+														</button>
+													</Show>
+													<Show when={story().status !== "done" && story().status !== "wont_fix"}>
+														<button
+															type="button"
+															class={s.danger}
+															disabled={busy()}
+															onClick={() => transition("wont_fix")}
+														>
+															{t("stories.status.wontFix", "Won't fix")}
+														</button>
+													</Show>
 												</Show>
-												<Show when={story().status === "in_progress"}>
-													<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
-														{t("stories.submitReview", "Submit for review")}
-													</button>
-												</Show>
-												<Show when={story().status === "review"}>
-													<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-														{t("stories.approve", "Approve")}
-													</button>
-													<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
-														{t("stories.requestChanges", "Request changes")}
-													</button>
-												</Show>
-												<Show when={["in_progress", "review"].includes(story().status)}>
-													<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
-														{t("stories.submitQa", "Submit for QA")}
-													</button>
-												</Show>
-												<Show when={story().status === "qa"}>
-													<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-														{t("stories.qaPassed", "QA passed")}
-													</button>
-													<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
-														{t("stories.qaFailed", "QA failed")}
-													</button>
-												</Show>
-												<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
-													<button type="button" disabled={busy()} onClick={() => transition("block")}>
-														{t("stories.block", "Block")}
-													</button>
-												</Show>
-												<Show when={story().status === "blocked"}>
-													<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
-														{t("stories.unblock", "Unblock")}
-													</button>
-												</Show>
-												<Show when={story().status !== "done" && story().status !== "wont_fix"}>
-													<button
-														type="button"
-														class={s.danger}
-														disabled={busy()}
-														onClick={() => transition("wont_fix")}
-													>
-														{t("stories.status.wontFix", "Won't fix")}
-													</button>
-												</Show>
+												<button
+													type="button"
+													disabled={busy() || !!story().claimSession}
+													onClick={() =>
+														void mutate({
+															action: story().archived ? "unarchive_story" : "archive_story",
+															story_id: story().id,
+															expected_revision: story().revision,
+														})
+													}
+												>
+													{story().archived
+														? t("stories.archive.restoreStory", "Restore story")
+														: t("stories.archive.archiveStory", "Archive story")}
+												</button>
 											</div>
 										</Show>
 										<Show when={`${props.project}:${story().id}`} keyed>

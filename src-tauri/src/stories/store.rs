@@ -11,6 +11,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 mod amendments;
+mod archive;
 mod notes;
 #[cfg(test)]
 mod plan_update_tests;
@@ -23,7 +24,7 @@ use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug)]
 pub struct StoryStore {
@@ -123,6 +124,13 @@ impl StoryStore {
                 input_sha256 TEXT NOT NULL,
                 PRIMARY KEY(run_id, proposal_key)
             );
+            CREATE TABLE IF NOT EXISTS archive_history (
+                entity_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                archived INTEGER NOT NULL,
+                actor_json TEXT NOT NULL,
+                PRIMARY KEY(entity_id, revision)
+            );
             CREATE TABLE IF NOT EXISTS story_transitions (
                 story_id TEXT NOT NULL REFERENCES stories(id),
                 revision INTEGER NOT NULL,
@@ -182,6 +190,12 @@ impl StoryStore {
                 )
                 .map_err(|e| format!("add plan revision: {e}"))?;
             }
+            if current < 5 {
+                tx.execute_batch(
+                    "ALTER TABLE plans ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+                )
+                .map_err(|e| format!("add plan archive metadata: {e}"))?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("save story schema version: {e}"))?;
             tx.commit()
@@ -201,6 +215,7 @@ impl StoryStore {
         }
         let plan = Plan {
             revision: 1,
+            archived: false,
             id: Uuid::now_v7().to_string(),
             project: input.project.trim().into(),
             title: input.title.trim().into(),
@@ -218,7 +233,7 @@ impl StoryStore {
     pub fn get_plan(&self, id: &str) -> Result<Plan, String> {
         self.connect()?
             .query_row(
-                "SELECT id,project,title,source,revision FROM plans WHERE id=?1",
+                "SELECT id,project,title,source,revision,archived FROM plans WHERE id=?1",
                 [id],
                 |row| {
                     Ok(Plan {
@@ -227,6 +242,7 @@ impl StoryStore {
                         title: row.get(2)?,
                         source: row.get(3)?,
                         revision: row.get(4)?,
+                        archived: row.get(5)?,
                     })
                 },
             )
@@ -236,17 +252,22 @@ impl StoryStore {
     }
 
     pub fn list_plans(&self, project: &str) -> Result<Vec<Plan>, String> {
+        self.list_plans_archived(project, false)
+    }
+
+    pub fn list_plans_archived(&self, project: &str, archived: bool) -> Result<Vec<Plan>, String> {
         let conn = self.connect()?;
         let mut stmt = conn
-            .prepare("SELECT id,project,title,source,revision FROM plans WHERE project=?1 ORDER BY rowid")
+            .prepare("SELECT id,project,title,source,revision,archived FROM plans WHERE project=?1 AND archived=?2 ORDER BY rowid")
             .map_err(|e| format!("prepare plan list: {e}"))?;
-        stmt.query_map([project], |row| {
+        stmt.query_map(params![project, archived], |row| {
             Ok(Plan {
                 id: row.get(0)?,
                 project: row.get(1)?,
                 title: row.get(2)?,
                 source: row.get(3)?,
                 revision: row.get(4)?,
+                archived: row.get(5)?,
             })
         })
         .map_err(|e| format!("list plans: {e}"))?
@@ -294,7 +315,7 @@ impl StoryStore {
         let tx = immediate(&mut conn)?;
         let mut plan = tx
             .query_row(
-                "SELECT id,project,title,source,revision FROM plans WHERE id=?1",
+                "SELECT id,project,title,source,revision,archived FROM plans WHERE id=?1",
                 [id],
                 |row| {
                     Ok(Plan {
@@ -303,6 +324,7 @@ impl StoryStore {
                         title: row.get(2)?,
                         source: row.get(3)?,
                         revision: row.get(4)?,
+                        archived: row.get(5)?,
                     })
                 },
             )
@@ -334,10 +356,13 @@ impl StoryStore {
 
     pub fn create_story(&self, input: NewStory) -> Result<Story, String> {
         validate_new_story(&input)?;
-        self.get_plan(&input.plan_id)?;
+        self.require_unarchived_plan(&input.plan_id)?;
         let story = build_story(input);
-        let conn = self.connect()?;
-        insert_story(&conn, &story)?;
+        let mut conn = self.connect()?;
+        let tx = immediate(&mut conn)?;
+        require_active_plan(&tx, &story.plan_id)?;
+        insert_story(&tx, &story)?;
+        tx.commit().map_err(|e| format!("commit new story: {e}"))?;
         Ok(story)
     }
 
@@ -380,6 +405,7 @@ impl StoryStore {
         if !exists {
             return Err("story proposal plan not found".into());
         }
+        require_active_plan(&tx, &input.plan_id)?;
         let story = build_story(input);
         insert_story(&tx, &story)?;
         tx.execute(
@@ -430,8 +456,21 @@ impl StoryStore {
     }
 
     pub fn plan_view(&self, plan_id: &str) -> Result<PlanView, String> {
-        let stories = self.list_stories(plan_id)?;
-        let by_id: HashMap<&str, &Story> = stories
+        self.plan_view_archived(plan_id, false)
+    }
+
+    pub(super) fn plan_view_archived(
+        &self,
+        plan_id: &str,
+        archived: bool,
+    ) -> Result<PlanView, String> {
+        let all_stories = self.list_stories(plan_id)?;
+        let stories: Vec<_> = all_stories
+            .iter()
+            .filter(|story| !story.archived)
+            .cloned()
+            .collect();
+        let by_id: HashMap<&str, &Story> = all_stories
             .iter()
             .map(|story| (story.id.as_str(), story))
             .collect();
@@ -466,8 +505,9 @@ impl StoryStore {
         } else {
             PlanState::Active
         };
-        let reads: Vec<StoryRead> = stories
+        let reads: Vec<StoryRead> = all_stories
             .iter()
+            .filter(|story| story.archived == archived)
             .map(|story| {
                 let mut stack = vec![story.id.as_str()];
                 let mut visited = HashSet::new();
@@ -490,7 +530,13 @@ impl StoryStore {
                 }
             })
             .collect();
-        let (visible_story_ids, columns) = super::filters::project(&reads, &Default::default());
+        let (visible_story_ids, columns) = super::filters::project(
+            &reads,
+            &super::StoryFilter {
+                archived,
+                ..Default::default()
+            },
+        );
         Ok(PlanView {
             visible_story_ids,
             columns,
@@ -513,7 +559,7 @@ impl StoryStore {
         expected_revision: i64,
     ) -> Result<Story, String> {
         validate_text("session", session, 200)?;
-        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight_plan = self.require_unarchived_story(story_id)?.plan_id;
         let project = self.get_plan(&preflight_plan)?.project;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let _reservation_guard = crate::workflows::guard_manual_story_start(&project, story_id)?;
@@ -522,6 +568,7 @@ impl StoryStore {
         preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        require_active_story(&tx, &story)?;
         if story.status != StoryStatus::Ready {
             let unmet = unmet_dependencies(&tx, &story, &preflight)?;
             return Err(if unmet.is_empty() {
@@ -604,6 +651,7 @@ fn proposal_hash(input: &NewStory) -> Result<String, String> {
 
 fn build_story(input: NewStory) -> Story {
     Story {
+        archived: false,
         id: Uuid::now_v7().to_string(),
         plan_id: input.plan_id,
         title: input.title.trim().into(),
