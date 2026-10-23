@@ -19,7 +19,7 @@ vi.mock("../../stores/terminals", () => ({
 	},
 }));
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getActive: () => ({ path: "/repo" }), get: () => undefined },
+	repositoriesStore: { state: { repositories: {} }, getActive: () => ({ path: "/repo" }), get: () => undefined },
 }));
 vi.mock("../../stores/github", () => ({ githubStore: { getBranchPrData: () => null } }));
 vi.mock("../../stores/promptLibrary", () => ({
