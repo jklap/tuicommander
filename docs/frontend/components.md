@@ -906,6 +906,8 @@ Shell-folder rows offer the same available-agent menu as Git workspace rows.
 Launching an agent uses the folder as its working directory, without creating a
 branch or worktree. The Add Terminal button also offers agents on a long press.
 
+FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
+
 ### Mobile SessionUsageBlock
 
 `SessionUsageBlock` is mounted inside the session overflow. It loads

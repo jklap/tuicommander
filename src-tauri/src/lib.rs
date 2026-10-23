@@ -991,6 +991,15 @@ pub(crate) fn read_file_impl_with_limit(
         .map_err(|e| format!("Failed to resolve file path: {e}"))?;
 
     if !canonical_file.starts_with(&canonical_repo) {
+        if file_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(format!(
+                "Cannot open symbolic link \"{file}\": target \"{}\" is outside the repository.",
+                canonical_file.display()
+            ));
+        }
         return Err("Access denied: file is outside repository".to_string());
     }
 

@@ -399,7 +399,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 							e.path !== c.path ||
 							e.git_status !== c.git_status ||
 							e.modified_at !== c.modified_at ||
-							e.is_ignored !== c.is_ignored
+							e.is_ignored !== c.is_ignored ||
+							e.symlink_target !== c.symlink_target ||
+							e.symlink_target_kind !== c.symlink_target_kind
 						);
 					});
 				if (changed) {
@@ -1604,14 +1606,24 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 											}}
 											onContextMenu={(e) => handleContextMenu(e, entry)}
 										>
-											<FileIcon name={entry.name} isDir={entry.is_dir} class={s.entryIcon} />
+											<FileIcon
+												name={entry.name}
+												isDir={entry.is_dir}
+												isLink={entry.symlink_target_kind !== undefined}
+												class={s.entryIcon}
+											/>
 											<span class={s.entryName} title={fileTooltip(entry)}>
 												{isSearch ? entry.path : entry.name}
+												<Show when={entry.symlink_target_kind}>
+													<span class={s.entryLink}>
+														{entry.symlink_target_kind} link → {entry.symlink_target ?? "Target unavailable"}
+													</span>
+												</Show>
 											</span>
 											<Show when={entry.git_status}>
 												<span class={cx(g.dot, getStatusClass(entry.git_status))} title={entry.git_status} />
 											</Show>
-											<Show when={!entry.is_dir && entry.size > 0}>
+											<Show when={!entry.is_dir && !entry.symlink_target_kind && entry.size > 0}>
 												<span class={s.entrySize}>{formatSize(entry.size)}</span>
 											</Show>
 										</div>

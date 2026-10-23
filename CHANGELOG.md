@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Identify symbolic links and their target kind/path in Files; explain outside-repository link refusals without adding read access (#2155-5da6).
+
 - Show session-bound account quota or ego session tokens and cost in the mobile session menu, with explicit loading, unavailable and stale states. Remote sessions use their owning daemon; Claude refreshes never trigger inference (#2150-4e0c).
 - Show sidebar status diagnostics once and omit removal warnings for main checkouts (#2152-765e).
 
