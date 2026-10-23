@@ -40,6 +40,16 @@ afterEach(() => {
 });
 
 describe("mobile Progress", () => {
+	it.each([["/newer"], ["/newer", "/older"]])(
+		"does not repeat the selected project name above its mobile selector (%j)",
+		async (...projects) => {
+			render(() => <ProgressDialog embedded projects={projects} />);
+			await waitFor(() => expect(screen.getByText("Later work is blocked.")).toBeTruthy());
+			expect(screen.getByLabelText("Progress project")).toBeTruthy();
+			expect(screen.getAllByText("newer")).toHaveLength(1);
+		},
+	);
+
 	it("opens the newest populated project and lets Boss read another project's entries", async () => {
 		render(() => <ProgressDialog embedded projects={["/newer", "/older"]} />);
 		await waitFor(() => expect(screen.getByText("Later work is blocked.")).toBeTruthy());

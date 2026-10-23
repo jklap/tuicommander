@@ -133,7 +133,9 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 			<div class={s.header}>
 				<div class={s.title}>
 					<h4>Progress</h4>
-					<span class={s.project}>{displayName()}</span>
+					<Show when={!props.embedded}>
+						<span class={s.project}>{displayName()}</span>
+					</Show>
 				</div>
 				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
 					<Select
