@@ -17,7 +17,8 @@ pub(in crate::design_mode) fn git(repo: &Path, args: &[&str]) {
     );
 }
 pub(in crate::design_mode) fn repository() -> tempfile::TempDir {
-    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    // Physical: discovery canonicalizes the repository before matching listener cwds.
+    let dir = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
     git(dir.path(), &["init"]);
     git(
         dir.path(),

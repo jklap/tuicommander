@@ -47,7 +47,7 @@ fn repo(root: &std::path::Path) -> PathBuf {
 #[cfg(unix)]
 #[tokio::test]
 async fn launch_transaction_retries_after_worktree_checkpoint_without_fallback() {
-    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let root = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     let repo = repo(root.path());
     let state = state();

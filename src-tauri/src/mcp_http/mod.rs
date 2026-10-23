@@ -3446,7 +3446,8 @@ mod tests {
         use crate::workflows::{NodeKind, WorkflowStore};
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        // Physical: the route resolves `path` before matching the draft's project.
+        let project = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
         let project = project.path().to_str().unwrap();
         let store = WorkflowStore::open().unwrap();
         let draft = store

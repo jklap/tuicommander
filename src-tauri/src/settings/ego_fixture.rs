@@ -11,7 +11,8 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture() -> Fixture {
-    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    // Physical: the replay executable records its `getcwd`.
+    let dir = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
     let script = dir.path().join("ego");
     std::fs::write(&script, include_str!("fixtures/ego/replay.py")).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();

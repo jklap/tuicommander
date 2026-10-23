@@ -794,7 +794,7 @@ mod warm_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn recycling_removal_and_creation_return_rename_and_retract_old_workspace() {
-        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let temp = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let repo = setup_repo(temp.path());

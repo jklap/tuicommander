@@ -1943,7 +1943,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_stats_cache_tracks_growth_truncation_and_deletion() {
-        let dir = tempfile::tempdir().unwrap();
+        // Physical: the scan canonicalizes the projects dir, so watcher events are.
+        let dir = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
         let project = projects.join("project-a");
@@ -2033,7 +2034,8 @@ mod tests {
     /// or a missed watcher event never being repaired by reconciliation.
     #[tokio::test]
     async fn session_stats_only_stats_the_changed_transcript_then_reconciles() {
-        let dir = tempfile::tempdir().unwrap();
+        // Physical: the scan canonicalizes the projects dir, so watcher events are.
+        let dir = tempfile::tempdir_in(crate::test_support::physical_test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
         let project = projects.join("project-a");

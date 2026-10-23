@@ -2698,7 +2698,8 @@ mod tests {
     // filtering, and a deleted or atomically replaced file remaining resumable.
     #[test]
     fn codex_watched_discovery_observes_replacement_and_deletion() {
-        let root = TempDir::new().unwrap();
+        // Physical: FSEvents reports watched paths canonicalized.
+        let root = TempDir::new_in(crate::test_support::physical_test_temp_root()).unwrap();
         let sessions = root.path().join("sessions");
         let day = codex_recent_day_dirs_for_test(&sessions);
         fs::create_dir_all(&day).unwrap();
@@ -2755,7 +2756,8 @@ mod tests {
     // Catches: replacing a date directory leaves discovery attached to its deleted inode.
     #[test]
     fn codex_replaced_day_directory_keeps_observing_new_rollouts() {
-        let root = TempDir::new().unwrap();
+        // Physical: FSEvents reports watched paths canonicalized.
+        let root = TempDir::new_in(crate::test_support::physical_test_temp_root()).unwrap();
         let sessions = root.path().join("sessions");
         let day = codex_recent_day_dirs_for_test(&sessions);
         fs::create_dir_all(&day).unwrap();

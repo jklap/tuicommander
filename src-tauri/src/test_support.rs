@@ -15,6 +15,18 @@ pub(crate) use tuic_test_support::{
     replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
+/// [`test_temp_root`] spelled the way the filesystem stores it.
+///
+/// The per-run root keeps the caller's lexical spelling (on macOS
+/// `/var/folders/...`, a symlink to `/private/var/folders/...`), but git,
+/// FSEvents, `getcwd` and production code that canonicalizes all answer with
+/// the physical one. A fixture whose assertions compare such an answer with its
+/// own path must create its scratch here; one that tests the symlinked
+/// spelling itself keeps using [`test_temp_root`].
+pub(crate) fn physical_test_temp_root() -> std::path::PathBuf {
+    crate::fs::long_form(&test_temp_root())
+}
+
 /// A private per-test socket dir (`<socket root>/xxxx`): any socket name of up
 /// to `tuic_test_support::MAX_TEST_SOCKET_NAME` bytes inside it fits SUN_LEN.
 #[cfg(unix)]
