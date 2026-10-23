@@ -100,11 +100,23 @@ pub(in crate::workflows::run) async fn drive_effect(
                     continue;
                 }
                 if *role == AgentRole::Implementer {
-                    store.begin_graph_story(
+                    let status = store.begin_graph_story(
                         run,
                         &graph.target_id,
                         &format!("workflow:{}", attempt.id),
                     )?;
+                    if status == crate::stories::StoryStatus::Qa {
+                        let receipt = store.command_expected(
+                            &run.id,
+                            &format!("manual-qa:{}:{}", attempt.id, run.sequence),
+                            run.sequence,
+                            RunCommand::PauseFor {
+                                cause: format!("Story {} awaits manual QA", graph.target_id),
+                            },
+                        )?;
+                        emit_run_changed(state, &run.project, &run.id, receipt.sequence);
+                        return Ok(true);
+                    }
                 }
                 let key = format!("spawn:{}", attempt.id);
                 if run.effects.iter().any(|e| e.key == key) {

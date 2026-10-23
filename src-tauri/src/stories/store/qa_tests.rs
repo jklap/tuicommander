@@ -254,6 +254,6 @@ fn qa_filters_and_kanban_keep_human_work_visible_and_unfinished() {
             },
         )
         .unwrap();
-    assert!(closed.visible_story_ids.is_empty());
+    assert_eq!(closed.visible_story_ids, Vec::<String>::new());
     assert_eq!(closed.state, PlanState::Active);
 }

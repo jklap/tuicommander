@@ -278,5 +278,8 @@ fn qa_story_incident_survives_completed_attempt_and_clears_after_approval() {
     store
         .transition(&passed.id, passed.revision, StoryCommand::Approve)
         .unwrap();
-    assert!(project_story_incidents(&run, None, &store.list_stories(&plan.id).unwrap()).is_empty());
+    assert_eq!(
+        project_story_incidents(&run, None, &store.list_stories(&plan.id).unwrap()),
+        Vec::<RunIncident>::new()
+    );
 }

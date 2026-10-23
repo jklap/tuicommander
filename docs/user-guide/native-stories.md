@@ -53,6 +53,8 @@ Starting work, claiming a story, checking or unchecking a criterion, changing it
 
 Use `"submit_qa"` to move an In progress or Review story to QA explicitly. It requires at least one manual criterion and no unchecked non-manual criteria. In QA, check each manual criterion after it passes, then send `"approve"` to reach Done. Approval refuses any unchecked criterion. Send `"reject_qa"` after a failed check to return to In progress. Unchecking a non-manual criterion or removing the manual marker from an unchecked criterion also returns the story to In progress. All commands require the current `expected_revision`.
 
+If a workflow starts a Ready story whose checks are all manual, the story enters QA and the run pauses before it reserves an implementer spawn or creates a worktree. While QA remains pending, resuming the run does not launch an implementer. Fail QA back to development when implementation changes are required.
+
 QA is not Done: it keeps a plan Active and does not release dependent stories. Story lists return `status:"qa"`; the project summary reports a separate `qa` count. Run history incidents identify QA stories with source `story_qa`, including after an agent attempt completes, and describe the next human action. Existing stored story documents, revisions and checks are retained without a JSON rewrite when the status constraint is upgraded.
 
 ## Which caller can do what
