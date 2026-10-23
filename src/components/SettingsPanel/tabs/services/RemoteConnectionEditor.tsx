@@ -13,6 +13,7 @@ import { tunnelsStore } from "../../../../stores/tunnels";
 import { randomUuid } from "../../../../utils/randomId";
 import { SshConnectionFields } from "../../../shared/SshConnectionFields";
 import { normalizeForwardForType, PortForwardsEditor } from "../../../TunnelsPanel/PortForwardsEditor";
+import layout from "../../../TunnelsPanel/TunnelEditorModal.module.css";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import s from "../../Settings.module.css";
@@ -416,7 +417,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			class={s.group}
 			style={{ background: "var(--bg-secondary, rgba(255,255,255,0.03))", padding: "12px", "border-radius": "6px" }}
 		>
-			<div style={{ display: "grid", gap: "8px" }}>
+			<div class={layout.body} style={{ display: "grid", gap: "8px" }}>
 				<div class={s.group}>
 					<label>Name</label>
 					<Input

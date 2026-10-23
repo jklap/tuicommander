@@ -1,3 +1,10 @@
+/* SSH/forward fields sit in their editor's grid, which spaces them with its
+ * gap. Zero Settings' `.group + .group` sibling margin so side-by-side fields
+ * (Host and Port) share one top edge (#2051). `.body` is the editor's grid
+ * container: RemoteConnectionEditor's form since the standalone
+ * TunnelEditorModal was removed. Same specificity as `.group + .group`, so
+ * this sheet must load after Settings.module.css (SshConnectionFields and
+ * PortForwardsEditor import it second). */
 .body .field {
   margin: 0;
 }
