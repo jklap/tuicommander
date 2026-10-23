@@ -1,13 +1,15 @@
-import { type Component, createEffect, createSignal, For, on, onMount, Show, untrack } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onMount, Show, untrack } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
+import { storiesUi } from "../../stores/storiesUi";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
-import type { PlanState, StoryStatus } from "../../types/stories.gen";
+import type { PlanState, StoryStatus, StoryType, StoryVisibility } from "../../types/stories.gen";
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
+import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
@@ -24,7 +26,12 @@ interface PlanSource {
 	title: string;
 	source: string;
 }
+interface StoryColumn {
+	status: StoryStatus;
+	storyIds: string[];
+}
 interface Story {
+	storyType?: StoryType;
 	id: string;
 	planId: string;
 	title: string;
@@ -46,7 +53,14 @@ type Reply =
 	| { type: "plan_state"; value: PlanState }
 	| {
 			type: "plan_view";
-			value: { stories: Story[]; state: PlanState; wontFixCount: number; allCancelled: boolean };
+			value: {
+				stories: Story[];
+				state: PlanState;
+				wontFixCount: number;
+				allCancelled: boolean;
+				visibleStoryIds?: string[];
+				columns?: StoryColumn[];
+			};
 	  }
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
@@ -135,6 +149,24 @@ const statusLabel = (status: StoryStatus): string => {
 	}
 };
 
+const storyTypeLabel = (kind: StoryType | undefined): string => {
+	switch (kind) {
+		case "feature":
+			return t("stories.type.feature", "Feature");
+		case "fix":
+			return t("stories.type.fix", "Fix");
+		case "refactor":
+			return t("stories.type.refactor", "Refactor");
+		case "chore":
+			return t("stories.type.chore", "Chore");
+		case "task":
+			return t("stories.type.task", "Task");
+		default:
+			return t("stories.type.untyped", "Untyped");
+	}
+};
+const STORY_TYPES: StoryType[] = ["feature", "fix", "refactor", "chore", "task"];
+
 const planStateLabel = (state: string): string => {
 	switch (state) {
 		case "draft":
@@ -151,13 +183,28 @@ const planStateLabel = (state: string): string => {
 export interface StoriesDialogProps {
 	project: string;
 	onClose: () => void;
+	mode?: "inline" | "detached";
 }
 
 export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
-	registerModal(props.onClose);
+	const mode = () => props.mode ?? "inline";
+	if (mode() === "inline") registerModal(props.onClose);
 	const [plans, setPlans] = createSignal<Plan[]>([]);
 	const [planSources, setPlanSources] = createSignal<PlanSource[]>([]);
 	const [stories, setStories] = createSignal<Story[]>([]);
+	const [visibleIds, setVisibleIds] = createSignal<string[] | undefined>();
+	const [columns, setColumns] = createSignal<StoryColumn[]>([]);
+	const [newStoryType, setNewStoryType] = createSignal<StoryType | "untyped">("untyped");
+	const filter = () => ({
+		visibility: storiesUi.visibility(),
+		storyType: storiesUi.storyType() === "all" || storiesUi.storyType() === "untyped" ? null : storiesUi.storyType(),
+		untypedOnly: storiesUi.storyType() === "untyped",
+	});
+	const storiesById = createMemo(() => new Map(stories().map((story) => [story.id, story])));
+	const listedStories = () =>
+		visibleIds()
+			?.map((id) => storiesById().get(id))
+			.filter((story): story is Story => !!story) ?? stories();
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
 	const [planState, setPlanState] = createSignal<string>("draft");
@@ -224,6 +271,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	let capabilitiesReady = false;
 	// A dependency choice belongs to the story it was made for.
 	createEffect(on(storyId, () => setDependencyId("")));
+
+	function changeFilters(): void {
+		void refresh();
+	}
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
@@ -480,10 +531,21 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			let nextState = "draft";
 			let nextWontFixCount = 0;
 			let nextAllCancelled = false;
+			let nextVisibleIds: string[] | undefined;
+			let nextColumns: StoryColumn[] = [];
 			if (nextPlan) {
-				const view = await call({ action: "plan_view", plan_id: nextPlan });
+				const selectedFilter = untrack(filter);
+				const filtering =
+					selectedFilter.visibility !== "all" || selectedFilter.storyType !== null || selectedFilter.untypedOnly;
+				const view = await call(
+					filtering
+						? { action: "filtered_plan_view", plan_id: nextPlan, filter: selectedFilter }
+						: { action: "plan_view", plan_id: nextPlan },
+				);
 				if (view.type !== "plan_view") throw new Error(t("stories.error.invalidStory", "Invalid story response"));
 				nextStories = view.value.stories;
+				nextVisibleIds = view.value.visibleStoryIds;
+				nextColumns = view.value.columns ?? [];
 				nextState = view.value.state;
 				nextWontFixCount = view.value.wontFixCount;
 				nextAllCancelled = view.value.allCancelled;
@@ -496,10 +558,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setPlans(list.value);
 			setPlanId(nextPlan);
 			setStories(nextStories);
+			setVisibleIds(nextVisibleIds);
+			setColumns(nextColumns);
 			setPlanState(nextState);
 			setWontFixCount(nextWontFixCount);
 			setAllCancelled(nextAllCancelled);
-			setStoryId(nextStories.find((story) => story.id === preferredStory)?.id ?? nextStories[0]?.id ?? null);
+			const selectableIds = nextVisibleIds ?? nextStories.map((story) => story.id);
+			setStoryId(
+				preferredStory && selectableIds.includes(preferredStory) ? preferredStory : (selectableIds[0] ?? null),
+			);
 		} catch (cause) {
 			if (current === request) fail(cause);
 		} finally {
@@ -597,6 +664,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					title: storyTitle().trim(),
 					criteria,
 					priority: priority(),
+					...(newStoryType() === "untyped" ? {} : { storyType: newStoryType() }),
 					origin: { type: "native" },
 					fileScope,
 				},
@@ -607,6 +675,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setStoryTitle("");
 			setCriteriaText("");
 			setScopeText("");
+			setNewStoryType("untyped");
 		} catch (cause) {
 			fail(cause);
 		} finally {
@@ -650,11 +719,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	});
 
 	return (
-		<div class={d.overlay} onClick={props.onClose}>
+		<div
+			class={mode() === "detached" ? s.detachedHost : d.overlay}
+			onClick={() => mode() === "inline" && props.onClose()}
+		>
 			<div
 				class={s.dialog}
+				classList={{ [s.detached]: mode() === "detached" }}
 				role="dialog"
-				aria-modal="true"
+				aria-modal={mode() === "inline" ? "true" : undefined}
 				aria-label={t("stories.title", "Plans and Stories")}
 				onClick={(event) => event.stopPropagation()}
 			>
@@ -706,25 +779,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							Designer
 						</button>
 					</div>
-					<button
-						ref={closeButton}
-						type="button"
-						class={s.iconButton}
-						aria-label={t("stories.close", "Close Plans and Stories")}
-						onClick={props.onClose}
-					>
-						<svg
-							viewBox="0 0 16 16"
-							width="15"
-							height="15"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							aria-hidden="true"
-						>
-							<path d="M3 3l10 10M13 3 3 13" />
-						</svg>
-					</button>
+					<div class={s.windowControls}>
+						<PanelWindowControls
+							panelId="stories"
+							mode={mode()}
+							onInlineClose={props.onClose}
+							closeLabel={t("stories.close", "Close Plans and Stories")}
+							closeButtonRef={(button) => {
+								closeButton = button;
+							}}
+						/>
+					</div>
 				</header>
 				<Show when={error()}>
 					<div class={s.error} role="alert">
@@ -1040,7 +1105,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					</div>
 				</Show>
 				<Show when={!showRuns() && !showDesigner()}>
-					<div class={s.content}>
+					<div class={s.content} classList={{ [s.kanbanContent]: storiesUi.view() === "kanban" }}>
 						<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.plans", "Plans")}</h3>
@@ -1139,6 +1204,52 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									{t("stories.newStory", "New story")}
 								</button>
 							</div>
+							<div class={s.filters}>
+								<label>
+									{t("stories.filter.status", "Status")}
+									<Select
+										value={storiesUi.visibility()}
+										onChange={(event) => {
+											storiesUi.setVisibility(event.currentTarget.value as StoryVisibility);
+											changeFilters();
+										}}
+									>
+										<option value="all">{t("stories.filter.allStatuses", "All statuses")}</option>
+										<option value="open">{t("stories.filter.open", "Open only")}</option>
+										<option value="closed">{t("stories.filter.closed", "Closed only")}</option>
+									</Select>
+								</label>
+								<label>
+									{t("stories.typeLabel", "Story type")}
+									<Select
+										value={storiesUi.storyType()}
+										onChange={(event) => {
+											storiesUi.setStoryType(event.currentTarget.value as StoryType | "all" | "untyped");
+											changeFilters();
+										}}
+									>
+										<option value="all">{t("stories.filter.allTypes", "All types")}</option>
+										<option value="untyped">{storyTypeLabel(undefined)}</option>
+										<For each={STORY_TYPES}>{(kind) => <option value={kind}>{storyTypeLabel(kind)}</option>}</For>
+									</Select>
+								</label>
+								<div role="group" aria-label={t("stories.view.label", "Story view")}>
+									<button
+										type="button"
+										aria-pressed={storiesUi.view() === "list"}
+										onClick={() => storiesUi.setView("list")}
+									>
+										{t("stories.view.list", "List")}
+									</button>
+									<button
+										type="button"
+										aria-pressed={storiesUi.view() === "kanban"}
+										onClick={() => storiesUi.setView("kanban")}
+									>
+										{t("stories.view.kanban", "Kanban")}
+									</button>
+								</div>
+							</div>
 							<Show when={newStory() && planId()}>
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>
 									<label>
@@ -1163,6 +1274,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
 									</label>
 									<label>
+										{t("stories.typeLabel", "Story type")}
+										<Select
+											value={newStoryType()}
+											onChange={(event) => setNewStoryType(event.currentTarget.value as StoryType | "untyped")}
+										>
+											<option value="untyped">{storyTypeLabel(undefined)}</option>
+											<For each={STORY_TYPES}>{(kind) => <option value={kind}>{storyTypeLabel(kind)}</option>}</For>
+										</Select>
+									</label>
+									<label>
 										{t("stories.priority", "Priority")}
 										<Select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
 											<option value="1">P1</option>
@@ -1175,24 +1296,77 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</button>
 								</form>
 							</Show>
-							<Show when={!loading() && planId() && stories().length === 0}>
-								<p class={s.empty}>{t("stories.emptyStories", "This plan has no stories.")}</p>
+							<Show when={!loading() && planId() && listedStories().length === 0}>
+								<p class={s.empty}>
+									{stories().length
+										? t("stories.filter.empty", "No stories match these filters.")
+										: t("stories.emptyStories", "This plan has no stories.")}
+								</p>
 							</Show>
-							<nav class={s.items}>
-								<For each={stories()}>
-									{(story) => (
-										<button
-											type="button"
-											class={s.item}
-											aria-current={storyId() === story.id ? "true" : undefined}
-											onClick={() => setStoryId(story.id)}
-										>
-											<span>{story.title}</span>
-											<small>{statusLabel(story.status)}</small>
-										</button>
-									)}
-								</For>
-							</nav>
+							{/* DEFERRED (2026-10-23) — core and the independently released Wiz plugin keep
+                                separate boards; extract a shared package when a third consumer needs one. */}
+							<Show
+								when={storiesUi.view() === "kanban"}
+								fallback={
+									<nav class={s.items}>
+										<For each={listedStories()}>
+											{(story) => (
+												<button
+													type="button"
+													class={s.item}
+													aria-current={storyId() === story.id ? "true" : undefined}
+													onClick={() => setStoryId(story.id)}
+												>
+													<span>{story.title}</span>
+													<small>
+														{statusLabel(story.status)} · {storyTypeLabel(story.storyType)}
+													</small>
+												</button>
+											)}
+										</For>
+									</nav>
+								}
+							>
+								<div class={s.board} role="region" aria-label={t("stories.view.kanban", "Kanban")}>
+									<For each={columns()}>
+										{(column) => (
+											<section class={s.boardColumn} aria-label={statusLabel(column.status)}>
+												<header class={s.boardColumnHeader} data-status={column.status}>
+													<span>{statusLabel(column.status)}</span>
+													<span>{column.storyIds.length}</span>
+												</header>
+												<div class={s.boardCards}>
+													<Show
+														when={column.storyIds.length}
+														fallback={<p class={s.boardEmpty}>{t("stories.board.empty", "No stories")}</p>}
+													>
+														<For each={column.storyIds}>
+															{(id) => (
+																<Show when={storiesById().get(id)}>
+																	{(story) => (
+																		<button
+																			type="button"
+																			class={s.boardCard}
+																			aria-current={storyId() === id ? "true" : undefined}
+																			onClick={() => setStoryId(id)}
+																		>
+																			<small class={s.boardCardId}>{story().id}</small>
+																			<span>{story().title}</span>
+																			<small>
+																				{storyTypeLabel(story().storyType)} · P{story().priority}
+																			</small>
+																		</button>
+																	)}
+																</Show>
+															)}
+														</For>
+													</Show>
+												</div>
+											</section>
+										)}
+									</For>
+								</div>
+							</Show>
 						</section>
 						<section class={s.detail} aria-label={t("stories.details", "Story details")}>
 							<Show
@@ -1221,7 +1395,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<div class={s.detailHeader}>
 											<div>
 												<span class={s.eyebrow}>
-													{t("stories.story", "Story")} · P{story().priority}
+													{t("stories.story", "Story")} · P{story().priority} · {storyTypeLabel(story().storyType)}
 												</span>
 												<h3>{story().title}</h3>
 											</div>

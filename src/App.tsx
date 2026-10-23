@@ -83,6 +83,7 @@ import { ideasPanelAdapter } from "./panelAdapters/ideas";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
 import { createMarkdownDocumentPanelAdapter } from "./panelAdapters/markdownDocument";
 import { outlinePanelAdapter } from "./panelAdapters/outline";
+import { storiesPanelAdapter } from "./panelAdapters/stories";
 import { detachPanel, reattachPanel, registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
 import { activityDashboardStore } from "./stores/activityDashboard";
 import { activityStore } from "./stores/activityStore";
@@ -132,6 +133,7 @@ registerPanel(fileBrowserPanelAdapter);
 registerPanel(markdownPanelAdapter);
 registerPanel(ideasPanelAdapter);
 registerPanel(outlinePanelAdapter);
+registerPanel(storiesPanelAdapter);
 registerPanel(aiChatPanelAdapter);
 
 const App: Component = () => {

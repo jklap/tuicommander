@@ -317,7 +317,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Plans and Stories",
-		description: "Open Plans and Stories from the project toolbar to create plans, track criteria, and review work.",
+		description:
+			"Open Plans and Stories from the project toolbar. On desktop, use its header to detach it into a resizable window.",
 		shortcut: null,
 	},
 	{

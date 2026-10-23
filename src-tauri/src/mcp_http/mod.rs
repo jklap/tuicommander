@@ -4046,6 +4046,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
@@ -4256,6 +4257,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id.clone(),
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
@@ -4303,6 +4305,7 @@ mod tests {
         );
         let other = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Operator decision".into(),
                 criteria: vec!["Done".into()],
@@ -11251,6 +11254,7 @@ mod workflow_authority_critic_tests {
             .unwrap();
         let story = store
             .create_story(crate::stories::NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Operator decision".into(),
                 criteria: vec!["Approved by the operator".into()],

@@ -59,9 +59,49 @@ pub struct NewStory {
     /// 1 (highest), 2 or 3.
     #[schemars(range(min = 1, max = 3))]
     pub priority: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // DEFERRED (2026-10-23) — existing metadata editing belongs to the generic story
+    // update action being designed separately; do not add a type-only setter.
+    pub story_type: Option<StoryType>,
     pub origin: StoryOrigin,
     /// Repo-relative paths the story may touch; may be empty.
     pub file_scope: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryType {
+    Feature,
+    Fix,
+    Refactor,
+    Chore,
+    Task,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryVisibility {
+    #[default]
+    All,
+    Open,
+    Closed,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryFilter {
+    #[serde(default)]
+    pub visibility: StoryVisibility,
+    pub story_type: Option<StoryType>,
+    #[serde(default)]
+    pub untyped_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryColumn {
+    pub status: StoryStatus,
+    pub story_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -100,6 +140,8 @@ pub struct Story {
     pub checked: Vec<bool>,
     pub dependencies: Vec<String>,
     pub priority: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_type: Option<StoryType>,
     pub origin: StoryOrigin,
     pub file_scope: Vec<String>,
     pub status: StoryStatus,
@@ -130,6 +172,8 @@ pub struct StorySummary {
 #[serde(rename_all = "camelCase")]
 pub struct PlanView {
     pub stories: Vec<StoryRead>,
+    pub visible_story_ids: Vec<String>,
+    pub columns: Vec<StoryColumn>,
     pub state: PlanState,
     pub wont_fix_count: usize,
     pub all_cancelled: bool,

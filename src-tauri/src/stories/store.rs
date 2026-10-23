@@ -323,7 +323,7 @@ impl StoryStore {
         } else {
             PlanState::Active
         };
-        let reads = stories
+        let reads: Vec<StoryRead> = stories
             .iter()
             .map(|story| {
                 let mut stack = vec![story.id.as_str()];
@@ -347,7 +347,10 @@ impl StoryStore {
                 }
             })
             .collect();
+        let (visible_story_ids, columns) = super::filters::project(&reads, &Default::default());
         Ok(PlanView {
+            visible_story_ids,
+            columns,
             stories: reads,
             state,
             wont_fix_count,
@@ -466,6 +469,7 @@ fn build_story(input: NewStory) -> Story {
         criteria: input.criteria,
         dependencies: Vec::new(),
         priority: input.priority,
+        story_type: input.story_type,
         origin: input.origin,
         file_scope: input.file_scope,
         status: StoryStatus::Ready,

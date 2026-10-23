@@ -34,6 +34,11 @@ pub enum StoryAction {
     },
     /// Counts over the active plans of the project: plans, in_progress stories, done and total stories.
     Summary,
+    /// Read the complete plan with Rust-filtered list ids and Kanban columns.
+    FilteredPlanView {
+        plan_id: String,
+        filter: super::StoryFilter,
+    },
     CreateStory {
         input: NewStory,
     },
@@ -163,6 +168,12 @@ fn story_action_with_source(
         StoryAction::PlanState { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanState(store.plan_state(&plan_id)?))
+        }
+        StoryAction::FilteredPlanView { plan_id, filter } => {
+            plan_in_project(&plan_id)?;
+            Ok(StoryReply::PlanView(
+                store.filtered_plan_view(&plan_id, &filter)?,
+            ))
         }
         StoryAction::PlanView { plan_id } => {
             plan_in_project(&plan_id)?;
@@ -449,6 +460,7 @@ mod tests {
             first_path,
             StoryAction::CreateStory {
                 input: NewStory {
+                    story_type: None,
                     plan_id: plan.id.clone(),
                     title: "Work".into(),
                     criteria: vec!["Done".into()],
@@ -498,6 +510,7 @@ mod tests {
                     project,
                     StoryAction::CreateStory {
                         input: NewStory {
+                            story_type: None,
                             plan_id: plan.id.clone(),
                             title: title.into(),
                             criteria: vec!["Done".into()],
@@ -552,6 +565,7 @@ mod tests {
                     project,
                     StoryAction::CreateStory {
                         input: NewStory {
+                            story_type: None,
                             plan_id: plans[0].id.clone(),
                             title: "Third".into(),
                             criteria: vec!["Done".into()],
@@ -599,6 +613,7 @@ mod tests {
                 project,
                 StoryAction::CreateStory {
                     input: NewStory {
+                        story_type: None,
                         plan_id: done_plan.id,
                         title: "Old".into(),
                         criteria: vec!["Done".into()],
