@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).
 - Terminal Chat now limits its green answer bar to the CLI answer region instead of the whole assistant message on desktop and mobile (#2158-4b3d).
 
 - Identify symbolic links and their target kind/path in Files; explain outside-repository link refusals without adding read access (#2155-5da6).
