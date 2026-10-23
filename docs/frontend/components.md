@@ -905,3 +905,5 @@ Shell workspace rows do not offer branch workflow actions or Git smart prompts.
 Shell-folder rows offer the same available-agent menu as Git workspace rows.
 Launching an agent uses the folder as its working directory, without creating a
 branch or worktree. The Add Terminal button also offers agents on a long press.
+
+Detached worktree inventory is rendered by `RepoSection` as informational rows, outside the selectable branch-workspace list. The header retains a detached count while folded; no branch or terminal actions are attached to detached rows.

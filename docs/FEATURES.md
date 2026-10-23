@@ -3339,3 +3339,5 @@ GitHub access diagnostics group exact API messages by account and owner, disting
 
 GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
 ordinary diagnostics reads do not alter the retry cache (#2133-9213).
+
+Detached checkout visibility: the sidebar shows directory name, short HEAD SHA and detached state in non-selectable rows, with a header count when folded. Discovery preserves newline paths and distinguishes the configured archive pool from unrelated `__archived` folders.

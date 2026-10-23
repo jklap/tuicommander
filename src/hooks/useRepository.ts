@@ -60,6 +60,15 @@ export interface WorkspaceWorktree {
 	kind: "worktree";
 }
 
+/** Detached checkouts are inventory, not selectable branch workspaces. */
+export interface DetachedWorktree {
+	path: string;
+	head: string;
+	short_head: string;
+	directory_name: string;
+	state: "detached";
+}
+
 /** Repository hook for git operations */
 export function useRepository() {
 	/** Get repository info */
@@ -332,6 +341,7 @@ export function useRepository() {
 	 *  Replaces 3 separate IPC calls in refreshAllBranchStats with one round-trip. */
 	async function getRepoSummary(repoPath: string): Promise<{
 		worktree_paths: Record<string, WorkspaceWorktree>;
+		detached_worktrees: DetachedWorktree[];
 		merged_branches: string[];
 		diff_stats: Record<string, { additions: number; deletions: number }>;
 		last_commit_ts: Record<string, number | null>;
@@ -341,7 +351,14 @@ export function useRepository() {
 			return await invoke("get_repo_summary", { repoPath });
 		} catch (err) {
 			appLogger.warn("git", `Failed to get repo summary for ${repoPath}`, err);
-			return { worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} };
+			return {
+				worktree_paths: {},
+				detached_worktrees: [],
+				merged_branches: [],
+				diff_stats: {},
+				last_commit_ts: {},
+				workspace_statuses: {},
+			};
 		}
 	}
 
@@ -349,6 +366,7 @@ export function useRepository() {
 	 *  Used by progressive loading Phase 1 — returns before expensive diff stats. */
 	async function getRepoStructure(repoPath: string): Promise<{
 		worktree_paths: Record<string, WorkspaceWorktree>;
+		detached_worktrees: DetachedWorktree[];
 		merged_branches: string[];
 	}> {
 		try {
@@ -356,7 +374,7 @@ export function useRepository() {
 		} catch (err) {
 			checkTccError(err, repoPath);
 			appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err);
-			return { worktree_paths: {}, merged_branches: [] };
+			return { worktree_paths: {}, detached_worktrees: [], merged_branches: [] };
 		}
 	}
 

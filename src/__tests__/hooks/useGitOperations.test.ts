@@ -1732,6 +1732,33 @@ describe("useGitOperations", () => {
 			});
 		}
 
+		// Catches the structure-to-store boundary dropping detached rows or minting fake workspaces.
+		it("refreshes detached inventory separately from branch workspaces and retracts it", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			const detached = {
+				path: "/external/detached",
+				head: "abcdef0123456789",
+				short_head: "abcdef0",
+				directory_name: "detached",
+				state: "detached",
+			};
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				detached_worktrees: [detached],
+			});
+			await gitOps.refreshAllBranchStats();
+			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([detached]);
+			expect(Object.keys(repositoriesStore.get("/repo")!.workspaces)).toEqual(["main"]);
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				detached_worktrees: [],
+			});
+			await gitOps.refreshAllBranchStats("/repo", { immediate: true });
+			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([]);
+		});
+
 		it("updates branch stats for all repos", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

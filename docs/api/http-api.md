@@ -3532,3 +3532,7 @@ Manual GitHub diagnostics refresh uses `POST /github/diagnostics` (no body). It
 clears the NOT_FOUND cooldown for all accounts and returns the same diagnostics
 DTO. `GET /github/diagnostics` remains read-only. This maps to
 `github_diagnostics` with `refresh: true` over IPC; omitted or false is read-only.
+
+### Detached checkout inventory
+
+`GET /repo/structure` and `GET /repo/summary` add `detached_worktrees` beside `worktree_paths`. Each record is `{path, head, short_head, directory_name, state: "detached"}`. The branch map and its workspace IDs do not change. `GET /worktrees/paths` remains a branch-only map for lifecycle and terminal placement. Both discovery backends retain detached checkouts in the additive inventory and exclude only the configured TUIC archive pool. Detached records are read-only sidebar information, not selectable workspaces.

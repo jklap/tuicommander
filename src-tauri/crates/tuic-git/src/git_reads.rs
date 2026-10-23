@@ -46,6 +46,11 @@ pub trait GitReads: Send + Sync {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String>;
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String>;
     fn status_counts(&self, repo: &Path) -> StatusCounts;
     fn diff_stats(&self, repo: &Path, scope: Option<&str>) -> DiffStats;
     fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String>;
@@ -81,6 +86,14 @@ impl GitReads for CliGitReads {
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
         crate::worktree::get_worktree_paths_raw(&repo.to_string_lossy())
+    }
+
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
+        crate::worktree::get_worktree_inventory_raw(&repo.to_string_lossy(), archive_pool)
     }
 
     fn status_counts(&self, repo: &Path) -> StatusCounts {
@@ -956,67 +969,49 @@ impl GitReads for GixGitReads {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
+        let mut paths = self.worktree_inventory(repo, None)?.worktree_paths;
+        // Legacy lifecycle callers still address branch workspaces only.
+        paths.retain(|_, entry| !crate::worktree::is_archived_checkout(Path::new(&entry.path)));
+        Ok(paths)
+    }
+
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
         let grepo = self.repo(repo)?;
-        let mut map = HashMap::new();
-        // `git worktree list` reports resolved real paths (symlinks followed,
-        // e.g. macOS /var -> /private/var). Match that so paths are byte-equal.
-        let real = |p: &Path| -> String {
-            let resolved = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-            git_spelling(&resolved.to_string_lossy())
+        let mut entries = Vec::new();
+        let mut add = |base: &Path| {
+            if !base.exists() {
+                return;
+            }
+            let path = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+            let head = crate::git::resolve_git_dir(&path)
+                .and_then(|dir| std::fs::read_to_string(dir.join("HEAD")).ok())
+                .unwrap_or_default();
+            let branch = crate::git::read_branch_from_head(&path);
+            entries.push(crate::worktree::WorktreeEntry {
+                path: git_spelling(&path.to_string_lossy()),
+                detached: branch.is_none() && !head.trim().is_empty() && !head.starts_with("ref:"),
+                branch,
+                head: head.trim().to_string(),
+            });
         };
-
-        // Main worktree (gix's worktrees() lists only LINKED ones). Standard
-        // non-bare layout: the main work dir is the `.git` directory's parent.
-        if let Some(main_wd) = grepo.common_dir().parent()
-            && main_wd.exists()
-            && let Some(branch) = crate::git::read_branch_from_head(main_wd)
-        {
-            // A git worktree's workspace id currently is its branch.
-            map.insert(
-                branch.clone(),
-                crate::worktree::WorkspaceWorktree {
-                    branch,
-                    path: real(main_wd),
-                    kind: crate::worktree::WorkspaceKind::Worktree,
-                    warm_artifacts: None,
-                    lifecycle_status: None,
-                },
-            );
+        // Resolve common-dir before taking its parent: linked discovery may return
+        // a path ending in `../..`, whose lexical parent is not the main checkout.
+        let common = std::fs::canonicalize(grepo.common_dir())
+            .map_err(|error| format!("Cannot resolve Git common directory: {error}"))?;
+        if !grepo.is_bare() {
+            if let Some(main) = common.parent() {
+                add(main);
+            }
         }
-
-        // Linked worktrees on a branch whose directory still exists.
         for proxy in grepo.worktrees().map_err(|e| e.to_string())? {
             let Ok(base) = proxy.base() else { continue };
-            if !base.exists() {
-                continue;
-            }
-            // Recycled checkouts parked in `__archived/` are a pool, not workspaces.
-            if crate::worktree::is_archived_checkout(&base) {
-                continue;
-            }
-            let path = real(&base);
-            // A worktree mid-rebase has a detached HEAD. Recover the
-            // pre-rebase branch from git's own state files, otherwise the row vanishes from the
-            // sidebar and its terminals are closed mid-conflict-resolution (GH #112).
-            // Only the admin HEAD is checkout-specific. Opening a full gix repository
-            // here rereads shared config and object-store layout for every workspace.
-            let branch = crate::git::read_branch_from_head(&base)
-                .or_else(|| crate::worktree::operation_head_branch(&base.to_string_lossy()));
-            if let Some(branch) = branch {
-                map.insert(
-                    branch.clone(),
-                    crate::worktree::WorkspaceWorktree {
-                        branch,
-                        path,
-                        kind: crate::worktree::WorkspaceKind::Worktree,
-                        warm_artifacts: None,
-                        lifecycle_status: None,
-                    },
-                );
-            }
+            add(&base);
         }
-
-        Ok(map)
+        Ok(crate::worktree::checkout_inventory(entries, archive_pool))
     }
 
     // status_counts via gix: classify status items into the panel's staged /
@@ -1220,6 +1215,19 @@ impl GitReadsRouter {
         }?;
         crate::worktree::attach_warm_statuses(&mut paths);
         Ok(paths)
+    }
+
+    pub fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
+        let mut inventory = match self.backend.worktree_paths {
+            Backend::Cli => self.cli.worktree_inventory(repo, archive_pool),
+            Backend::Gix => self.gix.worktree_inventory(repo, archive_pool),
+        }?;
+        crate::worktree::attach_warm_statuses(&mut inventory.worktree_paths);
+        Ok(inventory)
     }
 
     pub fn status_counts(&self, repo: &Path) -> StatusCounts {
@@ -1599,6 +1607,140 @@ mod tests {
             .to_string();
         let cli_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         assert_eq!(gix_head, cli_head);
+    }
+
+    /// Catches detached HEAD checkouts disappearing instead of reaching the sidebar inventory.
+    #[test]
+    fn discovery_2156_detached_checkouts_are_explicit() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let detached = linked.path().join("detached-checkout");
+        run_git(
+            &repo,
+            &["worktree", "add", "--detach", detached.to_str().unwrap()],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&detached).unwrap().to_string_lossy());
+        let expected_head = run_git(&detached, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let actual = reads.worktree_inventory(&repo, None).unwrap();
+            if !actual.detached_worktrees.iter().any(|entry| {
+                entry.path == expected
+                    && entry.head == expected_head
+                    && entry.short_head == expected_head[..7]
+                    && entry.directory_name == "detached-checkout"
+                    && entry.state == crate::worktree::DetachedWorktreeState::Detached
+            }) {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "detached checkout missing from {missing:?}: {expected}"
+        );
+    }
+
+    /// Catches taking the parent of an unresolved common-dir from a linked checkout.
+    #[test]
+    fn discovery_2156_linked_input_keeps_main_checkout() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked-input",
+                path.to_str().unwrap(),
+            ],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&repo).unwrap().to_string_lossy());
+        let actual = GixGitReads::new().worktree_paths(&path).unwrap();
+        assert!(
+            actual.values().any(|entry| entry.path == expected),
+            "main checkout omitted for linked input: {actual:?}"
+        );
+    }
+
+    /// Catches treating a user's unrelated __archived directory as a TUIC recycling pool.
+    #[test]
+    fn discovery_2156_unowned_archive_name_keeps_checkout() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("unrelated/__archived/user-checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "user-archive-name",
+                path.to_str().unwrap(),
+            ],
+        );
+        let pool = linked.path().join("configured/__archived");
+        let pooled = pool.join("pooled");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "tuic-pool",
+                pooled.to_str().unwrap(),
+            ],
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, Some(&pool)).unwrap();
+            assert!(
+                !inventory.worktree_paths.contains_key("tuic-pool"),
+                "{name} exposed the configured recycling pool"
+            );
+            if !inventory.worktree_paths.contains_key("user-archive-name") {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "ordinary checkout hidden by archive basename in {missing:?}"
+        );
+    }
+
+    /// Catches line-based porcelain parsing dropping a legal newline in a checkout path.
+    #[cfg(unix)]
+    #[test]
+    fn discovery_2156_newline_path_matches_git_inventory() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("line\nbreak");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "newline-path",
+                path.to_str().unwrap(),
+            ],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&path).unwrap().to_string_lossy());
+        let actual = CliGitReads.worktree_paths(&repo).unwrap();
+        assert_eq!(
+            actual.get("newline-path").map(|entry| &entry.path),
+            Some(&expected),
+            "CLI lost newline path from real Git"
+        );
     }
 
     /// Step 10: gix worktree_paths == CLI, including the main worktree (gix

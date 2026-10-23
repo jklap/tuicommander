@@ -1068,3 +1068,7 @@ exact message, plus an OAuth app authorization URL for every github.com OAuth gr
 `github_diagnostics` accepts optional `refresh: boolean` (default false). True
 clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 `POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.
+
+### Detached checkout inventory
+
+`get_repo_structure` and `get_repo_summary` include `detached_worktrees: Array<{path, head, short_head, directory_name, state: "detached"}>`, matching HTTP. `get_worktree_paths` retains its branch-workspace map response. Detached records have no workspace ID and cannot be used in branch actions.

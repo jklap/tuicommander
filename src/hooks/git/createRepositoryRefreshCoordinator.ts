@@ -44,6 +44,7 @@ interface RepositoryRefreshCoordinatorDeps {
 		getInfo: (path: string) => Promise<{ branch: string; is_git_repo: boolean }>;
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
+			detached_worktrees?: import("../useRepository").DetachedWorktree[];
 			merged_branches: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
@@ -273,6 +274,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const currentRepo = repositoriesStore.get(repoPath);
 		if (!currentRepo) return;
+		repositoriesStore.setDetachedWorktrees(repoPath, structure.detached_worktrees ?? []);
 
 		if (Object.keys(worktreePaths).length === 0) {
 			// Worktrees came back empty — either a transient backend error or the

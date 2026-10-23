@@ -1110,6 +1110,7 @@
 	"sidebar.mergeSquash": "Squash & Merge",
 	"sidebar.merging": "Merging...",
 	"sidebar.noActiveRepos": "No repositories with open terminals",
+	"sidebar.detached": "detached",
 	"sidebar.noBranches": "No branches loaded",
 	"sidebar.noRepositories": "No repositories",
 	"sidebar.parkedRepos": "Parked repositories",

@@ -326,3 +326,7 @@ starts. Dirty, unmerged, locked, and live worktrees are not reused.
 The remove confirmation says so: for such a checkout it reads "Archive workspace?"
 with an Archive button and states that the local branch is kept. The archived
 checkout still holds the branch.
+
+### Detached checkouts
+
+A checkout without a branch remains visible in the sidebar. Its row shows the directory name, short commit SHA and **detached**. The row is informational: it cannot select a branch or run branch actions. A repository header shows the detached count even when its rows are folded. Checkouts in TUIC’s configured recycling pool stay out of the active inventory; an unrelated folder named `__archived` does not hide worktrees.

@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Show detached checkouts as informational sidebar rows without inventing branch workspaces; retain the main checkout for linked-input discovery, preserve newline paths, and exclude only the configured TUIC archive pool (#2156-2723).
 - Show the selected project once in the mobile Progress header; keep the project selector, a subtitle when no selector is available, and the desktop subtitle (#2151-62ef).
 - Open mobile and desktop Progress lists with at most 100 entries; load older cursor pages on demand and discard stale page responses after filter changes (#2151-62ef).
 - Keep long mobile CLI file links inline with surrounding text and its hanging indent instead of centering wrapped paths (#2011-86b5).
