@@ -658,7 +658,11 @@ Switching scopes loads the new mark; closing records every visited scope.
 It queries on open, for the one project the dialog shows — not once per
 registered repository, which is what made the old panel fire a request per repo
 and answer with a red block for each one that no longer existed. Boot reads
-nothing at all.
+nothing at all. Each read requests at most 100 entries. `nextCursor` is an
+exclusive entry ID returned by the backend, and `loadOlder` reads one page on
+demand with the current filters. Refreshes replace the list with the newest
+page. A request epoch discards stale reads after a refresh or selection change;
+the loading state prevents concurrent older-page appends.
 
 The unread count is the number of `progress-recorded` pushes that arrived while
 the dialog was closed, reset on open. It is deliberately not a query: the
