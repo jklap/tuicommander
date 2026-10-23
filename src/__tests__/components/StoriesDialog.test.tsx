@@ -693,6 +693,7 @@ describe("StoriesDialog", () => {
 						},
 					};
 				if (action?.action === "events") return { type: "events", value: [] };
+				if (action?.action === "start_readiness") return { type: "readiness", value: [] };
 			}
 			return fallback?.(command, args);
 		});
@@ -717,6 +718,137 @@ describe("StoriesDialog", () => {
 			}),
 		);
 		await screen.findByRole("region", { name: "Run timeline" });
+	});
+
+	describe("story workflow run on a default install (2138)", () => {
+		const runBase = {
+			id: "r1",
+			planId: "p1",
+			status: "running",
+			sequence: 3,
+			startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [],
+		};
+		const mockRuns = (getRun: () => Record<string, unknown>) => {
+			const fallback = vi.mocked(invoke).getMockImplementation();
+			vi.mocked(invoke).mockImplementation(async (command, args) => {
+				const action = (args as { action?: { action: string } } | undefined)?.action;
+				if (command === "workflow_run_action") {
+					if (action?.action === "list_plan_runs") return { type: "runs", value: [{ ...runBase }] };
+					if (action?.action === "get") return { type: "snapshot", value: getRun() };
+					if (action?.action === "events") return { type: "events", value: [] };
+				}
+				return fallback?.(command, args);
+			});
+		};
+
+		it("says before start what stops the first agent step and refuses to start", async () => {
+			// Catches: a Start button that creates a run which pauses at once on a default install.
+			const fallback = vi.mocked(invoke).getMockImplementation();
+			vi.mocked(invoke).mockImplementation(async (command, args) => {
+				const action = (args as { action?: { action: string } } | undefined)?.action;
+				if (command === "workflow_definition_action")
+					return {
+						type: "drafts",
+						value: [{ id: "flow-1", name: "Story delivery", kind: "story", latestPublishedRevision: 2 }],
+					};
+				if (command === "workflow_run_action" && action?.action === "start_readiness")
+					return { type: "readiness", value: ["no run configuration is saved; save one in Settings > Agents"] };
+				return fallback?.(command, args);
+			});
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Start story workflow" }));
+			expect((await screen.findByRole("alert")).textContent).toContain("Settings > Agents");
+			expect((screen.getByRole("button", { name: "Start published workflow" }) as HTMLButtonElement).disabled).toBe(
+				true,
+			);
+		});
+
+		it("keeps Start disabled while readiness is pending, also after switching definition", async () => {
+			// Catches: Start enabled during the readiness request, so a click creates the run that pauses at once.
+			const fallback = vi.mocked(invoke).getMockImplementation();
+			const pending: ((problems: string[]) => void)[] = [];
+			vi.mocked(invoke).mockImplementation(async (command, args) => {
+				const action = (args as { action?: { action: string } } | undefined)?.action;
+				if (command === "workflow_definition_action")
+					return {
+						type: "drafts",
+						value: [
+							{ id: "flow-1", name: "Story delivery", kind: "story", latestPublishedRevision: 2 },
+							{ id: "flow-2", name: "Other delivery", kind: "story", latestPublishedRevision: 1 },
+						],
+					};
+				if (command === "workflow_run_action" && action?.action === "start_readiness")
+					return new Promise((resolve) => pending.push((value) => resolve({ type: "readiness", value })));
+				return fallback?.(command, args);
+			});
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Start story workflow" }));
+			const start = (await screen.findByRole("button", { name: "Start published workflow" })) as HTMLButtonElement;
+			await waitFor(() => expect(pending.length).toBe(1));
+			expect(start.disabled).toBe(true);
+			pending[0]([]);
+			await waitFor(() => expect(start.disabled).toBe(false));
+			fireEvent.change(screen.getByRole("combobox", { name: "Published workflow" }), { target: { value: "flow-2" } });
+			await waitFor(() => expect(pending.length).toBe(2));
+			expect(start.disabled).toBe(true);
+			pending[1]([]);
+			await waitFor(() => expect(start.disabled).toBe(false));
+		});
+
+		it("updates the run list row when the run changes, without Refresh", async () => {
+			// Catches: the list keeping the first fetched status while only the detail pane reloads.
+			let current: Record<string, unknown> = { ...runBase };
+			mockRuns(() => current);
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+			await screen.findByText(/running · 1 story · #3/);
+			current = { ...runBase, status: "paused", sequence: 5 };
+			workflowRunSignals.accept({ repo_path: "/repo", payload: { runId: "r1", sequence: 5 } });
+			await screen.findByText(/paused · 1 story · #5/);
+		});
+
+		it("shows the pause cause and preselects the only pending activation", async () => {
+			// Catches: a paused run with a known cause whose Resume form cannot be used from the UI.
+			const paused = {
+				...runBase,
+				status: "paused",
+				pauseCause: "workflow has no run profile for the Implementer role",
+				graphExecutions: [
+					{
+						...graph,
+						pauses: [],
+						activations: [{ id: "a1", nodeId: "implement", state: "running", edgeIndex: null }],
+					},
+				],
+			};
+			mockRuns(() => paused);
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+			await screen.findByText(/no run profile for the Implementer role/);
+			expect((screen.getByRole("combobox", { name: "Execution" }) as HTMLSelectElement).value).toBe("root");
+			expect((screen.getByRole("combobox", { name: "Resume activation" }) as HTMLSelectElement).value).toBe("a1");
+		});
+
+		it("does not show a cancelled run's open activation as running", async () => {
+			// Catches: the graph listing `running` for work that a cancelled run will never do.
+			mockRuns(() => ({
+				...runBase,
+				status: "cancelled",
+				graphExecutions: [
+					{ ...graph, pauses: [], activations: [{ id: "a1", nodeId: "implement", state: "running", edgeIndex: null }] },
+				],
+			}));
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+			await screen.findByText(/a1 · implement · cancelled/);
+		});
 	});
 
 	it("history renders replayed decisions and waits and preserves later-page payloads", async () => {

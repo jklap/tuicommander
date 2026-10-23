@@ -2231,6 +2231,23 @@ impl AgentsConfig {
         })
     }
 
+    /// Every saved run configuration with its agent, sorted by name.
+    pub(crate) fn saved_run_configs(&self) -> Vec<(&str, &AgentRunConfig)> {
+        let mut saved: Vec<(&str, &AgentRunConfig)> = self
+            .agents
+            .iter()
+            .filter(|(agent, _)| crate::agent::is_known_agent_type(agent))
+            .flat_map(|(agent, settings)| {
+                settings
+                    .run_configs
+                    .iter()
+                    .map(move |profile| (agent.as_str(), profile))
+            })
+            .collect();
+        saved.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        saved
+    }
+
     pub(crate) fn require_named_run_config(
         &self,
         name: &str,

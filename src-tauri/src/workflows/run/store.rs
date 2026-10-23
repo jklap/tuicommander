@@ -70,7 +70,8 @@ impl From<RunStartError> for String {
 /// Version 2 adds graph events and additive JSON snapshot fields. Legacy JSON
 /// is decoded with defaults, without inventing graph positions. Version 3
 /// records explicit graph-root targets; older binaries must refuse that contract.
-const RUN_STORE_SCHEMA_VERSION: i64 = 3;
+// 4: paused_for events; a build that supports 3 refuses the store instead of failing to decode them.
+const RUN_STORE_SCHEMA_VERSION: i64 = 4;
 
 mod approval;
 mod runtime_start;
@@ -275,6 +276,7 @@ impl RunStore {
             started_ms: now_ms(),
             paused_since_ms: None,
             paused_duration_ms: 0,
+            pause_cause: None,
             limits,
             loops: 0,
             story_creations: 0,
@@ -1849,6 +1851,7 @@ fn choose_event(
             command,
             RunCommand::Cancel
                 | RunCommand::Pause
+                | RunCommand::PauseFor { .. }
                 | RunCommand::BindAgent { .. }
                 | RunCommand::MarkEffect { .. }
                 | RunCommand::ResolveUncertainEffect { .. }
@@ -1870,6 +1873,7 @@ fn choose_event(
             command,
             RunCommand::Cancel
                 | RunCommand::Pause
+                | RunCommand::PauseFor { .. }
                 | RunCommand::BindAgent { .. }
                 | RunCommand::MarkEffect { .. }
                 | RunCommand::ResolveUncertainEffect { .. }
@@ -2479,6 +2483,7 @@ fn choose_event(
             Ok(RunEventKind::Completed)
         }
         RunCommand::Pause => Ok(RunEventKind::Paused),
+        RunCommand::PauseFor { cause } => Ok(RunEventKind::PausedFor { cause }),
         RunCommand::ExpireDeadline => unreachable!("deadline handled before ordinary commands"),
         RunCommand::ResumeGraph {
             execution_id,

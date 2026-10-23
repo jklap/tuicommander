@@ -61,7 +61,7 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 
 ## Workflow graph rollout
 
-The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. It needs run profiles named sol (implementation) and sonnet (review/validation). Missing profiles and failed effects pause with a repository progress notice. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
+The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. Each Agent step uses a run profile: one named `sol` (implementation, coordination, planning) or `sonnet` (review, validation) when saved, otherwise your default run profile in Settings > Agents (or the only one saved). A default profile that passes a permission-skipping flag such as `--dangerously-bypass-approvals-and-sandbox` is refused: save a profile named `sol` or `sonnet` to choose it for workflows. The Start dialog names a missing profile before the run starts and disables Start. Failed effects pause the run with a repository progress notice; Run history shows the cause, and Resume run offers the pending activation once the cause is fixed. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
 
 The Designer refuses new publications containing unsupported Gate or plan create/dispatch/coordinator nodes. Keep those graphs as drafts. Existing built-in publications remain readable; public graph start controls and full Resolve plan execution are still in development. A completed graph does not approve or merge a story by itself.
 
