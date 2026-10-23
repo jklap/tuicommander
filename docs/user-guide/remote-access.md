@@ -98,7 +98,9 @@ In **Sessions → New session**, the Agent picker lists installed CLI agents fro
 
 ### Add to Home Screen
 
-The terminal composer keeps the bottom safe-area inset inside its background so its controls stay above the Home Indicator. Shell height and position still follow `visualViewport.height` and `visualViewport.offsetTop` when the keyboard opens. This padding change does not establish the cause of a separate empty band below the shell; capture a full-screen device screenshot before reloading if that band occurs.
+The iOS PWA uses a non-overlay status bar. On the tested iPhone simulator, the previous translucent setting left a 62pt band outside the drawable content area; adding that height to the CSS shell only clipped the composer. The non-overlay setting removes the band while shell height and position continue to follow `visualViewport.height` and `visualViewport.offsetTop`. The CLI composer retains its compact 4px bottom padding; no extra safe-area gutter is added.
+
+**Existing iPhone Home Screen installs:** remove the installed PWA and add it from Safari again after this update. iOS reads the status-bar setting at installation; a normal page reload does not update that installed setting. Physical iPhone confirmation is still pending. If the band remains after reinstallation, capture the device screen, iOS version, orientation and keyboard state before reloading.
 
 The mobile UI supports PWA (Progressive Web App) installation:
 
@@ -107,7 +109,7 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
-**The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+**Historical title-fade report, before the non-overlay status-bar change.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
 
 At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
