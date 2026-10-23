@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Index, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { StoryRisk, StoryType } from "../../types/stories.gen";
 import { Input } from "../ui/Input";
@@ -49,7 +49,7 @@ export function StoryEditForm(props: {
 	);
 	const [problem, setProblem] = createSignal(baseline.problem ?? "");
 	const [risk, setRisk] = createSignal<StoryRisk | "">(baseline.risk ?? "");
-	const [criteria, setCriteria] = createSignal(baseline.criteria.join("\n"));
+	const [criteria, setCriteria] = createSignal([...baseline.criteria]);
 	const [scope, setScope] = createSignal(baseline.fileScope.join("\n"));
 	const [dependencies, setDependencies] = createSignal([...baseline.dependencies]);
 	const lines = (text: string) =>
@@ -76,11 +76,19 @@ export function StoryEditForm(props: {
 					: { type: "git_hub_issue", number: Number(issue()) },
 		);
 		// Do not resend untouched criteria: duplicate requirement text has no stable identity.
-		if (criteria() !== baseline.criteria.join("\n")) changed("criteria", lines(criteria()));
+		changed("criteria", criteria());
 		if (scope() !== baseline.fileScope.join("\n")) changed("fileScope", lines(scope()));
 		changed("dependencies", dependencies());
 		return result;
 	};
+	function moveCriterion(index: number, direction: -1 | 1): void {
+		setCriteria((items) => {
+			const next = [...items];
+			[next[index], next[index + direction]] = [next[index + direction], next[index]];
+			return next;
+		});
+	}
+
 	return (
 		<form
 			class={s.form}
@@ -187,16 +195,58 @@ export function StoryEditForm(props: {
 					<option value="high">{t("stories.edit.riskHigh", "High")}</option>
 				</Select>
 			</label>
-			<label>
-				{t("stories.edit.criteria", "Acceptance criteria (one per line)")}
-				<Textarea
-					required
-					rows={5}
-					value={criteria()}
-					disabled={props.busy}
-					onInput={(event) => setCriteria(event.currentTarget.value)}
-				/>
-			</label>
+			<fieldset disabled={props.busy} class={s.editCriteria}>
+				<legend>{t("stories.criteria", "Acceptance criteria")}</legend>
+				<Index each={criteria()}>
+					{(criterion, index) => (
+						<div class={s.editCriterion}>
+							<label>
+								{t("stories.edit.criterion", "Acceptance criterion {number}", { number: String(index + 1) })}
+								<Textarea
+									required
+									rows={3}
+									value={criterion()}
+									onInput={(event) => {
+										const text = event.currentTarget.value;
+										setCriteria((items) => items.map((item, position) => (position === index ? text : item)));
+									}}
+								/>
+							</label>
+							<div class={s.inline}>
+								<button
+									type="button"
+									disabled={index === 0}
+									aria-label={t("stories.edit.moveUp", "Move criterion {number} up", { number: String(index + 1) })}
+									onClick={() => moveCriterion(index, -1)}
+								>
+									{t("stories.edit.up", "Up")}
+								</button>
+								<button
+									type="button"
+									disabled={index === criteria().length - 1}
+									aria-label={t("stories.edit.moveDown", "Move criterion {number} down", { number: String(index + 1) })}
+									onClick={() => moveCriterion(index, 1)}
+								>
+									{t("stories.edit.down", "Down")}
+								</button>
+								<button
+									type="button"
+									disabled={criteria().length === 1}
+									aria-label={t("stories.edit.removeCriterion", "Remove criterion {number}", {
+										number: String(index + 1),
+									})}
+									onClick={() => setCriteria((items) => items.filter((_, position) => position !== index))}
+								>
+									{t("stories.remove", "Remove")}
+								</button>
+							</div>
+						</div>
+					)}
+				</Index>
+				<button type="button" onClick={() => setCriteria((items) => [...items, ""])}>
+					{t("stories.edit.addCriterion", "Add criterion")}
+				</button>
+			</fieldset>
 			<label>
 				{t("stories.edit.scope", "File scope (one path per line)")}
 				<Textarea

@@ -164,12 +164,20 @@ pub struct StoryPatch {
         deserialize_with = "nullable_patch",
         skip_serializing_if = "Option::is_none"
     )]
+    #[expect(
+        clippy::option_option,
+        reason = "omission preserves, null clears, and a value replaces"
+    )]
     pub story_type: Option<Option<StoryType>>,
     /// Null clears the problem; omission preserves it.
     #[serde(
         default,
         deserialize_with = "nullable_patch",
         skip_serializing_if = "Option::is_none"
+    )]
+    #[expect(
+        clippy::option_option,
+        reason = "omission preserves, null clears, and a value replaces"
     )]
     pub problem: Option<Option<String>>,
     /// Null clears the risk; omission preserves it.
@@ -178,6 +186,10 @@ pub struct StoryPatch {
         deserialize_with = "nullable_patch",
         skip_serializing_if = "Option::is_none"
     )]
+    #[expect(
+        clippy::option_option,
+        reason = "omission preserves, null clears, and a value replaces"
+    )]
     pub risk: Option<Option<StoryRisk>>,
     /// Ordered final criteria. Only unique, byte-identical criteria retain checks.
     pub criteria: Option<Vec<String>>,
@@ -185,6 +197,10 @@ pub struct StoryPatch {
     pub dependencies: Option<Vec<String>>,
 }
 
+#[expect(
+    clippy::option_option,
+    reason = "the outer option distinguishes a present null from omission"
+)]
 fn nullable_patch<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,

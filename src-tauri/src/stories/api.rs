@@ -862,7 +862,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ready.status, StoryStatus::Ready);
-        assert!(ready.dependencies.is_empty());
+        assert_eq!(ready.dependencies, Vec::<String>::new());
     }
 
     /// Catches: amendments bypassing claim/lifecycle ownership and mutating terminal records.
@@ -878,15 +878,14 @@ mod tests {
             .claim(&claimed.id, "session", claimed.revision)
             .unwrap();
         let (mut manual, _) = two_stories(project);
-        for (story, message) in [(&claimed, "claimed")] {
-            assert!(
-                store
-                    .update_story(&story.id, story.revision, StoryPatch::default())
-                    .unwrap_err()
-                    .contains(message)
-            );
-            assert_eq!(store.get_story(&story.id).unwrap(), *story);
-        }
+        assert!(
+            store
+                .update_story(&claimed.id, claimed.revision, StoryPatch::default())
+                .unwrap_err()
+                .contains("claimed")
+        );
+        assert_eq!(store.get_story(&claimed.id).unwrap(), claimed);
+
         for command in [
             StoryCommand::StartManual,
             StoryCommand::CheckCriterion(0),
@@ -953,7 +952,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(filtered.visible_story_ids.is_empty());
+        assert_eq!(filtered.visible_story_ids, Vec::<String>::new());
     }
 
     /// Catches: old documents failing to decode or omitted optional fields clearing metadata.

@@ -142,9 +142,9 @@ it("catches optional clearing, ordered requirements and dependency changes lost 
 	fireEvent.change(ui.getByLabelText("Risk (optional)"), { target: { value: "" } });
 	fireEvent.change(ui.getByLabelText("Origin"), { target: { value: "plan_step" } });
 	fireEvent.input(ui.getByLabelText("Plan step"), { target: { value: "Step 3" } });
-	fireEvent.input(ui.getByLabelText("Acceptance criteria (one per line)"), {
-		target: { value: "Second\nFirst changed" },
-	});
+	fireEvent.input(ui.getByLabelText("Acceptance criterion 1"), { target: { value: "First changed" } });
+	fireEvent.input(ui.getByLabelText("Acceptance criterion 2"), { target: { value: "Second" } });
+	fireEvent.click(ui.getByRole("button", { name: "Move criterion 2 up" }));
 	fireEvent.input(ui.getByLabelText("File scope (one path per line)"), { target: { value: "src/b.ts\nsrc/c.ts" } });
 	fireEvent.click(ui.getByLabelText("Old dependency"));
 	fireEvent.click(ui.getByLabelText("New dependency"));
@@ -172,8 +172,8 @@ it("catches editing one requirement splitting an untouched multiline criterion",
 			onCancel={() => {}}
 		/>
 	));
-	fireEvent.input(ui.getByLabelText("Acceptance criteria (one per line)"), {
-		target: { value: "Verify output:\n  expected value\nRevised requirement" },
+	fireEvent.input(ui.getByLabelText("Acceptance criterion 2"), {
+		target: { value: "Revised requirement" },
 	});
 	fireEvent.click(ui.getByRole("button", { name: "Save" }));
 	expect(save).toHaveBeenCalledWith({ criteria: ["Verify output:\n  expected value", "Revised requirement"] });
@@ -199,4 +199,24 @@ it("catches priority-only edits normalizing untouched externally stored metadata
 	fireEvent.change(ui.getByLabelText("Priority"), { target: { value: "3" } });
 	fireEvent.click(ui.getByRole("button", { name: "Save" }));
 	expect(save).toHaveBeenCalledWith({ priority: 3 });
+});
+
+it("catches adding, removing or reordering criteria normalizing untouched text", () => {
+	const save = vi.fn();
+	const ui = render(() => (
+		<StoryEditForm
+			story={{ ...baseline, criteria: ["  Keep this\r\n  indentation", "Remove this"] }}
+			candidates={[]}
+			busy={false}
+			error=""
+			onSave={save}
+			onCancel={() => {}}
+		/>
+	));
+	fireEvent.click(ui.getByRole("button", { name: "Remove criterion 2" }));
+	fireEvent.click(ui.getByRole("button", { name: "Add criterion" }));
+	fireEvent.input(ui.getByLabelText("Acceptance criterion 2"), { target: { value: "New\nrequirement" } });
+	fireEvent.click(ui.getByRole("button", { name: "Move criterion 2 up" }));
+	fireEvent.click(ui.getByRole("button", { name: "Save" }));
+	expect(save).toHaveBeenCalledWith({ criteria: ["New\nrequirement", "  Keep this\r\n  indentation"] });
 });
