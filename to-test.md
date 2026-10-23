@@ -1,3 +1,9 @@
+## Stories filters and native Kanban (2167-eedb) — Rust restart required
+
+- [x] Isolated native instance: twelve DOM/geometry samples cover all/open/closed, feature/fix/refactor/chore/task/untyped, combined open+untyped, and Kanban all/open+feature. Card selection shows the matching criteria; closing and reopening retains open+feature and Kanban. Recorded real API fixture and results: `~/Gits/.tmp/results/tuic-2167-evidence/`. The instance was stopped.
+- [ ] Capture and inspect each filter and List/Kanban after the screen is unlocked. All twelve owned-window screenshot attempts failed with `could not create image from window` while `loginwindow` was frontmost; no screenshot or visual pass is claimed.
+- [ ] After Boss chooses to rebuild/restart the daily backend, inspect these controls in the daily app. Rust filtering and optional story types require that restart; this peer did not restart or replace the daily app.
+
 ## Plans and Stories size and detachment (2166-11aa)
 
 - [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.

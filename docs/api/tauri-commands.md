@@ -25,6 +25,8 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 | `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
 
+`filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
+
 ## Project Progress
 
 | Command | Parameters | Result | Description |

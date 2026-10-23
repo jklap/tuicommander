@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view (#2167-eedb).
+
 - Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).
 
 - Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).

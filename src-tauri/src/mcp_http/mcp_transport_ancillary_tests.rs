@@ -2389,6 +2389,7 @@ async fn workflow_proposal_create_retries_create_one_story() {
     )
     .unwrap();
     let story = NewStory {
+        story_type: None,
         plan_id: plan.id.clone(),
         title: "One proposal".into(),
         criteria: vec!["Delivered".into()],

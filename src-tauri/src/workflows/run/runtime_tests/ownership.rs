@@ -81,6 +81,7 @@ async fn parallel_plan_runs_share_project_reservations() {
         .unwrap();
     let second = stories
         .create_story(NewStory {
+            story_type: None,
             plan_id: plan.id,
             title: "Second".into(),
             criteria: vec!["Done".into()],

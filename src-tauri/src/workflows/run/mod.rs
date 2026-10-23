@@ -565,6 +565,7 @@ mod tests {
         let dependent = if with_dependent {
             let dependent = stories
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan_id.clone(),
                     title: "Dependent".into(),
                     criteria: vec!["Done".into()],
@@ -1077,6 +1078,7 @@ mod tests {
             .expect("plan");
         let story = stories
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id.clone(),
                 title: "Work".into(),
                 criteria: vec!["Done".into()],
@@ -1401,6 +1403,7 @@ mod tests {
         let make_story = |title: &str, scope: &str| {
             stories
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan_id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],
@@ -1711,6 +1714,7 @@ mod tests {
         let make = |title: &str, scope: Vec<&str>| {
             stories
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan_id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],
@@ -1766,6 +1770,7 @@ mod tests {
         let stories = StoryStore::open().unwrap();
         let dependent = stories
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan_id.clone(),
                 title: "Dependent".into(),
                 criteria: vec!["Done".into()],
@@ -1853,6 +1858,7 @@ mod tests {
             })
             .unwrap();
         let make_story = |title: &str| NewStory {
+            story_type: None,
             plan_id: manual_plan.id.clone(),
             title: title.into(),
             criteria: vec!["Done".into()],
@@ -2104,6 +2110,7 @@ mod tests {
         let create = |title: &str, scope: &str| {
             stories
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan_id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],
@@ -2345,6 +2352,7 @@ mod tests {
             )
             .unwrap();
         let proposed = NewStory {
+            story_type: None,
             plan_id: plan_id.clone(),
             title: "Follow up".into(),
             criteria: vec!["Covered".into()],
@@ -2451,6 +2459,7 @@ mod tests {
                 title: "New evidence".into(),
                 criteria: vec!["Reviewed".into()],
                 priority: 2,
+                story_type: None,
                 origin: StoryOrigin::Native,
                 file_scope: vec![],
             })
@@ -2752,6 +2761,7 @@ mod tests {
                 title: "New work".into(),
                 criteria: vec!["New criterion".into()],
                 priority: 1,
+                story_type: None,
                 origin: StoryOrigin::Native,
                 file_scope: vec![],
             })

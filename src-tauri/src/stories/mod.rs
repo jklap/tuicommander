@@ -1,6 +1,9 @@
 mod api;
 #[cfg(test)]
 mod critic_tests;
+#[cfg(test)]
+mod filter_tests;
+mod filters;
 mod model;
 mod sources;
 mod store;
@@ -27,6 +30,7 @@ mod tests {
             .expect("plan");
         store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id.clone(),
                 title: "Wire story".into(),
                 criteria: vec!["Shown".into()],
@@ -120,6 +124,7 @@ mod tests {
             })
             .expect("plan");
         let proposed = NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: "Implement".into(),
             criteria: vec!["Focused test passes".into()],
@@ -183,6 +188,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Manual work".into(),
                 criteria: vec!["Verified".into()],
@@ -250,6 +256,7 @@ mod tests {
         assert_eq!(store.plan_state(&plan.id).expect("state"), PlanState::Draft);
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id.clone(),
                 title: "Implement core".into(),
                 criteria: vec!["Core behavior works".into()],
@@ -314,6 +321,7 @@ mod tests {
             PlanState::Draft
         );
         let make_story = |title: &str| NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: title.into(),
             criteria: vec!["Done".into()],
@@ -381,6 +389,7 @@ mod tests {
             })
             .expect("plan");
         let make_story = |title: &str| NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: title.into(),
             criteria: vec!["Done".into()],
@@ -500,6 +509,7 @@ mod tests {
             })
             .expect("plan");
         let make_story = |title: &str| NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: title.into(),
             criteria: vec!["Done".into()],
@@ -556,6 +566,7 @@ mod tests {
             })
             .expect("plan");
         let make_story = |title: &str| NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: title.into(),
             criteria: vec!["Done".into()],
@@ -613,6 +624,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
@@ -663,6 +675,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
@@ -729,6 +742,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
@@ -797,6 +811,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "A".into(),
                 criteria: vec!["Done".into()],
@@ -858,6 +873,7 @@ mod tests {
             "\\\\server\\share",
         ] {
             let result = store.create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id.clone(),
                 title: "Unsafe scope".into(),
                 criteria: vec!["Done".into()],
@@ -890,6 +906,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Work".into(),
                 criteria: vec!["Done".into()],
@@ -966,6 +983,7 @@ mod tests {
         let create = |title: &str| {
             store
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan.id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],
@@ -1033,6 +1051,7 @@ mod tests {
             .expect("plan");
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id: plan.id,
                 title: "Discard".into(),
                 criteria: vec!["Done".into()],
@@ -1070,6 +1089,7 @@ mod tests {
         let create = |title: &str| {
             store
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan.id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],
@@ -1139,6 +1159,7 @@ mod tests {
         let create = |title: &str| {
             store
                 .create_story(NewStory {
+                    story_type: None,
                     plan_id: plan.id.clone(),
                     title: title.into(),
                     criteria: vec!["Done".into()],

@@ -96,3 +96,30 @@
 	.header > .windowControls { grid-column: 2; grid-row: 1; }
 	.headerActions button { white-space: nowrap; }
 }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.filters label { display: flex; flex-direction: column; flex: 1; min-width: 100px; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
+.filters select { width: 100%; }
+.filters [role="group"] { display: flex; gap: 4px; align-items: flex-end; }
+.filters button { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; background: var(--bg-tertiary); color: var(--fg-secondary); font: inherit; font-size: var(--font-xs); cursor: pointer; }
+.filters button[aria-pressed="true"] { border-color: var(--accent); color: var(--fg-primary); }
+.filters button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kanbanContent { grid-template-columns: minmax(170px, 18%) minmax(0, 1fr); grid-template-rows: minmax(280px, 1fr) minmax(180px, 38%); }
+.kanbanContent .detail { grid-column: 1 / -1; min-height: 240px; border-top: 1px solid var(--border); }
+.kanbanContent .storyColumn { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* The plugin board is the visual reference; native membership comes from Rust. */
+.board { display: flex; flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; }
+.boardColumn { display: flex; flex: 1 0 150px; flex-direction: column; min-width: 150px; border-right: 1px solid var(--border); }
+.boardColumn:last-child { border-right: 0; }
+.boardColumnHeader { display: flex; justify-content: space-between; gap: 8px; flex-shrink: 0; padding: 8px; border-top: 3px solid var(--fg-muted); border-bottom: 1px solid var(--border); color: var(--fg-secondary); font-size: var(--font-xs); font-weight: 600; text-transform: uppercase; }
+.boardColumnHeader[data-status="ready"] { border-top-color: var(--accent); }
+.boardColumnHeader[data-status="in_progress"], .boardColumnHeader[data-status="review"] { border-top-color: var(--warning); }
+.boardColumnHeader[data-status="blocked"] { border-top-color: var(--error); }
+.boardColumnHeader[data-status="done"] { border-top-color: var(--success); }
+.boardCards { flex: 1; min-height: 0; padding: 6px; overflow-y: auto; }
+.boardCard { display: flex; flex-direction: column; gap: 4px; width: 100%; margin-bottom: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--fg-primary); text-align: left; font: inherit; font-size: var(--font-sm); overflow-wrap: anywhere; cursor: pointer; }
+.boardCard:hover, .boardCard[aria-current="true"] { background: var(--bg-highlight); border-color: var(--accent); }
+.boardCard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.boardCard small { color: var(--fg-muted); font-size: var(--font-xs); }
+.boardCardId { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.boardEmpty { padding: 12px 4px; color: var(--fg-muted); text-align: center; font-size: var(--font-xs); }

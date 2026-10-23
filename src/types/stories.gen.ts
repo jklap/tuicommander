@@ -2,3 +2,5 @@
 
 export type StoryStatus = "backlog" | "ready" | "in_progress" | "review" | "done" | "blocked" | "wont_fix";
 export type PlanState = "draft" | "active" | "done";
+export type StoryType = "feature" | "fix" | "refactor" | "chore" | "task";
+export type StoryVisibility = "all" | "open" | "closed";

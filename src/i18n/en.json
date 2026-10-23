@@ -1395,5 +1395,22 @@
 	"mcpAudit.col.outcome": "Outcome",
 	"mcpAudit.col.bytes": "Bytes",
 	"mcpAudit.col.effect": "Effect",
-	"mcpAudit.targetTitle": "SHA-256 digest of the target; not the target"
+	"mcpAudit.targetTitle": "SHA-256 digest of the target; not the target",
+	"stories.type.feature": "Feature",
+	"stories.type.fix": "Fix",
+	"stories.type.refactor": "Refactor",
+	"stories.type.chore": "Chore",
+	"stories.type.task": "Task",
+	"stories.type.untyped": "Untyped",
+	"stories.filter.status": "Status",
+	"stories.filter.allStatuses": "All statuses",
+	"stories.filter.open": "Open only",
+	"stories.filter.closed": "Closed only",
+	"stories.typeLabel": "Story type",
+	"stories.filter.allTypes": "All types",
+	"stories.view.label": "Story view",
+	"stories.view.list": "List",
+	"stories.view.kanban": "Kanban",
+	"stories.filter.empty": "No stories match these filters.",
+	"stories.board.empty": "No stories"
 }
