@@ -269,7 +269,9 @@ local `main`, then local `master`, then `origin/HEAD` (local branch when present
 otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
-shows **No base branch**, with the full reason in its tooltip.
+shows **No base branch**, with the full reason in its tooltip. Each branch-name
+tooltip includes the status diagnostic once. Main checkouts do not show removal
+warnings, because the sidebar cannot remove them.
 
 The checked-out main worktree branch is another integration target: if it
 contains the candidate tip, removal records `integration_ancestry` even when

@@ -361,7 +361,8 @@ Branch rows keep the status icon separate from the always-visible agents disclos
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
-  consequence in a WebView-compatible hover/focus tooltip
+  consequence in a WebView-compatible hover/focus tooltip. Branch-name tooltips include each
+  diagnostic once and omit removal warnings for main checkouts
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal

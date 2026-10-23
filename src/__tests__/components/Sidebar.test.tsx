@@ -2335,6 +2335,34 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe("PR #256 — 1 uncommitted file");
 		});
 
+		// Catches: dirty and commit tooltip fragments repeat the same unknown diagnostic.
+		it("shows the status diagnostic once in the branch name tooltip", () => {
+			const error = "Cannot resolve default branch: no verified base.";
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown", error },
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip.split(error)).toHaveLength(2);
+			expect(tooltip.split("Status unavailable")).toHaveLength(2);
+		});
+
+		// Catches: a non-removable main checkout inherits linked-worktree removal warnings.
+		it.each([true, false])("keeps main checkout status free of removal wording (isMain=%s)", (isMain) => {
+			const container = renderLifecycle({
+				isMain,
+				worktreePath: "/repo1",
+				lifecycleStatus: {
+					dirtyFiles: null,
+					commitStatus: "unknown",
+					removalSafety: "unknown",
+					error: "git status failed",
+				},
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip).toContain("Status unavailable");
+			expect(tooltip).not.toMatch(/remov|delet|discard/i);
+		});
+
 		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
 			const container = renderLifecycle({
 				lifecycleStatus: {
@@ -2345,7 +2373,7 @@ describe("Sidebar", () => {
 				},
 			});
 			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toBe(
-				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
+				"Status unavailable; removal is blocked. git status failed",
 			);
 		});
 

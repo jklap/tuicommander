@@ -6608,6 +6608,26 @@ mod tests {
         assert_eq!(status.error.as_deref(), Some(error.as_str()));
     }
 
+    /// Catches rejecting a committed master when origin/HEAD is absent.
+    #[test]
+    fn default_branch_master_without_remote_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-M", "master"])
+            .run()
+            .unwrap();
+        assert!(
+            git_cmd(&repo)
+                .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+                .run_silent()
+                .is_none()
+        );
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+    }
+
     #[test]
     fn get_remote_default_branch_from_test_repo() {
         let repo = setup_test_repo();
