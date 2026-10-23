@@ -55,6 +55,7 @@ pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
 pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
+pub(crate) mod session_usage;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -990,6 +991,15 @@ pub(crate) fn read_file_impl_with_limit(
         .map_err(|e| format!("Failed to resolve file path: {e}"))?;
 
     if !canonical_file.starts_with(&canonical_repo) {
+        if file_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(format!(
+                "Cannot open symbolic link \"{file}\": target \"{}\" is outside the repository.",
+                canonical_file.display()
+            ));
+        }
         return Err("Access denied: file is outside repository".to_string());
     }
 
@@ -2570,6 +2580,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             claude_usage::get_claude_usage_timeline,
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
+            session_usage::get_session_usage,
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
             grok_usage::get_grok_usage_api,

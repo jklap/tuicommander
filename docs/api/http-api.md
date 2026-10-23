@@ -3536,3 +3536,20 @@ DTO. `GET /github/diagnostics` remains read-only. This maps to
 ### Detached checkout inventory
 
 `GET /repo/structure` and `GET /repo/summary` add `detached_worktrees` beside `worktree_paths`. Each record is `{path, head, short_head, directory_name, state: "detached"}`. The branch map and its workspace IDs do not change. `GET /worktrees/paths` remains a branch-only map for lifecycle and terminal placement. Both discovery backends retain detached checkouts in the additive inventory and exclude only the configured TUIC archive pool. Detached records are read-only sidebar information, not selectable workspaces.
+
+### Directory listing link metadata
+
+`GET /fs/list?repoPath=…&subdir=…` returns the same `DirEntry` shape as `list_directory` IPC. Symbolic links include optional `symlink_target` (link text) and `symlink_target_kind` (`directory`, `file`, or `unavailable`) fields and size 0. These fields are metadata only; existing repository containment checks still gate reads. Outside-link reads return a target-specific refusal.
+
+### Session usage
+
+`GET /sessions/{id}/usage` mirrors `get_session_usage(session_id)`. It returns
+`{agent, model, scope, source, availability, reason, observed_at_ms, stale, lines}`.
+Each line has `label` and `value`; the backend owns units and formatting.
+Availability is `available` or `unavailable`; unknown identity/timestamp fields
+are null, not inferred from defaults. Scope is `account_quota` or `session_usage`.
+Claude/Codex lines describe shared account windows, not session spend. ego v3
+lines retain token categories, currencies, unknown costs and separate subscription
+API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
+settlement. Remote sessions are forwarded to their owning daemon or are unavailable.
+The request is bounded to 30 seconds locally; ego stdout is capped at 4 MiB.

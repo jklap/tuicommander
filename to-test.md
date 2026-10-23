@@ -1,3 +1,8 @@
+## Confident question lifetime after agent exit (1985-45bd) — Rust restart required
+
+- [x] Rebuilt isolated agent-test-1986: real Claude AskUserQuestion exit cleared backend awaiting/question/choice state before input; mobile 390×844 recovered Terminal composer, ran a shell marker, showed Session ended with disabled input, and Back returned an empty session list. Evidence: orchestrator `reports/tuicommander/img/2026-10-23-1985/fixed-*`. This is browser emulation, not a physical phone.
+- [ ] After Boss manually rebuilds/restarts the daily backend, exit an agent while its question is open. Before typing shell input, confirm the terminal no longer shows an awaiting badge or answer controls. This Rust change does not hot-reload; the peer does not restart the daily app.
+
 ## Progress cursor paging (2151-62ef)
 
 - [x] Targeted module/component checks verify a 1000-record journal opens with 100 rows and one read, then an older-page double click appends exactly 100 distinct rows. Scope changes and older-page failure/retry have regression coverage.
@@ -2823,3 +2828,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Worktree discovery (2156-2723) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the daily backend, verify detached checkouts show directory name, short SHA and detached state without branch actions. Check a repository opened from a linked checkout and a checkout in an unrelated `__archived` folder. The Rust change does not hot-reload; this peer does not restart the daily app.
+- [ ] After a deliberate Rust rebuild/restart, check Files shows a directory link with its target instead of 50 B, and opening an outside link names the target and refuses access (#2155-5da6).
+## Session usage menu (#2150-4e0c)
+
+- [ ] After a backend rebuild/restart, open the mobile overflow for Claude, Codex
+  and ego sessions. Check the live profile, shared quota/reset labels or exact ego
+  session tokens/cost, unavailable and stale states. Never restart the daily app
+  during active sessions for this check. Rust changes do not hot reload.
+
+- [x] Capture the isolated 390×844 session-usage browser fixture. _(verified 2026-10-23: available, unavailable and stale viewport PNGs captured with the authorized browser wrapper; accessibility text and DOM bounds checked. Fixture-only, not live provider evidence. Evidence: `~/Gits/personal/orchestrator/reports/tuicommander/img/2026-10-23-2150/README.md`.)_

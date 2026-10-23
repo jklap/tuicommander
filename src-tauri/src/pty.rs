@@ -1370,6 +1370,9 @@ struct ChunkProcessor {
     /// the snapshot reuses the row `String` allocations instead of allocating
     /// one per visible row on every chunk that moved anything.
     screen_buf: Vec<String>,
+    /// Deterministically interleave foreground retirement after reader sampling.
+    #[cfg(test)]
+    after_identity_sample: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// A terminal that enters the alternate screen this soon after spawn is treated
@@ -1472,6 +1475,8 @@ impl ChunkProcessor {
             codex_approval_question: None,
             codex_approval_canceled: false,
             screen_buf: Vec::new(),
+            #[cfg(test)]
+            after_identity_sample: None,
         }
     }
 
@@ -1680,6 +1685,11 @@ impl ChunkProcessor {
             .session_states
             .get(session_id)
             .and_then(|s| s.agent_type.clone());
+
+        #[cfg(test)]
+        if let Some(after_sample) = self.after_identity_sample.take() {
+            after_sample();
+        }
 
         // The screen snapshot is refilled in place: `screen_rows()` is
         // `prev_rows.clone()`, one allocation per visible row per chunk. Taking
@@ -2971,6 +2981,26 @@ impl ChunkProcessor {
             };
 
             let emit_event = resolved.as_ref().unwrap_or(event);
+
+            // Serialize agent-owned waits against foreground retirement. Parsing
+            // uses a pre-grid identity snapshot; shell return may revoke it while
+            // this chunk is being processed. Enqueue under the same identity lock
+            // as exit withdrawal so neither transport can re-arm a retired agent.
+            let _identity_guard = if agent_type.is_some()
+                && matches!(
+                    emit_event,
+                    ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
+                ) {
+                let Some(session) = state.session_maps.session_states.get(session_id) else {
+                    continue;
+                };
+                if session.agent_type != agent_type {
+                    continue;
+                }
+                Some(session)
+            } else {
+                None
+            };
 
             // Serialize once, reuse for both broadcast and Tauri IPC
             if let Ok(mut json) = serde_json::to_value(emit_event) {

@@ -675,6 +675,8 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_session_metrics: { map: () => ({ method: "GET", path: "/metrics" }) },
 	get_process_stats: { map: () => ({ method: "GET", path: "/process/stats" }) },
 
+	get_session_usage: { map: (_args, p) => ({ method: "GET", path: `/sessions/${p("sessionId")}/usage` }) },
+
 	// --- Claude Usage dashboard ---
 	get_claude_usage_api: {
 		map: (args, p) => ({

@@ -185,9 +185,9 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Mobile session Chat appearance** — The session detail CLI/Chat view shares desktop prompt/answer theme tokens and transcript typography. Mobile keeps its existing touch-sized switch and native input; AI Chat is a separate surface.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
-- **Terminal Chat reading layout** — One rule-only answer card per turn with whole-answer Copy on hover or focus, 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
+- **Terminal Chat reading layout** — One reading card per turn with whole-answer Copy on hover or focus. The green bar follows only CLI-owned answer blocks, not the whole message, on desktop and mobile; 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
 - **Codex terminal Chat** — Completed rollout messages and tools use the shared ACP transcript after a native SessionStart hook supplies exact ownership. Live PID, rollout id and cwd are validated on every read; heuristic IDs never enable Chat. Requires trusted TUIC native hooks on macOS/Linux; unsupported or unbound terminals keep Chat unavailable.
-- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
+- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller in the terminal Chat view, AI Chat and mobile chat, but keeps the normal readable text colour in dark and light themes; the last text of a turn keeps the normal size. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -525,6 +525,8 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
+
+- **Symbolic links**: link icon, target path and target kind in tree and list views; outside-target opens show a specific refusal without adding read access.
 - **Remote file drops**: native OS files dropped onto a connected remote repository are copied through its authenticated daemon connection; sources remain on the Mac. Directory copies require confirmation and existing names are skipped. Each top-level upload is limited to 256 MiB (including archive overhead) and 10,000 entries; symlinks and special files are rejected. Native destination filenames and safe executable permissions are preserved; uploads abort after 30 seconds without data.
 - Directory tree of active repository
 - **Auto-refresh**: directory watcher detects external file changes (create/delete/rename) and refreshes automatically within ~1s, preserving selection
@@ -3341,3 +3343,11 @@ GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
 ordinary diagnostics reads do not alter the retry cache (#2133-9213).
 
 Detached checkout visibility: the sidebar shows directory name, short HEAD SHA and detached state in non-selectable rows, with a header count when folded. Discovery preserves newline paths and distinguishes the configured archive pool from unrelated `__archived` folders.
+
+### Mobile session usage (#2150-4e0c)
+
+The session overflow loads a read-only usage block when opened. Claude and Codex
+show shared account quota for the live process profile. ego shows only the exact
+PID-bound session row from its v3 usage report, including separate API-equivalent
+estimates and unknown cost reasons. Unknown model, usage and stale data are
+labelled explicitly. Remote sessions use their owning daemon, never a local account.

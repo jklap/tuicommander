@@ -1340,3 +1340,17 @@ GitHub Settings preserves per-alias API access errors by owner/account. Only exp
 ### Detached checkout inventory
 
 Structure and summary snapshots include a separate detached-checkout vector (path, HEAD SHA, short SHA, directory name, detached state). The sidebar renders it without branch selection or actions and retains a header count when folded. Existing branch-workspace IDs and rich idle-session folding stay unchanged. Discovery excludes the configured TUIC archive pool, not every directory named `__archived`.
+
+### Session-owned mobile usage (#2150-4e0c)
+
+`get_session_usage(session_id)` / `GET /sessions/{id}/usage` returns display-ready
+Rust lines with agent, verified model when available, scope, source, availability,
+optional observation time and a stale flag. The overflow fetches on open and drops
+responses after its session changes or it closes. Unknown values are not zero.
+Claude uses profile-bound cache or its primary non-generating OAuth usage GET.
+Codex quota uses the live process home/profile and App Server rate-limits read;
+unbound configuration overrides are unavailable. ego uses exact PID/store/session
+binding and its v3 report, not workspace totals or native status text. The model
+is the latest admitted model, while session totals can span multiple models.
+Remote PTYs route to their owner or return unavailable with reason `remote session`.
+ACP usage is unchanged.

@@ -854,7 +854,7 @@ Confirmations. It uses the shared setting toggle and persists
 
 The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
 
-Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
+Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate. Terminal Chat draws its rule on the blocks selected by `answerBlockRanges` and `answerExtent`, never on the final-message wrapper; desktop and mobile use the same selection.
 
 The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
 
@@ -907,3 +907,12 @@ Launching an agent uses the folder as its working directory, without creating a
 branch or worktree. The Add Terminal button also offers agents on a long press.
 
 Detached worktree inventory is rendered by `RepoSection` as informational rows, outside the selectable branch-workspace list. The header retains a detached count while folded; no branch or terminal actions are attached to detached rows.
+
+FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
+
+### Mobile SessionUsageBlock
+
+`SessionUsageBlock` is mounted inside the session overflow. It loads
+`get_session_usage` on mount/session change, invalidates pending responses on
+cleanup, and renders backend-owned lines without usage computation. It has
+explicit loading, unavailable, unknown-model and stale presentation.

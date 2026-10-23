@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Mobile session usage",
+		description:
+			"Open More session actions on mobile to read the session profile's account quota or ego session tokens and cost. Unknown and stale usage are labelled explicitly.",
+		shortcut: null,
+	},
+	{
 		feature: "Telegram sender replies",
 		description:
 			"Agents can send Telegram notices without taking inbound ownership. Reply to a sender-prefixed notice in Telegram to reach that live agent; new messages still reach the inbound owner.",
