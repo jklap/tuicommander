@@ -1,3 +1,7 @@
+## Codex MCP instance forwarding (2012-72ff) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, verify the Codex MCP entry forwards `TUIC_SESSION`, `TUIC_SOCKET`, `TUIC_APP_INSTANCE` and `TUIC_CONFIG_DIR`. Existing identity-only entries must be repaired without losing user variables or settings. Named test instances do not edit the global agent config; this peer did not restart the daily app.
+
 ## Stdio MCP automatic recovery (2162-bf4a) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, confirm an exited stdio upstream recovers automatically on a health tick and a reply timeout does not kill a healthy upstream. A timed-out action may still complete; do not retry side-effecting actions without checking their outcome. The peer did not restart the daily app or edit its upstream configuration.
