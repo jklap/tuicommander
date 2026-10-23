@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
+
 Native story list service (#2174-6b3f): optional state/priority/story_type filters combine server-side. Optional limit 1–100 and a plan/filter-bound keyset cursor page id-ordered records with additive next_cursor; absent limit preserves full filtered reads. Dispatch retains the existing complete plan and priority/id order.
 
 Agent desktop verification (#2086-269b): `make agent-test` uses a dedicated macOS debug binary, named config namespace and explicit loopback port. Global input, dictation, Telegram, updater, deep links, global MCP writes, global CLI installation/update/removal, shared agent hook changes and sleep inhibition are disabled. Dry-run and supervised instance-only stop are available; simultaneous desktop/TCC proof remains an operator validation step.

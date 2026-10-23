@@ -12,10 +12,19 @@ pub struct NewPlan {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    pub revision: i64,
     pub id: String,
     pub project: String,
     pub title: String,
     pub source: String,
+}
+
+/// Mutable plan metadata. Omitted fields retain their stored values.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanPatch {
+    pub title: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -292,6 +301,7 @@ pub struct PlanView {
 }
 
 /// Error prefixes of mistakes the user can fix; the HTTP route answers them 422, not 500.
+pub const PLAN_SOURCE_IN_USE: &str = "plan source is in use by an active plan coordinator: ";
 pub const PLAN_DOCUMENT_NOT_FOUND: &str = "plan document not found: ";
 pub const CRITERIA_INCOMPLETE: &str = "criteria are incomplete: unchecked indexes ";
 pub const STORY_LIST_QUERY_INVALID: &str = "invalid story list query: ";

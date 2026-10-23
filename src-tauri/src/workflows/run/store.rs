@@ -94,13 +94,8 @@ pub(crate) fn guard_manual_story_start(
     Ok(Some(conn))
 }
 
-/// Fence amendments against both graph reservations and legacy dispatched story executions.
-/// Always open the database so a concurrent first run cannot race an absent-file probe.
-pub(crate) fn guard_story_amendment(
-    path: &Path,
-    project: &str,
-    story_id: &str,
-) -> Result<Connection, String> {
+/// Story and plan amendments must share the lock-only open contract, including the first write.
+fn lock_run_amendment(path: &Path) -> Result<(Connection, bool), String> {
     // This is a lock-only connection. RunStore::connect changes journal mode and initializes
     // schema, which races a concurrent first amendment at PRAGMA journal_mode=WAL.
     let conn = Connection::open(path)
@@ -121,6 +116,17 @@ pub(crate) fn guard_story_amendment(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs')",
         [], |row| row.get(0),
     ).map_err(|error| format!("read story amendment run schema: {error}"))?;
+    Ok((conn, has_runs))
+}
+
+/// Fence amendments against both graph reservations and legacy dispatched story executions.
+/// Always open the database so a concurrent first run cannot race an absent-file probe.
+pub(crate) fn guard_story_amendment(
+    path: &Path,
+    project: &str,
+    story_id: &str,
+) -> Result<Connection, String> {
+    let (conn, has_runs) = lock_run_amendment(path)?;
     if !has_runs {
         return Ok(conn);
     }
@@ -147,6 +153,40 @@ pub(crate) fn guard_story_amendment(
                 .any(|execution| execution.story_id == story_id)
             {
                 return Err("story is owned by an active workflow run".into());
+            }
+        }
+    }
+    Ok(conn)
+}
+
+/// Keep a source correction serialized with plan attempt start/bind and report writes.
+/// Open even an unused run store so a first run cannot race the source transaction.
+/// The caller holds this writer before acquiring the story writer, matching coordinator creation.
+pub(crate) fn guard_plan_source_update_in(
+    db_path: &Path,
+    plan_id: &str,
+) -> Result<Connection, String> {
+    let (conn, has_runs) = lock_run_amendment(db_path)?;
+    if !has_runs {
+        return Ok(conn);
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT snapshot_json FROM workflow_runs WHERE plan_id=?1 AND status IN ('running','paused')"
+        ).map_err(|e| format!("find source-dependent plan attempts: {e}"))?;
+        let rows = stmt
+            .query_map([plan_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("read source-dependent plan attempts: {e}"))?;
+        for row in rows {
+            let snapshot: RunSnapshot = decode(&row.map_err(|e| format!("read plan run: {e}"))?)?;
+            if snapshot.attempts.iter().any(|attempt| {
+                attempt.story_id == plan_id && attempt.state == AttemptState::Running
+            }) {
+                return Err(format!(
+                    "{}run {}; finish the coordinator or cancel the run before changing the source",
+                    crate::stories::PLAN_SOURCE_IN_USE,
+                    snapshot.id,
+                ));
             }
         }
     }
@@ -1068,7 +1108,7 @@ impl RunStore {
         }
         let snapshot = read_snapshot(&conn, run_id)?;
         drop(conn);
-        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let revisions = fingerprint(&snapshot.plan_id, &plan_stories(&snapshot)?, true)?;
         let current = snapshot
             .stories
             .iter()
@@ -1194,7 +1234,7 @@ impl RunStore {
         if expected_sequence.is_some_and(|expected| expected != snapshot.sequence) {
             return Err("stale workflow sequence".into());
         }
-        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let revisions = fingerprint(&snapshot.plan_id, &plan_stories(&snapshot)?, true)?;
         let dispatch_target = match &command {
             RunCommand::Graph {
                 transition: super::graph::GraphTransition::Start { target_id, .. },
@@ -1750,14 +1790,18 @@ fn validate_preflight(
     revisions: &str,
 ) -> Result<(), String> {
     if read_snapshot(conn, &snapshot.id)?.sequence != snapshot.sequence
-        || fingerprint(&plan_stories(snapshot)?, true)? != revisions
+        || fingerprint(&snapshot.plan_id, &plan_stories(snapshot)?, true)? != revisions
     {
         return Err("workflow or story revisions changed during command preflight; retry".into());
     }
     Ok(())
 }
 
-pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<String, String> {
+pub(super) fn fingerprint(
+    plan_id: &str,
+    stories: &[Story],
+    include_execution: bool,
+) -> Result<String, String> {
     let mut sorted = stories.to_vec();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let shape: Vec<_> = sorted
@@ -1781,7 +1825,11 @@ pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<
             }
         })
         .collect();
-    let bytes = serde_json::to_vec(&shape).map_err(|e| format!("encode plan fingerprint: {e}"))?;
+    // Plan metadata is a prompt and verification subject even when the plan has no stories.
+    let plan = StoryStore::open()?.get_plan(plan_id)?;
+    let subject = serde_json::json!([plan.title, plan.source, shape]);
+    let bytes =
+        serde_json::to_vec(&subject).map_err(|e| format!("encode plan fingerprint: {e}"))?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
@@ -1942,7 +1990,7 @@ fn choose_event(
         return Ok(RunEventKind::Paused);
     }
     let stories = plan_stories(snapshot)?;
-    let current_plan = fingerprint(&stories, false)?;
+    let current_plan = fingerprint(&snapshot.plan_id, &stories, false)?;
     if snapshot
         .planning_fingerprint
         .as_deref()
@@ -2540,7 +2588,7 @@ fn choose_event(
                 )?;
             }
             Ok(RunEventKind::VerificationPassed {
-                fingerprint: fingerprint(&stories, true)?,
+                fingerprint: fingerprint(&snapshot.plan_id, &stories, true)?,
             })
         }
         RunCommand::Complete => {
@@ -2554,7 +2602,7 @@ fn choose_event(
             }
             ready_to_verify(snapshot, &stories)?;
             if snapshot.verification_fingerprint.as_deref()
-                != Some(fingerprint(&stories, true)?.as_str())
+                != Some(fingerprint(&snapshot.plan_id, &stories, true)?.as_str())
             {
                 return Err("final verification is missing or stale".into());
             }

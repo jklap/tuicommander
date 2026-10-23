@@ -61,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn new_store_sets_schema_version_three() {
+    fn new_store_sets_schema_version_four() {
         let dir = tempfile::tempdir().expect("temporary config");
         let db = dir.path().join("stories.sqlite3");
 
@@ -71,7 +71,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read schema version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     #[test]
@@ -80,7 +80,7 @@ mod tests {
         let db = dir.path().join("stories.sqlite3");
         let connection = rusqlite::Connection::open(&db).expect("open database");
         connection
-            .pragma_update(None, "user_version", 4)
+            .pragma_update(None, "user_version", 5)
             .expect("set future schema version");
 
         let error = StoryStore::open_at(&db).expect_err("future schema is rejected");
@@ -99,9 +99,11 @@ mod tests {
                 source: "plan.md".into(),
             })
             .expect("plan");
-        // Builds before the schema was versioned wrote the same tables at user_version 0.
+        // Recreate the pre-revision plan table before marking the store unversioned.
         rusqlite::Connection::open(&db)
-            .and_then(|conn| conn.pragma_update(None, "user_version", 0))
+            .and_then(|conn| {
+                conn.execute_batch("ALTER TABLE plans DROP COLUMN revision; PRAGMA user_version=0;")
+            })
             .expect("mark store as version 0");
 
         let reopened = StoryStore::open_at(&db).expect("version 0 opens");
@@ -113,7 +115,7 @@ mod tests {
             .expect("open database")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read schema version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     #[test]
