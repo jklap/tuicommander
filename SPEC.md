@@ -1361,3 +1361,5 @@ binding and its v3 report, not workspace totals or native status text. The model
 is the latest admitted model, while session totals can span multiple models.
 Remote PTYs route to their owner or return unavailable with reason `remote session`.
 ACP usage is unchanged.
+
+Worktree discovery preserves existing branch workspace IDs. Forced duplicates use a deterministic primary checkout and read-only diagnostics for additional paths. Missing registrations are non-selectable with repair guidance, never auto-pruned by discovery. Cached discovery errors remain errors. Bisect and relative-gitdir rebase retain the branch recorded by Git.

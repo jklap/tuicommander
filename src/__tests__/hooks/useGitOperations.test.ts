@@ -1759,6 +1759,28 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([]);
 		});
 
+		// Catches read-only diagnostics disappearing at refresh or being persisted as selectable workspaces.
+		it("refreshes and retracts repair diagnostics without minting workspace IDs", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			const diagnostic = {
+				path: "/moved/checkout",
+				branch: "feature",
+				state: "missing",
+				guidance: "Run git worktree repair",
+			};
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				worktree_diagnostics: [diagnostic],
+			});
+			await gitOps.refreshAllBranchStats();
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toEqual([diagnostic]);
+			expect(Object.keys(repositoriesStore.get("/repo")!.workspaces)).toEqual(["main"]);
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			await gitOps.refreshAllBranchStats("/repo", { immediate: true });
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toEqual([]);
+		});
+
 		it("updates branch stats for all repos", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

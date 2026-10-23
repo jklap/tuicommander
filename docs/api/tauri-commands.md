@@ -1082,3 +1082,5 @@ clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 This async command runs outside the macOS main thread. Rust selects the owner,
 profile and exact ego ledger row. Missing usage is an explicit unavailable
 snapshot, not a zero quota or cost. No messages-generation fallback is used.
+
+`get_repo_structure` and `get_repo_summary` also return `worktree_diagnostics: Array<{path, branch: string | null, state: "missing" | "duplicate_branch", guidance}>`, identical to HTTP. Diagnostics are read-only and have no workspace ID. Discovery does not prune unavailable registrations.

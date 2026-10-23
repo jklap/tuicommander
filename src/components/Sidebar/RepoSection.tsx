@@ -1741,6 +1741,11 @@ export const RepoSection: Component<{
 							{props.repo.detachedWorktrees?.length} {t("sidebar.detached", "detached")}
 						</span>
 					</Show>
+					<Show when={props.repo.worktreeDiagnostics?.length}>
+						<span class={s.richChip} data-testid="worktree-diagnostic-count">
+							{props.repo.worktreeDiagnostics?.length} {t("sidebar.worktreeDiagnostics", "diagnostics")}
+						</span>
+					</Show>
 					<Show when={props.repo.connectionId}>
 						<span
 							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
@@ -1960,7 +1965,21 @@ ${checkout.head}`}
 							</div>
 						)}
 					</For>
-					<Show when={sortedBranches().length === 0 && !props.repo.detachedWorktrees?.length}>
+					<For each={props.repo.worktreeDiagnostics ?? []}>
+						{(checkout) => (
+							<div class={s.worktreeDiagnostic} data-testid="worktree-diagnostic" data-tooltip={checkout.path}>
+								<div class={s.detachedName}>{checkout.path}</div>
+								<div class={s.diagnosticGuidance}>{checkout.guidance}</div>
+							</div>
+						)}
+					</For>
+					<Show
+						when={
+							sortedBranches().length === 0 &&
+							!props.repo.detachedWorktrees?.length &&
+							!props.repo.worktreeDiagnostics?.length
+						}
+					>
 						<div class={s.repoEmpty}>{t("sidebar.noBranches", "No branches loaded")}</div>
 					</Show>
 				</div>

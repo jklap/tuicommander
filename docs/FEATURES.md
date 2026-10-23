@@ -3352,3 +3352,5 @@ show shared account quota for the live process profile. ego shows only the exact
 PID-bound session row from its v3 usage report, including separate API-equivalent
 estimates and unknown cost reasons. Unknown model, usage and stale data are
 labelled explicitly. Remote sessions use their owning daemon, never a local account.
+
+Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.

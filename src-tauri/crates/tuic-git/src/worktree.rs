@@ -1862,7 +1862,7 @@ pub fn resolve_any_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_worktree_workspace_paths(&listed.stdout)
@@ -1881,7 +1881,7 @@ fn resolve_archived_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_archived_workspace_paths(&listed.stdout)
@@ -3760,13 +3760,10 @@ const IN_PROGRESS_MARKERS: [&str; 6] = [
     "BISECT_LOG",
 ];
 
-/// Admin dir of a linked worktree: its `.git` is a *file* holding
-/// `gitdir: <repo>/.git/worktrees/<name>`. Returns `None` for the main worktree (where `.git`
-/// is a directory) and for paths that no longer exist.
+/// Resolve a checkout's admin directory, including a relative gitdir file or the
+/// main checkout's .git directory. Unavailable directories return None.
 fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(Path::new(worktree_path).join(".git")).ok()?;
-    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
-    Some(PathBuf::from(gitdir))
+    crate::git::resolve_git_dir(Path::new(worktree_path))
 }
 
 /// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
@@ -3781,8 +3778,8 @@ fn has_operation_in_progress(worktree_path: &str) -> bool {
 
 /// Branch a detached worktree was on before the in-flight operation started. Git records it in
 /// `head-name` for both rebase backends; merge/cherry-pick/revert never detach, so they have no
-/// equivalent (and need none). Bisect records only a raw name in `BISECT_START`, which we do not
-/// trust as a branch — such a worktree stays alive as an in-progress op, just without a row.
+/// equivalent (and need none). Bisect records the original name in `BISECT_START`;
+/// accept it only if Git resolves it as an existing local branch, never as an OID.
 ///
 /// **Stays path-addressed on purpose (#726-5ac7).** Story 726 asked for this to
 /// take a `workspace_id` alongside `worktree_dirtiness` and `check_worktree_dirty`,
@@ -3803,7 +3800,14 @@ pub fn operation_head_branch(worktree_path: &str) -> Option<String> {
             return Some(branch.to_string());
         }
     }
-    None
+    let start = std::fs::read_to_string(admin.join("BISECT_START")).ok()?;
+    let branch = start
+        .trim()
+        .strip_prefix("refs/heads/")
+        .unwrap_or(start.trim());
+    let repo = gix::open(worktree_path).ok()?;
+    repo.find_reference(&format!("refs/heads/{branch}")).ok()?;
+    Some(branch.to_string())
 }
 
 /// One workspace's checkout, resolved by opaque workspace id.
@@ -3831,6 +3835,24 @@ pub struct WorkspaceWorktree {
 pub struct WorktreeInventory {
     pub worktree_paths: HashMap<String, WorkspaceWorktree>,
     pub detached_worktrees: Vec<DetachedWorktree>,
+    #[serde(default)]
+    pub worktree_diagnostics: Vec<WorktreeDiagnostic>,
+}
+
+/// Non-selectable registrations that cannot safely use the existing branch workspace id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeDiagnostic {
+    pub path: String,
+    pub branch: Option<String>,
+    pub state: WorktreeDiagnosticState,
+    pub guidance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeDiagnosticState {
+    Missing,
+    DuplicateBranch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3854,19 +3876,40 @@ pub(crate) fn checkout_inventory(
     archive_pool: Option<&Path>,
 ) -> WorktreeInventory {
     let mut inventory = WorktreeInventory::default();
+    // Use the same deterministic primary checkout in discovery and legacy lifecycle resolution.
+    let mut entries: Vec<_> = entries.into_iter().collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
     let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     for entry in entries {
         let path = Path::new(&entry.path);
-        if !path.exists() {
-            continue;
-        }
         let parent = path
             .parent()
             .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
         if pool.is_some() && parent == pool {
             continue;
         }
+        if !path.is_dir() || crate::git::resolve_git_dir(path).is_none() {
+            inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                path: entry.path,
+                branch: entry.branch,
+                state: WorktreeDiagnosticState::Missing,
+                guidance: "Checkout unavailable or registration broken. Restore the checkout or run git worktree repair from its new location. Review git worktree list --porcelain before manually pruning a deleted registration.".to_string(),
+            });
+            continue;
+        }
         if let Some(branch) = entry.branch.or_else(|| operation_head_branch(&entry.path)) {
+            if inventory
+                .worktree_paths
+                .contains_key(&workspace_id_of_worktree(&branch))
+            {
+                inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                    path: entry.path,
+                    branch: Some(branch),
+                    state: WorktreeDiagnosticState::DuplicateBranch,
+                    guidance: "Another checkout uses this branch workspace. Use a distinct branch to select this checkout independently; no checkout was removed.".to_string(),
+                });
+                continue;
+            }
             inventory.worktree_paths.insert(
                 workspace_id_of_worktree(&branch),
                 WorkspaceWorktree {
@@ -3893,6 +3936,9 @@ pub(crate) fn checkout_inventory(
     }
     inventory
         .detached_worktrees
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    inventory
+        .worktree_diagnostics
         .sort_by(|a, b| a.path.cmp(&b.path));
     inventory
 }
@@ -3950,26 +3996,27 @@ pub(crate) fn is_archived_checkout(path: &Path) -> bool {
 fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
-    for entry in parse_worktree_entries(porcelain) {
+    let mut entries = parse_worktree_entries(porcelain);
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    for entry in entries {
         let branch = match entry.branch {
             Some(branch) => Some(branch),
             None => operation_head_branch(&entry.path),
         };
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
-            && Path::new(&entry.path).exists()
+            && crate::git::resolve_git_dir(Path::new(&entry.path)).is_some()
             && is_archived_checkout(Path::new(&entry.path)) == archived
         {
-            result.insert(
-                workspace_id_of_worktree(&branch),
-                WorkspaceWorktree {
+            result
+                .entry(workspace_id_of_worktree(&branch))
+                .or_insert_with(|| WorkspaceWorktree {
                     branch,
                     path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
                     warm_artifacts: None,
                     lifecycle_status: None,
-                },
-            );
+                });
         }
     }
 
@@ -4015,7 +4062,7 @@ pub fn resolve_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 

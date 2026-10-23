@@ -916,3 +916,5 @@ FileBrowserPanel and TreeNode render the backend link target and target kind wit
 `get_session_usage` on mount/session change, invalidates pending responses on
 cleanup, and renders backend-owned lines without usage computation. It has
 explicit loading, unavailable, unknown-model and stale presentation.
+
+Sidebar worktree diagnostics render recorded paths and repair guidance without buttons, tab focus or branch-selection handlers. The repository header retains a diagnostic count while folded. These transient inventory rows are separate from branch workspaces and are not saved in repository configuration.

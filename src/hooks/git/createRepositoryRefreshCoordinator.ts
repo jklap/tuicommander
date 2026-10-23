@@ -45,6 +45,7 @@ interface RepositoryRefreshCoordinatorDeps {
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
 			detached_worktrees?: import("../useRepository").DetachedWorktree[];
+			worktree_diagnostics?: import("../useRepository").WorktreeDiagnostic[];
 			merged_branches: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
@@ -275,6 +276,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		const currentRepo = repositoriesStore.get(repoPath);
 		if (!currentRepo) return;
 		repositoriesStore.setDetachedWorktrees(repoPath, structure.detached_worktrees ?? []);
+		repositoriesStore.setWorktreeDiagnostics(repoPath, structure.worktree_diagnostics ?? []);
 
 		if (Object.keys(worktreePaths).length === 0) {
 			// Worktrees came back empty — either a transient backend error or the

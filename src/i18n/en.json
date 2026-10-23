@@ -1025,6 +1025,7 @@
 	"settings.terminal": "Terminal",
 	"settings.title": "Settings",
 	"settings.voice": "Voice",
+	"sidebar.worktreeDiagnostics": "diagnostics",
 	"sidebar.addRepository": "Add Repository",
 	"sidebar.copySessionId": "Copy session ID",
 	"sidebar.copyProcessId": "Copy process ID",

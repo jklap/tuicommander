@@ -607,6 +607,20 @@
   font-size: var(--font-xs);
 }
 
+.worktreeDiagnostic {
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-md);
+  color: var(--warning);
+}
+
+.diagnosticGuidance {
+  margin-top: 2px;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
 .repoEmpty {
   padding: 8px 16px;
   font-size: var(--font-xs);

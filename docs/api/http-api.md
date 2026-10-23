@@ -3553,3 +3553,5 @@ lines retain token categories, currencies, unknown costs and separate subscripti
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
 settlement. Remote sessions are forwarded to their owning daemon or are unavailable.
 The request is bounded to 30 seconds locally; ego stdout is capped at 4 MiB.
+
+Worktree discovery diagnostics (#2157): `/repo/structure` and `/repo/summary` also return `worktree_diagnostics: Array<{path: string, branch: string | null, state: "missing" | "duplicate_branch", guidance: string}>`. These records have no workspace ID and cannot select a branch workspace. `/worktrees/paths` remains a branch map with the same deterministic primary path used by lifecycle resolution. Discovery failures return errors and are not cached as empty inventories. MCP repository list entries expose discovery failures as `worktree_error`; ACP workspace resource entries use `worktreeError`.
