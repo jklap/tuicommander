@@ -154,7 +154,9 @@ pub(in crate::workflows::run) fn judge(
             evidence(graph, activation, "Deterministic final plan checks failed"),
         )));
     }
-    if run.verification_fingerprint.as_deref() != Some(fingerprint(&stories, true)?.as_str()) {
+    if run.verification_fingerprint.as_deref()
+        != Some(fingerprint(&run.plan_id, &stories, true)?.as_str())
+    {
         return Ok(None);
     }
     Ok(Some((
@@ -209,7 +211,9 @@ pub(in crate::workflows::run) fn drive_checks(
         )?;
         return Ok(true);
     }
-    if run.verification_fingerprint.as_deref() != Some(fingerprint(&stories, true)?.as_str()) {
+    if run.verification_fingerprint.as_deref()
+        != Some(fingerprint(&run.plan_id, &stories, true)?.as_str())
+    {
         store.command_expected(
             &run.id,
             &format!("daemon:plan-verified:{}", run.sequence),

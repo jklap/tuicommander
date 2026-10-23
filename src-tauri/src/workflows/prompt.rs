@@ -325,6 +325,7 @@ mod tests {
             graph_executions: vec![],
         };
         let plan = Plan {
+            revision: 1,
             id: "plan-1".into(),
             project: "/project".into(),
             title: "Project delivery".into(),
@@ -546,6 +547,36 @@ mod tests {
         ] {
             assert!(package.prompt.contains(expected), "missing {expected}");
         }
+        // Catches: a moved plan source reusing the old delivered prompt subject.
+        let mut moved_plan = plan.clone();
+        moved_plan.source = "moved.md".into();
+        moved_plan.revision += 1;
+        let moved = render_plan_prompt(
+            &run,
+            &moved_plan,
+            &attempt,
+            &definition,
+            &[],
+            &[],
+            run.sequence,
+            "Deliver the plan",
+            &[],
+        )
+        .expect("moved source prompt");
+        let original = render_plan_prompt(
+            &run,
+            &plan,
+            &attempt,
+            &definition,
+            &[],
+            &[],
+            run.sequence,
+            "Deliver the plan",
+            &[],
+        )
+        .expect("original source prompt");
+        assert_ne!(original.prompt_sha256, moved.prompt_sha256);
+        assert!(moved.prompt.contains("moved.md"));
         assert_eq!(package.role, AgentRole::Coordinator);
         assert_eq!(package.prompt_sha256.len(), 64);
     }

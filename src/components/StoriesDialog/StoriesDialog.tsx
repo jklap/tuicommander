@@ -13,16 +13,14 @@ import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
+import { type EditablePlan, PlanEditForm, type PlanEditPatch } from "./PlanEditForm";
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
 import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
 import { StoryNotes } from "./StoryNotes";
 
-interface Plan {
-	id: string;
+interface Plan extends EditablePlan {
 	project: string;
-	title: string;
-	source: string;
 }
 interface PlanSource {
 	title: string;
@@ -202,6 +200,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			.filter((story): story is Story => !!story) ?? stories();
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
+	const [editingPlan, setEditingPlan] = createSignal<Plan | null>(null);
+	const [planEditError, setPlanEditError] = createSignal("");
+	createEffect(
+		on(planId, () => {
+			setEditingPlan(null);
+			setPlanEditError("");
+		}),
+	);
 	const [editing, setEditing] = createSignal<Story | null>(null);
 	const [editError, setEditError] = createSignal("");
 	createEffect(
@@ -594,6 +600,45 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	async function savePlan(patch: PlanEditPatch): Promise<void> {
+		const snapshot = editingPlan();
+		if (!snapshot) return;
+		setBusy(true);
+		setPlanEditError("");
+		try {
+			const reply = await call({
+				action: "update_plan",
+				plan_id: snapshot.id,
+				expected_revision: snapshot.revision,
+				patch,
+			});
+			if (reply.type !== "plan") throw new Error("Invalid plan update response");
+			if (editingPlan() === snapshot) setEditingPlan(null);
+			await refresh();
+		} catch (cause) {
+			appLogger.warn("store", "Stories: plan update failed", { error: String(cause) });
+			const message =
+				cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : String(cause);
+			if (editingPlan() === snapshot)
+				setPlanEditError(
+					message.includes("stale plan revision")
+						? t(
+								"stories.planEdit.conflict",
+								"This plan changed after editing started. Your draft is kept. Cancel and reopen Edit plan to load the latest revision.",
+							)
+						: message,
+				);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function cancelPlanEdit(): void {
+		setEditingPlan(null);
+		setPlanEditError("");
+		void refresh();
 	}
 
 	async function saveStory(patch: StoryEditPatch): Promise<void> {
@@ -1162,6 +1207,37 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								</button>
 							</div>
 							<Show when={selectedPlan()}>
+								<Show
+									when={editingPlan()}
+									keyed
+									fallback={
+										<div class={s.form}>
+											<button
+												type="button"
+												disabled={busy()}
+												onClick={() => {
+													const plan = selectedPlan();
+													if (plan) {
+														setEditingPlan({ ...plan });
+														setPlanEditError("");
+													}
+												}}
+											>
+												{t("stories.planEdit.open", "Edit plan")}
+											</button>
+										</div>
+									}
+								>
+									{(plan) => (
+										<PlanEditForm
+											plan={plan}
+											busy={busy()}
+											error={planEditError()}
+											onSave={savePlan}
+											onCancel={cancelPlanEdit}
+										/>
+									)}
+								</Show>
 								<p class={s.planNotice}>
 									{t("stories.state", "State")}: {planStateLabel(planState())}
 								</p>

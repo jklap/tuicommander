@@ -1,5 +1,7 @@
 # HTTP API Reference
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 ## Scoped plugin settings
 
 `POST /api/plugins/{id}/settings` accepts the same tagged PluginAction body as IPC: describe, get, set, reset, patch. Get takes paths; writes take expectedRevision. It returns descriptors, a redacted snapshot or a commit reply. Errors are structured settings failures: 400 invalid path/value, 404 unloaded owner, 409 stale revision. Existing API authentication applies. No caller-selected target, store or file is accepted.

@@ -1,5 +1,7 @@
 # Components
 
+The selected plan has an **Edit plan** control in the Plans column. It edits title and document/link with Save and Cancel. Save sends only changed fields using the revision captured when editing started. A conflict keeps the draft and requires Cancel and reopening Edit plan to load the latest version; an active-coordinator refusal keeps the source draft and displays the backend remedy. Successful saves refresh the plan list.
+
 Repository Settings uses scoped cards and responsive labelled rows. The existing repository update callbacks and export command remain authoritative. Reset is presented with its repository scope and consequences rather than as an unscoped footer action.
 
 Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.

@@ -15,6 +15,12 @@ pub enum StoryAction {
         title: String,
         source: String,
     },
+    /// Atomically correct plan metadata using its current stored revision.
+    UpdatePlan {
+        plan_id: String,
+        expected_revision: i64,
+        patch: super::PlanPatch,
+    },
     /// List the plans of the calling session's project.
     ListPlans,
     /// List the plan files found in the project that can become plans.
@@ -128,10 +134,11 @@ pub enum StoryReply {
     Stories(StoryListPage),
 }
 
-/// True for an error the user can fix (a missing plan file, unchecked criteria, invalid list filters).
+/// True for an error the user can fix, including a plan source still used by a coordinator.
 pub fn is_user_error(message: &str) -> bool {
     [
         PLAN_DOCUMENT_NOT_FOUND,
+        super::PLAN_SOURCE_IN_USE,
         CRITERIA_INCOMPLETE,
         super::STORY_LIST_QUERY_INVALID,
         super::STORY_NOTE_INVALID,
@@ -182,6 +189,18 @@ fn story_action_with_source(
                 title,
                 source,
             })?))
+        }
+        StoryAction::UpdatePlan {
+            plan_id,
+            expected_revision,
+            patch,
+        } => {
+            plan_in_project(&plan_id)?;
+            Ok(StoryReply::Plan(store.update_plan(
+                &plan_id,
+                expected_revision,
+                patch,
+            )?))
         }
         StoryAction::ListPlans => Ok(StoryReply::Plans(store.list_plans(&project)?)),
         StoryAction::ListPlanSources => Ok(StoryReply::PlanSources(
@@ -411,6 +430,83 @@ fn story_action_for_session_with_source(
 mod tests {
     use super::super::StoryOrigin;
     use super::*;
+
+    /// Catches: the missing update_plan action prevents correcting either stored field.
+    #[test]
+    fn update_plan_changes_title_and_source() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let StoryReply::Plan(plan) = story_action(
+            project,
+            StoryAction::CreatePlan {
+                title: "Original".into(),
+                source: "original.md".into(),
+            },
+            None,
+        )
+        .unwrap() else {
+            panic!("plan")
+        };
+        let original = serde_json::to_value(&plan).unwrap();
+        let action = serde_json::from_value(serde_json::json!({
+            "action": "update_plan", "plan_id": plan.id,
+            "expected_revision": original["revision"].as_i64().unwrap_or(1),
+            "patch": {"title": "Corrected", "source": "moved.md"}
+        }))
+        .expect("update_plan must be a supported action");
+        let StoryReply::Plan(updated) = story_action(project, action, None).unwrap() else {
+            panic!("plan")
+        };
+        assert_eq!(updated.id, plan.id);
+        assert_eq!(updated.title, "Corrected");
+        assert_eq!(updated.source, "moved.md");
+        let wire = serde_json::to_value(&updated).unwrap();
+        assert_eq!(wire["revision"], 2);
+        assert_eq!(
+            StoryStore::open().unwrap().get_plan(&plan.id).unwrap(),
+            updated
+        );
+    }
+
+    /// Catches: an identifier permitting an update to another project's plan.
+    #[test]
+    fn update_plan_rejects_cross_project_writes() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let other = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let StoryReply::Plan(plan) = story_action(
+            project,
+            StoryAction::CreatePlan {
+                title: "Owned".into(),
+                source: "plan.md".into(),
+            },
+            None,
+        )
+        .unwrap() else {
+            panic!("plan")
+        };
+        let result = story_action(
+            other.path().to_str().unwrap(),
+            StoryAction::UpdatePlan {
+                plan_id: plan.id.clone(),
+                expected_revision: plan.revision,
+                patch: super::super::PlanPatch {
+                    title: Some("Wrong".into()),
+                    source: None,
+                },
+            },
+            None,
+        );
+        assert!(result.unwrap_err().contains("does not belong to project"));
+        assert_eq!(
+            StoryStore::open().unwrap().get_plan(&plan.id).unwrap(),
+            plan
+        );
+    }
 
     #[test]
     fn plan_sources_follow_repo_files_and_document_titles() {
