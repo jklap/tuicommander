@@ -74,6 +74,23 @@ pub(crate) async fn get_repo_info(
     .await
 }
 
+/// Rename a branch and carry its label along. The one rename path for the
+/// Tauri command and the HTTP route; the main branch is never renamed.
+pub(crate) fn rename_branch_with_label(
+    path: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), String> {
+    if tuic_git::git::check_is_main_branch(old_name.to_string()) {
+        return Err(format!("Cannot rename the main branch '{old_name}'"));
+    }
+    rename_branch_impl(path, old_name, new_name)?;
+    if let Err(e) = crate::config::move_branch_label(path, old_name, new_name) {
+        tracing::warn!("Branch renamed but its label could not be moved: {e}");
+    }
+    Ok(())
+}
+
 /// Rename a git branch (Tauri command with cache invalidation)
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -85,7 +102,7 @@ pub(crate) async fn rename_branch(
 ) -> Result<(), String> {
     let state_arc = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        rename_branch_impl(&path, &old_name, &new_name)?;
+        rename_branch_with_label(&path, &old_name, &new_name)?;
         state_arc.invalidate_repo_caches(&path);
         Ok(())
     })
@@ -367,16 +384,23 @@ pub(crate) async fn get_repo_diff_stats_impl(
         move || {
             let mut diff_stats = HashMap::new();
             let mut workspace_statuses = HashMap::new();
+            let branches: Vec<_> = worktree_paths.values().map(|w| w.branch.clone()).collect();
+            let ref_keys = tuic_git::worktree::monitoring_ref_keys(Path::new(&path), &branches);
             for (id, workspace) in &worktree_paths {
-                diff_stats.insert(
-                    workspace.path.clone(),
-                    git_reads().diff_stats(Path::new(&workspace.path), None),
-                );
+                let (diff, dirty) =
+                    crate::monitoring_status::CACHE.read(Path::new(&workspace.path));
+                diff_stats.insert(workspace.path.clone(), diff);
                 workspace_statuses.insert(
                     id.clone(),
-                    tuic_git::worktree::inspect_workspace_monitoring_with_pr(
+                    tuic_git::worktree::inspect_workspace_monitoring_with_status(
                         Path::new(&path),
                         workspace,
+                        ref_keys.as_ref().map_err(String::as_str).and_then(|keys| {
+                            keys.get(&workspace.branch)
+                                .map(String::as_str)
+                                .ok_or("missing monitoring ref key")
+                        }),
+                        dirty,
                         |repo, branch, tip| {
                             crate::worktree::merged_github_pr_proves_tip_monitoring(
                                 &proof_state,
@@ -426,20 +450,6 @@ pub(crate) async fn branches_detail_cached(
     let p = path.clone();
     cached_try(state.git_cache.branches_detail.clone(), path, move || {
         git_reads().branches_detail(Path::new(&p))
-    })
-    .await
-}
-
-/// Get rich git panel context in a single IPC call (cached, 5s TTL).
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn get_git_panel_context(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-) -> Result<GitPanelContext, String> {
-    let p = path.clone();
-    cached_get(state.git_cache.git_panel_context.clone(), path, move || {
-        get_git_panel_context_impl(Path::new(&p))
     })
     .await
 }
@@ -967,6 +977,73 @@ pub(crate) async fn get_commit_graph(
 mod tests {
     use super::*;
     use tuic_git::test_fixtures::setup_test_repo_with_commit;
+
+    fn labelled_repo(branch: &str) -> (tempfile::TempDir, String, tempfile::TempDir) {
+        let (dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().to_string();
+        git_cmd(&path)
+            .args(["branch", branch])
+            .run()
+            .expect("branch");
+        let config = tempfile::TempDir::new().expect("config dir");
+        (dir, repo, config)
+    }
+
+    fn seed_label(repo: &str, branch: &str, label: &str) {
+        let mut map = crate::config::RepoSettingsMap::default();
+        map.repos.insert(
+            repo.to_string(),
+            crate::config::RepoSettingsEntry {
+                path: repo.to_string(),
+                ..Default::default()
+            },
+        );
+        crate::config::save_repo_settings(Default::default(), map).expect("seed settings");
+        crate::config::set_branch_label(repo.to_string(), branch.to_string(), Some(label.into()))
+            .expect("seed label");
+    }
+
+    fn labels(repo: &str) -> HashMap<String, String> {
+        crate::config::load_repo_settings().repos[repo]
+            .branch_labels
+            .clone()
+    }
+
+    /// B15: the label stayed under the old name and vanished from the renamed row.
+    #[test]
+    #[serial_test::serial]
+    fn renaming_a_branch_moves_its_label() {
+        let (_dir, repo, config) = labelled_repo("feat/a");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        seed_label(&repo, "feat/a", "X");
+
+        rename_branch_with_label(&repo, "feat/a", "feat/a2").expect("rename");
+
+        assert_eq!(
+            labels(&repo),
+            HashMap::from([("feat/a2".into(), "X".into())])
+        );
+    }
+
+    /// C3: the toolbar path renamed `main`; the sidebar refuses it.
+    #[test]
+    #[serial_test::serial]
+    fn the_main_branch_is_not_renamed() {
+        let (_dir, repo, config) = labelled_repo("feat/a");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let main = tuic_git::test_fixtures::base_branch_of(Path::new(&repo));
+
+        let err = rename_branch_with_label(&repo, &main, "trunk").expect_err("must refuse");
+
+        assert!(err.contains("main branch"), "{err}");
+        assert!(
+            git_cmd(Path::new(&repo))
+                .args(["rev-parse", "--verify", &main])
+                .run()
+                .is_ok(),
+            "the branch must still exist"
+        );
+    }
 
     /// Progressive loading splits one refresh into `get_repo_structure` (phase 1)
     /// then `get_repo_diff_stats` (phase 2), and both need the branch→path map.

@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Desktop frame receipts no longer keep silent terminals redrawing; missed-frame recovery avoids offering the same desktop snapshot twice without recreating its own delivery debt (#2040-16b2).
+
 - Native MCP tools with long guidance expose compact action contracts and return the full guide through `action=help`; existing owner gates and Settings copy remain unchanged (#2069-7347).
 
 - Independent durable peer-mail readers filter routine lifecycle traffic, retain acknowledged cursors across reconnect, and support continuous HTTP/ACP notification delivery (#2004-4760).
@@ -132,7 +134,9 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-On desktop and mobile CLI views, adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. Fenced blocks keep a separate Copy row above the code on desktop and mobile, without covering wrapped text. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
+- **Bounded input frame priority** — Desktop and browser/PWA input can wake the existing grid ticker after reader-applied output, without waiting for animation rate floors. A rolling send budget preserves output coalescing; newer reader work retains its bounded retry across a send. Desktop receipt gates and synchronized output remain in force.
+
+On desktop and mobile CLI views, adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. Mobile places this bar in a separate gutter outside the text box, so column-zero text stays clear and existing agent indentation stays unchanged. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. Fenced blocks keep a separate Copy row above the code on desktop and mobile, without covering wrapped text. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -145,6 +149,8 @@ and Unicode string offsets. The existing bound of nine zero-width characters
 per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
+
+The extension offers **Let agents capture any site** as an optional Chrome all-sites grant. Approved capture needs no further browser-action gesture; without the grant, temporary `activeTab` access remains available. Capture consent is separate from agent eval and remote error-read consent. The sidebar reports when Chrome does not add a separate eval grant.
 
 Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool is retired without an alias.
 
@@ -388,6 +394,8 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 ---
 
 ## 2. Sidebar
+
+- Right-click a session row to copy its PTY session ID, live PTY child PID, or exact session alias. Entries show their values on hover and confirm copies; unknown PID and absent alias entries are hidden.
 
 Automatic repository refreshes start at least five seconds apart per repository. Event bursts retain one trailing refresh; badges can lag by five seconds plus backend read time. Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
 
@@ -902,6 +910,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 - Codex 0.162.1 native panels export their question and options. Mobile opens queued questions with Shift+Left; numeric options submit immediately. CLI-enforced command approvals also export their title and options past command metadata.
 - An open Ink selection dialog restores a missing question badge with native hooks enabled, including after a later busy hook; repeated paints do not duplicate the notification.
+- Codex `/plan` questions export narrow-layout choices with separate wrapped hints and retain Input through delayed idle hooks until answered. Native counter and footer anchors remain required.
 - Recognizes interactive prompts (yes/no, multiple choice, numbered options)
 - Tab dot turns orange (pulsing) when awaiting input; sidebar branch icon shows `?` in orange
 - Prompt overlay: keyboard navigation (↑/↓, Enter, number keys 1-9, Escape)
@@ -1125,15 +1134,11 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 | PR AI review, changelog generation, improvement scan | **795-320b** — one unattended ego turn each; see 8.3 and 8.10 |
 | Smart Prompts `api` execution mode | **787-ee50** — one unattended ego turn; see 10.5 |
 
-### 6.15 Session Knowledge Store (recording only)
-Outlived the engine because none of it involves a model, and `pty.rs` is the
-producer. Nothing reads it today — it is kept because the history cannot be
-re-derived later.
-- **Command outcomes** — exit code, duration, CWD, classification, output snippet, auto-correlated error→fix pairs, CWD history, `tui_apps_seen`, terminal mode
-- **OSC 133 semantic prompts** feed exact exit codes where the shell supports them; the PTY silence timer records an `Inferred` outcome where it does not
-- Persisted to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced flush
-- **TUI app detection** via alternate-screen tracking (`ESC[?1049h`/`l`). `TerminalMode::FullscreenTui { app_hint, depth }` is set when the terminal enters vim/htop/lazygit/less/tmux/…
-- Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
+### 6.15 TUI Application Detection
+- Alternate-screen tracking (`ESC[?1049h`/`l`) and primary-screen mouse reporting classify shell versus fullscreen TUI activity.
+- `TerminalMode::FullscreenTui { app_hint, depth }` remains part of session state and protects agent-session conflict handling.
+- The write-only command knowledge store and its background disk flush were removed in #2115-1333. Existing history files are not deleted or migrated.
+- Code: `src-tauri/src/ai_agent/tui_detect.rs`.
 
 ### 6.16 ChoicePrompt Detection
 - Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions and imperative titles without a question mark (`Pick a colour`). Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
@@ -2352,6 +2357,16 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 
 TUICommander aggregates upstream MCP servers and exposes them through its own `/mcp` endpoint. Any MCP client (Claude Code, Cursor, VS Code) connecting to TUIC automatically gains access to all configured upstream tools.
 
+### Opt-in interrupting agent mail
+
+`agent action=send urgency=interrupt` sends Esc to a safe working Claude Code,
+Codex or ego, waits up to ten seconds for confirmed idle, then submits the full
+message as one input. Dialogs and drafts block the input. Unsupported agents
+and idle timeouts use the existing urgent notice/inbox fallback. The receipt
+reports `interrupt_delivered`, `interrupt_fallback_reason` and `delivery_path`.
+Normal and urgent mail remain non-interrupting. Interrupted tools may leave
+partial work, and their child processes may continue.
+
 ### 19.1 Architecture
 - TUIC acts as both an MCP server (to downstream clients) and an MCP client (to upstream servers)
 - All upstream tools are exposed via the single `POST /mcp` Streamable HTTP endpoint
@@ -2494,7 +2509,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
 - Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A descendant that started within 60s of the agent itself is also excluded whatever its name, which covers the daemons no list can anticipate — `codex-code-mode-host`, or an MCP server launched through `npm exec`; platforms that report no process age fall back to the name rule alone A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
 - Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
-- Process statistics use HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), while `GET /process/monitor` serves a self-contained HTML dashboard with no build step or external assets. The removed MCP `session action=process_stats` returns an error naming the HTTP replacement.
+- Process statistics use HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), while `GET /process/monitor` serves a self-contained HTML dashboard with no build step or external assets. The removed MCP `session action=process_stats` is not supported; clients must call the HTTP route directly.
 - Frontend `ProcessManagerModal` opens the dashboard in-app
 - Use to diagnose which agent/terminal is driving high CPU or memory
 
@@ -2534,6 +2549,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - tmux key name translation (Enter, C-c, Space, etc.)
 
 ### 21.4 Agent Orchestration
+- `tuic bg <log> -- <cmd>` — run a detached command without inheriting the foreground `TUIC_SESSION` or `TUIC_PARENT`; the runner retains caller-bound completion wake and mail routing
 - `tuic agent spawn <type> <prompt> [--repo <path>]` — spawn AI agent on an initial prompt
 - `tuic agent ls` — list running agents
 - `tuic agent send <peer-uuid> <message>` — deliver to a registered peer's inbox through the registry, the same path as the MCP `agent action=send` tool. Reports `Delivered` only when something surfaced the message; an `inbox_only` route reads `Buffered`
@@ -2567,8 +2583,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Runs the desktop's background tasks that a machine needs: process snapshots,
   standby parking, content indexing and boot pre-warm, tool search index, upstream
   MCP auto-connect and health checks, CPU watchdog, maintenance sweep. It does not
-  run the WebView watchdog (no WebView) or command-knowledge persistence (no
-  route exposes it). The embedded assistant's scheduler and watcher engine are
+  run the WebView watchdog (no WebView). Command-knowledge persistence was removed in #2115-1333. The embedded assistant's scheduler and watcher engine are
   not on this list any more — they were deleted outright in #784-0aec
 
 ### 22.2 Configuration
@@ -2687,6 +2702,12 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
     shell, no-shell, auth-failed and unreachable results; free text remains valid
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
   - Fields: URL, auth username
+- **Relay** — Reaches a `tuic-remote` daemon that has no inbound port through a
+  relay. Paste the bundle printed by `tuic-remote --relay-pair <url>`; the end-to-end
+  secret never reaches the relay. The desktop exposes the daemon on a loopback port, so
+  repos, sessions and terminals use the same handlers as a direct connection. A lost
+  link shows a typed state (`relay_unreachable`, `daemon_offline`, `pairing_rejected`,
+  `link_lost`) and reconnects as a new attachment, without replaying what was in flight
 - **Update & restart remote** — For either connection type, compare the
   daemon's `/health` build SHA-256 with the release asset or a matching local
   build, show an out-of-date badge, confirm the number of live sessions that
@@ -2707,6 +2728,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- The relay pairing bundle goes to the vault (`Credential::RelayPairing`), keyed by the connection UUID, never to `connections.json`
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon
@@ -2881,7 +2903,7 @@ MCP session end, PTY close, foreground-agent exit or daemon restart.
 Allowlisted private text arrives as native peer mail. Without an agent the bot
 replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops the text; strangers stay silent.
 The registered agent can stream concise activity, send exact replies and offer
-opaque buttons. Proactive sends use one allowlisted destination. Only the polling
+opaque buttons. Any live MCP-bound agent can send notifications without registering or taking inbound ownership. Non-owner sends carry a server-derived `[session name]` on every chunk, allow no buttons, and are limited to one send per 30 seconds per peer. Telegram Replies to that prefix reach the unique live exact-name sender; other replies and new messages use the inbound owner. Proactive sends use one allowlisted destination. Only the polling
 cursor persists; live mint deployment remains pending. See
 [Telegram channel](design/telegram-channel.md).
 ### Telegram Settings
@@ -3128,6 +3150,8 @@ Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with 
 
 The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
 
+MCP call audit view (#2136-dc79): Settings > MCP > Call audit lists the body-free `GET /mcp/audit` rows behind the `mcp_call_audit_enabled` setting (off in release, on in debug). Off records nothing.
+
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
@@ -3251,7 +3275,7 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 ### Generated launch playbook
 
-Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication.
+Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication. When mdkb is installed, the launch text also carries the fixed MDKB code-search rule.
 
 ### Durable managed-child launch
 
@@ -3303,3 +3327,14 @@ Mobile offers the **Chat** tab only when the host has a configured ego executabl
 ## Agent desktop verification
 
 `make agent-test` provides a preset isolated macOS desktop instance for authorized agent live checks. It uses a distinctly named binary and config namespace, loopback port 19876, disabled global input/microphone/Telegram/updater integrations, a side-effect-free dry-run and an instance-only stop target. See [Development Setup](guides/development-setup.md#isolated-agent-desktop-checks-macos).
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+GitHub access diagnostics group exact API messages by account and owner, distinguish NOT_FOUND from retriable denials, and offer the OAuth organization authorization action for every github.com OAuth group.
+
+GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
+ordinary diagnostics reads do not alter the retry cache (#2133-9213).

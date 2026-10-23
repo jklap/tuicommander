@@ -239,11 +239,11 @@ fn a_story_database_from_before_this_change_opens_and_keeps_working() {
         .expect("drop new tables");
 
     let store = open(dir.path());
-    assert!(
+    assert_eq!(
         store
             .transition_history(&a.id)
-            .expect("history of old story")
-            .is_empty()
+            .expect("history of old story"),
+        [] as [crate::stories::model::StoryTransition; 0]
     );
     assert_eq!(store.get_story(&a.id).expect("a").status, StoryStatus::Done);
     let b = store

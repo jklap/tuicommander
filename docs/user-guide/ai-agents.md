@@ -105,7 +105,7 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 ## Launch Instructions (TUIC Output Markers)
 
-TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback.
+TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback. When mdkb is installed, the launch playbook also carries a fixed "Code search" rule that tells the agent to search with MDKB first; without mdkb it is absent. TUICommander checks once when it writes the launch files (startup, settings change, mdkb install or uninstall).
 
 | Agent | Channel |
 |---|---|
@@ -173,6 +173,11 @@ Grok Ask selectors expose numbered answers and the `z` free-text action to deskt
 ### Codex native questions
 
 Codex 0.162.1 queues native questions before showing their options. Use **Open Codex question** on mobile, or Shift+Left in the terminal. A numbered key answers once; Ctrl+] skips, and Shift+Right returns to the main prompt. Open questions supply the same title and options to desktop and mobile.
+
+Codex `/plan` questions also export named choices in narrow panes. The native
+footer can span three rows, and wrapped descriptions stay separate from answer
+labels. An unanswered question keeps Input state through a delayed idle hook;
+answering it clears the controls. Only visible native options are exported.
 
 CLI-enforced command approvals are separate from native questions. Their title and numeric controls are available to desktop and mobile; a numeric refusal submits immediately, and Escape cancels.
 

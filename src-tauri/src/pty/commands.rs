@@ -113,7 +113,7 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers
@@ -284,7 +284,7 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers
@@ -454,7 +454,8 @@ pub(crate) async fn resize_pty(
     cols: u16,
 ) -> Result<(), String> {
     let state = Arc::clone(&state);
-    let resize_frame = resize_session_off_thread(&state, session_id.clone(), rows, cols).await?;
+    let resize_frame =
+        resize_session_off_thread(&state, session_id.clone(), rows, cols, "ipc").await?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {
@@ -636,56 +637,6 @@ pub(crate) fn has_foreground_process(
     }
 }
 
-/// Debug: diagnose agent detection for a PTY session.
-/// Returns each step of the detection pipeline so failures can be pinpointed.
-/// Diagnostic-only command — no frontend caller; kept as a debug escape hatch
-/// for investigating agent classification mismatches in production.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) fn debug_agent_detection(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> serde_json::Value {
-    let entry = match state.session_maps.sessions.get(&session_id) {
-        Some(e) => e,
-        None => {
-            return serde_json::json!({ "error": "session not found", "session_id": session_id });
-        }
-    };
-    let session = entry.value().lock();
-
-    #[cfg(not(windows))]
-    {
-        let raw_fd = session.master.as_raw_fd();
-        let pgid = session.master.process_group_leader();
-        let name = pgid.and_then(|p| process_name_from_pid(p as u32));
-        let classified = name.as_deref().and_then(classify_agent);
-        serde_json::json!({
-            "session_id": session_id,
-            "master_raw_fd": raw_fd,
-            "process_group_leader": pgid,
-            "process_name": name,
-            "classified_agent": classified,
-            "child_pid": session._child.process_id(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        let child_pid = session._child.process_id();
-        let leaf = child_pid.and_then(deepest_descendant_pid);
-        let name = leaf.and_then(process_name_from_pid);
-        let classified = name.as_deref().and_then(classify_agent);
-        serde_json::json!({
-            "session_id": session_id,
-            "child_pid": child_pid,
-            "leaf_pid": leaf,
-            "process_name": name,
-            "classified_agent": classified,
-        })
-    }
-}
-
-/// Get orchestrator stats
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_orchestrator_stats(state: State<'_, Arc<AppState>>) -> OrchestratorStats {
@@ -794,56 +745,6 @@ pub(crate) fn get_process_stats(state: State<'_, Arc<AppState>>) -> Vec<ProcessS
     collect_process_stats(&state)
 }
 
-/// Returns scrollback log lines and current screen rows for a session.
-///
-/// This is the desktop IPC equivalent of the PWA WebSocket `format=log` path.
-/// `lines` are finalized scrollback lines (each appears once, oldest first).
-/// `screen` is the current visible screen with agent chrome trimmed.
-/// Desktop IPC equivalent of PWA WebSocket format=log — no frontend caller yet.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn read_vt_log(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    offset: Option<usize>,
-    limit: Option<usize>,
-) -> Result<VtLogChunk, String> {
-    let limit = limit.unwrap_or(200);
-    // Everything that needs the lock is gathered in one pass on the pool
-    // thread; the chrome trim below works on the copies it hands back.
-    let gathered = vt_try_read(&state, session_id, move |buf| {
-        let off = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
-        let (lines, _) = buf.lines_since_owned(off, limit);
-        (
-            lines,
-            buf.screen_rows(),
-            buf.screen_log_lines(),
-            buf.total_lines(),
-            buf.oldest_offset(),
-        )
-    })
-    .await?;
-    let Some((lines, raw_rows, screen_log, total_lines, oldest)) = gathered else {
-        return Ok(VtLogChunk {
-            lines: vec![],
-            screen: vec![],
-            total_lines: 0,
-            oldest: 0,
-        });
-    };
-    // Chrome cutoff runs outside the lock — no contention with PTY reader.
-    let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
-    let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
-    let screen: Vec<crate::state::LogLine> = screen_log.into_iter().take(cutoff).collect();
-
-    Ok(VtLogChunk {
-        lines,
-        screen,
-        total_lines,
-        oldest,
-    })
-}
-
 /// Register a Tauri Channel for binary grid frame streaming on a session.
 /// The frontend calls this once per terminal; subsequent PTY output triggers
 /// `serialize_dirty_rows()` on the session's TerminalGrid and sends the result
@@ -903,17 +804,27 @@ pub(crate) fn ack_terminal_frame(
     received: u64,
     visible: Option<bool>,
 ) {
+    ack_terminal_frame_core(&state, &session_id, epoch, received, visible);
+}
+
+#[cfg(feature = "desktop")]
+pub(super) fn ack_terminal_frame_core(
+    state: &AppState,
+    session_id: &str,
+    epoch: u64,
+    received: u64,
+    visible: Option<bool>,
+) {
     if let Some(visible) = visible
-        && let Some(channel) = state.grid.channels.get(&session_id)
+        && let Some(channel) = state.grid.channels.get(session_id)
         && channel.epoch == epoch
     {
         channel.visible.store(visible, Ordering::Relaxed);
     }
-    if let Some(gate) = state.grid.gates.get(&session_id)
-        && gate.ack(epoch, received)
-        && let Some(dirty) = state.grid.frame_dirty.get(&session_id)
-    {
-        dirty.store(true, Ordering::Relaxed);
+    if let Some(gate) = state.grid.gates.get(session_id) {
+        // A receipt reopens delivery; it is not new terminal damage. The ticker
+        // retains actual reader damage and missed-frame repair debt while gated.
+        gate.ack(epoch, received);
     }
 }
 
@@ -1075,20 +986,6 @@ pub(crate) fn terminal_scroll_to(state: State<'_, Arc<AppState>>, session_id: St
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) async fn terminal_get_block_rows(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    start_line: usize,
-    end_line: usize,
-) -> Result<Vec<String>, String> {
-    vt_read(&state, session_id, move |vt| {
-        vt.read_rows_in_range(start_line, end_line)
-    })
-    .await
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
 pub(crate) async fn terminal_scroll_info(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1208,17 +1105,6 @@ pub(crate) async fn terminal_get_cursor_line(
     session_id: String,
 ) -> Result<String, String> {
     vt_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn terminal_hyperlink_at(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    row: usize,
-    col: usize,
-) -> Result<Option<String>, String> {
-    vt_read(&state, session_id, move |vt| vt.grid_hyperlink_at(row, col)).await
 }
 
 #[cfg(feature = "desktop")]

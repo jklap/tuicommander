@@ -384,6 +384,17 @@ cleartext copy does not survive on disk.
 | `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |
 | `index_memory_budget_mb` | `usize` | `1024` | Total heap the resident content indices may hold before `content_index::enforce_memory_budget` drops the least recently used. An ordinary repo indexes to 60–100 MB, so 1 GB holds 10–15 resident and only evicts for an outlier. An evicted index is snapshotted to `<data_dir>/content-index/` and reloaded on return, so eviction costs a stat walk rather than a rebuild. Configurable rather than a constant because the Rust backend does not hot-reload |
 
+On macOS, the desktop process always opts out of App Nap, even while hidden and
+with no busy agent. This process-lifetime activity permits idle system sleep;
+`prevent_sleep_when_busy` controls the separate sleep assertion. Hidden-idle
+backend work can therefore use more energy than an App-Napped process. See the
+[controlled replay and its limits](../../scripts/stall-workload/OCCLUDED-RESULTS.md).
+
+Content-index repository events share a 60-second cooldown after a build, an
+incremental update, or a completed unchanged-content validation. A no-op validation
+does not rebuild the search corpus. Snapshot restoration still reconciles disk
+state before publication.
+
 **Commands:** `load_app_config()`, `save_app_config(base, config)`
 
 Settings windows compare their current preferences with their own last successful
@@ -592,9 +603,7 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 Nothing migrates or deletes them: a file left behind by an older version is
 inert, and removing a user's data on upgrade is a worse default than leaving it.
 
-`ai-sessions/<session_id>.json` is the exception and stays live — `pty.rs` writes
-command outcomes there and `ai_agent::knowledge::spawn_persist_task` flushes them,
-neither of which involves a model. Nothing reads them back yet.
+`ai-sessions/<session_id>.json` is also inert after #2115-1333 removed the write-only command knowledge store and its persistence task. Existing history files are not deleted or migrated.
 
 ### UI Preferences (`ui-prefs.json`)
 
@@ -921,7 +930,7 @@ The settings owner exposes `/root` as a structured bounded geometry value. Group
 
 The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
-`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions".
+`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions". When mdkb is on PATH or in a known install directory (stat-only check, cached per process, reset by `write_files` and by `install_mdkb`/`uninstall_mdkb`), `launch_instructions::MDKB_RULE` is emitted after the modules and before additions.
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
@@ -1069,6 +1078,15 @@ This request does not save config or rewrite launch files.
 ## Cache Files
 
 ### Claude Usage Cache (`claude-usage-cache.json`)
+
+One app-owned watcher marks changed top-level JSONL transcripts dirty. Warm
+refreshes enumerate membership but do not stat unchanged transcript history.
+Specific-project scope resolves that project directly. Refreshes share one scan
+gate; watcher errors and overflow force reconciliation. A full metadata check
+also runs after 30 minutes, or on every refresh if watching is unavailable.
+Watcher delivery is asynchronous, so edits become visible after their event
+arrives. The persisted parse-cache format does not change.
+
 
 **Module:** `src-tauri/src/claude_usage.rs`
 
@@ -1238,6 +1256,8 @@ Runtime reconciliation refreshes integrated dependency projections without inter
 ### Telegram setup files
 
 Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_ids` (positive private-chat IDs, one per line), and `config.json` (`enabled`, `bot_alias`). TUIC creates the directory as 0700 and files as 0600 on Unix, refuses secret-file symlinks, and atomically replaces files. A separate `setup.lock` serializes cross-process setup and pairing writes. No token is serialized by the read API.
+
+The runtime keeps an opt-in snapshot and refreshes it on configuration or allowlist file events. Both configuration watchers also accept pathless lost-event rescan notifications before filtering access events or file names. Idle checks do not reopen those files. Setup and token changes use a nonrecursive file watcher instead of a one-second metadata poll. Actual send and delivery authorization still reads the current allowlist; a cached runtime opt-in is not an authorization grant. If a setup watcher cannot start, the adapter logs an error and waits for an explicit Settings change instead of polling.
 
 `pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
 
@@ -1624,6 +1644,8 @@ visible; it does not resume every inactive tab.
 
 `mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.
 
+`mcp_call_audit_enabled` in `config.json` gates recording and display of the MCP call audit. Default `true` when built with debug assertions, `false` otherwise, including when the field is absent from an older file. Live: no restart.
+
 ### Background tray and menu-bar icon
 
 `background.tray_icon` accepts `always`, `background_only` (default), and `never`. It applies live. Never restores a hidden desktop before removing the tray. Close configured as background minimizes when the tray is disabled, fails to build, or Linux has no registered StatusNotifier host. This keeps desktop session visibility intact. The Ask dialog omits Background when unavailable. Tray state and the first-entry notice are process-local, not persisted.
@@ -1793,3 +1815,9 @@ A compound vault/config failure publishes an unapplied generation only after a
 vault write has persisted, including when subsequent config persistence fails
 and the owner attempts rollback. Hints carry only section, generation and
 persistence/apply flags, never credentials or credential-derived hashes.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

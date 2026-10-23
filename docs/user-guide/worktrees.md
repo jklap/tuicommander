@@ -174,7 +174,7 @@ edits to a path that was already dirty. Initialized submodule refs, stash entrie
 and reflog-only commits are preserved in the main checkout's module repository
 before removal. If the main checkout's copy of a
 submodule is uninitialized or points at the wrong Git repository, removal stops
-and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
+and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning, including modules whose configured names differ from their checkout paths. Each destination must have one valid path in its owning main module's `.gitmodules`; missing or malformed mappings stop cleanup and retain the registration.
 
 If Git has already removed the registration but left a directory behind, cleanup
 still cancels any pending build-input warming before reporting a directory error.
@@ -322,3 +322,7 @@ A safe removal keeps a clean, integrated checkout in the archive area for reuse.
 A later worktree creation can reuse it under the new branch name without copying
 ignored build artifacts. Freshly created worktrees stay reserved even before a session
 starts. Dirty, unmerged, locked, and live worktrees are not reused.
+
+The remove confirmation says so: for such a checkout it reads "Archive workspace?"
+with an Archive button and states that the local branch is kept. The archived
+checkout still holds the branch.

@@ -1524,53 +1524,6 @@ async fn remote_mcp_caller_cannot_rename_resize_or_wait_for_peer_mail() {
     );
 }
 
-#[tokio::test]
-async fn removed_native_actions_name_a_single_call_replacement() {
-    let state = test_state();
-    let cases = [
-        ("agent", "detect", "GET /agents"),
-        ("agent", "stats", "GET /stats"),
-        ("agent", "metrics", "GET /metrics"),
-        ("session", "process_stats", "GET /process/stats"),
-        ("repo", "prs", "GET /repo/prs"),
-        ("repo", "issues", "GET /repo/issues"),
-        ("repo", "close_issue", "POST /repo/issues/close"),
-        ("repo", "reopen_issue", "POST /repo/issues/reopen"),
-        ("repo", "ci_logs", "GET /repo/ci-failure-logs"),
-    ];
-    for (tool, action, replacement) in cases {
-        let response = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            tool,
-            &serde_json::json!({"action": action}),
-            None,
-        )
-        .await;
-        assert!(
-            response["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(replacement)),
-            "{tool} {action}: {response}"
-        );
-        let definitions = native_tool_definitions();
-        let schema = definitions
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["name"] == tool)
-            .unwrap();
-        let actions = schema["inputSchema"]["properties"]["action"]["description"]
-            .as_str()
-            .unwrap()
-            .trim_start_matches("One of: ");
-        assert!(
-            !actions.split(", ").any(|listed| listed == action),
-            "{tool} still advertises {action}: {actions}"
-        );
-    }
-}
-
 async fn subscribed_acp_mail_recipient() -> (Arc<AppState>, String, String) {
     use crate::acp::McpOverAcpHost;
 
@@ -5919,6 +5872,54 @@ async fn runtime_audit_projection(state: Arc<AppState>) -> serde_json::Value {
         .await
         .unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+// Catches: audit rows still recorded or returned while the feature is disabled.
+#[tokio::test]
+async fn mcp_call_audit_disabled_records_nothing_and_endpoint_reports_disabled() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = false;
+    post_test_tool_call(
+        state.clone(),
+        "audit-off",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    let off = runtime_audit_projection(state.clone()).await;
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["records"], serde_json::json!([]));
+    state.config.write().mcp_call_audit_enabled = true;
+    let on = runtime_audit_projection(state).await;
+    assert_eq!(on["enabled"], true);
+    assert_eq!(
+        on["retained"], 0,
+        "the call made while disabled left no row"
+    );
+}
+
+// Catches: the row outcome hides an application error, or labels a reply as success of the effect.
+#[tokio::test]
+async fn mcp_call_audit_outcome_names_reply_and_error_not_effect() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = true;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "progress",
+        serde_json::json!({"type":"done","text":"x".repeat(600)}),
+    )
+    .await;
+    let projection = runtime_audit_projection(state).await;
+    assert_eq!(projection["records"][0]["outcome"], "error");
+    assert_eq!(projection["records"][1]["outcome"], "replied");
 }
 
 // Catches: cancelling real dispatch records rollback/no effect, or leaks body values.

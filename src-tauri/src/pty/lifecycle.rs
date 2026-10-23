@@ -3059,61 +3059,6 @@ pub(super) fn is_cc_tool_call_header(text: &str) -> bool {
     })
 }
 
-/// Emit an `Inferred` command outcome for shells that don't speak OSC 133.
-/// Called right after a busy→idle transition; no-op once we've ever observed
-/// a marker for this session (shell-integration path is authoritative then).
-/// The command text is unknown in this mode, but cwd + snippet still populate
-/// context summary and cwd history.
-pub(super) fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id: &str) {
-    use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass};
-
-    if state
-        .session_maps
-        .has_osc133_integration
-        .contains_key(session_id)
-    {
-        return;
-    }
-    // try_lock to avoid blocking the timer thread if write_pty holds
-    // the session lock. Inferred outcomes are best-effort — missing cwd
-    // for one record is acceptable vs risking contention.
-    let cwd = state
-        .session_maps
-        .sessions
-        .get(session_id)
-        .and_then(|s| s.try_lock().and_then(|s| s.cwd.clone()))
-        .unwrap_or_default();
-    let output_snippet = state
-        .grid
-        .vt_log_buffers
-        .get(session_id)
-        .map(|b| {
-            let buf = b.lock();
-            buf.screen_rows().join("\n")
-        })
-        .unwrap_or_default();
-    let mut tail_start = output_snippet.len().saturating_sub(500);
-    while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    let output_snippet = output_snippet[tail_start..].to_string();
-
-    let outcome = CommandOutcome {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        command: String::new(),
-        cwd,
-        exit_code: None,
-        output_snippet,
-        classification: OutcomeClass::Inferred,
-        duration_ms: 0,
-        id: 0,
-    };
-    state.record_outcome(session_id, outcome);
-}
-
 /// Retract a low-confidence `awaiting_input` once the screen is quiet and no
 /// question is visible any more.
 ///
@@ -3399,8 +3344,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
 }
 
 /// Per-session state a tombstone keeps readable after the process is gone: the
-/// buffers, the exit code, the alias the tab still shows, and the accumulated
-/// knowledge a background task has yet to flush. Reaped when the tombstone ages
+/// buffers, the exit code, and the alias the tab still shows. Reaped when the tombstone ages
 /// out — or immediately, when the session is closed outright.
 ///
 /// See [`remove_live_session_state`] for why these are the only two lists.
@@ -3432,16 +3376,6 @@ fn trim_unused_session_heap() {
         let _ = unsafe { libc::malloc_trim(0) };
     }
 }
-
-// NOT A DEFERRAL — two session-keyed maps are deliberately NOT reaped by
-// either half, because the session is not what owns them:
-//   * `session_knowledge` / `knowledge_dirty` ARE the cross-session memory:
-//     `knowledge::summarize_for_repo` and the agent prompt builder read the live
-//     map, never the files, so reaping a closed session removes knowledge the
-//     next session in that repo is supposed to inherit. Residency is bounded at
-//     startup (40 newest), not during a run.
-// They need an owner-scoped lifetime, not a session-scoped one: tie them to a
-// running residency bound.
 
 /// Remove the live session and transfer any pending child wait out of its maps.
 fn remove_pty_session(session_id: &str, state: &AppState) {
@@ -3491,6 +3425,7 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
+#[cfg(test)]
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);
@@ -3745,18 +3680,25 @@ pub(crate) async fn resize_session_off_thread(
     session_id: String,
     rows: u16,
     cols: u16,
+    origin: &'static str,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || resize_session_core(&state, &session_id, rows, cols))
-        .await
-        .map_err(|e| format!("resize failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        resize_session_core(&state, &session_id, rows, cols, origin)
+    })
+    .await
+    .map_err(|e| format!("resize failed: {e}"))?
 }
 
+/// `origin` names the transport that asked (`ipc`, `http`, `mcp`) for the
+/// debug log: several viewers share one PTY and the last writer wins, so the log
+/// is the only record of which viewer set the size the child reads.
 pub(crate) fn resize_session_core(
     state: &AppState,
     session_id: &str,
     rows: u16,
     cols: u16,
+    origin: &'static str,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
@@ -3777,22 +3719,30 @@ pub(crate) fn resize_session_core(
         .or_insert_with(|| Arc::new(Mutex::new((0, 0))))
         .clone();
     let mut applied = resize_lock.lock();
-    // Seed the last-applied dims from the live grid the first time we see this session:
-    // at creation the grid and PTY share the openpty size, so a first resize that only
-    // matches the startup dims no-ops instead of firing a gratuitous SIGWINCH. `(0, 0)`
-    // is the never-applied sentinel (real dims are guarded > 0 above).
+    // Seed from the kernel PTY size, not the grid: the grid may differ from what
+    // the child sees. If querying fails, leave the sentinel and attempt the resize.
+    // `(0, 0)` is the never-applied sentinel (real dims are guarded > 0 above).
     if *applied == (0, 0)
-        && let Some(vt_log) = state.grid.vt_log_buffers.get(session_id)
+        && let Some(session) = state.session_maps.sessions.get(session_id)
+        && let Ok(size) = session.lock().master.get_size()
     {
-        let vt = vt_log.lock();
-        *applied = (vt.grid_screen_lines() as u16, vt.grid_columns() as u16);
+        *applied = (size.rows, size.cols);
     }
     // No-op guard compares against the last dims that actually reached the PTY, not just
     // the grid: a prior call that resized the grid but then failed `master.resize` leaves
     // them divergent, and a grid-only guard would skip the PTY forever (CONC-B criterion 2).
     if *applied == (rows, cols) {
+        tracing::debug!(
+            source = "pty",
+            session_id,
+            origin,
+            rows,
+            cols,
+            "PTY resize no-op: already applied"
+        );
         return Ok(None);
     }
+    let previous = *applied;
     // Resize the grid and capture a fresh full frame, holding the vt lock so no
     // PTY chunk can land between the check and the resize. `resize`
     // marks the grid fully damaged, so `serialize_dirty_rows` yields the whole
@@ -3829,8 +3779,8 @@ pub(crate) fn resize_session_core(
         .sessions
         .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    entry
-        .lock()
+    let session = entry.lock();
+    session
         .master
         .resize(PtySize {
             rows,
@@ -3839,6 +3789,21 @@ pub(crate) fn resize_session_core(
             pixel_height: 0,
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
+    // TIOCGWINSZ on the master reads the same winsize the child reads.
+    let child_size = session.master.get_size().ok();
+    drop(session);
+    tracing::debug!(
+        source = "pty",
+        session_id,
+        origin,
+        rows,
+        cols,
+        previous_rows = previous.0,
+        previous_cols = previous.1,
+        child_rows = child_size.map(|s| s.rows),
+        child_cols = child_size.map(|s| s.cols),
+        "PTY resize applied"
+    );
     // Record the dims only now that they've reached the PTY, still under `applied`, so
     // a racing resize either waits behind this lock or observes a consistent value.
     // On a `master.resize` failure above we return via `?` WITHOUT updating `applied`,

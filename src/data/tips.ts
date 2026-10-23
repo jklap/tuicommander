@@ -10,6 +10,24 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Telegram sender replies",
+		description:
+			"Agents can send Telegram notices without taking inbound ownership. Reply to a sender-prefixed notice in Telegram to reach that live agent; new messages still reach the inbound owner.",
+		shortcut: null,
+	},
+	{
+		feature: "Abandoned shells",
+		description:
+			"Plain shells with no running processes are marked abandoned after one idle hour. Settings → Agents → Idle agent hibernation has an expert setting to close them after a chosen number of hours; automatic closure is off by default.",
+		shortcut: null,
+	},
+	{
+		feature: "Session identifiers",
+		description:
+			"Right-click a sidebar session row to copy its PTY session ID, live child process ID, or MCP alias. Hover an entry to see its value.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile font sizes",
 		description:
 			"Use the Terminal and Chat controls in mobile Settings → Appearance to set each reading size independently. The choices stay on this device; composers and UI controls do not change.",

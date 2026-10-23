@@ -987,7 +987,6 @@ worktree for tracked or untracked changes, a HEAD reachable from a branch and
 live sessions inside it; an unsafe or stale request is refused. The frontend consumes the answer and
 closes the dialog before removal.
 
-Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `agent task_get/task_cancel` remain because their behavior has no equivalent single-call replacement.
 
 #### Conditional native tools
 
@@ -1967,6 +1966,24 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — the following paths surface buffered mail:
+   - **Interrupting mail (explicit opt-in)**: `agent action=send urgency="interrupt"`
+     buffers the message first. For Claude Code, Codex and ego, a safe working
+     session receives one bare Esc. TUIC waits up to **10 seconds** for independently
+     confirmed idle, then submits the full message as one input through the shared
+     agent submit writer. An already idle session skips Esc. This explicit request
+     also applies to registered orchestrators. Normal and urgent behavior is unchanged.
+     A dialog/approval, draft, unknown foreground owner or uncertain earlier input
+     prevents injection. A dialog or draft appearing during the wait aborts it.
+     Unsupported agent types, missing PTYs and idle timeouts fall back to the existing
+     urgent notice/inbox paths; a dialog or draft keeps the composer untouched.
+     The response adds `interrupt_delivered` and `interrupt_fallback_reason`
+     (for example `unknown_agent_type`, `dialog_open`, `composer_has_user_text`,
+     `idle_timeout`, or `waiter_owns_delivery`). `delivery_path=interrupt_payload_and_inbox`
+     means the complete input was written, not that the model accepted or acted on it.
+     An active waiter receives the buffered body without an interrupt. A partial
+     payload write is reported as `write_uncertain` and is not followed by a notice
+     or automatic replay. **Risk:** an interrupted tool can leave partial work, and
+     its child processes may continue; this is not a rollback or a process-tree kill.
    - **Urgent notice**: `agent send urgency="urgent"` retains the peer body only
      in the inbox. A busy managed Claude Code, Codex or ego session with a safe,
      empty composer gets a payload-free notice through the guarded PTY writer.
@@ -2531,7 +2548,7 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 `POST /settings/action` is registered once in `shared_routes()`, so desktop and headless daemons use the same handler, authentication policy and value-free Settings event publisher. Upstream OAuth startup requires a desktop host; the headless owner returns `unavailable` before upstream lookup or network access.
 
-`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken/relayPairing presence; the `set_relay_pairing` action stores the bundle printed by `tuic-remote --relay-pair` after parsing it (an unparsable bundle is `out_of_range`). Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
 
@@ -2697,6 +2714,8 @@ normal endpoint admission and the local OS-user trust boundary still apply.
 The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).
 
 ## Runtime call outcome audit (#2010-30a7)
+
+Gated by the persisted `mcp_call_audit_enabled` setting (#2136-dc79): default `false` in release builds, `true` when `cfg!(debug_assertions)`. While off, `tools/call` ingress records nothing and `GET /mcp/audit` (IPC `get_mcp_audit`) returns `{"enabled":false,"records":[]}`; retained rows are not returned. Each row also carries `outcome` (`replied`, `error`, `cancelled`), which describes the reply, never the effect. Settings > MCP > Call audit shows the rows; it fetches on open and on Refresh only.
 
 `GET /mcp/audit` returns at most 100 newest completed/cancelled `tools/call`
 observations from an instance-local 1024-record memory ring. `retained`, `evicted`,
@@ -2865,3 +2884,24 @@ measurement is not a claim about product-wide token or latency savings.
 This updates or clears the context-bar description without sending PTY bytes.
 
 Managed `agent action=launch` uses the same private pre-dispatch static contract as other native actions. Discovery describes the disjoint receipt-read and creation forms, workspace alternatives, and nested spawn argument types; the server enforces exclusivity. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.
+
+## Client tool identity
+
+Server instructions use TUIC protocol names as shorthand. Claude Code exposes the configured `tuicommander` server tool as `mcp__tuicommander__agent`; Codex 0.163.0 exposes namespace member `mcp__tuicommander.agent`. A different configured server alias changes that prefix. These are not the client native `Agent` tool. Use the actual exposed schema; a bare `tool_name=agent` is valid inside TUIC lazy `call_tool`, not as a guessed direct client call.
+
+The recorded client names and localhost-only capture script are in `src-tauri/src/mcp_http/fixtures/tool-names-2108.*`. The probe advertises one MCP tool and captures only outgoing tool names, with isolated homes and dummy keys; it rejects the model request without a vendor call. This records client qualification, not a production TUIC server handshake.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+### Detached command identity boundary
+
+Native `tuic bg` removes `TUIC_SESSION` and `TUIC_PARENT` from the command
+environment and sets `TUIC_BG_COMMAND=1`. Headerless MCP identity recovery
+checks each process up to its 16-hop bound and stops at this marker before
+reading an identity or reaching the foreground runner. This also covers a
+bridge whose agent removed the marker from the bridge environment. Ordinary
+foreground ego ancestry recovery and explicit identity headers are unchanged.
+The detached runner keeps its caller identity for completion queueing and mail.
+This is an identity boundary, not a security sandbox or a delivery-policy bypass.

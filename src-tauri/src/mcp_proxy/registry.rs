@@ -1537,7 +1537,7 @@ mod tests {
     #[test]
     fn aggregated_tools_empty_when_no_upstreams() {
         let registry = UpstreamRegistry::new();
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1594,7 +1594,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::CircuitOpen;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1962,7 +1962,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::Authenticating;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]
@@ -2208,7 +2208,7 @@ mod tests {
 
         let allowed: Vec<String> = vec![];
         let tools = registry.aggregated_tools_for_repo(Some(&allowed));
-        assert!(tools.is_empty());
+        assert_eq!(tools, [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]

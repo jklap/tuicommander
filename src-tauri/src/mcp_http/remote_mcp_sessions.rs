@@ -73,7 +73,18 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
         .and_then(|row| row.connection_id.map(|host| Ok((host, row.session_id))))
 }
 
+#[cfg(test)]
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
+    call_with_caller(state, host, id, args, None).await
+}
+
+pub(super) async fn call_with_caller(
+    state: &Arc<AppState>,
+    host: &str,
+    id: &str,
+    args: &Value,
+    own_pty: Option<&str>,
+) -> Value {
     let requested_budget = if args["action"] == "output" {
         match super::response_pages::budget(args) {
             Ok(budget) => budget,
@@ -129,7 +140,13 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
         _ => return failure(host, format!("session '{id}' is ambiguous")),
     };
     let action = args["action"].as_str().unwrap_or("");
-    if !matches!(action, "output" | "submit") {
+    if action == "close" && own_pty == Some(canonical) {
+        return failure(
+            host,
+            "Cannot close own session. Use exit to terminate yourself.",
+        );
+    }
+    if !matches!(action, "output" | "submit" | "close") {
         return failure(
             host,
             format!("MCP session action '{action}' is not supported remotely"),
@@ -138,12 +155,17 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
     url.set_path("/sessions");
     match url.path_segments_mut() {
         Ok(mut path) => {
-            path.push(canonical).push(action);
+            path.push(canonical);
+            if action != "close" {
+                path.push(action);
+            }
         }
         Err(_) => return failure(host, "invalid session URL"),
     }
     credential(state, host, &mut url);
-    let request_builder = if action == "submit" {
+    let request_builder = if action == "close" {
+        state.remote.http_client().delete(url)
+    } else if action == "submit" {
         state
             .remote
             .http_client()
@@ -279,6 +301,75 @@ async fn request(host: &str, builder: reqwest::RequestBuilder) -> Result<Value, 
 mod tests {
     use super::super::tests::test_state;
     use super::*;
+
+    // Catches: close rejected remotely, alias targeting the wrong daemon, loss
+    // of tombstone output, or an explicit connection bypassing self-close.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_mcp_close_uses_owner_tombstone_and_preserves_self_guard() {
+        let hub = test_state();
+        let remote = test_state();
+        let id = uuid::Uuid::new_v4().to_string();
+        crate::state::tests_support::insert_dummy_session(&remote, &id);
+        remote
+            .session_maps
+            .term_aliases
+            .insert(id.clone(), "remote-1".into());
+        let mut log = crate::state::VtLogBuffer::new(24, 80, 100);
+        log.process(b"final remote output\r\n");
+        remote
+            .grid
+            .vt_log_buffers
+            .insert(id.clone(), parking_lot::Mutex::new(log));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let token = remote.session_token.read().clone();
+        hub.remote
+            .force_connected_for_test("mint", &url, Some(&token));
+        let owner = Arc::clone(&remote);
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                super::super::build_remote_router(owner)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let own = call_with_caller(
+            &hub,
+            "mint",
+            "remote-1",
+            &json!({"action":"close"}),
+            Some(&id),
+        )
+        .await;
+        let preserved = remote.session_maps.sessions.contains_key(&id);
+        let reply = call(&hub, "mint", "remote-1", &json!({"action":"close"})).await;
+        let closed = !remote.session_maps.sessions.contains_key(&id);
+        let tail = call(&hub, "mint", &id, &json!({"action":"output"})).await;
+        let again = call(&hub, "mint", &id, &json!({"action":"close"})).await;
+        crate::pty::close_pty_core(&remote, &id, false);
+        server.abort();
+        assert!(
+            own["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("Cannot close own session")),
+            "{own}"
+        );
+        assert!(preserved);
+        assert_eq!(reply, json!({"ok":true,"connection_id":"mint"}));
+        assert!(closed, "owning daemon must close the live PTY");
+        assert_eq!(tail["exited"], true, "{tail}");
+        assert!(
+            tail["data"]
+                .as_str()
+                .unwrap()
+                .contains("final remote output"),
+            "{tail}"
+        );
+        assert_eq!(again["ok"], true, "{again}");
+    }
 
     // Catches: remote output silently becomes raw HTTP output, loses tombstone
     // state/cursors, or bypasses the native absolute-window rules.

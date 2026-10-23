@@ -3,6 +3,16 @@ import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Catches: browser reload dropping the changed-ID filter and scanning every plugin.
+it("maps targeted plugin discovery with the same ID array as IPC", () => {
+	const ids = ["plugin-a", "odd,id"];
+	const mapping = mapCommandToHttp("list_user_plugins", { pluginIds: ids });
+	const url = new URL(mapping!.path, "http://localhost");
+	expect(url.pathname).toBe("/plugins/list");
+	expect(JSON.parse(url.searchParams.get("plugin_ids")!)).toEqual(ids);
+	expect(mapCommandToHttp("list_user_plugins", {})?.path).toBe("/plugins/list");
+});
+
 // Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps scoped plugin settings actions without adding host authority", () => {
 	const action = { action: "get", paths: ["/retryDelayMs"] };
@@ -741,6 +751,12 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base: { font_family: "Menlo" }, config: cfg });
 		});
 
+		it("maps the MCP call audit read to GET /mcp/audit", () => {
+			const result = mapCommandToHttp("get_mcp_audit", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/mcp/audit");
+		});
+
 		it("maps upstream saves with both the loaded base and desired config", () => {
 			const base = { servers: [{ id: "a", enabled: true }] };
 			const config = { servers: [{ id: "a", enabled: false }] };
@@ -988,6 +1004,16 @@ describe("transport", () => {
 				expect(result.body).toEqual({ password: "hunter2" });
 			});
 
+			it("maps set_remote_connection_relay_pairing to PUT with the bundle in the body", () => {
+				const result = mapCommandToHttp("set_remote_connection_relay_pairing", {
+					id: "c1",
+					bundle: "tuic-pair-v1:abc",
+				});
+				expect(result.method).toBe("PUT");
+				expect(result.path).toBe("/config/remote-connections/c1/relay-pairing");
+				expect(result.body).toEqual({ bundle: "tuic-pair-v1:abc" });
+			});
+
 			it("maps remote_connection_password_exists to a GET that carries no secret", () => {
 				const result = mapCommandToHttp("remote_connection_password_exists", { id: "c1" });
 				expect(result.method).toBe("GET");
@@ -1188,14 +1214,6 @@ describe("transport", () => {
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
-		});
-
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
 		});
 
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
@@ -1872,7 +1890,12 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
 			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
-			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+			expect(mapCommandToHttp("github_diagnostics", {})).toEqual({ method: "GET", path: "/github/diagnostics" });
+			// Catches manual refresh being mapped to the read-only diagnostics route.
+			expect(mapCommandToHttp("github_diagnostics", { refresh: true })).toEqual({
+				method: "POST",
+				path: "/github/diagnostics",
+			});
 		});
 
 		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.

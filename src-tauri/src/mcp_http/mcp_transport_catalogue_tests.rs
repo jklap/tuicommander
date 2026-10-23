@@ -113,7 +113,7 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
     // Agent descriptions may shrink; Settings copy must stay unchanged.
     let recorded: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
-    assert!(!tools.is_empty());
+    assert_ne!(tools.as_slice(), [] as [serde_json::Value; 0]);
     assert_eq!(catalog.len(), tools.len());
     assert_eq!(NATIVE_TOOL_SUMMARIES.len(), tools.len());
     for (tool, entry) in tools.iter().zip(&catalog) {
@@ -1224,7 +1224,7 @@ fn agent_send_schema_and_description_explain_urgent_mail_without_exposing_payloa
         .unwrap();
     assert_eq!(
         agent["inputSchema"]["properties"]["urgency"]["enum"],
-        serde_json::json!(["normal", "urgent"])
+        serde_json::json!(["normal", "urgent", "interrupt"])
     );
     let description = agent["description"].as_str().unwrap();
     assert!(description.contains("Normal is the default"));
@@ -2079,7 +2079,7 @@ fn built_instructions_follow_the_served_tool_list_and_ready_upstreams() {
         .inject_ready_upstream("quill", &["a", "b"]);
     let out = build_mcp_instructions_for_mode(&state, Some("claude-code"), false);
     let served = filtered_native_tools(&state);
-    assert!(!served.is_empty());
+    assert_ne!(served, [] as [serde_json::Value; 0]);
     for tool in &served {
         let name = tool["name"].as_str().unwrap();
         assert!(
@@ -2320,7 +2320,10 @@ async fn action_validation_rejects_observed_bad_inputs_before_effects() {
         assert_eq!(result["effect"], "not_started");
         assert_eq!(result["retryable"], false);
         assert_eq!(result["repair"]["retry_after_correction"], true);
-        assert!(!result["violations"].as_array().unwrap().is_empty());
+        assert_ne!(
+            result["violations"].as_array().unwrap().as_slice(),
+            [] as [serde_json::Value; 0]
+        );
         assert!(result["violations"][0]["path"].is_string());
     }
     assert!(state.session_maps.session_html_tabs.is_empty());
@@ -2613,6 +2616,8 @@ async fn conditional_configured_telegram_preserves_caller_authority() {
 // Catches: shortening the catalogue drops a rule instead of moving it to help.
 // Oracle: descriptions recorded from d4882b0f6c before the catalogue rewrite.
 // UI updated verbatim from main 06f115ae14 for the added 2067 Design Mode actions.
+// Agent guidance updated for the explicit interrupt delivery contract in 2113.
+// Telegram guidance updated for non-owner send and reply routing in 2119.
 #[tokio::test]
 async fn native_help_preserves_every_displaced_rule_2069() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
@@ -2708,5 +2713,42 @@ async fn native_help_respects_owner_availability_2069() {
             "{name}: {reply}"
         );
         assert!(reply.get("description").is_none());
+    }
+}
+
+// Catches: bare TUIC `agent` guidance being mistaken for a client's native Agent.
+#[test]
+fn instructions_name_tools_unambiguously() {
+    let recording: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/tool-names-2108.json")).unwrap();
+    let ctx = InstructionContext {
+        native_tools: tools(&["agent", "session", "repo"]),
+        peer_count: 1,
+        ..Default::default()
+    };
+    for (client, key) in [("claude-code", "claude"), ("codex", "codex")] {
+        let names = recording["clients"][key]["exposed_tool_names"]
+            .as_array()
+            .unwrap();
+        let agent = names
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|name| name.ends_with("__agent") || name.ends_with(".agent"))
+            .expect("capture must include the real client's qualified agent tool");
+        for collapsed in [false, true] {
+            let out = render_mcp_instructions(Some(client), collapsed, (true, true), true, &ctx);
+            assert!(
+                out.contains(agent),
+                "{client} cannot find its exposed {agent}: {out}"
+            );
+            assert!(
+                out.contains("not the native `Agent`"),
+                "must distinguish the client built-in: {out}"
+            );
+            assert!(
+                out.contains("protocol names"),
+                "short examples need an explicit naming rule: {out}"
+            );
+        }
     }
 }

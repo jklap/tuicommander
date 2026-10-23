@@ -263,6 +263,12 @@ The name, tasks, and session-scoped Progress open temporary sheets over the
 terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
 remain reachable in overflow. No fixed intent/task rows reduce terminal space.
 
+`MobileApp` measures `visualViewport.height` and `offsetTop` into the fixed shell's
+CSS variables. Resize, viewport scroll, `pageshow`, foreground `visibilitychange`
+and document `resume` share one animation-frame measurement. Lifecycle listeners
+are removed on unmount. This prevents stale geometry after a restore without a
+viewport event; it does not establish the cause of the reported iPhone grey screen.
+
 `MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;
@@ -334,6 +340,8 @@ input-listener cleanup. These controllers do not use reactive state.
 **Key behavior:** Terminals are **never unmounted** — they stay in the DOM when switching tabs. Only visibility is toggled. This preserves terminal state (scroll position, content, active processes).
 
 ### Sidebar (`Sidebar/`)
+
+Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID, child PID, or alias. PID and alias come from the owning row of an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; they are checked again before copying. Unknown PID and absent alias entries are hidden, including exited or suspended sessions. Both desktop and mobile copy confirmation uses the toast store.
 
 Repository tree with branch management. Touch branch rows reveal their existing
 actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
@@ -600,6 +608,8 @@ Ideas panel with per-repo filtering and terminal integration.
 ### StoriesDialog (`StoriesDialog/`)
 
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
+
+The Plans and Stories toolbar button (`StoriesButton.tsx`) widens into a pill while the project has an active plan: active plans, stories in progress and a done/total bar, with the breakdown in its tooltip and `aria-label`. Counts come from the Rust `summary` story action. Nothing signals story changes, so it re-reads on repo change, window focus or visibility, dialog close, and every 60 s while the window is visible; a failed call leaves the plain icon.
 
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
@@ -879,3 +889,15 @@ retain the existing TextCorrector workflow; export does not change settings.
 Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.
+
+### Context menu viewport bounds
+
+Context menus use their unscaled layout size to stay within an 8px viewport margin.
+Oversized menus scroll; their minimum width also shrinks in narrow windows.
+Shell workspace rows do not offer branch workflow actions or Git smart prompts.
+
+Shell-folder rows offer the same available-agent menu as Git workspace rows.
+Launching an agent uses the folder as its working directory, without creating a
+branch or worktree. The Add Terminal button also offers agents on a long press.
