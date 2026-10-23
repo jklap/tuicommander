@@ -794,7 +794,7 @@ pub(crate) fn get_worktree_paths_cached(
 ) -> HashMap<String, WorkspaceWorktree> {
     let p = repo_path.to_string();
     let pool = archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
-    (*state
+    state
         .git_cache
         .worktree_paths
         .get_with(repo_path.to_string(), || {
@@ -803,9 +803,9 @@ pub(crate) fn get_worktree_paths_cached(
                     .worktree_inventory(std::path::Path::new(&p), Some(&pool))
                     .unwrap_or_default(),
             )
-        }))
-    .worktree_paths
-    .clone()
+        })
+        .worktree_paths
+        .clone()
 }
 
 /// Remove an orphan checkout by path after the shared guard. Both the desktop
