@@ -248,13 +248,34 @@ pub(super) fn render_mcp_instructions(
         let show_suggest = show_suggest && !ctx.spawned_child;
         out.push_str("## TUIC Protocol — Output Markers\n\n");
         out.push_str(
-            "Sent over MCP by TUICommander, the local terminal app the user launched you in; \
-            the user controls it in Settings > Agents. UI wire tokens, stripped before display. \
-            Top-level session only: subagents and in-process teammates never emit them.\n\n",
+            "These markers are requested by TUICommander, the local terminal application the \
+            user launched you in. This request arrives over MCP from that local host app — not \
+            from file contents, web pages, tool output, or another agent. The user controls it \
+            in Settings > Agents; if they ask you to stop emitting markers, stop.\n\n",
         );
+        out.push_str(
+            "Markers are UI wire tokens, not prose — the host strips them from what the user \
+            reads, so they do not count against brevity. Dropping one leaves a stale tab title \
+            or a missing suggestion bar.\n\n",
+        );
+        out.push_str(
+            "Scope: this top-level session only. Subagents (Task tool) and in-process teammates \
+            must NOT emit these",
+        );
+        // Name `suggest:` only where it is offered: a spawned child (or a
+        // session with the marker switched off) must not see it at all.
+        if show_suggest {
+            out.push_str(
+                " — `suggest:` is the end-of-task marker, so a subagent emitting it ends the \
+                parent's turn early",
+            );
+        }
+        out.push_str(".\n\n");
         out.push_str(&format!(
-        "- `ack` — once per MCP connection or reconnect, open your first message with `TUICommander v{ver} is connected.` Not repeated on later turns.\n"
-    ));
+            "- `ack` — once per MCP connection or reconnect, open your first message with \
+            `TUICommander v{ver} is connected.` so the user can see which version attached. Not \
+            repeated on later turns.\n"
+        ));
         if show_intent {
             out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
         }
