@@ -103,6 +103,19 @@ impl ProfileStore {
     /// rewritten here: they live inside the user's repository (possibly
     /// committed and shared with older builds), so they stay as they are until
     /// someone saves them.
+    ///
+    /// Locking: unlike `connections.json` (rewritten under `ConfigFile::with_locks`),
+    /// there is no profile-store lock to take — `save`/`delete` write each
+    /// `<id>.toml` with a plain temp-file rename and lock nothing. This is safe
+    /// in-process only because the sole caller, `ssh_connection::legacy::
+    /// migrate_persisted_shapes`, runs at boot before `AppState::new` (desktop
+    /// `lib.rs` and the headless remote daemon alike), so no IPC/HTTP route that
+    /// could save or delete a profile exists yet.
+    // DEFERRED (2026-10-23) — a second process sharing this config dir (another
+    // instance, or `tuic-remote` beside the desktop app) that saves the same
+    // profile between our read and `backup_then_replace` would lose its write.
+    // Closing that needs a cross-process lock taken by EVERY ProfileStore
+    // writer, not just here; boot-only and per-file, so left until it is seen.
     pub fn migrate_legacy_global_profiles(app_data_dir: &Path) -> Result<Vec<std::path::PathBuf>> {
         let dir = app_data_dir.join("tunnels");
         if !dir.exists() {
