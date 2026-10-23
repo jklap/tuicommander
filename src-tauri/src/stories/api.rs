@@ -907,10 +907,11 @@ mod tests {
             };
             story = updated;
         }
-        let wire = serde_json::to_value(
-            story_action(project, StoryAction::ListStories { plan_id: plan.id }, None).unwrap(),
-        )
+        let list: StoryAction = serde_json::from_value(serde_json::json!({
+            "action": "list_stories", "plan_id": plan.id, "state": "qa", "limit": 1
+        }))
         .unwrap();
+        let wire = serde_json::to_value(story_action(project, list, None).unwrap()).unwrap();
         assert_eq!(wire["value"][0]["status"], "qa");
         let wire = serde_json::to_value(story_action(project, StoryAction::Summary, None).unwrap())
             .unwrap();
