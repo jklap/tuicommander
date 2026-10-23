@@ -284,8 +284,10 @@ result names the matching rule.
 
 Default-branch resolution uses only verified local Git refs, without a fetch:
 the main checkout branch's explicit `branch.<name>.tuicommander-base`, then
-local `main`, then local `master`, then `origin/HEAD` (local branch when present,
-otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
+local `main`, then local `master`, then a remote's HEAD (local branch when present,
+otherwise the remote-tracking ref; `origin/HEAD` first, then the remote the main
+checkout's branch tracks, then every other remote in `git remote` order, so an
+`upstream`-only or fork setup resolves too), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
 shows **No base branch**, with the full reason in its tooltip.
