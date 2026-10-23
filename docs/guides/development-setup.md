@@ -374,7 +374,8 @@ crate's `build.rs` compiles with the build's own `rustc`. Never copy `/bin/cat`,
 platform binary ("Killed: 9"), and a symlink, a script or `exec -a` reports the
 wrong executable to `proc_pidpath`/`/proc/<pid>/exe`. The probe needs no
 `codesign`. With no arguments it echoes stdin until EOF (alive while its stdin is
-open, like `cat`); `--print <words…>` prints them; installed as `ps` (or run with
+open, like `cat`); `--print <words…>` prints them; `--cat <file>` prints the file,
+then echoes stdin (like `cat <file> -`); installed as `ps` (or run with
 `--ps`) it answers `-p <pid> -o comm=` natively, for a test that runs
 remote-side shell text such as `verified_kill` locally where `/bin/ps` cannot run.
 Covered by `crates/tuic-test-support/tests/identity_probe.rs`.

@@ -855,8 +855,9 @@ pub fn identity_probe_bin() -> &'static std::path::Path {
 ///
 /// Personalities (see `src/identity_probe_main.rs`): no arguments copies stdin
 /// to stdout until EOF, staying alive like `cat` while its stdin is open;
-/// `--print <words…>` prints the words and exits 0; installed as `ps` (or run
-/// with `--ps`) it answers `-p <pid> -o comm=` natively.
+/// `--print <words…>` prints the words and exits 0; `--cat <file>` prints the
+/// file, then echoes stdin like `cat <file> -`; installed as `ps` (or run with
+/// `--ps`) it answers `-p <pid> -o comm=` natively.
 ///
 /// Why not copy `/bin/cat` or `/bin/sleep`: a relocated Apple platform binary
 /// is SIGKILLed on exec in the agent sandbox ("Killed: 9"), and symlinks,

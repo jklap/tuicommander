@@ -17,6 +17,9 @@
 //!   on stdin that nobody writes to, it stays alive blocked in `read`, like
 //!   `cat`.
 //! - `--print <words…>`: print the words joined by spaces and a newline, exit 0.
+//! - `--cat <file>`: print the file, then copy stdin to stdout until EOF (like
+//!   `cat <file> -`); exit 1 if the file cannot be read. The file reaches
+//!   stdout before any stdin is read.
 //! - `ps` (invoked under the file name `ps`, or with `--ps` first): the subset
 //!   `-p <pid> -o comm=` prints that pid's executable path (no header) and
 //!   exits 0, or exits 1 when no such process is visible. Read natively, so it
@@ -42,6 +45,13 @@ fn main() -> ExitCode {
             println!("{}", args[1..].join(" "));
             ExitCode::SUCCESS
         }
+        Some("--cat") => match args.get(1) {
+            Some(file) => cat_then_echo(file),
+            None => {
+                eprintln!("tuic-identity-probe: --cat needs a file");
+                ExitCode::from(2)
+            }
+        },
         _ => echo_stdin(),
     }
 }
@@ -56,6 +66,26 @@ fn invoked_as_ps(program: &str) -> bool {
     name == "ps"
 }
 
+fn cat_then_echo(file: &str) -> ExitCode {
+    let contents = match std::fs::read(file) {
+        Ok(contents) => contents,
+        Err(error) => {
+            eprintln!("tuic-identity-probe: {file}: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut stdout = std::io::stdout().lock();
+    if stdout
+        .write_all(&contents)
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
+        return ExitCode::from(1);
+    }
+    drop(stdout);
+    echo_stdin()
+}
+
 fn echo_stdin() -> ExitCode {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -64,7 +94,11 @@ fn echo_stdin() -> ExitCode {
         match stdin.read(&mut buf) {
             Ok(0) => return ExitCode::SUCCESS,
             Ok(n) => {
-                if stdout.write_all(&buf[..n]).and_then(|()| stdout.flush()).is_err() {
+                if stdout
+                    .write_all(&buf[..n])
+                    .and_then(|()| stdout.flush())
+                    .is_err()
+                {
                     return ExitCode::from(1);
                 }
             }

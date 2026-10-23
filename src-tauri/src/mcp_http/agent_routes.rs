@@ -604,22 +604,15 @@ mod tests {
         .unwrap();
         // Like ForegroundIdentityProbe: this is an OS process-name probe,
         // not a fake implementation of Codex. The hook bytes are recorded.
-        let probe = cwd.join("codex");
-        std::fs::copy("/bin/cat", &probe).unwrap();
-        #[cfg(target_os = "macos")]
-        {
-            let signed = std::process::Command::new("/usr/bin/codesign")
-                .args(["--force", "--sign", "-"])
-                .arg(&probe)
-                .output()
-                .unwrap();
-            assert!(signed.status.success(), "sign the local process-name probe");
-        }
+        // The compiled identity probe, not a copy of /bin/cat: the sandbox
+        // SIGKILLs a relocated Apple binary. `--cat <file>` prints the frame,
+        // then echoes stdin, like `cat <file> -`.
+        let probe = tuic_test_support::install_identity_probe(&cwd, "codex");
         let frame = cwd.join("hook-frame");
         let encoded = base64::engine::general_purpose::STANDARD.encode(hook.to_string());
         let script = crate::test_support::fake_ssh_script(
             "codex-http-native-binding",
-            "if [ \"$1\" = '--help' ]; then exit 0; fi; printf '\\033]7770;codex-session=%s:%s\\033\\\\\\nHOOK_REPLAY_DONE\\n' \"$TUIC_SESSION\" \"$CODEX_HOOK\" > \"$CODEX_FRAME\"; exec \"$CODEX_PROBE\" \"$CODEX_FRAME\" -",
+            "if [ \"$1\" = '--help' ]; then exit 0; fi; printf '\\033]7770;codex-session=%s:%s\\033\\\\\\nHOOK_REPLAY_DONE\\n' \"$TUIC_SESSION\" \"$CODEX_HOOK\" > \"$CODEX_FRAME\"; exec \"$CODEX_PROBE\" --cat \"$CODEX_FRAME\"",
             "exit /b 0",
         );
         let mut failures = Vec::new();

@@ -96,6 +96,59 @@ fn default_mode_stays_alive_while_stdin_is_open() {
     assert!(child.wait().unwrap().success(), "EOF on stdin exits 0");
 }
 
+/// `--cat <file>`: the file first, before any stdin arrives (a hook-replay
+/// frame a test needs on the PTY at launch), then stdin echoed until EOF.
+#[test]
+fn cat_mode_prints_the_file_before_echoing_stdin() {
+    let dir = scratch();
+    let exe = tuic_test_support::install_identity_probe(dir.path(), "codex");
+    let frame = dir.path().join("frame");
+    std::fs::write(&frame, b"FRAME\n").unwrap();
+    let mut child = Command::new(&exe)
+        .arg("--cat")
+        .arg(&frame)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut head = [0u8; 6];
+        stdout.read_exact(&mut head).unwrap();
+        tx.send(head).unwrap();
+        let mut rest = Vec::new();
+        stdout.read_to_end(&mut rest).unwrap();
+        rest
+    });
+    let head = rx.recv_timeout(std::time::Duration::from_secs(10));
+    let mut stdin = child.stdin.take().unwrap();
+    if head.is_err() {
+        drop(stdin);
+        reap(child);
+        panic!("the file was not printed while stdin stayed open");
+    }
+    assert_eq!(&head.unwrap(), b"FRAME\n");
+    stdin.write_all(b"after\n").unwrap();
+    drop(stdin);
+    assert_eq!(reader.join().unwrap(), b"after\n");
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn cat_mode_fails_on_a_missing_file() {
+    let dir = scratch();
+    let exe = tuic_test_support::install_identity_probe(dir.path(), "codex");
+    let out = Command::new(&exe)
+        .arg("--cat")
+        .arg(dir.path().join("missing"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{:?}", out.status);
+    assert!(out.stdout.is_empty());
+}
+
 /// The reason the probe exists: a relocated Apple platform binary is
 /// SIGKILLed on exec in the agent sandbox. The probe, copied anywhere under
 /// any name, must exit on its own terms — never by a signal.
