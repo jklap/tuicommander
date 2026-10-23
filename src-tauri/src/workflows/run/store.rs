@@ -193,6 +193,26 @@ pub(crate) fn guard_plan_source_update_in(
     Ok(conn)
 }
 
+/// Hold the workflow writer lock until the native archive transaction commits.
+/// Active plan runs own the plan's story set, not only currently dispatched attempts.
+pub(crate) fn guard_native_archive(
+    path: &Path,
+    project: &str,
+    plan_id: &str,
+) -> Result<Connection, String> {
+    let conn = RunStore::open_at(path)?.connect()?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("lock archive reservations: {e}"))?;
+    let owned: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE project=?1 AND plan_id=?2 AND status IN ('running','paused'))",
+        params![project, plan_id], |row| row.get(0),
+    ).map_err(|e| format!("read archive reservations: {e}"))?;
+    if owned {
+        return Err("plan or story is owned by an active workflow run".into());
+    }
+    Ok(conn)
+}
+
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 thread_local! {
@@ -323,7 +343,7 @@ impl RunStore {
         let owner = crate::progress::resolve_owning_project(Some(project))?
             .to_string_lossy()
             .to_string();
-        let plan = StoryStore::open()?.get_plan(plan_id)?;
+        let plan = StoryStore::open()?.require_unarchived_plan(plan_id)?;
         if plan.project != owner {
             return Err("plan does not belong to project".into());
         }
@@ -407,6 +427,7 @@ impl RunStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("begin run start: {e}"))?;
+        StoryStore::open()?.require_unarchived_plan(plan_id)?;
         insert_started_run(&tx, &snapshot, "start plan run")?;
         insert_event(&tx, &snapshot.id, &receipt)?;
         tx.commit()
@@ -1833,8 +1854,14 @@ pub(super) fn fingerprint(
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
-fn plan_stories(snapshot: &RunSnapshot) -> Result<Vec<Story>, String> {
-    StoryStore::open()?.list_stories(&snapshot.plan_id)
+pub(in crate::workflows::run) fn plan_stories(
+    snapshot: &RunSnapshot,
+) -> Result<Vec<Story>, String> {
+    Ok(StoryStore::open()?
+        .list_stories(&snapshot.plan_id)?
+        .into_iter()
+        .filter(|story| !story.archived)
+        .collect())
 }
 
 /// Unknown, globbed or overlapping scopes cannot safely share a work wave.

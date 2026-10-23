@@ -22,7 +22,10 @@ pub enum StoryAction {
         patch: super::PlanPatch,
     },
     /// List the plans of the calling session's project.
-    ListPlans,
+    ListPlans {
+        #[serde(default)]
+        archived: bool,
+    },
     /// List the plan files found in the project that can become plans.
     ListPlanSources,
     /// Create the plan for a plan file, deriving its title; returns the existing plan if there is one.
@@ -62,6 +65,8 @@ pub enum StoryAction {
         #[schemars(range(min = 1, max = 3))]
         priority: Option<u8>,
         story_type: Option<super::StoryType>,
+        #[serde(default)]
+        archived: bool,
         #[schemars(range(min = 1, max = 100))]
         limit: Option<u16>,
         cursor: Option<String>,
@@ -79,6 +84,28 @@ pub enum StoryAction {
     /// Read immutable notes in append order.
     ListNotes {
         story_id: String,
+    },
+    ArchiveStory {
+        story_id: String,
+        expected_revision: i64,
+    },
+    UnarchiveStory {
+        story_id: String,
+        expected_revision: i64,
+    },
+    ArchivePlan {
+        plan_id: String,
+        expected_revision: i64,
+    },
+    UnarchivePlan {
+        plan_id: String,
+        expected_revision: i64,
+    },
+    StoryArchiveHistory {
+        story_id: String,
+    },
+    PlanArchiveHistory {
+        plan_id: String,
     },
     GetStory {
         story_id: String,
@@ -129,6 +156,7 @@ pub enum StoryReply {
     Transitions(Vec<StoryTransition>),
     Note(super::StoryNote),
     Notes(Vec<super::StoryNote>),
+    ArchiveHistory(Vec<super::ArchiveEvent>),
     // This reply already contains its type tag so the cursor is beside, not inside, value.
     #[serde(untagged)]
     Stories(StoryListPage),
@@ -202,7 +230,9 @@ fn story_action_with_source(
                 patch,
             )?))
         }
-        StoryAction::ListPlans => Ok(StoryReply::Plans(store.list_plans(&project)?)),
+        StoryAction::ListPlans { archived } => Ok(StoryReply::Plans(
+            store.list_plans_archived(&project, archived)?,
+        )),
         StoryAction::ListPlanSources => Ok(StoryReply::PlanSources(
             super::sources::list_plan_sources(std::path::Path::new(&project))?,
         )),
@@ -210,6 +240,7 @@ fn story_action_with_source(
             if let Some(plan) = store
                 .list_plans(&project)?
                 .into_iter()
+                .chain(store.list_plans_archived(&project, true)?)
                 .find(|plan| plan.source == source)
             {
                 return Ok(StoryReply::Plan(plan));
@@ -281,6 +312,7 @@ fn story_action_with_source(
             state,
             priority,
             story_type,
+            archived,
             limit,
             cursor,
         } => {
@@ -291,6 +323,7 @@ fn story_action_with_source(
                     state,
                     priority,
                     story_type,
+                    archived,
                 },
                 limit,
                 cursor.as_deref(),
@@ -321,6 +354,50 @@ fn story_action_with_source(
         StoryAction::ListNotes { story_id } => {
             story_in_project(&story_id)?;
             Ok(StoryReply::Notes(store.list_notes(&story_id)?))
+        }
+        StoryAction::ArchiveStory {
+            ref story_id,
+            expected_revision,
+        }
+        | StoryAction::UnarchiveStory {
+            ref story_id,
+            expected_revision,
+        } => {
+            story_in_project(story_id)?;
+            let archived = matches!(action, StoryAction::ArchiveStory { .. });
+            Ok(StoryReply::Story(store.set_story_archived(
+                story_id,
+                expected_revision,
+                archived,
+                archive_actor(actor_session, unauthenticated_http),
+            )?))
+        }
+        StoryAction::ArchivePlan {
+            ref plan_id,
+            expected_revision,
+        }
+        | StoryAction::UnarchivePlan {
+            ref plan_id,
+            expected_revision,
+        } => {
+            plan_in_project(plan_id)?;
+            let archived = matches!(action, StoryAction::ArchivePlan { .. });
+            Ok(StoryReply::Plan(store.set_plan_archived(
+                plan_id,
+                expected_revision,
+                archived,
+                archive_actor(actor_session, unauthenticated_http),
+            )?))
+        }
+        StoryAction::StoryArchiveHistory { story_id } => {
+            story_in_project(&story_id)?;
+            Ok(StoryReply::ArchiveHistory(
+                store.archive_history(&story_id)?,
+            ))
+        }
+        StoryAction::PlanArchiveHistory { plan_id } => {
+            plan_in_project(&plan_id)?;
+            Ok(StoryReply::ArchiveHistory(store.archive_history(&plan_id)?))
         }
         StoryAction::GetStory { story_id } => Ok(StoryReply::Story(story_in_project(&story_id)?)),
         StoryAction::TransitionHistory { story_id } => {
@@ -508,6 +585,229 @@ mod tests {
         );
     }
 
+    /// Catches: archive that only sets a flag the default list ignores.
+    #[test]
+    fn archived_story_is_hidden_from_default_list() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, sibling) = two_stories(project);
+        let action = serde_json::from_value(serde_json::json!({
+            "action":"archive_story", "story_id":story.id,
+            "expected_revision":story.revision
+        }))
+        .expect("archive action must be supported");
+        story_action(project, action, None).expect("archive");
+        let action = serde_json::from_value(serde_json::json!({
+            "action":"list_stories", "plan_id":story.plan_id
+        }))
+        .unwrap();
+        let StoryReply::Stories(page) = story_action(project, action, None).unwrap() else {
+            panic!("stories");
+        };
+        assert_eq!(
+            page.value.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            vec![&sibling.id]
+        );
+    }
+
+    /// Catches: restore losing record contents, stale cleanup overwriting edits, or archive history disappearing on reopen.
+    #[test]
+    fn archive_round_trip_checks_revisions_and_preserves_history_and_contents() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        let call = |value| story_action(project, serde_json::from_value(value).unwrap(), None);
+        let archived = story_of(call(serde_json::json!({"action":"archive_story","story_id":story.id,"expected_revision":story.revision})).unwrap());
+        assert!(archived.archived);
+        assert_eq!(archived.revision, story.revision + 1);
+        assert_eq!(archived.status, story.status);
+        assert!(call(serde_json::json!({"action":"unarchive_story","story_id":story.id,"expected_revision":story.revision})).unwrap_err().contains("stale"));
+        let StoryReply::Stories(page) = call(serde_json::json!({"action":"list_stories","plan_id":story.plan_id,"archived":true,"limit":1})).unwrap() else { panic!("stories"); };
+        assert_eq!(page.value, vec![archived.clone()]);
+        let restored = story_of(call(serde_json::json!({"action":"unarchive_story","story_id":story.id,"expected_revision":archived.revision})).unwrap());
+        let mut expected = story.clone();
+        expected.revision += 2;
+        assert_eq!(restored, expected);
+        let StoryReply::ArchiveHistory(events) =
+            call(serde_json::json!({"action":"story_archive_history","story_id":story.id}))
+                .unwrap()
+        else {
+            panic!("history");
+        };
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| (e.revision, e.archived))
+                .collect::<Vec<_>>(),
+            vec![(2, true), (3, false)]
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| e.actor == super::super::StoryTransitionActor::Human)
+        );
+        let store = StoryStore::open().unwrap();
+        let plan = store.get_plan(&story.plan_id).unwrap();
+        let archived_plan = store
+            .set_plan_archived(
+                &plan.id,
+                plan.revision,
+                true,
+                super::super::StoryTransitionActor::LocalApi,
+            )
+            .unwrap();
+        assert!(store.list_plans(project).unwrap().is_empty());
+        assert_eq!(
+            store.list_plans_archived(project, true).unwrap(),
+            vec![archived_plan.clone()]
+        );
+        assert!(
+            store
+                .set_plan_archived(
+                    &plan.id,
+                    plan.revision,
+                    false,
+                    super::super::StoryTransitionActor::Human
+                )
+                .unwrap_err()
+                .contains("stale")
+        );
+        assert!(
+            store
+                .claim(&story.id, "session", restored.revision)
+                .unwrap_err()
+                .contains("archived")
+        );
+        let restored_plan = store
+            .set_plan_archived(
+                &plan.id,
+                archived_plan.revision,
+                false,
+                super::super::StoryTransitionActor::Human,
+            )
+            .unwrap();
+        assert_eq!(restored_plan.revision, plan.revision + 2);
+        assert!(!restored_plan.archived);
+        assert_eq!(store.get_story(&story.id).unwrap(), restored);
+        assert_eq!(store.archive_history(&plan.id).unwrap().len(), 2);
+    }
+
+    /// Catches: continuing a cursor from active records into a different archive query.
+    #[test]
+    fn archive_filter_is_bound_to_story_list_cursor() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (story, _) = two_stories(repo.path().to_str().unwrap());
+        let store = StoryStore::open().unwrap();
+        let page = store
+            .list_stories_filtered(&story.plan_id, &StoryListFilter::default(), Some(1), None)
+            .unwrap();
+        let filter = StoryListFilter {
+            archived: true,
+            ..Default::default()
+        };
+        assert!(
+            store
+                .list_stories_filtered(
+                    &story.plan_id,
+                    &filter,
+                    Some(1),
+                    page.next_cursor.as_deref()
+                )
+                .unwrap_err()
+                .contains("does not match")
+        );
+    }
+
+    /// Catches: cleanup releasing a live claim, or parent cleanup bypassing child ownership.
+    #[test]
+    fn archive_refuses_claims_and_archived_stories_cannot_restart() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (story, sibling) = two_stories(repo.path().to_str().unwrap());
+        let store = StoryStore::open().unwrap();
+        let claimed = store.claim(&story.id, "owner", story.revision).unwrap();
+        let actor = super::super::StoryTransitionActor::Human;
+        assert!(
+            store
+                .set_story_archived(&story.id, claimed.revision, true, actor.clone())
+                .unwrap_err()
+                .contains("claimed")
+        );
+        let plan = store.get_plan(&story.plan_id).unwrap();
+        assert!(
+            store
+                .set_plan_archived(&plan.id, plan.revision, true, actor.clone())
+                .unwrap_err()
+                .contains("claimed")
+        );
+        assert_eq!(store.get_story(&story.id).unwrap(), claimed);
+        assert!(store.archive_history(&story.id).unwrap().is_empty());
+        let archived = store
+            .set_story_archived(&sibling.id, sibling.revision, true, actor)
+            .unwrap();
+        assert!(
+            store
+                .claim(&sibling.id, "other", archived.revision)
+                .unwrap_err()
+                .contains("archived")
+        );
+        assert!(
+            store
+                .transition(&sibling.id, archived.revision, StoryCommand::StartManual)
+                .unwrap_err()
+                .contains("archived")
+        );
+        assert!(
+            !store
+                .plan_view(&plan.id)
+                .unwrap()
+                .visible_story_ids
+                .contains(&sibling.id)
+        );
+    }
+
+    /// Catches: archive and history actions accessing another project's record by id.
+    #[test]
+    fn archive_actions_preserve_project_boundaries() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let other = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (story, _) = two_stories(repo.path().to_str().unwrap());
+        for action in [
+            "archive_story",
+            "unarchive_story",
+            "archive_plan",
+            "unarchive_plan",
+            "story_archive_history",
+            "plan_archive_history",
+        ] {
+            let mut value = serde_json::json!({"action":action});
+            if action.contains("story") {
+                value["story_id"] = story.id.clone().into();
+            } else {
+                value["plan_id"] = story.plan_id.clone().into();
+            }
+            if !action.ends_with("history") {
+                value["expected_revision"] = 1.into();
+            }
+            let error = story_action(
+                other.path().to_str().unwrap(),
+                serde_json::from_value(value).unwrap(),
+                None,
+            )
+            .unwrap_err();
+            assert!(error.contains("does not belong"), "{action}: {error}");
+        }
+    }
+
     #[test]
     fn plan_sources_follow_repo_files_and_document_titles() {
         let config = tempfile::tempdir().expect("config");
@@ -642,7 +942,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            matches!(story_action(second_path, StoryAction::ListPlans, None).expect("list"), StoryReply::Plans(plans) if plans.is_empty())
+            matches!(story_action(second_path, StoryAction::ListPlans { archived: false }, None).expect("list"), StoryReply::Plans(plans) if plans.is_empty())
         );
 
         let StoryReply::Story(story) = story_action(
@@ -1134,7 +1434,7 @@ mod tests {
         let (first, second) = two_stories(project);
         let third = {
             let StoryReply::Plans(plans) =
-                story_action(project, StoryAction::ListPlans, None).unwrap()
+                story_action(project, StoryAction::ListPlans { archived: false }, None).unwrap()
             else {
                 panic!("expected plans");
             };
@@ -1540,5 +1840,15 @@ mod tests {
                 &note
             );
         }
+    }
+}
+
+fn archive_actor(session: Option<&str>, unauthenticated_http: bool) -> super::StoryTransitionActor {
+    match session {
+        Some(id) => super::StoryTransitionActor::ManagedSession {
+            session_id: id.into(),
+        },
+        None if unauthenticated_http => super::StoryTransitionActor::LocalApi,
+        None => super::StoryTransitionActor::Human,
     }
 }

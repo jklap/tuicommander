@@ -1830,6 +1830,60 @@ mod tests {
         assert!(error.contains("integration receipt"), "{error}");
     }
 
+    /// Catches: archiving a run-owned story or its parent plan while dispatch can still use it.
+    #[test]
+    fn archive_refuses_active_run_ownership_and_allows_after_cancel() {
+        let (_config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let runs = RunStore::open().unwrap();
+        let run = runs
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let story = stories.get_story(&story_id).unwrap();
+        let plan = stories.get_plan(&plan_id).unwrap();
+        let actor = crate::stories::StoryTransitionActor::Human;
+        for archived in [true, false] {
+            assert!(
+                stories
+                    .set_story_archived(&story_id, story.revision, archived, actor.clone())
+                    .unwrap_err()
+                    .contains("active workflow")
+            );
+            assert!(
+                stories
+                    .set_plan_archived(&plan_id, plan.revision, archived, actor.clone())
+                    .unwrap_err()
+                    .contains("active workflow")
+            );
+        }
+        runs.command(&run.id, "cancel-for-archive", RunCommand::Cancel)
+            .unwrap();
+        stories
+            .set_story_archived(&story_id, story.revision, true, actor.clone())
+            .unwrap();
+        stories
+            .set_plan_archived(&plan_id, plan.revision, true, actor)
+            .unwrap();
+        assert!(
+            runs.start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default()
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("archived")
+        );
+    }
+
     #[test]
     fn another_plans_workflow_run_does_not_hold_manual_dependents() {
         let (_config, project, plan_id, _story_id, definition_id, _guard) = fixture();

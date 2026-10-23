@@ -82,7 +82,7 @@ impl StoryStore {
         dependency_id: &str,
         expected_revision: i64,
     ) -> Result<Story, String> {
-        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight_plan = self.require_unarchived_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
@@ -90,6 +90,7 @@ impl StoryStore {
         let mut story = read_story(&tx, story_id)?;
         let dependency = read_story(&tx, dependency_id)?;
         check_revision(&story, expected_revision)?;
+        require_active_story(&tx, &story)?;
         if story.plan_id != dependency.plan_id {
             return Err("dependencies must belong to one plan".into());
         }
@@ -133,13 +134,14 @@ impl StoryStore {
         expected_revision: i64,
         _actor_session: Option<&str>,
     ) -> Result<Story, String> {
-        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight_plan = self.require_unarchived_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        require_active_story(&tx, &story)?;
         if story.status != StoryStatus::Backlog {
             return Err(format!(
                 "dependencies can be removed only from backlog stories (status: {})",
@@ -247,7 +249,7 @@ impl StoryStore {
         {
             return Err("a story cannot be approved by its workflow implementer".into());
         }
-        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight_plan = self.require_unarchived_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let _reservation_guard = if !workflow_start && matches!(command, StoryCommand::StartManual)
         {
@@ -261,6 +263,7 @@ impl StoryStore {
         preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        require_active_story(&tx, &story)?;
         match command {
             StoryCommand::StartManual => {
                 if story.status != StoryStatus::Ready {

@@ -63,6 +63,17 @@ verify the selected check against that PR head.
 
 Native stories expose `qa` for work that waits on manual checks. A criterion starts with `[MANUAL]`, or is marked through `set_criterion_manual {index,manual}`. Active work automatically enters QA when all unchecked criteria are manual; `submit_qa` explicitly requests that state. `reject_qa` returns QA to In progress; `approve` requires every criterion checked. QA keeps plans Active and dependencies blocked. All transitions retain expected-revision checks. See the [native stories guide](../user-guide/native-stories.md#manual-qa).
 
+### Reversible native record archival
+
+All native story transports share `archive_story`, `unarchive_story`, `archive_plan`, and `unarchive_plan`. Story actions take `story_id`; plan actions take `plan_id`. Each requires `expected_revision` and returns the updated record with its incremented `revision` and `archived` flag. Stale revisions fail without a write. Archival preserves status, criteria, dependencies, and child archive flags; it never deletes records or cascades to children.
+
+`list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
+
+Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused workflow run owns its plan's story set: cleanup of that plan or its stories is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+
 The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Any trusted caller may remove a direct WontFix prerequisite from a Backlog story with its current revision. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.

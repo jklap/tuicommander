@@ -213,3 +213,23 @@ pub(super) fn reconcile_ready(
     }
     Ok(())
 }
+
+/// Check within the caller's SQLite transaction, not an earlier presentation read.
+pub(super) fn require_active_plan(conn: &Connection, id: &str) -> Result<(), String> {
+    let archived: bool = conn
+        .query_row("SELECT archived FROM plans WHERE id=?1", [id], |row| {
+            row.get(0)
+        })
+        .map_err(|e| format!("read plan archive state: {e}"))?;
+    if archived {
+        return Err("plan is archived; restore it first".into());
+    }
+    Ok(())
+}
+
+pub(super) fn require_active_story(conn: &Connection, story: &Story) -> Result<(), String> {
+    if story.archived {
+        return Err("story is archived; restore it first".into());
+    }
+    require_active_plan(conn, &story.plan_id)
+}

@@ -63,7 +63,8 @@ impl StoryStore {
         // Preserve the existing id order and full internal read; only the response is projected.
         let mut stories = self.list_stories(plan_id)?;
         stories.retain(|story| {
-            filter.state.is_none_or(|state| story.status == state)
+            story.archived == filter.archived
+                && filter.state.is_none_or(|state| story.status == state)
                 && filter
                     .priority
                     .is_none_or(|priority| story.priority == priority)

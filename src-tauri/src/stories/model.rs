@@ -13,6 +13,7 @@ pub struct NewPlan {
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub revision: i64,
+    pub archived: bool,
     pub id: String,
     pub project: String,
     pub title: String,
@@ -129,6 +130,8 @@ pub struct StoryFilter {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct StoryListFilter {
+    #[serde(default)]
+    pub archived: bool,
     pub state: Option<StoryStatus>,
     pub priority: Option<u8>,
     pub story_type: Option<StoryType>,
@@ -249,6 +252,8 @@ impl StoryStatus {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Story {
+    #[serde(default)]
+    pub archived: bool,
     pub id: String,
     pub plan_id: String,
     pub title: String,
@@ -377,3 +382,11 @@ pub struct StoryNote {
 }
 
 pub const STORY_NOTE_INVALID: &str = "invalid story note: ";
+/// Append-only archival event. Archival never changes status or deletes records.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveEvent {
+    pub revision: i64,
+    pub archived: bool,
+    pub actor: StoryTransitionActor,
+}

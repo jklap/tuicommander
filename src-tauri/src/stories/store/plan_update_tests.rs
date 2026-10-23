@@ -115,7 +115,7 @@ fn update_plan_migrates_version_three_without_changing_metadata() {
     drop(store);
     let path = dir.path().join("stories.sqlite3");
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("ALTER TABLE plans DROP COLUMN revision; PRAGMA user_version=3;")
+    conn.execute_batch("ALTER TABLE plans DROP COLUMN revision; ALTER TABLE plans DROP COLUMN archived; PRAGMA user_version=3;")
         .unwrap();
     drop(conn);
     let store = StoryStore::open_at(&path).unwrap();
