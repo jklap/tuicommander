@@ -64,6 +64,13 @@ pub(crate) async fn create_pty(
             apply_agent_screen_env(&mut cmd, &spawn_config.env);
             inject_worktree_env(&mut cmd, spawn_config.cwd.as_deref());
 
+            // DEFERRED (2026-10-23) — this caller env runs after
+            // `bind_pty_identity` and `inject_worktree_env`, so a key named
+            // `TUIC_SESSION` (or a derived `TUIC_*`) overrides TUIC's own value;
+            // `agent::apply_spawn_agent_env` applies caller env first. Pre-existing
+            // at wip's tip (F16 note, Tauri IPC only); reordering changes what a
+            // desktop tab's configured flags can override, so it needs its own
+            // decision and test rather than riding along with F16.
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_config.env {
                 cmd.env(key, value);
@@ -269,6 +276,8 @@ pub(crate) async fn create_pty_with_worktree(
             );
             apply_agent_screen_env(&mut cmd, &spawn_env);
             inject_worktree_env(&mut cmd, spawn_worktree_path.to_str());
+            // DEFERRED (2026-10-23) — same caller-env-after-identity order as
+            // `create_pty` above; see the note there.
             for (key, value) in &spawn_env {
                 cmd.env(key, value);
             }

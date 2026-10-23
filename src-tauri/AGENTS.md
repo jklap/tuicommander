@@ -987,10 +987,13 @@ per-key env loop for "feature flags configured in Settings → Agents" ran AFTER
 `bind_pty_identity`; `CommandBuilder::env` takes the last write for a key, so a flag named
 `TUIC_SESSION` would win and could rebind another live session's identity via
 `bind_peer_identity_locked` (reachable only via this app's own Tauri IPC — a footgun, not an
-outside exploit). This tree already orders it safely: derived worktree `TUIC_*` context first,
-then the configured env flags (which may deliberately override that derived context), then
-`bind_pty_identity` last, so the identity is always authoritative. Keep `bind_pty_identity` the
-last env write in that closure. No new test (same untested `#[tauri::command]` closure as above).
+outside exploit). The order lives in `agent::apply_spawn_agent_env`: the configured/caller env
+flags first, then the derived worktree `TUIC_*` context, then `bind_pty_identity` last, so TUIC's
+own identity and worktree env always win over caller env (wip's pick a31b11611). Keep
+`bind_pty_identity` the last env write. Test:
+`agent::tests::spawn_agent_env_lets_tuic_context_and_identity_win_over_caller_env`. The Tauri IPC
+`create_pty`/`create_pty_with_worktree` (`pty/commands.rs`) still apply caller env last; that gap
+is pre-existing and marked `DEFERRED` there.
 
 There is no other spawn path to fix on this codebase: there is no
 `pty::spawn_session_for_agent`/in-process agent loop (cron scheduler, PR-review watcher,

@@ -1508,25 +1508,16 @@ pub(crate) async fn spawn_agent(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
-            // Derived TUIC_* context first, so the configured env flags below
-            // (and the identity bound after them) can still override it.
-            crate::pty::inject_worktree_env(
-                &mut cmd,
-                spawn_agent_config
-                    .cwd
-                    .as_deref()
-                    .or(spawn_pty_config.cwd.as_deref()),
-            );
-            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
-            // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &spawn_pty_config.env {
-                cmd.env(key, value);
-            }
-            crate::pty::bind_pty_identity(
+            apply_spawn_agent_env(
                 &state_for_env,
                 &mut cmd,
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
+                spawn_agent_config
+                    .cwd
+                    .as_deref()
+                    .or(spawn_pty_config.cwd.as_deref()),
+                &spawn_pty_config.env,
             );
             cmd
         },
@@ -1673,9 +1664,67 @@ pub(crate) async fn spawn_agent(
     Ok(session_id)
 }
 
+/// The environment `spawn_agent` gives its agent. `CommandBuilder::env` keeps
+/// the last write for a key, so the order is the precedence (later wins).
+fn apply_spawn_agent_env(
+    state: &crate::state::AppState,
+    cmd: &mut CommandBuilder,
+    session_id: &str,
+    tuic_session: Option<&str>,
+    cwd: Option<&str>,
+    env: &std::collections::HashMap<String, String>,
+) {
+    crate::pty::apply_agent_screen_env(cmd, env);
+    // Caller-supplied env flags (feature flags configured in Settings →
+    // Agents) first: a security review found that a caller env applied after
+    // the TUIC-owned env could shadow it. A flag must never override the
+    // derived worktree `TUIC_*` context nor the identity bound last.
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    crate::pty::inject_worktree_env(cmd, cwd);
+    // Identity is always the last env write.
+    crate::pty::bind_pty_identity(state, cmd, session_id, tuic_session);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: caller-supplied `pty_config.env` overriding the TUIC-derived
+    // worktree context or the bound identity (pick 201's intent: TUIC's own
+    // identity/worktree env always wins over caller env).
+    #[test]
+    fn spawn_agent_env_lets_tuic_context_and_identity_win_over_caller_env() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let cwd = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let env: std::collections::HashMap<String, String> = [
+            ("TUIC_SCRIPT_KIND", "caller"),
+            ("TUIC_APP_VERSION", "caller"),
+            ("TUIC_SESSION", "caller"),
+            ("TUIC_PROBE_UNRELATED", "caller"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut cmd = CommandBuilder::new("agent");
+        apply_spawn_agent_env(
+            &state,
+            &mut cmd,
+            "pty-key",
+            Some("identity"),
+            Some(cwd.path().to_str().unwrap()),
+            &env,
+        );
+        let get = |key: &str| cmd.get_env(key).map(|v| v.to_string_lossy().into_owned());
+        assert_eq!(get("TUIC_SCRIPT_KIND").as_deref(), Some("run"));
+        assert_eq!(
+            get("TUIC_APP_VERSION").as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(get("TUIC_SESSION").as_deref(), Some("identity"));
+        assert_eq!(get("TUIC_PROBE_UNRELATED").as_deref(), Some("caller"));
+    }
 
     #[test]
     fn windows_probe_resolution_prefers_runnable_shims_over_extensionless_script() {
