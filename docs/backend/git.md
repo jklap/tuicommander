@@ -12,6 +12,15 @@ The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree o
 
 Workflow launch uses `validate_branch_worktree_path`: the canonical path must identify a registered isolated branch checkout outside the archive pool, with no Git operation in progress. Detached-orphan removal uses the separate `validate_worktree_path` guard, which continues to refuse attached branch checkouts. Launch authorization never grants removal permission (#1883-eba0).
 
+Orphan scans and orphan removal share the temporary-path policy in
+`tuic_core::temp_paths`. OS/environment temp roots, `~/Gits/.tmp` and Unix
+`/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` are excluded
+before per-checkout assessment. Component matching checks registered and resolved
+paths, including existing ancestors of missing checkouts. The path validator and
+low-level orphan remover recheck the exclusion, so stale or confirmed requests
+cannot remove temporary detached checkouts. Detached sidebar inventory is
+independent: it can display these checkouts without authorizing cleanup.
+
 Worktree removal verifies checkout and submodule safety before asking Git to unregister it. Git can return `Directory not empty` after removing the registration and some files. In that state, the removal call finishes deleting the known checkout directory and only then compares and deletes the branch ref. A failed cleanup reports the remaining path; an unregistered directory without TUIC ownership evidence is never recursively deleted.
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.

@@ -7490,7 +7490,7 @@ mod tests {
     // safety verdict (untracked files must survive).
     #[tokio::test]
     async fn test_repo_worktree_remove_by_path_removes_clean_detached_and_refuses_untracked() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let state = test_state();
         let add = |name: &str| {
             let linked = repo.path().join(name);
@@ -7641,7 +7641,18 @@ mod tests {
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.
     fn create_temp_git_repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().expect("create temp dir");
+        create_git_repo_at(tempfile::tempdir().expect("create temp dir"))
+    }
+
+    /// Ordinary orphan fixtures must not qualify for the temporary-path exclusion.
+    fn create_orphan_git_repo() -> tempfile::TempDir {
+        create_git_repo_at(
+            tempfile::tempdir_in(tuic_test_support::non_temporary_fixture_root())
+                .expect("create non-temporary orphan fixture"),
+        )
+    }
+
+    fn create_git_repo_at(dir: tempfile::TempDir) -> tempfile::TempDir {
         let path = dir.path();
         std::process::Command::new("git")
             .args(["init"])
@@ -7674,7 +7685,7 @@ mod tests {
 
     #[tokio::test]
     async fn orphan_cleanup_assessment_rejects_untracked_files() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
             .args([
@@ -7721,7 +7732,7 @@ mod tests {
 
     #[tokio::test]
     async fn orphan_cleanup_assessment_rejects_commit_reachable_only_from_tag() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
             .args([
@@ -7832,7 +7843,7 @@ mod tests {
     /// A clean detached checkout with a live session registered in it.
     #[cfg(unix)]
     fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
             .args([
@@ -8025,7 +8036,7 @@ mod tests {
     // blocking a removal that has no live session at all.
     #[tokio::test]
     async fn confirmed_orphan_removal_ignores_stale_confirmed_ids() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
             .args([
@@ -8078,7 +8089,7 @@ mod tests {
 
     #[tokio::test]
     async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
             .args([
@@ -8172,7 +8183,7 @@ mod tests {
     // so), naming it from the repo itself or from a linked worktree as `path`.
     #[tokio::test]
     async fn worktree_remove_by_path_never_removes_the_main_checkout_even_when_detached() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let state = test_state();
         crate::git_cli::git_cmd(repo.path())
             .args(["checkout", "--detach"])
@@ -8203,7 +8214,7 @@ mod tests {
     #[tokio::test]
     async fn worktree_remove_by_path_refuses_staged_work_unreachable_commits_and_branch_checkouts()
     {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let state = test_state();
         let staged = critic_detached_checkout(repo.path(), "staged");
         std::fs::write(staged.join("new.txt"), "x").unwrap();
@@ -8254,7 +8265,7 @@ mod tests {
     // a `..` hop out of a real checkout), which would delete anything the caller names.
     #[tokio::test]
     async fn worktree_remove_by_path_refuses_anything_that_is_not_a_registered_worktree() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let state = test_state();
         let linked = critic_detached_checkout(repo.path(), "linked");
         std::fs::create_dir(linked.join("sub")).unwrap();
@@ -8301,7 +8312,7 @@ mod tests {
     // keeps the orphan listed can never be dropped through MCP.
     #[tokio::test]
     async fn worktree_remove_by_path_drops_the_registration_of_a_vanished_checkout() {
-        let repo = create_temp_git_repo();
+        let repo = create_orphan_git_repo();
         let state = test_state();
         let linked = critic_detached_checkout(repo.path(), "vanished");
         std::fs::remove_dir_all(&linked).unwrap();
