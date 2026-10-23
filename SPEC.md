@@ -130,7 +130,7 @@ renderer data loss.
 
 Desktop and HTTP/PWA interactive input arm a 100ms priority window before the
 PTY write. Only subsequent reader-applied output can wake the existing frame
-ticker early. Priority uses a rolling budget of two bypass cuts per 100ms and
+ticker early. Priority uses a rolling budget of four bypass cuts per 100ms and
 8ms coalescing from the previous ticker cut; repeated input does not reset the
 budget. The normal animation/load floors, desktop receipt gate, DEC-2026
 buffering, ordering and shared-damage repair remain on that same serializer.

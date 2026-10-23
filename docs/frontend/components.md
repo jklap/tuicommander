@@ -361,7 +361,8 @@ Branch rows keep the status icon separate from the always-visible agents disclos
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
-  consequence in a WebView-compatible hover/focus tooltip
+  consequence in a WebView-compatible hover/focus tooltip. Branch-name tooltips include each
+  diagnostic once and omit removal warnings for main checkouts
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal
@@ -628,8 +629,11 @@ The whole Progress UI: one newest-first list for the active PTY by default,
 with a selector for other PTYs and the repository aggregate. It has a divider
 marking where the last visit ended, and a blocked-only
 checkbox. Blocked entries are red, host-written `intent` entries are muted, and
-each row can be deleted. There are no pages, no tabs, no workstream projections
-and no export — Progress is a thing you glance at, so it is a dialog and not a
+each row can be deleted. The list opens with at most 100 entries; **Load older**
+appends another cursor page. The control is disabled while a read is pending.
+The header uses its project selector as the project label when available.
+Without a selector, including on desktop, it shows a project subtitle instead.
+There is no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.
 The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.

@@ -1,3 +1,8 @@
+## Progress cursor paging (2151-62ef)
+
+- [x] Targeted module/component checks verify a 1000-record journal opens with 100 rows and one read, then an older-page double click appends exactly 100 distinct rows. Scope changes and older-page failure/retry have regression coverage.
+- [x] Captured the mobile Progress list at 390×844 before and after paging, including a scroll into the older page. Parent reviewed the PNGs. Evidence: orchestrator `reports/tuicommander/img/2026-10-23-2151/`. Parent inspection of the original screenshot identified a repeated project name in the header, not duplicate journal records; the embedded header now keeps only the project selector. Regression coverage checks single- and multi-project mobile headers, empty/missing project discovery fallback, and the retained desktop subtitle. Updated header capture: `~/Gits/.tmp/results/2151/header-visual/after-header.png` (390×844; matching DOM snapshot has no separate project subtitle).
+
 ## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
 
 - [x] Isolated `agent-test-2040` native measurements exercised real ego echo and matching paced bulk output before/after the fix. The private-repair-plus-delta cycle disappeared; native echo p95 still exceeds one frame. Evidence: `~/Gits/.tmp/2040-web/native-final-fixed/` and the browser-input measurement report. This does not certify the remaining story criteria.
@@ -74,7 +79,7 @@
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
 ## Bounded input frame priority (2040-16b2) — Rust restart required
 
-- [ ] After a manual rebuild/restart, check repeated input while output races frame delivery. Newer applied output must retain its bounded retry; two credits per 100 ms, 8 ms spacing, receipt gates and synchronized redraws remain unchanged. Native idle/help proxy results and limits are in the browser-input measurement report; this is not a one-frame guarantee.
+- [ ] After a manual rebuild/restart, check repeated input while output races frame delivery. Newer applied output must retain its bounded retry; this experimental branch trials four credits per 100 ms, with unchanged 8 ms spacing, receipt gates and synchronized redraws. Do not load this trial in the daily app: the completed A/B/A/B series improves idle p95 but is NOT LANDABLE under the strict all-statistic rule because B1 calibration rAF max is 40 ms versus A 26/36 ms; see `reports/tuicommander/2026-10-23-four-send-quota-trial.md`. Native idle/help proxy results and limits are in the browser-input measurement report; this is not a one-frame guarantee.
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
 
