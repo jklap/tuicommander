@@ -1,6 +1,8 @@
 //! Reconcile durable runs against host-owned evidence, including after bus lag.
 use super::{
-    run::{AutomationRun, OUTPUT_LIMIT, RunDetails, RunStatus},
+    definitions::DefinitionStore,
+    model::Workspace,
+    run::{AutomationRun, OUTPUT_LIMIT, RunDetails, RunStatus, RunTrigger},
     store::RunStore,
 };
 use crate::{
@@ -207,6 +209,7 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn publish(&self, run: &AutomationRun) {
+        publish_event_draft_pr(run);
         let store = self.0.automation_runtime.notification_store();
         let notice = store.as_ref().is_some_and(|store| {
             super::notifications::publish(
@@ -230,6 +233,52 @@ impl CompletionEffects for NativeCompletion<'_> {
             super::notifications::settle(&store, run, "bell", false);
         }
     }
+}
+
+/// A completed event run opens its draft PR; the agent pushed the branch itself.
+/// Allowlist and branch checks live in `publish`, which this only feeds.
+fn publish_event_draft_pr(run: &AutomationRun) {
+    let (
+        RunStatus::Completed,
+        RunTrigger::Event {
+            repository,
+            issue_number,
+            ..
+        },
+    ) = (run.status, &run.trigger)
+    else {
+        return;
+    };
+    let (Some(workspace), Workspace::NewPerRun { base_branch }) =
+        (run.workspace.clone(), run.definition.workspace.clone())
+    else {
+        tracing::warn!(source = "automations", run_id = %run.id, "Event run has no isolated workspace; draft PR not opened");
+        return;
+    };
+    let (repository, issue_number, run_id) = (repository.clone(), *issue_number, run.id.clone());
+    std::thread::spawn(move || {
+        let outcome = (|| {
+            let intake = DefinitionStore::new().load()?.event_intake;
+            let workspace = std::path::Path::new(&workspace);
+            let head = super::publish::run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            super::publish::publish_draft_pr(
+                &intake,
+                &super::publish::DraftPr {
+                    repository: &repository,
+                    head: &head,
+                    base: &base_branch,
+                    issue_number,
+                },
+                |args| super::publish::run_gh_in(workspace, args),
+            )
+        })();
+        match outcome {
+            Ok(url) => tracing::info!(source = "automations", %run_id, %url, "Draft PR opened"),
+            Err(error) => {
+                tracing::warn!(source = "automations", %run_id, %error, "Draft PR not opened")
+            }
+        }
+    });
 }
 
 #[cfg(test)]

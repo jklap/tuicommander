@@ -152,3 +152,15 @@ exact across daylight-saving changes.
 ### Guided GitHub event configuration
 
 For step-by-step policy setup, use the three [event configuration Smart Prompts](event-driven-templates.md), not the scheduled draft templates above. The guides verify the owning daemon, agent/reviewer profiles, GitHub auth, skills and supported intake/publication APIs. Missing capabilities stop the interview; no event subscription is created by applying a scheduled template.
+
+### GitHub issue intake (allowlisted, off by default)
+
+`automations.json` accepts an `event_intake` block. It stays off until `repositories` lists at least one `owner/name`:
+
+```json
+"event_intake": { "repositories": ["owner/name"], "label": "tuic-run", "definition_id": "<definition id>" }
+```
+
+The existing GitHub poller supplies the issues, so its issue filter must be `all` for the repository. An open issue that carries the label starts the named, enabled definition once per issue and label; the key is stored in the run ledger and survives restarts. If an open run or the concurrency limit refuses it, a later 30-second tick admits it. The agent receives only the issue URL, never its title or body.
+
+When such a run completes in an isolated workspace (`new_per_run`), TUIC runs `gh pr create --draft --repo <owner/name>` for the workspace branch. The agent must push that branch itself. Publication re-checks the allowlist; no other repository is ever written. `gh` uses the authentication of the TUIC process environment.
