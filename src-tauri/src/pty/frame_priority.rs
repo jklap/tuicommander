@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const WINDOW: Duration = Duration::from_millis(100);
+const BYPASS_SENDS: usize = 4;
 const MIN_SPACING: Duration = Duration::from_millis(8);
 
 #[derive(Default)]
@@ -19,7 +20,7 @@ struct PriorityState {
     output: u64,
     pending: bool,
     // Rolling quota: new input must not replenish it during an output flood.
-    sent: [Option<Instant>; 2],
+    sent: [Option<Instant>; BYPASS_SENDS],
 }
 
 #[derive(Clone, Copy)]
@@ -109,8 +110,8 @@ impl InputFramePriority {
             state.pending = false;
         }
         if bypassed {
-            state.sent[0] = state.sent[1];
-            state.sent[1] = Some(now);
+            state.sent.rotate_left(1);
+            state.sent[BYPASS_SENDS - 1] = Some(now);
         }
         // Newer reader work can arrive while the old request is pending, so
         // applied() deliberately coalesces its wake. Keep its bounded retry on
@@ -139,7 +140,7 @@ mod tests {
     fn repeated_input_cannot_replenish_the_rolling_send_budget() {
         let priority = InputFramePriority::default();
         let now = Instant::now();
-        for ms in [0, 8] {
+        for ms in [0, 8, 16, 24] {
             let at = now + Duration::from_millis(ms);
             priority.arm(at);
             priority.applied(priority.generation(), at);
@@ -147,7 +148,7 @@ mod tests {
             assert_eq!(request.ready_at, at);
             priority.sent(request, at, true);
         }
-        let at = now + Duration::from_millis(16);
+        let at = now + Duration::from_millis(32);
         priority.arm(at);
         priority.applied(priority.generation(), at);
         assert_eq!(priority.request(at, None).unwrap().ready_at, now + WINDOW);
@@ -168,15 +169,15 @@ mod tests {
     fn retained_send_retry_preserves_spacing_quota_and_expiry() {
         let mut failures = Vec::new();
         for (spent, at_ms, expected_ms) in [
-            (false, 16, Some(24)),
-            (true, 16, Some(100)),
+            (false, 32, Some(40)),
+            (true, 32, Some(100)),
             (false, 99, None),
         ] {
             let priority = InputFramePriority::default();
             let start = Instant::now();
             priority.arm(start);
             if spent {
-                for ms in [0, 8] {
+                for ms in [0, 8, 16, 24] {
                     let at = start + Duration::from_millis(ms);
                     priority.applied(priority.generation(), at);
                     let request = priority.request(at, None).unwrap();
