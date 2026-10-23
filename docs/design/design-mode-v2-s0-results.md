@@ -834,3 +834,39 @@ browser was closed through its own browser connection; PID 35188 was absent
 afterward. No backend, fixture server or owner session was started. No Boss
 window, daily TUIC endpoint, permission setting or product source was changed.
 This round changes documentation only; no application build or test suite ran.
+
+
+## Round 15: single-key MacControl call timed out (2026-10-23)
+
+After the coordinator reported the upstream reconnected, the retry used one
+native action per call and no wait actions. Owned CFT149 PID **87700**, scratch
+profile unchanged, opened Extensions without a load flag. MacControl identified
+its window as **13901**; window 12608 remained untouched. The actual extension
+folder `~/Gits/.tmp/design-web/profile/tuic-design-extension` was verified before
+input. The console was unlocked.
+
+The first Load unpacked click stopped with `user_active` and no completed
+actions. A later separate click succeeded. The very next input call was exactly:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":13901,"key":"cmd+shift+g"}]}
+```
+
+That single-key call returned:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+Host timestamps bound the call at approximately **14 seconds**, from 14:24:53
+to 14:25:07 CEST; this is not a separately instrumented duration. A subsequent
+`list_windows({app:"Google Chrome for Testing"})` returned the same IPC timeout
+at 14:25:22, approximately 15 seconds later. No path was typed, no Select action
+was sent, and no further native-input retry was made. This does not establish
+that the upstream process exited, but it establishes that even a single key
+without an explicit wait failed to return. No new permission denial was seen.
+
+AC1 remains unchecked. Browser-native folder selection and no-load restart
+persistence remain unproved. Raw observations, argv/PID, browser version and
+cleanup are in `~/Gits/.tmp/design-web/s0-native-round15/`. The owned browser
+closed through its own connection and PID 87700 was absent afterward. No backend,
+fixture, owner session, daily TUIC endpoint or alternate OS input was used.
+Documentation only; no application build or test suite ran.
