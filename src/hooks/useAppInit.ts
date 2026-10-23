@@ -17,6 +17,7 @@ import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
+import { locallyCreatedSessions } from "../stores/locallyCreatedSessions";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -56,13 +57,6 @@ import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspended
 import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
 import { noteWarmEvent } from "./git/warmStateSeed";
 import { createRevisionCoalescer } from "./revisionCoalescer";
-
-/** PTY sessions created by THIS client (desktop or browser). Since B.4 removed
- *  the `beforeunload` auto-close, this set's only remaining purpose is to
- *  drop the create-echo for a session this client is itself mid-creating —
- *  never "sessions we might kill" (nothing in this file kills a session on
- *  unload anymore, on either transport). */
-export const locallyCreatedSessions = new Set<string>();
 
 /** Remote (MCP) sessionId → termId. Persists even after Terminal.tsx nulls sessionId
  *  on exit, so the session-closed listener can find the tab to auto-remove. */

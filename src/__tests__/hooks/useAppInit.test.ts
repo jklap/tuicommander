@@ -11,7 +11,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
-import { type AppInitDeps, initApp, locallyCreatedSessions } from "../../hooks/useAppInit";
+import { type AppInitDeps, initApp } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
 import { chatViewAvailability } from "../../stores/chatView";
@@ -19,6 +19,7 @@ import { closeDialogStore } from "../../stores/closeDialog";
 import { diffTabsStore, SESSION_SCOPE } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
+import { locallyCreatedSessions } from "../../stores/locallyCreatedSessions";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";

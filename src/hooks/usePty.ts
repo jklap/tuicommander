@@ -1,9 +1,9 @@
 import { appLogger } from "../stores/appLogger";
+import { locallyCreatedSessions } from "../stores/locallyCreatedSessions";
 import { rpc } from "../transport";
 import type { OrchestratorStats, PtyConfig } from "../types";
 import { randomUuid } from "../utils/randomId";
 import { clearShellFamilyCache, getShellFamily, sendCommand as sendCommandUtil } from "../utils/sendCommand";
-import { locallyCreatedSessions } from "./useAppInit";
 
 /** Pre-generate a session id for a create and register it locally BEFORE the
  *  create RPC. The backend's `session-created` event can be delivered before

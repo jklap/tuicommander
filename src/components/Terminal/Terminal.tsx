@@ -11,13 +11,13 @@ import {
 	untrack,
 } from "solid-js";
 import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
-import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
+import { locallyCreatedSessions } from "../../stores/locallyCreatedSessions";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";

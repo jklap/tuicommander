@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
-import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
+import { locallyCreatedSessions } from "../../stores/locallyCreatedSessions";
 import { setRemoteBaseUrlLookup, setRepoConnectionLookup } from "../../transportRuntime";
 import { mockInvoke } from "../mocks/tauri";
 
