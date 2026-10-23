@@ -235,7 +235,7 @@ fn story_filters_keep_review_blocked_and_backlog_open_and_group_done_as_closed()
         );
     }
     assert!(!view.visible_story_ids.contains(&done.id));
-    assert_eq!(view.columns.len(), 7);
+    assert_eq!(view.columns.len(), 8);
     assert_eq!(view.state, PlanState::Active);
     let closed = store
         .filtered_plan_view(

@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).
 - Report HTTPS active only while the TLS listener is running, and read Tailscale certificates from stdout to avoid macOS app sandbox write failures (#2165-b4de).
+- Native stories enter QA when only manual criteria remain. MCP, CLI, project summaries and run incidents distinguish human checks from development work; revision checks and existing story documents are retained (#2168-7fbc).
 
 - Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).
 - Preserve duplicate-branch checkouts as read-only diagnostics, show missing registrations with repair guidance, propagate discovery errors without caching empty results, and retain bisect/relative-gitdir rebase identity (#2157-eb64). Missing detached registrations also stay out of automatic orphan cleanup, including Ask countdowns; explicit removal remains available.

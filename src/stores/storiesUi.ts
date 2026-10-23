@@ -16,7 +16,12 @@ export const storiesUi = {
 		if (!data || typeof data !== "object") return;
 		const controls = data as Record<string, unknown>;
 		batch(() => {
-			if (controls.visibility === "all" || controls.visibility === "open" || controls.visibility === "closed") {
+			if (
+				controls.visibility === "all" ||
+				controls.visibility === "open" ||
+				controls.visibility === "closed" ||
+				controls.visibility === "qa"
+			) {
 				setVisibility(controls.visibility);
 			}
 			if (

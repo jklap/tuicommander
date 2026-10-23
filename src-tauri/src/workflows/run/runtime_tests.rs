@@ -184,6 +184,62 @@ fn runtime_definition_uses_the_api_canonical_owner() {
     assert_eq!(run.status, RunStatus::Running);
 }
 
+/// Catches: all-manual Ready work entering QA but still reserving an implementer spawn.
+#[tokio::test]
+async fn manual_only_workflow_pauses_before_implementer_spawn() {
+    let (config, project, _plan, story_id, _template, _guard) = fixture();
+    let stories = StoryStore::open().unwrap();
+    let story = stories.get_story(&story_id).unwrap();
+    stories
+        .transition(
+            &story.id,
+            story.revision,
+            crate::stories::StoryCommand::SetCriterionManual {
+                index: 0,
+                manual: true,
+            },
+        )
+        .unwrap();
+    // Remove the default-install migration's profile in this isolated config so
+    // even the pre-fix regression cannot launch an external agent.
+    let base = crate::config::load_agents_config();
+    let mut agents = base.clone();
+    for settings in agents.agents.values_mut() {
+        settings.run_configs.clear();
+    }
+    crate::config::save_agents_config(base, agents).unwrap();
+    assert_eq!(
+        crate::config::load_agents_config()
+            .saved_run_configs()
+            .len(),
+        0
+    );
+    let published = definition(project.path().to_str().unwrap(), false, true);
+    let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+    let run = store
+        .start_graph_run(&request(
+            project.path().to_str().unwrap(),
+            &story_id,
+            &published,
+            "manual-only",
+        ))
+        .unwrap();
+    let current = drive_turn(&store, &run.id).unwrap();
+    assert_eq!(current.attempts.len(), 1);
+    let result = runtime::effects::drive_effect(&state(config.path()), &store, &current).await;
+    assert_eq!(
+        stories.get_story(&story_id).unwrap().status,
+        crate::stories::StoryStatus::Qa
+    );
+    let paused = store.snapshot(&run.id).unwrap();
+    assert_eq!(paused.status, RunStatus::Paused);
+    assert_eq!(paused.effects.len(), 0);
+    assert_eq!(paused.attempts[0].agent, None);
+    assert_eq!(paused.stories[0].worktree_path, None);
+    assert_eq!(store.replay(&run.id).unwrap(), paused);
+    assert!(result.unwrap());
+}
+
 #[test]
 fn start_story_activates_first_successor() {
     // catches: a Running snapshot with no runnable node (01), changed-key retries or skipped predecessors.

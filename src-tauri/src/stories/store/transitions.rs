@@ -1,6 +1,30 @@
 use super::*;
 use std::collections::HashSet;
 
+fn is_manual(criterion: &str) -> bool {
+    criterion.trim_start().starts_with("[MANUAL]")
+}
+
+pub(super) fn only_manual_pending(story: &Story) -> bool {
+    story.checked.iter().any(|checked| !checked)
+        && story
+            .criteria
+            .iter()
+            .zip(&story.checked)
+            .all(|(criterion, checked)| *checked || is_manual(criterion))
+}
+
+fn incomplete_criteria(story: &Story) -> String {
+    let open: Vec<String> = story
+        .checked
+        .iter()
+        .enumerate()
+        .filter(|(_, checked)| !**checked)
+        .map(|(index, _)| index.to_string())
+        .collect();
+    format!("{CRITERIA_INCOMPLETE}{}", open.join(", "))
+}
+
 fn wrong_status(story: &Story, required: &str) -> String {
     format!(
         "story must be {required} for this command (status: {})",
@@ -248,8 +272,8 @@ impl StoryStore {
                 story.status = StoryStatus::InProgress;
             }
             StoryCommand::CheckCriterion(index) | StoryCommand::UncheckCriterion(index) => {
-                if story.status != StoryStatus::InProgress {
-                    return Err(wrong_status(&story, "in_progress"));
+                if !matches!(story.status, StoryStatus::InProgress | StoryStatus::Qa) {
+                    return Err(wrong_status(&story, "in_progress or qa"));
                 }
                 let checked = story.checked.get_mut(index).ok_or_else(|| {
                     format!(
@@ -259,25 +283,66 @@ impl StoryStore {
                 })?;
                 *checked = matches!(command, StoryCommand::CheckCriterion(_));
             }
+            StoryCommand::SetCriterionManual { index, manual } => {
+                if matches!(story.status, StoryStatus::Done | StoryStatus::WontFix) {
+                    return Err(wrong_status(&story, "unfinished"));
+                }
+                let criterion = story
+                    .criteria
+                    .get_mut(index)
+                    .ok_or_else(|| format!("criterion index {index} out of range"))?;
+                if manual && !is_manual(criterion) {
+                    let marked = format!("[MANUAL] {}", criterion.trim_start());
+                    validate_text("criterion", &marked, 2000)?;
+                    *criterion = marked;
+                } else if !manual && is_manual(criterion) {
+                    *criterion = criterion
+                        .trim_start()
+                        .strip_prefix("[MANUAL]")
+                        .expect("manual prefix")
+                        .trim_start()
+                        .into();
+                    validate_text("criterion", criterion, 2000)?;
+                }
+            }
+            StoryCommand::SubmitQa => {
+                if !matches!(story.status, StoryStatus::InProgress | StoryStatus::Review) {
+                    return Err(wrong_status(&story, "in_progress or review"));
+                }
+                if !story.criteria.iter().any(|criterion| is_manual(criterion))
+                    || story
+                        .criteria
+                        .iter()
+                        .zip(&story.checked)
+                        .any(|(criterion, checked)| !checked && !is_manual(criterion))
+                {
+                    return Err(
+                        "QA requires manual criteria and no open non-manual criteria".into(),
+                    );
+                }
+                story.status = StoryStatus::Qa;
+            }
+            StoryCommand::RejectQa => {
+                if story.status != StoryStatus::Qa {
+                    return Err(wrong_status(&story, "qa"));
+                }
+                story.status = StoryStatus::InProgress;
+            }
             StoryCommand::SubmitReview => {
                 if story.status != StoryStatus::InProgress {
                     return Err(wrong_status(&story, "in_progress"));
                 }
-                if !story.checked.iter().all(|checked| *checked) {
-                    let open: Vec<String> = story
-                        .checked
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, checked)| !**checked)
-                        .map(|(index, _)| index.to_string())
-                        .collect();
-                    return Err(format!("{CRITERIA_INCOMPLETE}{}", open.join(", ")));
+                if !story.checked.iter().all(|checked| *checked) && !only_manual_pending(&story) {
+                    return Err(incomplete_criteria(&story));
                 }
                 story.status = StoryStatus::Review;
             }
             StoryCommand::Approve => {
-                if story.status != StoryStatus::Review {
-                    return Err(wrong_status(&story, "review"));
+                if !matches!(story.status, StoryStatus::Review | StoryStatus::Qa) {
+                    return Err(wrong_status(&story, "review or qa"));
+                }
+                if !story.checked.iter().all(|checked| *checked) {
+                    return Err(incomplete_criteria(&story));
                 }
                 story.status = StoryStatus::Done;
                 story.claim_session = None;
@@ -295,7 +360,10 @@ impl StoryStore {
             StoryCommand::Block => {
                 if !matches!(
                     story.status,
-                    StoryStatus::Ready | StoryStatus::InProgress | StoryStatus::Review
+                    StoryStatus::Ready
+                        | StoryStatus::InProgress
+                        | StoryStatus::Review
+                        | StoryStatus::Qa
                 ) {
                     return Err(format!(
                         "story can be blocked only from ready, in_progress or review (status: {})",
@@ -325,6 +393,31 @@ impl StoryStore {
                 story.status = StoryStatus::WontFix;
                 story.claim_session = None;
             }
+        }
+        if matches!(
+            command,
+            StoryCommand::StartManual
+                | StoryCommand::CheckCriterion(_)
+                | StoryCommand::UncheckCriterion(_)
+                | StoryCommand::SetCriterionManual { .. }
+                | StoryCommand::SubmitReview
+        ) {
+            if matches!(story.status, StoryStatus::InProgress | StoryStatus::Review)
+                && only_manual_pending(&story)
+            {
+                story.status = StoryStatus::Qa;
+            } else if story.status == StoryStatus::Qa
+                && story
+                    .criteria
+                    .iter()
+                    .zip(&story.checked)
+                    .any(|(criterion, checked)| !checked && !is_manual(criterion))
+            {
+                story.status = StoryStatus::InProgress;
+            }
+        }
+        if story.status == StoryStatus::Qa {
+            story.claim_session = None;
         }
         save_story(&tx, &mut story, expected_revision)?;
         tx.execute(
@@ -372,6 +465,38 @@ mod tests {
         (store, story)
     }
 
+    /// Catches: the last automated check leaving manual-only work in progress.
+    #[test]
+    fn last_non_manual_criterion_moves_story_to_qa() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("dir");
+        let (store, story) = store_with_story(dir.path(), 1);
+        let plan_id = story.plan_id;
+        let story = store
+            .create_story(NewStory {
+                story_type: None,
+                plan_id,
+                title: "Manual verification".into(),
+                criteria: vec![
+                    "Automated behavior".into(),
+                    "[MANUAL] Check hardware".into(),
+                ],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check development");
+        assert_eq!(serde_json::to_value(&checked).unwrap()["status"], "qa");
+        assert_eq!(checked.checked, vec![true, false]);
+        assert_eq!(store.get_story(&story.id).unwrap(), checked);
+        assert_eq!(checked.revision, started.revision + 1);
+    }
+
     /// Catches: wrong_status returning an empty or placeholder string (mutants
     /// `String::new()` and `"xyzzy"` at the format! call), which would leave an agent
     /// refused with no hint of the status it needs.
@@ -383,13 +508,16 @@ mod tests {
         let err = store
             .transition(&story.id, story.revision, StoryCommand::Approve)
             .expect_err("approve needs review");
-        assert_eq!(err, "story must be review for this command (status: ready)");
+        assert_eq!(
+            err,
+            "story must be review or qa for this command (status: ready)"
+        );
         let err = store
             .transition(&story.id, story.revision, StoryCommand::CheckCriterion(0))
             .expect_err("check needs in_progress");
         assert_eq!(
             err,
-            "story must be in_progress for this command (status: ready)"
+            "story must be in_progress or qa for this command (status: ready)"
         );
     }
 
