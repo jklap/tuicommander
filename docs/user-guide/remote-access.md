@@ -13,6 +13,12 @@ Access TUICommander from a browser on another device on your network.
 
 Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
+On macOS, TUICommander can use the installed Tailscale app when no `tailscale`
+CLI is on its PATH, including launches from Finder. Status detection, peer lookup
+and certificate requests run the app executable with `TAILSCALE_BE_CLI=1`.
+You do not need to set this variable globally. A standalone CLI on PATH keeps
+its existing environment.
+
 ## Connecting from Another Device
 
 1. Open a browser on any device on the same network

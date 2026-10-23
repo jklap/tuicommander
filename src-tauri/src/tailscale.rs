@@ -140,9 +140,19 @@ pub(crate) fn detect() -> TailscaleState {
     }
 }
 
+/// Build every Tailscale invocation through the same process boundary.
+fn cli_command(binary: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(binary);
+    // The macOS app executable also serves as the CLI when this mode is explicit.
+    if binary.ends_with("Tailscale.app/Contents/MacOS/Tailscale") {
+        command.env("TAILSCALE_BE_CLI", "1");
+    }
+    command
+}
+
 /// Detection and peer advice use the same CLI and status source.
 fn status_command() -> Option<std::process::Command> {
-    let mut command = std::process::Command::new(find_binary()?);
+    let mut command = cli_command(&find_binary()?);
     command.args(["status", "--json"]);
     Some(command)
 }
@@ -284,7 +294,7 @@ async fn provision_cert_cli(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("key path is not valid UTF-8: {key_path:?}"))?;
 
-    let output = tokio::process::Command::new(&binary)
+    let output = tokio::process::Command::from(cli_command(&binary))
         .args([
             "cert",
             "--cert-file",
@@ -397,6 +407,64 @@ mod tests {
         "Version": "1.94.1",
         "BackendState": "Stopped"
     }"#;
+
+    /// Catches the app-bundle fallback starting the GUI instead of the CLI.
+    #[test]
+    fn app_bundle_command_enables_cli_mode() {
+        for binary in [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/Users/test/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ] {
+            let command = cli_command(std::path::Path::new(binary));
+            assert_eq!(command.get_program(), std::ffi::OsStr::new(binary));
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find(|(key, _)| *key == "TAILSCALE_BE_CLI")
+                    .and_then(|(_, value)| value),
+                Some(std::ffi::OsStr::new("1")),
+                "bundle CLI mode missing for {binary}"
+            );
+        }
+    }
+
+    /// Catches a bundle workaround overriding standalone CLI environments.
+    #[test]
+    fn standalone_command_keeps_environment_unchanged() {
+        for binary in [
+            "/opt/homebrew/bin/tailscale",
+            "/usr/bin/tailscale",
+            r"C:\Program Files\Tailscale\tailscale.exe",
+            "/usr/local/bin/Tailscale",
+            "/Applications/Other.app/Contents/MacOS/Tailscale",
+        ] {
+            let command = cli_command(std::path::Path::new(binary));
+            assert_eq!(command.get_program(), std::ffi::OsStr::new(binary));
+            assert_eq!(command.get_envs().count(), 0, "override for {binary}");
+        }
+    }
+
+    /// Catches loss of CLI mode or arguments when cert/peer commands become async.
+    #[test]
+    fn async_command_preserves_bundle_cli_mode_and_arguments() {
+        let mut command = cli_command(std::path::Path::new(
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ));
+        command.args(["status", "--json"]);
+        let command = tokio::process::Command::from(command);
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            ["status", "--json"]
+        );
+        assert_eq!(
+            command
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "TAILSCALE_BE_CLI")
+                .and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
 
     #[test]
     fn short_name_advice_uses_recorded_peer_not_local_tailnet_guess() {
