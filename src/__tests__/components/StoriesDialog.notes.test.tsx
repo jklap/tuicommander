@@ -64,6 +64,7 @@ beforeEach(() => {
 					allCancelled: false,
 				},
 			};
+		if (action.action === "transition_history") return { type: "transitions", value: [] };
 		if (action.action === "list_notes") return { type: "notes", value: action.story_id === "first" ? notes : [] };
 		if (action.action === "add_note") return append(action);
 		throw new Error(`Unexpected action ${action.action}`);

@@ -2900,3 +2900,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After rebuilding the Rust backend, use an isolated agent-test instance to archive a throwaway native story at its current revision, confirm that the default list omits it and `archived: true` selects it, then restore it and inspect archive history. Do not use daily-instance data. Also check the independent Archived plans/Archived stories toggles and revision-checked Restore controls in StoriesDialog.
 
 - [ ] After a Rust rebuild, archive and restore a workflow-integrated Done story. Confirm the restored plan stays Done and its dependent stays Ready; a story-root workflow must still allow archival of an unrelated unclaimed sibling.
+
+- [x] Story 2173: claimed story metadata, managed transition history and New story plan-step persistence. _(verified: isolated agent-test-2173 API and DOM evidence in `~/Gits/.tmp/results/tuic-2173-live/`; screenshot unavailable because no agent-test window was found.)_

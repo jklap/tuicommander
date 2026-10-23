@@ -17,6 +17,7 @@ import { type EditablePlan, PlanEditForm, type PlanEditPatch } from "./PlanEditF
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
 import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
+import { StoryMetadata } from "./StoryMetadata";
 import { StoryNotes } from "./StoryNotes";
 
 interface Plan extends EditablePlan {
@@ -236,6 +237,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [criteriaText, setCriteriaText] = createSignal("");
 	const [scopeText, setScopeText] = createSignal("");
 	const [priority, setPriority] = createSignal(2);
+	const [originType, setOriginType] = createSignal<"native" | "plan_step">("native");
+	const [planStep, setPlanStep] = createSignal("");
 	const [dependencyId, setDependencyId] = createSignal("");
 	const [showRuns, setShowRuns] = createSignal(false);
 	const [showDesigner, setShowDesigner] = createSignal(false);
@@ -760,7 +763,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					criteria,
 					priority: priority(),
 					...(newStoryType() === "untyped" ? {} : { storyType: newStoryType() }),
-					origin: { type: "native" },
+					origin: originType() === "plan_step" ? { type: "plan_step", step: planStep().trim() } : { type: "native" },
 					fileScope,
 				},
 			});
@@ -771,6 +774,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setCriteriaText("");
 			setScopeText("");
 			setNewStoryType("untyped");
+			setOriginType("native");
+			setPlanStep("");
 		} catch (cause) {
 			fail(cause);
 		} finally {
@@ -1470,6 +1475,27 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										</Select>
 									</label>
 									<label>
+										{t("stories.metadata.origin", "Origin")}
+										<Select
+											value={originType()}
+											onChange={(event) => setOriginType(event.currentTarget.value as "native" | "plan_step")}
+										>
+											<option value="native">{t("stories.metadata.native", "Native")}</option>
+											<option value="plan_step">{t("stories.metadata.planStep", "Plan step")}</option>
+										</Select>
+									</label>
+									<Show when={originType() === "plan_step"}>
+										<label>
+											{t("stories.metadata.planStep", "Plan step")}
+											<Input
+												required
+												maxlength="200"
+												value={planStep()}
+												onInput={(event) => setPlanStep(event.currentTarget.value)}
+											/>
+										</label>
+									</Show>
+									<label>
 										{t("stories.priority", "Priority")}
 										<Select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
 											<option value="1">P1</option>
@@ -1589,6 +1615,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												{statusLabel(story().status)}
 											</span>
 										</div>
+										<StoryMetadata project={props.project} story={story()} />
 										<Show
 											when={editing()}
 											keyed
