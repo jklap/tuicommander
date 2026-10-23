@@ -302,7 +302,7 @@ decision trail, or the notification-classification record:
 | `src/stores/stateExplain.ts` | The shared open/close signal both triggers (Activity Dashboard row button, `TabBar.tsx`'s tab context menu) call into |
 | `src/i18n/en.json` | Any new `tabBar.*`/UI label — `i18nKeyCollisions.test.ts` fails the build otherwise |
 | `docs/backend/pty.md` | "Session state explain" section — the four-layer chain (evidence → `SilenceState` bookkeeping → the ladder rung → the frontend badge) and the full payload shape |
-| `docs/api/tauri-commands.md` / `docs/api/http-api.md` | `explain_session_state` entry, beside `debug_agent_detection`/`get_session_foreground_process` |
+| `docs/api/tauri-commands.md` / `docs/api/http-api.md` | `explain_session_state` entry, beside `get_session_foreground_process` |
 | `docs/backend/mcp-http.md` | Debug-actions table row (`explain_state`) |
 | `src-tauri/AGENTS.md` | "Agent state detection" section — how to read a dump, alongside the existing signal table/capture workflow |
 | `agent-signal-architecture.html` | Its "Investigation Playbook" — the new surface belongs there |
