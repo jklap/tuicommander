@@ -12,6 +12,8 @@ vi.mock("../../transport", async (importOriginal) => ({
 	rpc: vi.fn().mockResolvedValue(undefined),
 	buildHttpUrl: (path: string) => `http://localhost${path}`,
 }));
+const { toastAdd } = vi.hoisted(() => ({ toastAdd: vi.fn() }));
+vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div>Terminal output</div> }));
 vi.mock("../useMobileVoice", () => ({
 	useMobileVoice: () => ({
@@ -217,13 +219,18 @@ it("opens the closed question after an HTTP selection_required refusal", async (
 		await fireEvent.click(view.getByRole("button", { name: "Open ego question" }));
 	}
 	vi.mocked(rpc).mockRejectedValueOnce(
-		new HttpRpcError("submit_agent_reply", 409, JSON.stringify({ reason: "selection_required", submitted: false })),
+		new HttpRpcError(
+			"submit_agent_reply",
+			409,
+			JSON.stringify({ reason: "selection_required", submitted: false, detail: "Use the question controls." }),
+		),
 	);
 	const input = view.getByRole("textbox") as HTMLTextAreaElement;
 	await fireEvent.input(input, { target: { value: "A" } });
 	await fireEvent.click(view.getByRole("button", { name: "Send" }));
 	await waitFor(() => expect(view.queryByText(question.options[0].label)).not.toBeNull());
 	expect(input.value).toBe("A");
+	expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "Use the question controls.", "error", true);
 	expect(vi.mocked(rpc).mock.calls.filter(([cmd]) => cmd === "write_pty")).toHaveLength(0);
 });
 
@@ -279,6 +286,12 @@ it("selection_required_reply_opens_question_controls", async () => {
 	await fireEvent.click(view.getByRole("button", { name: "Send" }));
 	await waitFor(() => expect(view.queryByText(question.options[0].label)).not.toBeNull());
 	expect(input.value).toBe("A");
+	expect(toastAdd).toHaveBeenCalledWith(
+		"Reply not sent",
+		"This question requires an option selection. Open the question and use its answer controls.",
+		"error",
+		true,
+	);
 	expect(vi.mocked(rpc).mock.calls.filter(([cmd]) => cmd === "write_pty")).toHaveLength(0);
 });
 
