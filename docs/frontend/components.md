@@ -361,7 +361,8 @@ Branch rows keep the status icon separate from the always-visible agents disclos
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
-  consequence in a WebView-compatible hover/focus tooltip
+  consequence in a WebView-compatible hover/focus tooltip. Branch-name tooltips include each
+  diagnostic once and omit removal warnings for main checkouts
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal
@@ -609,6 +610,8 @@ Ideas panel with per-repo filtering and terminal integration.
 
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
+The Plans and Stories toolbar button (`StoriesButton.tsx`) widens into a pill while the project has an active plan: active plans, stories in progress and a done/total bar, with the breakdown in its tooltip and `aria-label`. Counts come from the Rust `summary` story action. Nothing signals story changes, so it re-reads on repo change, window focus or visibility, dialog close, and every 60 s while the window is visible; a failed call leaves the plain icon.
+
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
 The project-scoped Plans and Stories dialog supports manual plan/story actions
@@ -626,8 +629,11 @@ The whole Progress UI: one newest-first list for the active PTY by default,
 with a selector for other PTYs and the repository aggregate. It has a divider
 marking where the last visit ended, and a blocked-only
 checkbox. Blocked entries are red, host-written `intent` entries are muted, and
-each row can be deleted. There are no pages, no tabs, no workstream projections
-and no export — Progress is a thing you glance at, so it is a dialog and not a
+each row can be deleted. The list opens with at most 100 entries; **Load older**
+appends another cursor page. The control is disabled while a read is pending.
+The header uses its project selector as the project label when available.
+Without a selector, including on desktop, it shows a project subtitle instead.
+There is no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.
 The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
@@ -848,7 +854,7 @@ Confirmations. It uses the shared setting toggle and persists
 
 The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
 
-Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
+Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate. Terminal Chat draws its rule on the blocks selected by `answerBlockRanges` and `answerExtent`, never on the final-message wrapper; desktop and mobile use the same selection.
 
 The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
 
@@ -889,3 +895,24 @@ Desktop `TerminalChatView` renders active native questions from the existing ses
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
 
 Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.
+
+### Context menu viewport bounds
+
+Context menus use their unscaled layout size to stay within an 8px viewport margin.
+Oversized menus scroll; their minimum width also shrinks in narrow windows.
+Shell workspace rows do not offer branch workflow actions or Git smart prompts.
+
+Shell-folder rows offer the same available-agent menu as Git workspace rows.
+Launching an agent uses the folder as its working directory, without creating a
+branch or worktree. The Add Terminal button also offers agents on a long press.
+
+Detached worktree inventory is rendered by `RepoSection` as informational rows, outside the selectable branch-workspace list. The header retains a detached count while folded; no branch or terminal actions are attached to detached rows.
+
+FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
+
+### Mobile SessionUsageBlock
+
+`SessionUsageBlock` is mounted inside the session overflow. It loads
+`get_session_usage` on mount/session change, invalidates pending responses on
+cleanup, and renders backend-owned lines without usage computation. It has
+explicit loading, unavailable, unknown-model and stale presentation.

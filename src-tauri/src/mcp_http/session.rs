@@ -20,6 +20,13 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_session_usage(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    Json(crate::session_usage::get_session_usage_impl(&state, &id).await).into_response()
+}
+
 pub(super) async fn get_prompt_receipt(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -516,8 +523,14 @@ pub(super) async fn resize_session(
     }
     // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545),
     // on the blocking pool — a whole-ring rewrap must not sit on a tokio worker.
-    match crate::pty::resize_session_off_thread(&state, session_id.clone(), body.rows, body.cols)
-        .await
+    match crate::pty::resize_session_off_thread(
+        &state,
+        session_id.clone(),
+        body.rows,
+        body.cols,
+        "http",
+    )
+    .await
     {
         Ok(Some(frame)) => {
             crate::pty::send_grid_frame(&state, &session_id, frame);
@@ -2880,15 +2893,15 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*bytes.lock().unwrap(), b"next task\x15");
-        assert!(
+        assert_eq!(
             state
                 .session_maps
                 .input_buffers
                 .get(sid)
                 .unwrap()
                 .lock()
-                .content()
-                .is_empty()
+                .content(),
+            ""
         );
         assert_eq!(
             crate::pty::list_queued_commands(&state, sid)[0].text,
@@ -4417,7 +4430,7 @@ mod tests {
 
         let frame = full_frame_for_single_client(&state, "shared-damage")
             .expect("a dirty session must produce a frame");
-        assert!(!frame.is_empty());
+        assert_ne!(frame, [] as [u8; 0]);
 
         assert!(
             !ticker_frame(&state, "shared-damage").is_empty(),
@@ -5001,7 +5014,7 @@ mod tests {
             148,
             "registration must preserve the requested width"
         );
-        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148, "test")
             .await
             .expect("same-size resize");
         assert_eq!(

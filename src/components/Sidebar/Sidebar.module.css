@@ -583,6 +583,30 @@
   padding-top: 1px;
 }
 
+/* Detached inventory rows deliberately have no selection, branch actions or hover state. */
+.detachedWorktree {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-md);
+  color: var(--fg-secondary);
+}
+
+.detachedName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detachedState {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+}
+
 .repoEmpty {
   padding: 8px 16px;
   font-size: var(--font-xs);

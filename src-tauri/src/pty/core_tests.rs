@@ -7379,8 +7379,11 @@ fn raw_stream_carry_is_bounded() {
 /// ends OSC with ESC-backslash would carry its whole stream forward.
 #[test]
 fn raw_stream_carry_recognises_st_termination() {
-    assert!(unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\").is_empty());
-    assert!(!unterminated_osc_tail("\x1b]777;notify;Codex;approval").is_empty());
+    assert_eq!(
+        unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\"),
+        ""
+    );
+    assert_ne!(unterminated_osc_tail("\x1b]777;notify;Codex;approval"), "");
 }
 
 // --- Awaiting-signal fixtures -----------------------------------------
@@ -8273,7 +8276,7 @@ async fn progress_open_intent_close_matrix() {
     ] {
         let (events, entries) = run_progress_intent_case(&chunks, 128, true, false);
         assert!(events.is_empty(), "cursor move or CR closed an open intent");
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [std::string::String; 0]);
     }
 
     let (events, entries) = run_progress_intent_case(
@@ -8283,7 +8286,7 @@ async fn progress_open_intent_close_matrix() {
         false,
     );
     assert!(events.is_empty(), "soft wrap closed an open intent");
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case(
         &[
@@ -8316,8 +8319,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case_ending(
         &["\x1b[4;1H\x1b[2K• intent: Inspect a closed store (Store error)"],
@@ -8332,7 +8341,7 @@ async fn progress_open_intent_close_matrix() {
         events.is_empty(),
         "failed journal write must not publish an intent"
     );
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let secret = format!("ghp_{}", "A".repeat(40));
     let chunk = format!("\x1b[4;1H\x1b[2K• intent: Inspect {secret} (Secret check)");
@@ -8419,8 +8428,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 }
 
 #[cfg(unix)]
@@ -8556,8 +8571,14 @@ async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
     }
     INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(0));
     let (events, entries) = run_progress_intent_case(&[&frame], 80, true, false);
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
     INTENT_CANDIDATE_GRID_READS.with(|reads| {
         assert!(
             reads.get() <= 2,
@@ -11555,7 +11576,10 @@ fn check_pending_planfiles_empty_is_noop() {
     let state = crate::state::tests_support::make_test_app_state();
     let mut cp = ChunkProcessor::new(None, None);
     cp.check_pending_planfiles("sid", &state);
-    assert!(cp.pending_planfiles.is_empty());
+    assert_eq!(
+        cp.pending_planfiles,
+        [] as [(std::string::String, std::time::Instant); 0]
+    );
 }
 
 #[test]
@@ -12716,7 +12740,7 @@ mod vt_read_tests {
             .await
             .unwrap();
 
-        assert!(text.is_empty());
+        assert_eq!(text, "");
     }
 
     // The lock is taken inside the closure, on the pool thread. If it were taken
@@ -13112,6 +13136,127 @@ mod grid_delivery_tests {
             }
         }
         false
+    }
+
+    /// Catches: an ordinary desktop receipt manufacturing cursor damage and
+    /// keeping an otherwise silent terminal in sustained-output throttling.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn desktop_receipts_do_not_generate_output() {
+        for missed in [false, true] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "receipt-is-not-damage";
+            let _rx = grid_session(&state, sid);
+            let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+            let (tx, reader) = std::sync::mpsc::channel();
+            spawn_reader_thread(
+                Box::new(ChunkReader(reader)),
+                Arc::new(AtomicBool::new(false)),
+                sid.into(),
+                state.clone(),
+                None,
+            );
+            tx.send(b"first".to_vec()).unwrap();
+            let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+                while frames.lock().is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                if missed {
+                    // Another real producer cuts damage while the desktop is
+                    // closed; the browser receives it, so desktop owes one repair.
+                    let frame = cut_frame(&state, sid, "missed while gated");
+                    send_grid_frame(&state, sid, frame);
+                }
+                commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 1, None);
+                if missed {
+                    while frames.lock().len() < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    }
+                    commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 2, None);
+                }
+                // This quiet interval is the behavior: a receipt must not produce
+                // even one new frame, regardless of the ticker's scheduling phase.
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let quiet_count = frames.lock().len();
+                tx.send("⑤".as_bytes().to_vec()).unwrap();
+                loop {
+                    if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                quiet_count
+            })
+            .await;
+            drop(tx);
+            assert_eq!(
+                observed.expect("real output did not reach the channel"),
+                if missed { 2 } else { 1 },
+                "desktop receipt or repair generated another frame without PTY output (missed={missed})"
+            );
+        }
+    }
+
+    /// Catches: retiring a paused tick's dirty hint, then depending on an ACK
+    /// to invent damage before a late real receipt can release retained output.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn paused_desktop_retains_reader_output_until_late_receipt() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "paused-retained-output";
+        let rx = grid_session(&state, sid);
+        let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+        drop(rx);
+        state.grid.watch.remove(sid);
+        for _ in 0..3 {
+            let frame = cut_frame(&state, sid, "unreceived");
+            send_grid_frame(&state, sid, frame);
+            gate.abandon();
+        }
+        assert!(gate.is_paused());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.into(),
+            state.clone(),
+            None,
+        );
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                let applied = state
+                    .grid
+                    .vt_log_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .read_rows_in_range(0, 24)
+                    .join("\n")
+                    .contains('⑤');
+                if applied {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            let before = frames.lock().len();
+            commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 3, None);
+            loop {
+                if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            before
+        })
+        .await;
+        drop(tx);
+        assert_eq!(
+            observed.expect("late receipt lost retained reader output"),
+            3,
+            "paused desktop received output before a real receipt"
+        );
     }
 
     /// Catches: post-input echo remaining behind the sustained/typing rate floor

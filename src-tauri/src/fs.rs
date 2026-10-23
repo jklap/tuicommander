@@ -93,6 +93,12 @@ pub struct DirEntry {
     pub git_status: String,
     /// Whether the file is listed in .gitignore.
     pub is_ignored: bool,
+    /// Link text from read_link; absent for ordinary entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+    /// Target metadata only: directory, file, or unavailable (dangling/inaccessible).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symlink_target_kind: Option<&'static str>,
 }
 
 /// A single line match returned by `search_content`.
@@ -500,7 +506,26 @@ pub(crate) fn list_directory_impl(
             .map_err(|e| format!("Failed to read metadata for {name}: {e}"))?;
 
         let is_dir = metadata.is_dir();
-        let size = if is_dir { 0 } else { metadata.len() };
+        let is_symlink = metadata.file_type().is_symlink();
+        let symlink_target = if is_symlink {
+            std::fs::read_link(entry.path())
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let symlink_target_kind = is_symlink.then(|| match std::fs::metadata(entry.path()) {
+            Ok(target) if target.is_dir() => "directory",
+            Ok(target) if target.is_file() => "file",
+            _ => "unavailable",
+        });
+        // A link's lstat length counts its target spelling, not file content.
+        // Keep is_dir/navigation unchanged; target kind is display metadata only.
+        let size = if is_dir || is_symlink {
+            0
+        } else {
+            metadata.len()
+        };
         let modified_at = metadata
             .modified()
             .ok()
@@ -558,6 +583,8 @@ pub(crate) fn list_directory_impl(
             modified_at,
             git_status,
             is_ignored,
+            symlink_target,
+            symlink_target_kind,
         });
     }
 
@@ -1270,6 +1297,8 @@ pub(crate) fn search_files_impl(
             modified_at,
             git_status: String::new(), // populated below
             is_ignored: false,         // walker already filtered gitignored entries
+            symlink_target: None,
+            symlink_target_kind: None,
         });
     }
 
@@ -2580,6 +2609,86 @@ mod tests {
             .unwrap();
 
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_listing_does_not_disguise_external_directory_as_file_bytes() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-dir")).unwrap();
+        let entries = list_directory_impl(dir.path().to_string_lossy().into(), ".".into()).unwrap();
+        let link = entries.iter().find(|e| e.name == "linked-dir").unwrap();
+        let wire = serde_json::to_value(link).unwrap();
+        assert_eq!(
+            wire["symlink_target"],
+            outside.path().to_string_lossy().as_ref()
+        );
+        assert_eq!(wire["symlink_target_kind"], "directory");
+        assert_eq!(link.size, 0, "link text length is not file content size");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_open_names_external_target_instead_of_generic_access_denied() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-dir")).unwrap();
+        let error = crate::read_file_impl(dir.path().to_string_lossy().into(), "linked-dir".into())
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "Cannot open symbolic link \"linked-dir\": target \"{}\" is outside the repository.",
+                outside.path().canonicalize().unwrap().display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_metadata_preserves_internal_reads_and_dangling_entries() {
+        // Catches following links for lstat size, dropping broken links, or denying internal reads.
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(outside.path().join("private.txt"), "outside content").unwrap();
+        for (name, target) in [
+            ("internal", PathBuf::from("README.md")),
+            ("external", outside.path().join("private.txt")),
+            ("dangling", PathBuf::from("missing")),
+        ] {
+            std::os::unix::fs::symlink(target, dir.path().join(name)).unwrap();
+        }
+        let repo = dir.path().to_string_lossy().into_owned();
+        let entries = list_directory_impl(repo.clone(), ".".into()).unwrap();
+        for (name, kind) in [
+            ("internal", "file"),
+            ("external", "file"),
+            ("dangling", "unavailable"),
+        ] {
+            let link = entries.iter().find(|e| e.name == name).unwrap();
+            let wire = serde_json::to_value(link).unwrap();
+            assert_eq!(wire["symlink_target_kind"], kind, "{name}");
+            assert_eq!(link.size, 0, "{name}");
+        }
+        assert_eq!(
+            crate::read_file_impl(repo.clone(), "internal".into()).unwrap(),
+            "# Test"
+        );
+        assert!(
+            crate::read_file_impl(repo.clone(), "external".into())
+                .unwrap_err()
+                .contains("is outside the repository")
+        );
+        assert!(crate::read_file_impl(repo, "dangling".into()).is_err());
+        let ordinary = entries.iter().find(|e| e.name == "README.md").unwrap();
+        assert!(
+            serde_json::to_value(ordinary)
+                .unwrap()
+                .get("symlink_target")
+                .is_none()
+        );
+        assert_eq!(ordinary.size, 6);
     }
 
     #[test]
@@ -4749,7 +4858,7 @@ mod tests {
 
         assert_eq!(res.moved, 1);
         assert_eq!(res.skipped, 1);
-        assert!(res.errors.is_empty());
+        assert_eq!(res.errors, [] as [std::string::String; 0]);
     }
 
     // --- Cross-repo content search (search_content_all_impl) ---

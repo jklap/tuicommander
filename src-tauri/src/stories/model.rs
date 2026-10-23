@@ -115,6 +115,17 @@ pub struct StoryRead {
     pub abandoned: bool,
 }
 
+/// Progress over the active plans of a project: plans not yet complete, stories being worked on,
+/// and accepted (done) against countable stories (neither won't-fix nor abandoned behind one).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StorySummary {
+    pub active_plans: usize,
+    pub in_progress: usize,
+    pub done: usize,
+    pub total: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanView {
@@ -123,6 +134,10 @@ pub struct PlanView {
     pub wont_fix_count: usize,
     pub all_cancelled: bool,
 }
+
+/// Error prefixes of mistakes the user can fix; the HTTP route answers them 422, not 500.
+pub const PLAN_DOCUMENT_NOT_FOUND: &str = "plan document not found: ";
+pub const CRITERIA_INCOMPLETE: &str = "criteria are incomplete: unchecked indexes ";
 
 /// A status command. Unit commands are plain strings (`"submit_review"`); the criterion commands
 /// carry a zero-based index (`{"check_criterion":0}`).

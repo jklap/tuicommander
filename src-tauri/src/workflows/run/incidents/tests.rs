@@ -18,6 +18,7 @@ fn run() -> RunSnapshot {
         started_ms: 0,
         paused_since_ms: None,
         paused_duration_ms: 0,
+        pause_cause: None,
         limits: RunLimits::default(),
         loops: 0,
         story_creations: 0,
@@ -82,7 +83,10 @@ fn incident_reports_keep_cause_and_identity_instead_of_only_transition_labels() 
     });
     assert_eq!(project_incidents(&run, None)[0].cause, "Which API version?");
     run.attempts[0].input_answer = Some("v2".into());
-    assert!(project_incidents(&run, None).is_empty());
+    assert_eq!(
+        project_incidents(&run, None),
+        [] as [crate::workflows::run::incidents::RunIncident; 0]
+    );
     run.attempts[0].outcome = Some(AttemptOutcome::Interrupted);
     assert_eq!(
         project_incidents(&run, None)[0].source,
@@ -183,11 +187,17 @@ fn incident_live_evidence_does_not_leak_other_tasks_or_retry_pending_prompts() {
     run.attempts[0].state = AttemptState::Running;
     run.attempts[0].outcome = None;
     run.attempts[0].agent.as_mut().unwrap().session_id = "other-session".into();
-    assert!(project_incidents(&run, Some(&state)).is_empty());
+    assert_eq!(
+        project_incidents(&run, Some(&state)),
+        [] as [crate::workflows::run::incidents::RunIncident; 0]
+    );
     run.attempts[0].agent.as_mut().unwrap().session_id = "session-1".into();
     run.attempts[0].state = AttemptState::Reported;
     run.attempts[0].outcome = Some(AttemptOutcome::Completed);
-    assert!(project_incidents(&run, Some(&state)).is_empty());
+    assert_eq!(
+        project_incidents(&run, Some(&state)),
+        [] as [crate::workflows::run::incidents::RunIncident; 0]
+    );
 }
 
 #[test]
@@ -202,7 +212,10 @@ fn incident_working_sessions_are_not_inferred_stuck_and_paused_cause_is_honest()
         .session_maps
         .session_states
         .insert("session-1".into(), session.clone());
-    assert!(project_incidents(&run, Some(&state)).is_empty());
+    assert_eq!(
+        project_incidents(&run, Some(&state)),
+        [] as [crate::workflows::run::incidents::RunIncident; 0]
+    );
     session.agent_state = Some("awaiting_input".into());
     state
         .session_maps

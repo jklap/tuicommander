@@ -537,3 +537,23 @@ nullable overrides in `repo-settings.json`: null inherits the current global
 value, true hides the matching PRs, and false explicitly shows them. Settings
 owner transactions preserve unrelated fields, and settings refresh adopts owner
 readback without saving it again. The Rust settings catalogue describes both scopes.
+
+### Repository access diagnostics
+
+The unified batch poll preserves `errors[].path`, `type` and the exact message
+per repository alias, including nested-field errors. Only a root-level explicit
+`NOT_FOUND` enters the account-scoped 24-hour exclusion. `FORBIDDEN` and unexplained
+nulls remain eligible for the next normal poll, and a successful poll clears the
+failure. A `NOT_FOUND` can mean a repository is not visible to the token; it does
+not prove that the repository was deleted.
+
+`github_diagnostics` (IPC and HTTP) retains `repos_not_found` and adds
+`repo_access_errors`, grouped by account, host and owner. Each repository carries
+`repo`, `reason` and `message`. Reasons are `not_found`, `forbidden` and
+`unknown`; message wording does not infer organization policy or SSO.
+Every github.com OAuth group offers the app's authorized-app page, including
+NOT_FOUND groups because GitHub can hide private repositories until org approval.
+Settings renders these backend groups without reclassifying them. Refresh status clears the NOT_FOUND retry cache for all accounts through an
+explicit mutation, then reads diagnostics. Opening Settings and ordinary GET
+diagnostics remain read-only. Refresh does not log in, grant access, reset rate
+limits or bypass the monitoring cadence; the next poll retries the repositories.

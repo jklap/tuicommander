@@ -79,6 +79,7 @@
 }
 
 .project {
+  color: var(--fg-primary);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;

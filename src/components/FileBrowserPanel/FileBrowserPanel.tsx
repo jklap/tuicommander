@@ -399,7 +399,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 							e.path !== c.path ||
 							e.git_status !== c.git_status ||
 							e.modified_at !== c.modified_at ||
-							e.is_ignored !== c.is_ignored
+							e.is_ignored !== c.is_ignored ||
+							e.symlink_target !== c.symlink_target ||
+							e.symlink_target_kind !== c.symlink_target_kind
 						);
 					});
 				if (changed) {
@@ -1112,6 +1114,33 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		contextMenu.open(e);
 	};
 
+	/** Right-click on the empty area (rows stop propagation): menu for the tree root. */
+	const getRootContextMenuItems = (): ContextMenuItem[] => {
+		const mod = getModifierSymbol();
+		const parent = parentDirFor(null);
+		return [
+			{ label: t("fileBrowser.newFolder", "New Folder\u2026"), action: () => openCreateDialog("folder", parent) },
+			{
+				label: t("fileBrowser.newFile", "New File\u2026"),
+				action: () => openCreateDialog("file", parent),
+				separator: true,
+			},
+			{
+				label: t("fileBrowser.paste", "Paste"),
+				shortcut: `${mod}V`,
+				action: handlePaste,
+				disabled: !clipboard(),
+			},
+		];
+	};
+
+	const handleEmptyAreaContextMenu = (e: MouseEvent) => {
+		e.preventDefault();
+		if (!root()) return;
+		setContextEntry(null);
+		contextMenu.open(e);
+	};
+
 	// Keyboard navigation
 	createEffect(() => {
 		if (!props.visible) return;
@@ -1416,7 +1445,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				</div>
 			</Show>
 
-			<div class={p.content} ref={contentRef}>
+			<div class={p.content} ref={contentRef} onContextMenu={handleEmptyAreaContextMenu}>
 				<Show when={loading() || (searching() && searchMode() === "filename")}>
 					<div class={s.empty}>
 						{searching() ? t("fileBrowser.searching", "Searching\u2026") : t("fileBrowser.loading", "Loading...")}
@@ -1577,14 +1606,24 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 											}}
 											onContextMenu={(e) => handleContextMenu(e, entry)}
 										>
-											<FileIcon name={entry.name} isDir={entry.is_dir} class={s.entryIcon} />
+											<FileIcon
+												name={entry.name}
+												isDir={entry.is_dir}
+												isLink={entry.symlink_target_kind !== undefined}
+												class={s.entryIcon}
+											/>
 											<span class={s.entryName} title={fileTooltip(entry)}>
 												{isSearch ? entry.path : entry.name}
+												<Show when={entry.symlink_target_kind}>
+													<span class={s.entryLink}>
+														{entry.symlink_target_kind} link → {entry.symlink_target ?? "Target unavailable"}
+													</span>
+												</Show>
 											</span>
 											<Show when={entry.git_status}>
 												<span class={cx(g.dot, getStatusClass(entry.git_status))} title={entry.git_status} />
 											</Show>
-											<Show when={!entry.is_dir && entry.size > 0}>
+											<Show when={!entry.is_dir && !entry.symlink_target_kind && entry.size > 0}>
 												<span class={s.entrySize}>{formatSize(entry.size)}</span>
 											</Show>
 										</div>
@@ -1598,7 +1637,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 
 			{/* Context menu */}
 			<ContextMenu
-				items={contextEntry() ? getContextMenuItems(contextEntry()!) : []}
+				items={contextEntry() ? getContextMenuItems(contextEntry()!) : getRootContextMenuItems()}
 				x={contextMenu.position().x}
 				y={contextMenu.position().y}
 				visible={contextMenu.visible()}

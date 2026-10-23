@@ -308,6 +308,7 @@ mod tests {
             started_ms: 1,
             paused_since_ms: None,
             paused_duration_ms: 0,
+            pause_cause: None,
             limits: RunLimits::default(),
             loops: 0,
             story_creations: 0,
@@ -411,7 +412,7 @@ mod tests {
         assert_eq!(package.contract_version, 1);
         assert_eq!(package.role, AgentRole::Implementer);
         assert_eq!(package.prompt_sha256.len(), 64);
-        assert!(!package.audit_preview.is_empty());
+        assert_ne!(package.audit_preview, "");
     }
 
     #[test]

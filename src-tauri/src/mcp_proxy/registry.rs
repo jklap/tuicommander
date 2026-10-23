@@ -16,8 +16,7 @@
 //! # Circuit breaker (per upstream)
 //!
 //! - 3 consecutive failures → circuit opens (backoff starts at 1s, capped at 60s)
-//! - After max 10 retries in Failed state, the entry is marked `Failed` permanently
-//!   until the user re-enables/re-connects it.
+//! - Exhausted retries mark the entry `Failed` with a 10-minute recovery backoff.
 //! - Background task runs `health_check` every 60s on every Ready upstream.
 
 use crate::mcp_proxy::http_client::{HttpMcpClient, UpstreamError, UpstreamToolDef};
@@ -1305,6 +1304,7 @@ async fn run_health_checks(registry: &UpstreamRegistry) {
                     *entry.tools.write() = tools;
 
                     entry.cb.record_success();
+                    *entry.last_error.write() = None;
                     if needs_recovery {
                         *entry.status.write() = UpstreamStatus::Ready;
                         tracing::info!(source = "mcp_registry", %name, "Recovered (Ready) with {new_count} tools");
@@ -1537,7 +1537,7 @@ mod tests {
     #[test]
     fn aggregated_tools_empty_when_no_upstreams() {
         let registry = UpstreamRegistry::new();
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1594,7 +1594,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::CircuitOpen;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -1889,6 +1889,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_respawns_an_exited_stdio_upstream() {
+        // Catches health checks treating a dead child as a failing endpoint forever.
+        let mut fixture = std::env::current_exe().unwrap();
+        fixture.pop();
+        if fixture.file_name().is_some_and(|name| name == "deps") {
+            fixture.pop();
+        }
+        fixture.push(format!(
+            "tuic-mcp-fixture-server{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        assert!(
+            fixture.is_file(),
+            "fixture server must be built by nextest setup"
+        );
+        let mut config = http_server_config("respawn", "");
+        config.transport = UpstreamTransport::Stdio {
+            command: fixture.to_string_lossy().into_owned(),
+            args: vec!["crash-on-call".into()],
+            env: Default::default(),
+            cwd: None,
+        };
+        let registry = UpstreamRegistry::new();
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        registry.set_mcp_tools_tx(tx);
+        registry.connect_upstream(config, None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let before = registry
+            .proxy_tool_call("respawn__probe", serde_json::json!({}))
+            .await
+            .unwrap();
+        let crash = registry
+            .proxy_tool_call("respawn__probe", serde_json::json!({"crash": true}))
+            .await;
+        assert!(crash.unwrap_err().contains("closed stdout"));
+        for _ in 0..2 {
+            assert!(
+                registry
+                    .proxy_tool_call("respawn__probe", serde_json::json!({}))
+                    .await
+                    .is_err()
+            );
+        }
+        tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            registry.status_snapshot()["upstreams"][0]["status"],
+            "circuit_open"
+        );
+        // The production health interval is 60s; respect the real 5s spawn limiter
+        // without changing its state or manufacturing a dead client.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        run_health_checks(&registry).await;
+        tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            registry.status_snapshot()["upstreams"][0]["status"],
+            "ready",
+            "health tick must respawn the exited child without manual reconnect"
+        );
+        assert!(registry.status_snapshot()["upstreams"][0]["last_error"].is_null());
+        let after = registry
+            .proxy_tool_call("respawn__probe", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_ne!(
+            before["content"][0]["text"], after["content"][0]["text"],
+            "the response must come from a fresh process"
+        );
+        assert_eq!(registry.aggregated_tools().len(), 1);
+        registry.disconnect_upstream("respawn").unwrap();
+    }
+
+    #[tokio::test]
     async fn health_check_failure_records_last_error() {
         // Regression: the Err arm of the health check must bind the error, log it,
         // and write entry.last_error so the failure reason surfaces in the status
@@ -1962,7 +2043,7 @@ mod tests {
         *entry.status.write() = UpstreamStatus::Authenticating;
         registry.entries.insert(name, entry);
 
-        assert!(registry.aggregated_tools().is_empty());
+        assert_eq!(registry.aggregated_tools(), [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]
@@ -2208,7 +2289,7 @@ mod tests {
 
         let allowed: Vec<String> = vec![];
         let tools = registry.aggregated_tools_for_repo(Some(&allowed));
-        assert!(tools.is_empty());
+        assert_eq!(tools, [] as [serde_json::Value; 0]);
     }
 
     #[tokio::test]

@@ -302,6 +302,28 @@ pnpm test:coverage     # Coverage report
 
 **Coverage:** ~80%+
 
+### Chat browser landing gate (macOS)
+
+Run `make check-chat-readability` at landing when Chat prose or answer-list CSS
+changes. This local gate starts an isolated fixture Vite on an OS-assigned port,
+runs the computed-colour, border and list-geometry regressions, then closes Vite
+in a cleanup trap. It does not start Tauri or use a running app. The browser
+harness closes its own named tab and does not close shared Chrome.
+
+Prerequisites: installed frontend dependencies, `agent-browser`, matching Chrome
+for Testing, and the approved `ab-stealth.sh` wrapper under
+`~/Gits/personal/brainstorming/tools/browser-stealth/`. Set
+`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path. Evidence defaults to a
+new `.tmp/chat-readability-*` directory in the checkout; set
+`TUIC_CHAT_EVIDENCE_DIR` to retain it elsewhere. Managed agents run this target
+through the shared build slot.
+
+The frontend CI job runs on Ubuntu and cannot use this macOS `.app`/`open` wrapper.
+This is a separate required local landing gate, not part of `make check` or the
+ordinary Vitest run. The direct test retains its explicit opt-in skip when
+`TUIC_CHAT_BROWSER_URL` is absent; the make target always supplies the URL and
+evidence directory, so it runs both regressions without skips.
+
 ### Rust build features
 
 Plain application Cargo builds enable `desktop` but omit native speech. Add

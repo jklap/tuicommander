@@ -926,6 +926,22 @@ describe("useGitOperations", () => {
 			);
 		});
 
+		// Catches: a recycled (archived) checkout is reported as "Removed", hiding that the branch lives on.
+		it("reports archive and kept branch when the backend recycled the checkout", async () => {
+			mockRepo.removeWorktree.mockResolvedValueOnce({
+				branch_delete_warning: null,
+				branch: "feature",
+				removal_rule: "recyclable",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Archived feature worktree for reuse; branch was kept");
+			expect(mockSetStatusInfo).not.toHaveBeenCalledWith("Removed feature");
+		});
+
 		it("passes deleteBranch=false when repo setting overrides default", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 0,
@@ -1018,6 +1034,49 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["new-name"]).toBeDefined();
 			expect(repositoriesStore.get("/repo")?.workspaces["old-name"]).toBeUndefined();
 			expect(gitOps.currentBranch()).toBe("new-name");
+		});
+
+		it("moves the branch label to the new name", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feat/a", { worktreePath: "/repo/wt" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.setLabel("/repo", "feat/a", "X");
+			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "feat/a" });
+
+			await gitOps.handleRenameBranch("feat/a", "feat/a2");
+
+			expect(repoSettingsStore.get("/repo")?.branchLabels).toEqual({ "feat/a2": "X" });
+		});
+
+		it("keeps the label under the old name when the backend rename fails", async () => {
+			mockRepo.renameBranch.mockRejectedValueOnce("already exists");
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feat/a", { worktreePath: "/repo/wt" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.setLabel("/repo", "feat/a", "X");
+			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "feat/a" });
+
+			await gitOps.handleRenameBranch("feat/a", "feat/b");
+
+			expect(repoSettingsStore.get("/repo")?.branchLabels).toEqual({ "feat/a": "X" });
+		});
+	});
+
+	describe("handleOpenRenameBranchDialog", () => {
+		it("refuses the main branch, whichever entry point asks", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+			expect(gitOps.handleOpenRenameBranchDialog("/repo", "main")).toBe(false);
+			expect(gitOps.branchToRename()).toBeNull();
+		});
+
+		it("opens for a feature branch", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feat/a", { worktreePath: "/repo/wt" });
+
+			expect(gitOps.handleOpenRenameBranchDialog("/repo", "feat/a")).toBe(true);
+			expect(gitOps.branchToRename()).toEqual({ repoPath: "/repo", branchName: "feat/a" });
 		});
 	});
 
@@ -1672,6 +1731,33 @@ describe("useGitOperations", () => {
 				last_commit_ts: summary.last_commit_ts,
 			});
 		}
+
+		// Catches the structure-to-store boundary dropping detached rows or minting fake workspaces.
+		it("refreshes detached inventory separately from branch workspaces and retracts it", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			const detached = {
+				path: "/external/detached",
+				head: "abcdef0123456789",
+				short_head: "abcdef0",
+				directory_name: "detached",
+				state: "detached",
+			};
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				detached_worktrees: [detached],
+			});
+			await gitOps.refreshAllBranchStats();
+			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([detached]);
+			expect(Object.keys(repositoriesStore.get("/repo")!.workspaces)).toEqual(["main"]);
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				detached_worktrees: [],
+			});
+			await gitOps.refreshAllBranchStats("/repo", { immediate: true });
+			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([]);
+		});
 
 		it("updates branch stats for all repos", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
