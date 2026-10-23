@@ -17,6 +17,10 @@
 //           (`"/bin/ps"`), std or tokio.
 //   SHELL — `ps -x` / `pgrep -x` / `pkill -x` inside text: an `sh -c` string,
 //           a generated hook script, a test literal.
+//   HELPER — the tool name as a string literal followed by an argument
+//           slice or vec (`command("ps", &["-p", ..])`): an exec through a
+//           local spawn helper, which EXEC cannot see (F30: design_mode's
+//           `command("ps", ..)` slipped past both rules above).
 //
 // The allow-list is keyed by `file::enclosing fn` (the nearest preceding `fn`
 // line), so a new call in a different function of an allow-listed file is
@@ -38,6 +42,7 @@ const EXEC_RE = new RegExp(String.raw`Command::new\(\s*"(?:[^"]*/)?(${TOOLS})"\s
 const SHELL_RE = new RegExp(
 	String.raw`(?:^|[\s"'\x60(|;&$])(?:(${TOOLS})\s+-[A-Za-z]|(ps)\s+[aAcCeEhjlLmMrSTuvwxXo]{1,6}(?=$|[\s"'\x60;|&)\\]))`,
 );
+const HELPER_RE = new RegExp(String.raw`"(?:[^"]*/)?(${TOOLS})"\s*,\s*(?:&\s*)?(?:\[|vec!)`);
 const COMMENT_RE = /^\s*(\/\/|\/\*|\*)/;
 const FN_RE = /\bfn\s+([A-Za-z0-9_]+)/;
 const INDENT_RE = /^(\s*)/;
@@ -128,7 +133,13 @@ function scan(files) {
 			// A body that stays open past this line: not a `;` declaration, not
 			// a one-line `fn f() { .. }`.
 			if (fn && !/[;}]\s*$/.test(line)) open.push({ name: fn[1], indent });
-			const rule = EXEC_RE.test(line) ? "EXEC" : SHELL_RE.test(line) ? "SHELL" : null;
+			const rule = EXEC_RE.test(line)
+				? "EXEC"
+				: SHELL_RE.test(line)
+					? "SHELL"
+					: HELPER_RE.test(line)
+						? "HELPER"
+						: null;
 			if (rule) hits.push({ site: `${file}::${enclosing}`, line: i + 1, rule, text: line.trim() });
 		}
 	}
@@ -170,6 +181,11 @@ if (selfTest) {
 		},
 		// BSD-style letters with no dash, and prose that must not match.
 		{ path: "h.rs", text: 'fn bsd() {\n    run("sh", "-c", "ps aux | grep x");\n    log("the ps fallback ran");\n}\n' },
+		// An exec through a local spawn helper; a path join is not one.
+		{
+			path: "j.rs",
+			text: 'fn wrapped() {\n    command("ps", &["-p", "1"]);\n    run("/usr/bin/pgrep", vec!["-f"]);\n    let p = dir.join("ps");\n}\n',
+		},
 		// A one-line fn and a `;` declaration do not swallow what follows.
 		{
 			path: "i.rs",
@@ -193,13 +209,15 @@ if (selfTest) {
 		"f.rs::<top level>:SHELL",
 		"g.rs::<top level>:SHELL",
 		"h.rs::bsd:SHELL",
+		"j.rs::wrapped:HELPER",
+		"j.rs::wrapped:HELPER",
 		"i.rs::<top level>:SHELL",
 	];
 	if (JSON.stringify(sites) !== JSON.stringify(expected)) {
 		throw new Error(`expected offenders ${JSON.stringify(expected)}, got ${JSON.stringify(sites)}`);
 	}
 	process.stdout.write(
-		"process-exec checker: exec/shell/BSD-style/path-prefixed calls caught, comments, prose and arithmetic ignored, allow-list is per function body\n",
+		"process-exec checker: exec/shell/helper/BSD-style/path-prefixed calls caught, comments, prose and arithmetic ignored, allow-list is per function body\n",
 	);
 
 	// The fixture run above would stay green if REAL_ROOTS stopped covering the

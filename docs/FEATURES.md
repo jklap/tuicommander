@@ -2640,7 +2640,7 @@ partial work, and their child processes may continue.
 
 ### 20.4 Process Name via Syscall
 - `proc_pidpath` (macOS) / `/proc/pid/comm` (Linux) replaces `ps` fork
-- No process-inspection tool is exec'd anywhere (`ps`/`pgrep`/`pkill` fail in sandboxed hosts): the shared process snapshot, process monitor, CPU-watchdog child listing and tunnel ssh check read the OS natively through `tuic_core::process_info`; `ps` survives only as the logged fallback of the process snapshot (see `docs/backend/pty.md`), and `scripts/check-no-process-exec.mjs` keeps it that way
+- No process-inspection tool is exec'd anywhere (`ps`/`pgrep`/`pkill` fail in sandboxed hosts): the shared process snapshot, process monitor, CPU-watchdog child listing, tunnel ssh check and Design Mode's dev-server attribution read the OS natively through `tuic_core::process_info`; `ps` survives only as the logged fallback of the process snapshot (see `docs/backend/pty.md`), and `scripts/check-no-process-exec.mjs` keeps it that way
 - Eliminates ~100 fork+exec/min with 5 terminals open
 
 ### 20.5 MCP Concurrent Tool Calls

@@ -174,17 +174,43 @@ fn attributed_candidates(
     }
     candidates(listing, cwds, roots)
 }
+/// The `<pid> <command line>` lines `ps -p <pids> -o pid=,command=` used to
+/// print, read natively (sandboxed hosts refuse to exec `ps`). A pid that is
+/// gone or whose argv is unreadable (another user's process) is skipped; its
+/// `lsof` cwd still attributes it.
+#[cfg(unix)]
+fn command_lines(source: &dyn tuic_core::process_info::ProcessSource, pids: &[u32]) -> String {
+    let mut seen = HashSet::new();
+    let mut lines = String::new();
+    for &pid in pids {
+        if !seen.insert(pid) {
+            continue;
+        }
+        let Some(Ok(argv)) = source.info(pid).map(|info| info.argv) else {
+            continue;
+        };
+        if argv.is_empty() {
+            continue;
+        }
+        lines.push_str(&format!("{pid} {}\n", argv.join(" ").replace('\n', " ")));
+    }
+    lines
+}
 #[cfg(unix)]
 async fn live_candidates(roots: &[PathBuf]) -> Result<Vec<Value>, String> {
     let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
-    let ids = listeners(&listing)
+    let pids: Vec<u32> = listeners(&listing)
         .iter()
-        .map(|listener| listener.pid.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    if !ids.is_empty() {
+        .map(|listener| listener.pid)
+        .collect();
+    if !pids.is_empty() {
+        let ids = pids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
-        let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
+        let commands = command_lines(&tuic_core::process_info::NativeProcessSource, &pids);
         return Ok(attributed_candidates(&listing, &mut cwds, &commands, roots));
     }
     Ok(Vec::new())

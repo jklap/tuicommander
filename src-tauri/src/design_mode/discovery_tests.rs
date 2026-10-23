@@ -314,3 +314,36 @@ fn tuic_pid_is_not_a_candidate() {
         .is_empty()
     );
 }
+
+// Catches: the native replacement for `ps -p <ids> -o pid=,command=` losing a
+// live owner's command line, repeating a pid, or inventing one for a process
+// whose argv it cannot read.
+#[test]
+fn command_lines_read_the_command_line_natively() {
+    use tuic_core::process_info::{FakeProcessSource, ProcInfo, Unreadable};
+    let source = FakeProcessSource::with_processes(vec![
+        FakeProcessSource::process(10, 1, "python3", &["python3", "/repo/app/serve.py"]),
+        ProcInfo {
+            argv: Err(Unreadable::PermissionDenied),
+            ..FakeProcessSource::process(11, 1, "node", &[])
+        },
+    ]);
+    let lines = command_lines(&source, &[10, 11, 12, 10]);
+    assert_eq!(lines, "10 python3 /repo/app/serve.py\n");
+    let roots = [PathBuf::from("/repo"), PathBuf::from("/repo/app")];
+    assert_eq!(
+        command_owners(&lines, &roots).get(&10),
+        Some(&PathBuf::from("/repo/app"))
+    );
+}
+
+// Catches: the live source returning nothing where `ps` would have answered
+// (this test process is the caller's own, so its argv is always readable).
+#[test]
+fn command_lines_read_this_process_from_the_live_os() {
+    let pid = std::process::id();
+    let lines = command_lines(&tuic_core::process_info::NativeProcessSource, &[pid]);
+    let exe = std::env::args().next().unwrap();
+    assert_eq!(lines.lines().count(), 1, "{lines:?}");
+    assert!(lines.starts_with(&format!("{pid} {exe}")), "{lines:?}");
+}
