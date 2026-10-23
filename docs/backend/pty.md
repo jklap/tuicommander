@@ -299,7 +299,7 @@ Frame emission is decoupled from PTY reading via a per-session **frame ticker** 
 **Bounded input priority.** Desktop and HTTP/PWA input arm a 100ms window before
 writing to the PTY. Only output applied by the reader after that input can wake
 the same ticker early. A priority frame waits at least 8ms after the previous
-frame; at most two priority bypasses are allowed in any rolling 100ms, even if
+frame; at most four priority bypasses are allowed in any rolling 100ms, even if
 input continues. If newer reader output arrives during a send, send accounting
 retains its retry on this same ticker, with the same spacing, quota and expiry.
 Other output retains the sustained-animation 33ms floor and
