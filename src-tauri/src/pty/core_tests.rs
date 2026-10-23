@@ -12064,6 +12064,12 @@ fn claude_hook_osc7770_turn_reaches_busy_then_idle() {
 /// redundant hook-matcher registrations firing per `AskUserQuestion`, an
 /// orthogonal quirk this test does not need to fix): before the dedup fix,
 /// only the first ever survived (count == 1); after it, all four do.
+///
+/// It also applies every event to `SessionState` through the replay
+/// accumulator and checks the badge is lit from each dialog's hook marker until
+/// the answering keypress. Main's footer recovery relights the second dialog a
+/// few chunks after its swallowed marker, so only this window, not a count of
+/// footer-sourced questions, tells the two apart.
 #[test]
 fn claude_double_askuserquestion_both_survive_dedup() {
     use crate::pty_capture::CaptureDirection;
@@ -12105,35 +12111,67 @@ fn claude_double_askuserquestion_both_survive_dedup() {
     let mut cp = ChunkProcessor::new(None, None);
     let mut rx = state.event_bus.subscribe();
     let mut question_count = 0;
-    let mut footer_question_count = 0;
+    // Each dialog is open from the record carrying its
+    // `PreToolUse(AskUserQuestion)` `state=awaiting` marker until the user's
+    // answering keypress (the capture's input record). The badge must be lit
+    // for that whole window: main's screen recovery repaints it a few chunks
+    // later from the `Enter to select` footer, so a count of footer-sourced
+    // questions cannot tell a swallowed hook marker from a working one.
+    let mut open_since: Option<usize> = None;
+    let mut dialogs_answered = Vec::new();
+    let mut unlit_while_open = Vec::new();
 
     let bytes = agent_prompt_fixture("claude_double_askuserquestion_second_missed.tcap");
-    for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
+    for (record_index, record) in crate::pty_capture::decode(&bytes)
+        .expect("valid capture")
+        .into_iter()
+        .enumerate()
+    {
         if record.direction != CaptureDirection::Output {
+            if let Some(opened) = open_since.take() {
+                dialogs_answered.push((opened, record_index));
+            }
             continue;
         }
         let data = String::from_utf8_lossy(&record.data).into_owned();
+        if open_since.is_none()
+            && data.contains("tool=AskUserQuestion")
+            && data.contains("state=awaiting")
+        {
+            open_since = Some(record_index);
+        }
         let _ = cp.process_chunk(&data, &silence, sid, &state);
         while let Ok(evt) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &evt);
             if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
                 && parsed.get("type").and_then(|t| t.as_str()) == Some("question")
+                // Main also re-arms awaiting from the rendered footer, with a
+                // non-empty prompt_text. Count only the hook-sourced markers.
+                && parsed.get("prompt_text").and_then(|t| t.as_str()) == Some("")
             {
-                // Main also re-arms awaiting from the rendered `Enter to select`
-                // footer for hook-instrumented sessions (full-screen presence
-                // recovery), which emits its own non-empty-prompt `question`
-                // per dialog. Count only the hook-sourced (empty prompt_text)
-                // markers this test is about, and the footer ones separately.
-                if parsed.get("prompt_text").and_then(|t| t.as_str()) == Some("") {
-                    question_count += 1;
-                } else {
-                    footer_question_count += 1;
-                }
+                question_count += 1;
             }
+        }
+        if open_since.is_some()
+            && !state
+                .session_state_with_shell(sid)
+                .expect("session state")
+                .awaiting_input
+        {
+            unlit_while_open.push(record_index);
         }
     }
     assert_eq!(
-        footer_question_count, 2,
-        "main's footer recovery should see each of the two AskUserQuestion dialogs once"
+        dialogs_answered.len(),
+        2,
+        "the capture holds two AskUserQuestion dialogs, each answered once: {dialogs_answered:?}"
+    );
+    assert!(
+        unlit_while_open.is_empty(),
+        "SessionState.awaiting_input must stay lit from each dialog's hook \
+         `state=awaiting` marker until it is answered (dialogs {dialogs_answered:?}); \
+         unlit after records {unlit_while_open:?}: the second AskUserQuestion's \
+         marker was swallowed by the question dedup"
     );
 
     assert_eq!(
