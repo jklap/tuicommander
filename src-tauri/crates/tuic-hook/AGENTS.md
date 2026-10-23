@@ -41,7 +41,7 @@ one-process-per-test default currently masks this, but don't rely on that).
    exist (the crate has a same-binary safety net for this,
    `help_text_lists_every_derivation_table_event_name`).
 3. Update BOTH `docs/backend/tuic-hook.md`'s derivation table AND
-   `hook-lifecycle.html`'s per-event card walkthrough — these are two
+   `plans/docs/hook-lifecycle.html`'s per-event card walkthrough (main checkout only) — these are two
    independent hand-written sources of the same event list with nothing else
    keeping them in sync. `Elicitation`/`ElicitationResult` shipped in `main.rs`
    two commits before either doc caught up — don't repeat that.

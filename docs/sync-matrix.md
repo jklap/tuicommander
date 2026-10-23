@@ -59,7 +59,7 @@ event map.)
 
 | File | What to update |
 |------|----------------|
-| `tuic-escape-sequences.html` | Protocol reference (tracked) — recognized-sequence tables, "Explicitly not handled" lists, Deliberate Deviations |
+| `plans/docs/tuic-escape-sequences.html` (main checkout only, gitignored, not tracked) | Protocol reference — recognized-sequence tables, "Explicitly not handled" lists, Deliberate Deviations |
 | `src-tauri/patches/vte/src/ansi.rs` | `Performer::osc_dispatch` OSC arms, `PrivateMode::new` mode arms, CSI dispatch, `attrs_from_sgr_parameters` |
 | `src-tauri/patches/alacritty_terminal/src/term/{mod,cell}.rs` | `Handler` impls (OSC 133, clipboard, keyboard modes), `Cell::erase_blank` |
 | `src-tauri/src/terminal_grid.rs` | `TermEvent` mapping, `extract_semantic_zones`, emulator `Config` flags (e.g. `kitty_keyboard`) |
@@ -266,7 +266,7 @@ When changing an agent's hook event map, adding/removing an OSC 7770 verb, or to
 | `docs/backend/tuic-hook.md` | CLI reference, derivation table, stdin fields, env vars, exit-code contract |
 | `docs/user-guide/ai-agents.md` | "Native Hook Instrumentation" user-facing section |
 | `docs/FEATURES.md` | Section 1.19 (red-tick tier description) |
-| `plans/docs/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/tracked despite this table's other rows; confirmed absent from `git ls-files` 2026-09-15) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
+| `plans/docs/hook-lifecycle.html` (main checkout only, gitignored, not tracked) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
 | `agent-signal-architecture.html` (repo root, tracked) | Per-agent signal matrix and the command-block/scrollbar-tick section — update if a hook map, block producer, or per-agent classifier changes |
 
 ### Agent wrap consent prompt (zsh `userwrap`)
@@ -900,7 +900,6 @@ When adding, renaming or moving a docs page:
 |------|---------|
 | **Root** | |
 | `agent-signal-architecture.html` | Big-picture reference — how hooks (OSC 7770), the OSC 777 notification format, and screen-scraping all converge into one `SessionState` and one scrollbar-tick system; per-agent signal matrix; start here before the two below |
-| `tuic-escape-sequences.html` | Terminal protocol reference (OSC/CSI/SGR/modes, both directions) |
 | `SPEC.md` | Feature specification, architecture, version |
 | `CHANGELOG.md` | Release history (Keep a Changelog format) |
 | `AGENTS.md` | Project rules, compact reference |
@@ -908,6 +907,7 @@ When adding, renaming or moving a docs page:
 | `to-test.md` | Manual testing tracker |
 | **plans/ (main checkout only, gitignored)** | |
 | `plans/docs/hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale. Despite the name matching `agent-signal-architecture.html`'s style, this one is NOT tracked at repo root — confirmed absent from `git ls-files` (2026-09-15); it only exists as a `plans/docs/`-directory reference doc in the main checkout, same as `plans/network-aware-remote-access.md` below |
+| `plans/docs/tuic-escape-sequences.html` | Terminal protocol reference (OSC/CSI/SGR/modes, both directions); like `hook-lifecycle.html`, removed from the repo root (81a25f132) and kept only in the main checkout's `plans/docs/` |
 | **docs/** | |
 | `docs/FEATURES.md` | Canonical feature inventory (single source of truth) |
 | `docs/plugins.md` | Plugin developer authoring guide |
