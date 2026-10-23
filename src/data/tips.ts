@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Native story QA",
+		description:
+			"Prefix human checks with [MANUAL]. When development checks pass, the story enters QA; use the QA filter or Kanban column to find checks that wait for a person.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile session usage",
 		description:
 			"Open More session actions on mobile to read the session profile's account quota or ego session tokens and cost. Unknown and stale usage are labelled explicitly.",

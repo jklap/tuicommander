@@ -140,6 +140,8 @@ const statusLabel = (status: StoryStatus): string => {
 			return t("stories.status.inProgress", "In progress");
 		case "review":
 			return t("stories.status.review", "Review");
+		case "qa":
+			return t("stories.status.qa", "QA");
 		case "done":
 			return t("stories.status.done", "Done");
 		case "blocked":
@@ -1217,6 +1219,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<option value="all">{t("stories.filter.allStatuses", "All statuses")}</option>
 										<option value="open">{t("stories.filter.open", "Open only")}</option>
 										<option value="closed">{t("stories.filter.closed", "Closed only")}</option>
+										<option value="qa">{t("stories.filter.qa", "QA only")}</option>
 									</Select>
 								</label>
 								<label>
@@ -1269,6 +1272,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											onInput={(event) => setCriteriaText(event.currentTarget.value)}
 										/>
 									</label>
+									<p class={s.muted}>
+										{t("stories.manualHint", "Prefix human checks with [MANUAL] to track them in QA.")}
+									</p>
 									<label>
 										{t("stories.scopeInput", "File scope, one relative path per line")}
 										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
@@ -1413,7 +1419,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																<input
 																	type="checkbox"
 																	checked={story().checked[index()]}
-																	disabled={story().status !== "in_progress" || busy()}
+																	disabled={!["in_progress", "qa"].includes(story().status) || busy()}
 																	onChange={() =>
 																		transition({
 																			[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
@@ -1515,7 +1521,20 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													{t("stories.requestChanges", "Request changes")}
 												</button>
 											</Show>
-											<Show when={["ready", "in_progress", "review"].includes(story().status)}>
+											<Show when={["in_progress", "review"].includes(story().status)}>
+												<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
+													{t("stories.submitQa", "Submit for QA")}
+												</button>
+											</Show>
+											<Show when={story().status === "qa"}>
+												<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+													{t("stories.qaPassed", "QA passed")}
+												</button>
+												<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
+													{t("stories.qaFailed", "QA failed")}
+												</button>
+											</Show>
+											<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
 												<button type="button" disabled={busy()} onClick={() => transition("block")}>
 													{t("stories.block", "Block")}
 												</button>

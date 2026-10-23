@@ -473,6 +473,7 @@ mod tests {
         let plan_id = story.plan_id;
         let story = store
             .create_story(NewStory {
+                story_type: None,
                 plan_id,
                 title: "Manual verification".into(),
                 criteria: vec![

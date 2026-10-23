@@ -45,6 +45,8 @@ API and CLI callers can filter `list_stories` by native `state`, `priority`, and
 
 ## Manual QA
 
+The dialog shows QA in the story list and its own Kanban column. Select **QA only** in the Status filter. In story details, check the manual criteria, then select **QA passed** or **QA failed**. **Submit for QA** is available during development or review; the backend validates its criteria.
+
 Use the **QA** state when development is complete and only human checks remain. Prefix a manual criterion with `[MANUAL]` when you create the story, or send a transition command such as `{"set_criterion_manual":{"index":1,"manual":true}}`. Set `manual` to `false` to remove the marker. Indexes start at zero. The marker is part of the criterion text, not a second checklist.
 
 Starting work, claiming a story, checking or unchecking a criterion, changing its manual marker, and submitting review evaluate QA readiness in the backend. An In progress or Review story enters QA when at least one criterion is unchecked and every unchecked criterion is manual. An open non-manual criterion prevents QA. An all-manual story enters QA when work starts. This automatic transition shares the triggering revision and transaction and releases its terminal claim.

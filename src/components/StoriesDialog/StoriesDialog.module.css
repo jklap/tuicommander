@@ -58,6 +58,7 @@
 .status[data-status="done"] { color: var(--success); }
 .status[data-status="blocked"] { color: var(--error); }
 .status[data-status="review"] { color: var(--warning); }
+.status[data-status="qa"] { color: var(--attention); }
 .detail .criteria { list-style: none; padding-left: 0; }
 .criteria li + li { margin-top: 8px; }
 .criteria label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }

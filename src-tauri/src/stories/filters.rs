@@ -7,6 +7,7 @@ const BOARD_STATUSES: &[StoryStatus] = &[
     StoryStatus::Ready,
     StoryStatus::InProgress,
     StoryStatus::Review,
+    StoryStatus::Qa,
     StoryStatus::Blocked,
     StoryStatus::WontFix,
     StoryStatus::Done,
@@ -29,6 +30,7 @@ pub(super) fn project(
         let closed = matches!(story.status, StoryStatus::Done | StoryStatus::WontFix);
         if matches!(filter.visibility, StoryVisibility::Open) && closed
             || matches!(filter.visibility, StoryVisibility::Closed) && !closed
+            || matches!(filter.visibility, StoryVisibility::Qa) && story.status != StoryStatus::Qa
             || filter
                 .story_type
                 .is_some_and(|kind| story.story_type != Some(kind))

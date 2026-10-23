@@ -249,6 +249,7 @@ fn qa_story_incident_survives_completed_attempt_and_clears_after_approval() {
         .unwrap();
     let story = store
         .create_story(NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: "Device".into(),
             criteria: vec!["[MANUAL] Device check".into()],

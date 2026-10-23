@@ -815,3 +815,5 @@ The dictation store subscribes separately to `voice` configuration and
 component-local and is not overwritten. Both subscriptions are disposed together.
 
 Terminal ownership and creation provenance are independent: `TerminalData.isRemote` reflects a configured remote `connection_id`; `isExternallyCreated` preserves the backend `is_remote` HTTP/MCP creation flag for worker-tab cleanup, decoration and completion policy. Local `session-created` events set only creation provenance; startup reconciliation derives ownership from the connection, not the launch transport. Both live creation and reconnect retain the backend-issued `tuic_session` as `tuicSession`. Caller-bound worktree declarations use this stable identity to place a newly spawned tab without changing its actual cwd.
+
+Native story controls retain the QA-only visibility filter through `storiesUi`, alongside All, Open and Closed. The backend derives filter membership and Kanban columns.

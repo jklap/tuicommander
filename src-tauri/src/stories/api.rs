@@ -876,6 +876,7 @@ mod tests {
             project,
             StoryAction::CreateStory {
                 input: NewStory {
+                    story_type: None,
                     plan_id: plan.id.clone(),
                     title: "Manual work".into(),
                     criteria: vec!["Development".into(), "Device".into()],

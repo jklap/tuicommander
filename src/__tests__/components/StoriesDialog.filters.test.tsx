@@ -34,7 +34,7 @@ const done = {
 	checked: [true],
 	status: "done",
 };
-const states = ["backlog", "ready", "in_progress", "review", "blocked", "wont_fix", "done"];
+const states = ["backlog", "ready", "in_progress", "review", "qa", "blocked", "wont_fix", "done"];
 const view = (ids: string[]) => ({
 	type: "plan_view",
 	value: {
@@ -92,7 +92,7 @@ it("catches ignoring the Rust projection or resetting combined filters when swit
 	);
 	fireEvent.click(first.getByRole("button", { name: /^Kanban$/ }));
 	const board = within(first.getByRole("region", { name: "Kanban" }));
-	expect(board.getAllByRole("region")).toHaveLength(7);
+	expect(board.getAllByRole("region")).toHaveLength(8);
 	expect(board.queryByRole("button", { name: /Closed task/ })).toBeNull();
 	fireEvent.click(board.getByRole("button", { name: /Open feature/ }));
 	expect(within(first.getByRole("region", { name: "Story details" })).getByText("Open criterion")).toBeTruthy();

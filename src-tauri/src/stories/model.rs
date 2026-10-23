@@ -85,6 +85,7 @@ pub enum StoryVisibility {
     All,
     Open,
     Closed,
+    Qa,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]

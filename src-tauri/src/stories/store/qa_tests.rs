@@ -12,6 +12,7 @@ fn setup(criteria: &[&str]) -> (tempfile::TempDir, StoryStore, Story) {
         .unwrap();
     let story = store
         .create_story(NewStory {
+            story_type: None,
             plan_id: plan.id,
             title: "Verify".into(),
             criteria: criteria.iter().map(|s| (*s).into()).collect(),
@@ -128,6 +129,7 @@ fn qa_all_manual_claim_releases_ownership_but_not_dependencies() {
     let (_dir, store, story) = setup(&["[MANUAL] Device"]);
     let dependent = store
         .create_story(NewStory {
+            story_type: None,
             plan_id: story.plan_id.clone(),
             title: "Next".into(),
             criteria: vec!["Next step".into()],
@@ -213,4 +215,45 @@ fn qa_schema_upgrade_preserves_existing_documents_and_history() {
             .unwrap(),
         qa
     );
+}
+
+/// Catches: QA disappearing from Open/Kanban or being included in Closed/other-type projections.
+#[test]
+fn qa_filters_and_kanban_keep_human_work_visible_and_unfinished() {
+    use crate::stories::{StoryFilter, StoryVisibility};
+    let (_dir, store, story) = setup(&["[MANUAL] Device"]);
+    let qa = apply(&store, &story, StoryCommand::StartManual);
+    let qa_filter: StoryFilter =
+        serde_json::from_value(serde_json::json!({"visibility":"qa"})).unwrap();
+    for filter in [
+        StoryFilter::default(),
+        StoryFilter {
+            visibility: StoryVisibility::Open,
+            ..Default::default()
+        },
+        qa_filter,
+    ] {
+        let view = store.filtered_plan_view(&qa.plan_id, &filter).unwrap();
+        assert_eq!(view.visible_story_ids, vec![qa.id.clone()]);
+        assert_eq!(
+            view.columns
+                .iter()
+                .find(|column| column.status == StoryStatus::Qa)
+                .unwrap()
+                .story_ids,
+            vec![qa.id.clone()]
+        );
+        assert_eq!(view.state, PlanState::Active);
+    }
+    let closed = store
+        .filtered_plan_view(
+            &qa.plan_id,
+            &StoryFilter {
+                visibility: StoryVisibility::Closed,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(closed.visible_story_ids.is_empty());
+    assert_eq!(closed.state, PlanState::Active);
 }
