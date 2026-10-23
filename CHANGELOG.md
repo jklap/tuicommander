@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).
-- Preserve duplicate-branch checkouts as read-only diagnostics, show missing registrations with repair guidance, propagate discovery errors without caching empty results, and retain bisect/relative-gitdir rebase identity (#2157-eb64).
+- Preserve duplicate-branch checkouts as read-only diagnostics, show missing registrations with repair guidance, propagate discovery errors without caching empty results, and retain bisect/relative-gitdir rebase identity (#2157-eb64). Missing detached registrations also stay out of automatic orphan cleanup, including Ask countdowns; explicit removal remains available.
 
 - Terminal Chat now limits its green answer bar to the CLI answer region instead of the whole assistant message on desktop and mobile (#2158-4b3d).
 

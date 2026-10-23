@@ -2373,9 +2373,8 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
-/// Remove a detached orphan. A checkout whose directory is already gone holds
-/// nothing to lose, so dropping its registration is confirmed by the safety
-/// assessment instead of a `force` flag.
+/// Remove a detached orphan after the caller's removal guard. Missing checkout
+/// registrations require explicit confirmation; automatic safety rejects them.
 pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
     refuse_temporary_orphan(&worktree.path)?;
     remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
@@ -12679,7 +12678,7 @@ branch refs/heads/feat
     /// The directory was moved away but git still lists the worktree. Spawning
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
-    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
+    fn orphan_whose_directory_is_gone_requires_explicit_removal_to_drop_entry() {
         let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-moved-away");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
@@ -12691,13 +12690,15 @@ branch refs/heads/feat
 
         let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
 
-        let entry = assessments
-            .iter()
-            .find(|entry| entry.path.ends_with("orphan-moved-away"))
-            .expect("the tracked orphan is still listed");
-        assert!(entry.safe, "{entry:?}");
-        let reason = entry.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("already gone"), "{reason}");
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path.ends_with("orphan-moved-away")),
+            "unavailable registrations must stay out of automatic cleanup"
+        );
+        let reason =
+            orphan_cleanup_safety(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
+        assert!(reason.contains("git worktree repair"), "{reason}");
         assert!(!reason.contains("spawn"), "{reason}");
 
         let worktree = WorktreeInfo {
@@ -13656,18 +13657,27 @@ branch refs/heads/feat
         assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
-    // Catches (critic-1367): a vanished checkout reported with a fingerprint, so a Keep
-    // would hold for a directory nobody can inspect any more.
+    // Catches: a vanished checkout entering the fingerprint-based cleanup/Keep flow
+    // instead of remaining a repair diagnostic.
     #[test]
-    fn orphan_whose_directory_is_gone_has_no_fingerprint() {
+    fn orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup() {
         let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-vanished");
         fs::remove_dir_all(&path).unwrap();
 
-        let entry = orphan_entry(&repo, "orphan-vanished");
-
-        assert!(entry.safe, "{entry:?}");
-        assert_eq!(entry.dirty_fingerprint, None);
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
+        let inventory = get_worktree_inventory_raw(&repo.to_string_lossy(), None).unwrap();
+        assert!(
+            inventory
+                .worktree_diagnostics
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
     }
 
     // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"
@@ -13794,13 +13804,16 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
+            // An unavailable registration belongs to repair diagnostics, not the
+            // automatic sweep (including Ask mode's countdown confirmation).
+            .filter(|path| Path::new(path).is_dir())
             .map(|path| {
                 let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
                     .ok()
                     .map(|(fingerprint, _)| fingerprint);
                 match orphan_cleanup_safety(repo_path, &path) {
                     Ok(()) => OrphanCleanupAssessment {
-                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        reason: None,
                         path,
                         safe: true,
                         dirty_fingerprint,
@@ -13835,15 +13848,13 @@ fn non_default_local_branch_at_head(
     Ok(branches.stdout.lines().any(|branch| branch != default_ref))
 }
 
-const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
-
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
-    // Nothing to inspect: git cannot run in a missing cwd, and there is no
-    // work left to lose.
-    if !worktree.exists() {
-        return Ok(());
+    // Recheck at the automatic-removal boundary: the directory may have moved
+    // after assessment. Only an explicit removal may discard its registration.
+    if !worktree.is_dir() {
+        return Err("checkout unavailable; restore it or run git worktree repair; explicit removal is required to discard its registration".into());
     }
     let status = git_cmd(worktree)
         .args([

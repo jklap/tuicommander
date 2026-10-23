@@ -3354,3 +3354,5 @@ estimates and unknown cost reasons. Unknown model, usage and stale data are
 labelled explicitly. Remote sessions use their owning daemon, never a local account.
 
 Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.

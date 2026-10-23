@@ -2848,3 +2848,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Worktree discovery diagnostics (#2157-eb64)
 
 - [ ] After the next deliberate Rust rebuild/restart, check forced duplicate-branch and moved-checkout fixtures: read-only diagnostics retain paths and repair guidance; bisect and relative-gitdir rebase keep their branch rows. The currently running backend does not hot-reload this change.
+
+- [ ] After rebuilding, move a detached checkout manually: its old registration stays visible as a repair diagnostic and survives Ask/On automatic cleanup; explicit user removal can discard it.

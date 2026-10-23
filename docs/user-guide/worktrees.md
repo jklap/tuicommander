@@ -350,3 +350,5 @@ A checkout without a branch remains visible in the sidebar. Its row shows the di
 Missing or moved registrations appear as read-only diagnostic rows with their recorded path and repair guidance. Restore the checkout, or run `git worktree repair` from its new location. Review `git worktree list --porcelain` before manually pruning a registration for a deleted checkout. Discovery never prunes it automatically.
 
 If `git worktree add --force` puts a branch in several checkouts, the lexicographically smallest path keeps the existing branch workspace. Other checkouts appear as read-only diagnostics. Use a distinct branch when you need an independent selectable workspace. Bisect and rebase keep the original branch identity when Git records it.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
