@@ -17,6 +17,8 @@ import subprocess
 import sys
 import threading
 
+from maintainer_tools import build_freeze, build_slot, host_temp_dir
+
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = "tuicommander-agent-test"
 
@@ -28,12 +30,16 @@ def plan(instance: str, port: str) -> dict:
         raise ValueError("port must be in 1024..65535 and must not be 9876")
     if os.environ.get("CARGO_TARGET_DIR"):
         raise ValueError("unset CARGO_TARGET_DIR; mbx owns the target directory")
-    # Short, instance-specific runtime files stay under Gits, not the OS temp dir.
+    # Instance-specific runtime files live under the caller's temp dir. The app
+    # names its socket after the full digest; the directory needs only a short
+    # prefix of it, so the path fits macOS sun_path under a default TMPDIR.
     digest = hashlib.sha256(instance.encode()).hexdigest()[:16]
-    runtime = Path.home() / "Gits/.tmp/tuic-at" / digest
+    base = Path(os.environ.get("TUIC_AGENT_TEST_RUNTIME_BASE") or host_temp_dir())
+    runtime = base / "tuic-at" / digest[:8]
     socket = runtime / f"tuic-mcp-{digest}.sock"
     if len(os.fsencode(socket)) >= 104:
-        raise ValueError("runtime socket path exceeds the macOS Unix socket limit")
+        raise ValueError("runtime socket path exceeds the macOS Unix socket limit; "
+                         "set TUIC_AGENT_TEST_RUNTIME_BASE to a shorter private directory")
     executable = ROOT / ".tmp/agent-test" / instance / BINARY
     # Tao's launch activation hack makes every initially visible window key,
     # even with focus=false. Agent-test presents it without a key only at Ready.
@@ -100,12 +106,12 @@ def start(launch: dict) -> int:
         if shutil.which("cargo", path=env["PATH"]) != str(shim):
             raise RuntimeError("cargo must resolve to the mbx shim")
         subprocess.run(["mbx", "doctor"], env=env, cwd=ROOT, check=True)
-        slot = Path.home() / "Gits/personal/orchestrator/tools/build/build-slot.sh"
+        slot = build_slot()
         runner = [str(slot)] if slot.is_file() else []
         subprocess.run([*runner, *launch["frontend"]], env=env, cwd=ROOT, check=True)
         # Embedded assets, separate application identity, no dev server or bundle writes.
         env["TAURI_CONFIG"] = launch["build_environment"]["TAURI_CONFIG"]
-        freeze = Path.home() / "Gits/.tmp/BUILD_FREEZE"
+        freeze = build_freeze()
         if freeze.exists() and "feat-2086" not in freeze.read_text():
             raise RuntimeError("BUILD_FREEZE does not allow feat-2086")
         artifacts = {}

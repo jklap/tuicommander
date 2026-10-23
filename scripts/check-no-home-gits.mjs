@@ -36,15 +36,14 @@ const ALLOWED = new Map([
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
 	// Main-only files (not test scratch) that predate this guard on the replayed tree:
-	["scripts/agent_capture/run.py", "under_gits(): capture-promotion paths must stay in the maintainer's checkout layout, not scratch"],
 	["scripts/chat-view-follow-proof.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
 	["scripts/replay-oracle.sh", "locates the maintainer's build-slot runner on macOS, not scratch"],
 	["src-tauri/crates/tuic-terminal/src/fixtures/claude-dot-blink-1654.json", "recorded capture fixture: a prompt string, not filesystem access"],
-	["scripts/agent-test.py", "agent-test runtime socket dir, maintainer build-slot runner and BUILD_FREEZE coordination file, not test scratch"],
-	["scripts/agent-test-visible.py", "maintainer evidence dir, BUILD_FREEZE coordination and short mbx socket TMPDIR for the native build, not test scratch"],
+	// Read-only lookups for the native verification scripts; their scratch comes
+	// from host_temp_dir() (pick 400 decision, 2026-10-23).
+	["scripts/maintainer_tools.py", "locates the maintainer's build-slot runner, browser-stealth wrapper and BUILD_FREEZE marker (read only, env-overridable), not scratch"],
 	["scripts/check-chat-code-copy-layout.py", "locates the maintainer's browser-stealth wrapper, not scratch"],
 	["scripts/design-mode-demo.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
-	["scripts/observe-github-volume-1995.py", "maintainer's browser-stealth wrapper, build log and evidence TMPDIR for a one-off live observation, not test scratch"],
 	["scripts/settings-visual/geometry.test.mjs", "comment citing where a recorded measurement came from, not filesystem access"],
 	["scripts/stall-workload/fixtures/occluded-1638.json", "recorded workload fixture: a captured path string, not filesystem access"],
 	["src-tauri/src/mcp_http/fixtures/managed-reconnect-2008.capture.py", "provenance script kept beside a recorded fixture, not run by the suite"],

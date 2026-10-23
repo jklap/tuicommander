@@ -56,7 +56,7 @@ headers and the token are never logged or written. These captured response
 fixtures can contain account/repository data. Do not commit them.
 
 Prerequisites: authenticated `gh`, native build authorization, the existing
-agent-browser stealth wrapper, local node dependencies and free localhost
+agent-browser stealth wrapper (`TUIC_AB_STEALTH` overrides its location), local node dependencies and free localhost
 ports 14360/14361. Use the required build-slot wrapper and mbx shim for this
 native test executable; it must run on the Mac with the browser. Do not set
 `CARGO_TARGET_DIR`.
@@ -64,8 +64,9 @@ native test executable; it must run on the Mac with the browser. Do not set
 1. Create `.tmp/github-live-1995` and compile the native lib test executable
    with `scripts/with-test-tmp.sh cargo test --manifest-path src-tauri/Cargo.toml
    --lib --no-run --message-format=json`, retaining complete JSON output in
-   a log under `~/Gits/.tmp/`.
-2. Set `TUIC_1995_BUILD_LOG` to that log, then run
+   a log in your temp dir (redirect from the outer shell, for example to
+   `"${TMPDIR%/}/chore-1995-native-harness-build.log"`, the driver's default).
+2. Set `TUIC_1995_BUILD_LOG` to that log if you used another path, then run
    `scripts/with-test-tmp.sh python3 scripts/observe-github-volume-1995.py`.
    Run this bounded observation in the background through the managed runner.
 

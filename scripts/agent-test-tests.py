@@ -1,12 +1,24 @@
 """Focused launcher contracts. No test starts a desktop application."""
+import importlib.util
 import json
 import os
 import re
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
+# Maintainer tools that used to write scratch under the home directory's Gits tree (pick 400 decision,
+# 2026-10-23): scratch and runtime files belong under the caller's temp dir.
+SCRATCH_TOOLS = ["scripts/agent-test.py", "scripts/agent-test-visible.py",
+                 "scripts/observe-github-volume-1995.py", "scripts/agent_capture/run.py"]
+
+
+def host_temp_dir():
+    return Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir())
 
 
 class AgentTestPlanTests(unittest.TestCase):
@@ -89,6 +101,48 @@ class AgentTestPlanTests(unittest.TestCase):
         for plan in [default, other]:
             self.assertEqual(plan["connect"],
                              f"curl --unix-socket '{plan['socket']}' http://localhost/health # Agents use this socket; TCP requires Basic auth")
+
+    def test_runtime_files_live_under_the_host_temp_dir_not_home(self):
+        # Bug caught: the runtime socket, PID file and stop FIFO were created
+        # under the home directory's Gits/.tmp, outside $TMPDIR, wherever HOME pointed.
+        fake_home = host_temp_dir() / "agent-test-fake-home"
+        plan = self.plan(HOME=str(fake_home))
+        for key in ["socket", "pid_file", "stop_fifo"]:
+            with self.subTest(key=key):
+                self.assertTrue(Path(plan[key]).is_relative_to(host_temp_dir()), plan[key])
+                self.assertFalse(Path(plan[key]).is_relative_to(fake_home), plan[key])
+        self.assertEqual(plan["environment"]["TMPDIR"], str(Path(plan["socket"]).parent) + "/")
+        base = host_temp_dir() / "x"
+        moved = self.plan(TUIC_AGENT_TEST_RUNTIME_BASE=str(base))
+        self.assertTrue(Path(moved["socket"]).is_relative_to(base), moved["socket"])
+
+    def test_scratch_tools_never_spell_a_home_gits_path(self):
+        # Bug caught: a maintainer tool writes temp data under the home Gits tree. Read-only
+        # lookups of external wrappers live in scripts/maintainer_tools.py.
+        for relative in SCRATCH_TOOLS:
+            with self.subTest(script=relative):
+                self.assertNotIn("Gits", (ROOT / relative).read_text())
+
+    @unittest.skipUnless(sys.platform == "darwin" and (ROOT / ".git").is_file(), "macOS linked worktree only")
+    def test_visible_observer_keeps_evidence_under_the_host_temp_dir(self):
+        # Bug caught: evidence had to live under the home Gits tree, outside $TMPDIR.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        spec = importlib.util.spec_from_file_location("agent_test_visible", ROOT / "scripts/agent-test-visible.py")
+        visible = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(visible)
+
+        class Stop(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory(dir=host_temp_dir()) as directory:
+            evidence = Path(directory) / "evidence"
+            with mock.patch.object(visible.subprocess, "check_output", side_effect=Stop):
+                with self.assertRaises(Stop):
+                    visible.agent_test_window_renders_visible_without_focus("at-unit", "19999", evidence)
+            self.assertTrue(evidence.is_dir())
+        with self.assertRaisesRegex(ValueError, "temp dir"):
+            visible.agent_test_window_renders_visible_without_focus("at-unit", "19999", ROOT / ".tmp/evidence-outside")
+        self.assertFalse((ROOT / ".tmp/evidence-outside").exists())
 
     def test_static_wiring_keeps_guards_before_machine_wide_effects(self):
         # Static audit requested by the story: dropping a runtime guard must fail

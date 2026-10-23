@@ -13,6 +13,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -28,10 +29,15 @@ def inventory():
             for agent, binary in AGENTS.items()}
 
 
-def under_gits(path):
+def host_temp_dir():
+    """The caller's temp dir, also inside scripts/with-test-tmp.sh."""
+    return Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir()).resolve()
+
+
+def scratch_path(path):
     path = Path(path).expanduser().resolve()
-    if not path.is_relative_to(Path.home() / "Gits"):
-        raise ValueError(f"path must stay under ~/Gits: {path}")
+    if not path.is_relative_to(host_temp_dir()):
+        raise ValueError(f"path must stay under the host temp dir {host_temp_dir()}: {path}")
     return path
 
 
@@ -112,13 +118,18 @@ def capture_run(args):
     agent = scenario["agent"]
     if not installed[agent]["binary"]:
         raise RuntimeError(f"{agent}: unverified (not installed)")
-    output = under_gits(args.output)
+    output = scratch_path(args.output)
+    # The daemon binds tuic-mcp-<16 hex>.sock in its TMPDIR, this directory:
+    # fail before launch instead of at bind time (macOS sun_path is 104 bytes).
+    if os.name == "posix" and len(os.fsencode(output / f"tuic-mcp-{'0' * 16}.sock")) > 103:
+        raise ValueError(f"--output is too long for the daemon's Unix socket; use a short "
+                         f"directory directly under {host_temp_dir()}")
     output.mkdir(parents=True, exist_ok=False)
     home = output / "daemon-home"
     home.mkdir()
     agent_home = Path(args.agent_home).expanduser().resolve()
     if agent_home != Path.home():
-        agent_home = under_gits(agent_home)
+        agent_home = scratch_path(agent_home)
     if not agent_home.is_dir():
         raise ValueError("agent-home must already exist; no login is automated")
     daemon = args.daemon.resolve()

@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """Opt-in native macOS joined GitHub observation; see fixtures/github_volume/README.md."""
 import hashlib, json, os, pathlib, re, subprocess, time, urllib.request, uuid
+from maintainer_tools import browser_stealth_wrapper, host_temp_dir
 root = pathlib.Path.cwd()
 base = root / '.tmp/github-live-1995'
 evidence = base / ('run-' + uuid.uuid4().hex[:8])
 evidence.mkdir()
 (evidence / 'reap-scope').mkdir()
-wrapper = str(pathlib.Path.home() / 'Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh')
+wrapper = str(browser_stealth_wrapper())
+# Test scratch stays under the caller's temp dir; the short host path keeps
+# Unix sockets the harness binds under the macOS sun_path limit.
+scratch = os.environ.get('TUIC_TEST_TMP_ROOT') or str(host_temp_dir() / 'tuic-tests')
 browserenv = dict(os.environ, AB_SESSION='chore-1995-' + uuid.uuid4().hex[:8], AB_AGENT_BROWSER_DIR=str(evidence / 'reap-scope'))
 browserenv.pop('GH_TOKEN', None)
 browserenv.pop('GITHUB_TOKEN', None)
 token = subprocess.run(['gh', 'auth', 'token'], capture_output=True, text=True, check=True, timeout=30).stdout.strip()
 assert token
-backendenv = dict(os.environ, GH_TOKEN=token, TUIC_1995_EVIDENCE=str(evidence), TUIC_1995_SOURCE_REF=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), TMPDIR=str(pathlib.Path.home() / 'Gits/.tmp/tuic-tests'), TUIC_TEST_TMP_ROOT=str(root / '.tmp/tuic-tests'))
+backendenv = dict(os.environ, GH_TOKEN=token, TUIC_1995_EVIDENCE=str(evidence), TUIC_1995_SOURCE_REF=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), TMPDIR=str(host_temp_dir() / 'tuic-tests'), TUIC_TEST_TMP_ROOT=scratch)
 backendenv.pop('GITHUB_TOKEN', None)
 exe = None
-for line in pathlib.Path(os.environ.get('TUIC_1995_BUILD_LOG', str(pathlib.Path.home() / 'Gits/.tmp/chore-1995-native-harness-build.log'))).read_text().splitlines():
+for line in pathlib.Path(os.environ.get('TUIC_1995_BUILD_LOG', str(host_temp_dir() / 'chore-1995-native-harness-build.log'))).read_text().splitlines():
     try:
         r = json.loads(line)
     except:

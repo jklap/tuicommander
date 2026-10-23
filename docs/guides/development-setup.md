@@ -85,8 +85,11 @@ The dry run does not build, create runtime files, read application configuration
 or start a desktop process. The launch runs in the foreground. It builds the
 frontend, then uses one Cargo build through the mbx shim for
 `tuicommander-agent-test`, `tuic-bridge` and `tuic`. The existing orchestrator
-build-slot wrapper serializes these builds when installed. `mbx doctor` must
-succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
+build-slot wrapper serializes these builds when installed. The launcher only
+reads two files outside the repository: that wrapper and the orchestrator's
+`BUILD_FREEZE` marker, which pauses native builds. `scripts/maintainer_tools.py`
+holds their default locations; override them with `TUIC_BUILD_SLOT` and
+`TUIC_BUILD_FREEZE_FILE`. `mbx doctor` must succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
 bundle, signing operation or installed executable is involved. Embedded frontend
 assets use `tauri/custom-protocol` even though this is a debug build.
 
@@ -155,7 +158,7 @@ WebView through its Unix socket, and stops the supervised instance in cleanup:
 
 ```bash
 python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
-  --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
+  --evidence-dir "${TMPDIR%/}/agent-test-visible-$(date +%s)"
 ```
 
 Add `--duration 300` to observe presentation for five minutes. Add `--cover` as
@@ -173,7 +176,9 @@ These observations do not read `NSWindow.occlusionState` directly or prove App N
 This needs explicit desktop-execution authorization, macOS, a linked worktree
 with build inputs, an unused named instance/port, and an unrelated foreground
 application at launch. Do not use an existing instance with sessions. The evidence directory
-must be new and under `~/Gits`.
+must be new and under the host temp dir (`TUIC_TEST_HOST_TMPDIR` inside
+`scripts/with-test-tmp.sh`, else `$TMPDIR`). macOS may purge files there that
+go unused for days, so copy the evidence you need to keep.
 
 `agent_test_window_renders_visible_without_focus` checks document/native
 visibility, positive terminal canvas area, actual `fillText` paint, no native or
@@ -193,7 +198,7 @@ part of the unattended shell/Rust/JS suites.
 | --- | --- |
 | Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
 | Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
-| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tmp/tuic-at/`. Child CLI/bridge processes inherit the same namespace. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR`, `<host temp dir>/tuic-at/<first 8 hash characters>/` (`TUIC_AGENT_TEST_RUNTIME_BASE` replaces `<host temp dir>` when the socket path would exceed the macOS limit, for example under a 72-byte sandbox `TMPDIR`). Child CLI/bridge processes inherit the same namespace. |
 | Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
 | Microphone and dictation | Not compiled into this binary. A dictation-enabled build refuses to start; no microphone permission request or capture path is available. Audio/voice hardware checks still belong to Boss. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |

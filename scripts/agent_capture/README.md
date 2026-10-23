@@ -8,8 +8,9 @@ reads a credential store, installs an agent, or fabricates terminal output.
 The agent uses the normal authenticated HOME by default, as authorized for these
 captures. CLI-owned authentication/session state remains in its normal location;
 scenario cwd and tool file writes stay in the throwaway output directory under
-`~/Gits`. Use `--agent-home` for an already authenticated alternate HOME under
-`~/Gits` if desired. The driver never reads/copies token stores or performs login.
+the host temp dir (`TUIC_TEST_HOST_TMPDIR` inside `scripts/with-test-tmp.sh`,
+else `$TMPDIR`). Use `--agent-home` for an already authenticated alternate HOME
+under that temp dir if desired. The driver never reads/copies token stores or performs login.
 The daemon always has a separate HOME, config, debug file vault and temporary
 files inside the output directory. Release daemons are excluded because their
 startup reads the native vault; supply the debug artifact from its build directory.
@@ -19,10 +20,12 @@ python3 -B scripts/agent_capture/run.py inventory
 python3 -B scripts/agent_capture/run.py record \
   --daemon /absolute/path/to/debug/tuic-remote \
   --scenario scripts/agent_capture/codex-short.json \
-  --output "$HOME/Gits/.tmp/agent-capture-1343/codex-001"
+  --output "${TMPDIR%/}/cap-codex-001"
 ```
 
-The output directory must not already exist. Each scenario selects an agent and
+The output directory must not already exist. The daemon binds its Unix socket
+inside it, so keep it short and directly under the temp dir: the driver refuses
+an output path that would exceed the macOS socket path limit. Each scenario selects an agent and
 explicit CLI arguments (`args`, without shell expansion). Adapt these arguments
 to the installed CLI version. Steps are:
 
@@ -106,7 +109,7 @@ recordings:
 
 ```sh
 python3 -B scripts/agent_capture/run.py promote \
-  "$HOME/Gits/.tmp/pi-capture-001/capture.json" --name simple-turn-20261008
+  "${TMPDIR%/}/cap-pi-001/capture.json" --name simple-turn-20261008
 ```
 
 The resulting `<agent>-<name>.tcap`, provenance `.md`, and `.scenario.json` enter the existing 1342
@@ -137,7 +140,7 @@ scenario metadata and the generated oracle files together.
 | Claude | `~/.local/bin/claude` | Unverified: real CLI reports login expired; never logged in automatically |
 | Codex | `/opt/homebrew/bin/codex` | Recorded and replayed real READY turn; fixture `codex-headless-short-20261008` |
 | pi | `/opt/homebrew/bin/pi` | Recorded and replayed READY turn and real question/answer (Gemini 2.5 Flash); fixtures `pi-headless-short-20261008`, `pi-headless-question-20261008` |
-| goose | `~/.local/bin/goose` | Unverified: the real banner prints the capture cwd, so a recording under `~/Gits` embeds the home path; re-record with a username-free cwd |
+| goose | `~/.local/bin/goose` | Unverified: the real banner prints the capture cwd, so the earlier recording (cwd under the home directory) embedded the home path; re-record with a username-free cwd |
 | Amp | Not found on PATH | Unverified |
 | Cursor | `cursor-agent` not found on PATH | Unverified |
 | Droid | Not found on PATH | Unverified |

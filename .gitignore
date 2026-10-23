@@ -50,6 +50,7 @@ benchmarks
 scripts/*
 !scripts/agent-test.py
 !scripts/agent-test-visible.py
+!scripts/maintainer_tools.py
 !scripts/agent-test-tests.py
 !scripts/test-agent-test.sh
 !scripts/check-desktop-embedding.sh

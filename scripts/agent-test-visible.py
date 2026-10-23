@@ -15,6 +15,11 @@ import sys
 import time
 import uuid
 
+# Also importable through runpy.run_path (reports/*/observer.py), which does not
+# put this file's directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from maintainer_tools import build_freeze, host_temp_dir  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "agent_test_window_renders_visible_without_focus"
 
@@ -149,8 +154,8 @@ def agent_test_window_renders_visible_without_focus(instance, port, evidence, du
     if sys.platform != "darwin" or not (ROOT / ".git").is_file():
         raise RuntimeError("native observer requires an authorized macOS linked worktree")
     evidence = evidence.resolve()
-    if not evidence.is_relative_to(Path.home() / "Gits"):
-        raise ValueError("evidence directory must be under ~/Gits")
+    if not evidence.is_relative_to(host_temp_dir().resolve()):
+        raise ValueError(f"evidence directory must be under the host temp dir {host_temp_dir()}")
     evidence.mkdir(parents=True, exist_ok=False)
     variables = [f"AGENT_TEST_INSTANCE={instance}", f"AGENT_TEST_PORT={port}"]
     launch = json.loads(subprocess.check_output(
@@ -160,7 +165,7 @@ def agent_test_window_renders_visible_without_focus(instance, port, evidence, du
     pid_file = Path(launch["pid_file"])
     if pid_file.exists():
         raise RuntimeError("selected agent-test instance already has a supervisor; not touching it")
-    freeze = Path.home() / "Gits/.tmp/BUILD_FREEZE"
+    freeze = build_freeze()
     if freeze.exists():
         raise RuntimeError("BUILD_FREEZE is present; do not launch a native build")
     before = frontmost()
@@ -172,8 +177,8 @@ def agent_test_window_renders_visible_without_focus(instance, port, evidence, du
     drove_terminal = False
     cleanup = {}
     # mbx creates a Unix socket under TMPDIR: the worktree test wrapper's long
-    # scratch path exceeds macOS SUN_LEN. Scope this short Gits path to the build.
-    build_environment = {**os.environ, "TMPDIR": str(Path.home() / "Gits/.tmp") + "/"}
+    # scratch path exceeds macOS SUN_LEN. Scope the short host temp dir to the build.
+    build_environment = {**os.environ, "TMPDIR": str(host_temp_dir()) + "/"}
     with (evidence / "desktop.log").open("w") as log:
         child = subprocess.Popen(["make", "agent-test", *variables], cwd=ROOT,
                                  env=build_environment, stdout=log, stderr=subprocess.STDOUT)

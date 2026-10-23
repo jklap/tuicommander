@@ -22,7 +22,7 @@ if (
 	throw new Error("Unsupported recording");
 const endpoint = `http://127.0.0.1:${Number(port)}`;
 const hash = createHash("sha256").update(instance).digest("hex").slice(0, 16);
-if (socketPath && !resolve(socketPath).endsWith(`/tuic-at/${hash}/tuic-mcp-${hash}.sock`))
+if (socketPath && !resolve(socketPath).endsWith(`/tuic-at/${hash.slice(0, 8)}/tuic-mcp-${hash}.sock`))
 	throw new Error("Socket must belong to the named make agent-test instance");
 const call = (path, options = {}) => {
 	if (!socketPath)
@@ -61,7 +61,7 @@ const get = async (path) => {
 // Fail closed: verify the named harness socket AND the actual listener executable.
 // A non-production port alone is not evidence that this is the isolated binary.
 const health = await get("/health");
-if (!health.ok || !String(health.socket_path).endsWith(`/tuic-at/${hash}/tuic-mcp-${hash}.sock`))
+if (!health.ok || !String(health.socket_path).endsWith(`/tuic-at/${hash.slice(0, 8)}/tuic-mcp-${hash}.sock`))
 	throw new Error("Target is not the named make agent-test instance");
 const listeners = spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], { encoding: "utf8" });
 const pids = [

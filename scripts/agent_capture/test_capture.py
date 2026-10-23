@@ -1,6 +1,7 @@
 """Focused capture contract tests; no synthetic agent transcripts."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,6 +32,16 @@ class CaptureContractTests(unittest.TestCase):
                       [{"action": "wait", "expect": {"agent": "working"}, "replay_expect": {"agent": "idle"}}]]:
             with self.subTest(steps=steps), self.assertRaises(ValueError):
                 validate({**base, "steps": steps})
+
+    # Catches: capture output or an alternate agent HOME written outside $TMPDIR
+    # (it used to be required under the home Gits tree).
+    def test_capture_scratch_must_stay_under_the_host_temp_dir(self):
+        host = Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir()).resolve()
+        inside = host / "cap-unit"
+        self.assertEqual(run.scratch_path(inside), inside)
+        for outside in [run.ROOT / ".tmp/cap-unit", Path.home() / "cap-unit"]:
+            with self.subTest(path=outside), self.assertRaisesRegex(ValueError, "temp dir"):
+                run.scratch_path(outside)
 
     # Catches: a missing binary is reported as verified or gets a fabricated capture.
     def test_missing_cli_remains_unverified(self):
