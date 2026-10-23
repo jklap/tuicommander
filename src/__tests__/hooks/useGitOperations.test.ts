@@ -20,6 +20,7 @@ import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { branchFacts, STALE_AFTER_DAYS } from "../../utils/sidebarRich";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
+import missingDetachedOrphans from "./missingDetachedOrphans.fixture.json";
 
 function resetStores() {
 	for (const id of terminalsStore.getIds()) {
@@ -1757,6 +1758,28 @@ describe("useGitOperations", () => {
 			});
 			await gitOps.refreshAllBranchStats("/repo", { immediate: true });
 			expect(repositoriesStore.get("/repo")?.detachedWorktrees).toEqual([]);
+		});
+
+		// Catches read-only diagnostics disappearing at refresh or being persisted as selectable workspaces.
+		it("refreshes and retracts repair diagnostics without minting workspace IDs", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			const diagnostic = {
+				path: "/moved/checkout",
+				branch: "feature",
+				state: "missing",
+				guidance: "Run git worktree repair",
+			};
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				worktree_diagnostics: [diagnostic],
+			});
+			await gitOps.refreshAllBranchStats();
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toEqual([diagnostic]);
+			expect(Object.keys(repositoriesStore.get("/repo")!.workspaces)).toEqual(["main"]);
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			await gitOps.refreshAllBranchStats("/repo", { immediate: true });
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toEqual([]);
 		});
 
 		it("updates branch stats for all repos", async () => {
@@ -4478,6 +4501,27 @@ describe("useGitOperations", () => {
 			safe: false,
 			reason: "untracked files",
 			dirty_fingerprint: fingerprint,
+		});
+
+		// Catches: automatic cleanup pruning missing detached registrations before repair.
+		// Input is the actual Rust assessment of deleted/moved Git-created checkouts, not hand-set safety.
+		it.each(["ask", "on"] as const)("preserves missing detached registrations during %s cleanup", async (mode) => {
+			repoSettingsStore.update("/repo", { orphanCleanup: mode });
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+				worktree_diagnostics: missingDetachedOrphans.diagnostics,
+			});
+			mockRepo.assessOrphanCleanup.mockResolvedValue(missingDetachedOrphans.assessments);
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+
+			await askOps(confirmOrphanCleanup).refreshAllBranchStats();
+
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toHaveLength(2);
+			expect(repositoriesStore.get("/repo")?.worktreeDiagnostics).toEqual(missingDetachedOrphans.diagnostics);
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+			expect(confirmOrphanCleanup).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).not.toHaveBeenCalledWith(expect.stringContaining("Removed"));
 		});
 
 		// Catches: "ask" mode opening a dialog for a clean, merged detached checkout, so a worktree that holds

@@ -462,6 +462,41 @@ describe("Sidebar", () => {
 		expect(folded.getByTestId("detached-worktree-count")).toHaveTextContent("1 detached");
 	});
 
+	// Catches missing/duplicate registrations being hidden or acquiring branch click actions.
+	it("renders repair diagnostics without selectable controls", () => {
+		const diagnostics = [
+			{
+				path: "/old/missing",
+				branch: "feature",
+				state: "missing",
+				guidance: "Run git worktree repair from the new location.",
+			},
+			{
+				path: "/other/duplicate",
+				branch: "main",
+				state: "duplicate_branch",
+				guidance: "Use a distinct branch to select independently.",
+			},
+		];
+		setRepos({ "/repo1": makeRepo({ worktreeDiagnostics: diagnostics }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const rows = view.getAllByTestId("worktree-diagnostic");
+		expect(rows).toHaveLength(2);
+		rows.forEach((row, index) => {
+			expect(row).toHaveTextContent(diagnostics[index].path);
+			expect(row).toHaveTextContent(diagnostics[index].guidance);
+			expect(row.querySelector("button, [tabindex]")).toBeNull();
+			fireEvent.click(row);
+		});
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, worktreeDiagnostics: diagnostics }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("worktree-diagnostic")).toBeNull();
+		expect(folded.getByTestId("worktree-diagnostic-count")).toHaveTextContent("2 diagnostics");
+	});
+
 	describe("density attribute", () => {
 		beforeEach(() => densityMode("auto"));
 		const manyBranches = (n: number) =>
