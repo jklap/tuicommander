@@ -1174,3 +1174,215 @@ and story acceptance remain incomplete.** Idle echo improved in this control,
 help-overlap echo did not. Criteria 3, 4 and 24 must not be marked passed from
 this evidence. The main story store remains untouched and the coordinator owns
 criterion reconciliation, after-the-fact RED and the separate critic.
+
+
+## Admission follow-up contract (2026-10-23)
+
+The consumer must receive already-applied post-input damage through the existing
+shared ticker, including damage that races an earlier frame send. The reader's
+`InputFramePriority::applied` generation and the ticker's real serialization/send
+accounting are the source of pending state. Native observations are recorded from
+the installed ego and the isolated custom CanvasTerminal; synthetic key input and
+fill callbacks do not prove physical keyboard-to-display latency.
+
+The main story store is read-only to this peer. This section records the contract
+for the coordinator's worklog without changing criteria. Keep the two bypasses per
+100 ms, 8 ms spacing, 100 ms expiry, desktop gate, DEC-2026 and bulk floors intact.
+
+### Exact idle admission rule, not a generic timer hypothesis
+
+The follow-up starts at merged `main` `554b1fa02`, which includes the receipt fix.
+Coordinator mail reports critic PASS and behavioral RED for
+`desktop_receipts_do_not_generate_output` on `118ba8df`; the paused-damage test
+passes that baseline and is a guard, not historical RED. Those are coordinator
+results, not new peer runs.
+
+The original final acquisition can be explained without another native run.
+`analyze-admission.py` replays the recorded `accounting` events to reconstruct
+`last_sent` and the two rolling credit timestamps. It validates 3,357 eligible
+production decisions outside a 0.25 ms log-overhead boundary; all agree.
+
+- `pty/frame_priority.rs:32-46`: a pending request cannot precede either the last
+  send plus 8 ms or the oldest retained bypass plus 100 ms. A new input extends
+  expiry but does not clear either credit (`:55-59`, `:111-114`).
+- `pty/frame_priority.rs:75-87`: `applied` does not unpark when rolling quota is
+  unavailable. With no wake, `pty.rs:3761,3780-3790` falls back to the 16 ms
+  maintenance park. This is a timeout request, not an OS scheduling guarantee.
+- `pty.rs:3970-3986`: periodic output can still send when its ordinary floor has
+  elapsed, even if priority quota is unavailable. It need not wait for a credit.
+
+Original idle N=200, reader-complete to first matching cut, ms median/p95/max:
+
+| Group | N | Median | p95 | Max |
+|---|---:|---:|---:|---:|
+| All | 200 | 0.062 | 20.026 | 38.767 |
+| Rolling quota unavailable at reader completion | 62 | 11.230 | 23.546 | 38.767 |
+| Rolling quota available | 138 | 0.053 | 0.090 | 0.162 |
+| No matched gate or floor deferral | 195 | 0.061 | 19.400 | 23.546 |
+
+These groups are not independent causal classes: a quota-blocked sample can also
+hit a floor. Only five idle samples have an observed floor deferral and none has
+an observed gate deferral. The 33 ms animation floor is not the primary cause of
+this p95. Repeated unique glyphs and Ctrl+U clears both produce real post-input
+frames and spend the same rolling budget.
+
+The p95 sample, `亲`, is decisive. In the recorded frontend-origin timeline,
+prior bypasses occurred at 22292.989 and 22324.822 ms. Reader completion was
+22359.316 ms. The oldest credit cannot return until 22392.989 ms: 33.673 ms later.
+Spacing is already satisfied. No early wake is eligible. A periodic decision cuts
+at 22379.342 ms, after 20.026 ms, with `min_interval=0`, `floor_pending=false`,
+`priority_due=false`, `periodic_tick=true`; the ordinary frame beats credit return.
+This is the existing two-per-100-ms policy plus maintenance scheduling, not time
+spent in parsing, serialization or IPC.
+
+### Separate send-race correction within the same bounds
+
+The same trace also shows a different help-output case. For `侳`, the first echo
+is applied at UTC `01:35:53.241687`. A concurrent help chunk removes it before the
+first cut. That newer chunk completes at `.241909`, before IPC ends at `.241937`;
+a repaint with the echo completes at `.242008`. The matching echo cut is not until
+`.265844`. The intermediate request was already pending, so `applied` coalesced
+its wake. `sent` preserved the newer output count, but the ticker retained no
+retry after sending. There was no floor at the matching cut and quota was free.
+This is not evidence that the first transient echo remained continuously on screen.
+
+The bounded correction changes only the existing send-accounting result:
+`InputFramePriority::sent` returns the remaining request's deadline after quota
+accounting, and `pty.rs:4020` retains it in the existing `priority_retry` slot.
+No timer, thread, state machine, credit, expiration, floor, transport, or gate is
+added or relaxed. When no newer output raced the send, the result remains `None`.
+A closed gate is still handled before admission; DEC-2026 buffering is unchanged.
+
+The concrete worst case remains two bypasses per rolling 100 ms, at least 8 ms
+after the previous send. If the next credit would return at or after expiry, no
+retry is retained. The new table regression covers free spacing, a new input with
+spent credits, and insufficient remaining expiry. The existing newer-damage
+regression now also checks the returned deadline and retirement after delivery.
+No old expectation is inverted or weakened.
+
+### Follow-up native run and limits
+
+Evidence: `~/Gits/.tmp/2040-web/native-retry-fixed/`. Same installed ego path,
+no argv flags or manual config edits; default model `openai-codex/gpt-6-sol`,
+version banner `ego 0.1.2`. The same helper acquires 3+3 smoke and 200+200 main
+idle/help samples in one ego session, then 20/120-batch bulk controls. Only `/help`
+is submitted; unique glyph drafts are cleared without Enter. All 400 main keys
+correlate reader, cut, IPC and acceptance. Verified overlap is 184 main plus two
+smoke help samples; 16 main candidates are excluded. No Working chunks appear.
+
+The requested merge also brought frontend changes. Although the window stays
+640x420 CSS, DPR 2 and the same WebKit UA, the fitted grid is now **14x37**, not the
+prior **15x38**. Help wraps differently. System-load conditions are not controlled:
+matched idle floor deferrals rise from 5 to 56. Therefore the before/after numbers
+below are measurements, not a clean causal A/B or proof that the patch improves
+all latency populations. No second experiment is invented to hide these limits.
+
+Ms median/p95/max (before = prior receipt-fixed acquisition):
+
+| Boundary | Before | Follow-up |
+|---|---:|---:|
+| Idle key to fill, N=200 each | 16 / 34 / 51 | 17 / 42 / 60 |
+| Idle reader-complete to cut | 0.062 / 20.026 / 38.767 | 4.061 / 35.820 / 46.499 |
+| Help-candidate reader-complete to cut | 13.882 / 23.664 / 24.157 (N=199) | 8.668 / 12.037 / 24.127 (N=200) |
+| Verified-help key to fill | 23 / 39 / 41 (N=199) | 21 / 28 / 40 (N=186) |
+| Verified-help reader to fill | 20.807 / 37.065 / 38.930 | 19.269 / 26.402 / 38.719 |
+| Verified-help accepted to rAF | 6 / 16 / 17 | 9 / 15 / 17 |
+
+The follow-up records 336 retained retries. The 1,453 bypass cuts have a minimum
+recorded preceding-send interval of 8,006 us; no 99.75 ms log-timestamp window has
+more than two. The slightly shorter validation window avoids claiming exact
+monotonic boundaries from epoch logging. These observations supplement, not
+replace, the deterministic quota/spacing/expiry tests. No empty cuts or private
+repair/cursor-delta feedback signature appear (3,212 cuts).
+
+Replayed follow-up admission accounting agrees with 3,341 eligible decisions.
+97/200 idle echoes have quota unavailable at reader completion; 56 have matched
+floor deferrals and one has a matched gate deferral. Help has no quota-blocked
+reader completions, 14 matched gate deferrals and one matched floor deferral.
+Help samples without either matched deferral cut at p95 12.016 ms, max 12.058 ms.
+The remaining idle policy tail is not fixed. Both overall one-frame and combined
+under-33-ms p95 requirements remain unmet.
+
+The exact 120-batch body remains 181,474 bytes, SHA-256
+`b85c17e2ff4daf1a919b760eb2d114622e4a0a108c320ae94ef6c516c203a20b`.
+The 20-batch body remains 30,274 bytes with its previous hash. Reader sums through
+the footer match both exactly; the validated 173-byte interruption suffix occurs
+only during owned cleanup and is excluded after that boundary.
+
+| Paced control | Before | Follow-up |
+|---|---:|---:|
+| Main reader B/s | 14006.104 | 13963.171 |
+| Main reader span, ms | 12956.780 | 12996.618 |
+| Main final-reader to end acceptance, ms | 20.402 | 17.242 |
+| Main rAF p95/max, ms | 18 / 27 | 18 / 21 |
+| Main 100 ms timer p95/max, ms | 105 / 106 | 105 / 106 |
+| Calibration rAF p95/max, ms | 18 / 24 | 18 / 47 |
+| Calibration timer p95/max, ms | 105 / 106 | 105 / 105 |
+
+Bytes are lossless and the paced rate remains about 14 KB/s, but the measured main
+rate is **0.307% lower**, not identical. Calibration rAF max is worse. These are not
+proof of zero throughput loss, all-statistic heartbeat non-regression, saturation
+capacity, or unchanged CPU cost. The producer sleeps between batches; its reader
+span includes scheduling drift. Criteria 3, 4 and 24 remain untouched and unproved.
+
+### Policy choices, not changes made here
+
+1. Keep two bypasses per 100 ms: the long-run priority allowance stays 20/s;
+   repeated key/clear traffic can exhaust it even with an open gate and no floor.
+   This follow-up preserves that policy.
+2. Raise the allowance to three or four per 100 ms: 30/s (+50%) or 40/s (+100%)
+   priority allowance. This is a policy change, not a repair of lost pending work;
+   continuous output can consume these credits too. No native trial was run.
+3. Exempt every fresh input from quota while retaining 8 ms spacing: a theoretical
+   125/s priority ceiling instead of a 20/s long-run allowance. This violates the
+   existing rolling-budget contract and needs throughput/CPU/heartbeat evidence.
+4. Lower the 50 ms saturation floor to the 16 ms maintenance interval: nominal
+   background send cap rises from 20/s to 62.5/s (3.125x). Lowering 33 ms to 16 ms
+   changes about 30.3/s to 62.5/s. Actual park scheduling can exceed its requested
+   timeout; these are arithmetic policy ceilings, not benchmark results.
+
+None of these alone guarantees key-to-fill within 16.7 ms: even a quota-eligible
+frame can wait 8 ms after the preceding send and then up to a display frame for
+frontend rAF. No policy change is made. Recommendation: retain the bounded
+send-race correction for independent review, but do not call the story complete
+or certify throughput/heartbeat criteria from this run.
+
+### Validation and ownership
+
+One final native targeted nextest run: **13/13 PASS**, run ID
+`f49c30d7-9e71-48f6-bd75-05ece8ce0c04`, 1.337 s tests after 3m52s build.
+Command uses build-slot, mbx, repository test-temp wrapper and only the five
+frame-priority tests plus the eight prior grid/priority regressions. The new table
+was then changed only to collect all case failures before asserting, rather than
+stop at the first failing case. Only that invalidated test was rerun: **1/1 PASS**,
+run ID `db696403-c6c3-4226-9a08-f7eb3142403b`, 0.037 s after 1m45s build;
+`retry-test-table-final.log` retains the command and result. No production code
+changed after the 13-test run. Log:
+`~/Gits/.tmp/2040-web/retry-tests-native.log`. The linker warns about the large
+`__eh_frame` compact-unwind table; no test stdout/stderr noise. mbx reports cache
+bypass diagnostics and automatic disk-pressure GC; no cache was manually cleared.
+
+No in-story RED, full suite, clippy, mutation or cross-target run is claimed for
+this follow-up. New pre-fix behavior is `554b1fa02`. For after-the-fact RED, the
+coordinator must port the old `sent` signature mechanically to return `None`
+without scheduling a retry; compilation failure is not behavioral RED. The
+modified newer-damage test protects the lost deadline; the table protects bounds.
+An independent concurrency critic must still check the ticker integration.
+
+The native helper's initial observer preparation failed on a changed frontend
+anchor before any build or acquisition; the exact current source was read and
+the temporary observer anchor corrected. The lifecycle then completed normally:
+helper 41679, supervisor 41686 and ego 64779 are absent, stop returns 0, supervisor
+exits 2 after sanctioned shutdown, and the desktop PID file is absent. Temporary
+observers are restored; the only retained Rust behavior change is bounded retry
+retention. The daily app was not restarted. Boss must manually rebuild/restart
+when ready to load this Rust change.
+
+Analysis reproducers: `analyze-admission.py`, `analyze-retry-admission.py`,
+`compare-retry-fix.py`, and their JSON outputs under `~/Gits/.tmp/2040-web/`.
+The production story store remains read-only to this peer.
+
+Static checks before commit: changed-file rustfmt check, `git diff --check`, and
+instruction-link validation pass (two pairs). `story-close.sh --check` correctly
+refuses unchecked criterion 3: help ratio plus echo under one frame while rows
+print. No criterion is checked to make that gate pass.

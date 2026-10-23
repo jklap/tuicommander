@@ -139,6 +139,9 @@ cell's full text span, since native search points have no subcell index.
   retain actual damage, and a missed-frame recovery sends its
   private full frame only to desktop and its delta only to browsers, without
   offering the same snapshot to desktop twice; normal output batching and input quotas are unchanged.
+- **Retained input retry:** newer reader damage that arrives during a send keeps
+  its retry on the existing ticker. This does not add input credits, relax the
+  8 ms spacing or expiry, bypass desktop receipts, or change synchronized output.
 - **Visibility batches:** `IntersectionObserver` can deliver multiple states for
   a terminal in one callback after resize/layout changes. `latestIntersectionVisibility`
   selects the greatest `entry.time` (last entry wins ties), so a transient hidden

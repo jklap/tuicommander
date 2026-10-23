@@ -74,6 +74,8 @@
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
 ## Bounded input frame priority (2040-16b2) — Rust restart required
 
+- [ ] After a manual rebuild/restart, check repeated input while output races frame delivery. Newer applied output must retain its bounded retry; two credits per 100 ms, 8 ms spacing, receipt gates and synchronized redraws remain unchanged. Native idle/help proxy results and limits are in the browser-input measurement report; this is not a one-frame guarantee.
+
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
 
 ## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified

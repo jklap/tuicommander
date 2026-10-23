@@ -3960,8 +3960,8 @@ pub(crate) fn spawn_reader_thread(
                     .unwrap_or(false)
             };
             // DEFERRED (2026-10-23) — native echo still exceeds one frame when
-            // the rolling input budget is spent. This fix removes receipt/repair
-            // feedback, not the deliberate bulk-protection floors; changing that
+            // the rolling input budget is spent. Receipt/repair and retry fixes
+            // preserve the deliberate bulk-protection floors; changing that
             // budget needs a separate latency/throughput/heartbeat trade-off.
             // Pick the send-rate floor: typing-under-load (~20 fps) wins, else the
             // sustained-animation floor (~30 fps), else full 60 fps for short bursts.
@@ -4017,7 +4017,7 @@ pub(crate) fn spawn_reader_thread(
                 );
                 last_sent = Some(now);
                 if let Some(request) = priority_request {
-                    ticker_priority.sent(request, now, priority_bypass);
+                    priority_retry = ticker_priority.sent(request, now, priority_bypass);
                 }
             }
         }
