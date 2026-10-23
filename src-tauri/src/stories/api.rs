@@ -1,7 +1,7 @@
 use super::{
     CRITERIA_INCOMPLETE, NewPlan, NewStory, PLAN_DOCUMENT_NOT_FOUND, Plan, PlanSource, PlanState,
-    PlanView, Story, StoryCommand, StoryPatch, StoryListFilter, StoryListPage, StoryStatus, StoryStore,
-    StorySummary, StoryTransition,
+    PlanView, Story, StoryCommand, StoryListFilter, StoryListPage, StoryPatch, StoryStatus,
+    StoryStore, StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
