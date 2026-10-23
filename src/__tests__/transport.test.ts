@@ -1243,6 +1243,20 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps watch_session_review to POST /repo/session-review/watch", () => {
+			const result = mapCommandToHttp("watch_session_review", { repoPath: "/my/repo", sessionId: "sess-1" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/session-review/watch");
+			expect(result.body).toEqual({ path: "/my/repo", session_id: "sess-1" });
+		});
+
+		it("maps unwatch_session_review to POST /repo/session-review/unwatch", () => {
+			const result = mapCommandToHttp("unwatch_session_review", { repoPath: "/my/repo", sessionId: "sess-1" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/session-review/unwatch");
+			expect(result.body).toEqual({ path: "/my/repo", session_id: "sess-1" });
+		});
+
 		it("maps revert_file_to_session_start to POST /repo/session-review/revert-file", () => {
 			const result = mapCommandToHttp("revert_file_to_session_start", {
 				repoPath: "/my/repo",
