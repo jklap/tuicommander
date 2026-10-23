@@ -1,3 +1,7 @@
+## Native story list filters and pagination (2174-6b3f) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, call `list_stories` with combined state/priority/type filters and `limit:1`, follow `next_cursor` with the same plan/filters, and check the legacy no-limit response stays a full array. This peer did not restart or replace the daily app.
+
 ## Stories filters and native Kanban (2167-eedb) — Rust restart required
 
 - [x] Isolated native instance: twelve DOM/geometry samples cover all/open/closed, feature/fix/refactor/chore/task/untyped, combined open+untyped, and Kanban all/open+feature. Card selection shows the matching criteria; closing and reopening retains open+feature and Kanban. Recorded real API fixture and results: `~/Gits/.tmp/results/tuic-2167-evidence/`. The instance was stopped.

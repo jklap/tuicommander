@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add server-side native story state/priority/type filters and optional bounded keyset pages without changing legacy full-list reads or workflow dispatch order (#2174-6b3f).
+
 - Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view; retain these controls across detach and reattach (#2167-eedb).
 
 - Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).

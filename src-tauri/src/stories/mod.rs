@@ -4,6 +4,9 @@ mod critic_tests;
 #[cfg(test)]
 mod filter_tests;
 mod filters;
+mod list;
+#[cfg(test)]
+mod list_tests;
 mod model;
 mod sources;
 mod store;
