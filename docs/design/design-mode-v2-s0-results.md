@@ -788,3 +788,49 @@ The owned Chrome was closed through its own browser connection and its exact
 recorded PID was absent afterward. No backend, fixture server or owner session
 was started in this round. Evidence: `~/Gits/.tmp/design-web/s0-native/`
 (`argv.json`, `pid.json`, `refusal.json`, `cleanup.json`).
+
+## Round 14: native input reached; MacControl upstream stopped (2026-10-23)
+
+The Screen Recording refusal from Round 13 was not reproduced. MacControl
+`list_windows` succeeded, and a **window-only** screenshot of the owned CFT149
+Extensions window succeeded. Native focus and a click on **Load unpacked** also
+returned success. No current Accessibility or Screen Recording denial was
+reported. The console was unlocked before both input phases.
+
+The browser was Chrome for Testing **149.0.7827.54**, PID **35188**, using only
+`~/Gits/.tmp/design-web/profile`, with no `--load-extension` flag. Its native
+window ID was **13734**; another Chrome window, **12608**, was not touched.
+Browser DOM/window geometry identified the Load unpacked button before the
+native click. The screenshot was scoped to window 13734, never the full screen.
+
+The next MacControl batch requested Cmd+Shift+G, a 400 ms wait, path typing and
+Enter. It failed with exactly:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+No completed-action list was returned, so the folder chooser state and the
+number of executed actions are unknown. The requested path was also incorrect:
+`~/Gits/.tmp/design-web/extension` does not exist; the recorded browser argv
+identifies the actual installed directory as
+`~/Gits/.tmp/design-web/profile/tuic-design-extension`. This harness mistake is
+retained, not counted as an installation result. No successful folder selection
+or extension installation is claimed.
+
+A subsequent MacControl `list_windows` call returned:
+
+> Upstream 'maccontrol' process is not running
+
+This is a new upstream availability blocker, **not** a permission refusal or a
+browser capability failure. No alternate native-input transport or upstream
+restart was attempted. Restore the MacControl upstream, then repeat the owned
+chooser flow with the actual installed directory and verify a no-load-flag
+restart. AC1 remains unchecked; Round 12's tab-return, crop and cancellation
+results are unchanged.
+
+Raw evidence and the bounded browser inspection/cleanup harnesses are under
+`~/Gits/.tmp/design-web/s0-native-round14/`: `argv.json`, `pid.json`,
+`observations.json`, `browser-version.json`, and `cleanup.json`. The owned
+browser was closed through its own browser connection; PID 35188 was absent
+afterward. No backend, fixture server or owner session was started. No Boss
+window, daily TUIC endpoint, permission setting or product source was changed.
+This round changes documentation only; no application build or test suite ran.
