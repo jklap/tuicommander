@@ -801,6 +801,8 @@ semantics, awaiting state, or turn completion.
 
 App settings, notifications, preferences, repository defaults and overrides, registration metadata, agent configurations, prompts, pane layout, tunnels, connection metadata and upstream lists adopt reads without bootstrap migration. Mounted owner pages also refresh GitHub, ego, Telegram and plugin settings. Dirty form fields remain local; same-field conflicts produce a content-free notice. `createConfigDeltaWriter.adopt` advances the backend baseline. The existing save tail rebases queued edits onto that baseline: unrelated local changes still persist, while conflicting remote leaves are not overwritten automatically. Component-local launch-instruction drafts also survive incoming saved values until blur or explicit reset.
 
+Pane layout reads apply the Rust owner's defaults for omitted `root`, `groups` and `activeGroupId` before baseline adoption and disk restoration. Direct `restore` calls use the same defaults. Restore batches tree, groups, focus and revision publication so reactive consumers see a complete layout, while reconciliation keeps unchanged group and tab identities.
+
 Snapshot adoption merges object leaves. Arrays are atomic owner values: concurrent changes to the same list retain the local list and report a conflict instead of guessing an index-based merge. A remote disconnect cancels in-flight adoption; reconnect clears that owner's generation cursor and fetches a fresh snapshot. Successful daemon mirror stream subscriptions and owner-scoped lag notifications also trigger this resync, even when the health status stayed connected.
 
 ## Startup workflow state versus Settings state
