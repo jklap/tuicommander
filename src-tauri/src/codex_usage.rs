@@ -355,6 +355,51 @@ async fn cached_snapshot() -> Result<CodexSnapshot, String> {
     }
 }
 
+/// Query only quota through the existing App Server contract, with explicit process home/profile.
+pub(crate) async fn session_quota(
+    home: &str,
+    codex_home: &str,
+    profile: Option<&str>,
+) -> Result<CodexUsageApiResponse, String> {
+    let detection = crate::agent::detect_agent_binary("codex".into()).await;
+    let binary = detection.path.ok_or("Codex CLI unavailable")?;
+    let mut args = vec!["app-server"];
+    if let Some(profile) = profile {
+        args.extend(["--profile", profile]);
+    }
+    let messages = [
+        serde_json::json!({"method":"initialize","id":0,"params":{"clientInfo":{"name":"tuicommander","version":env!("CARGO_PKG_VERSION")}}}),
+        serde_json::json!({"method":"initialized","params":{}}),
+        serde_json::json!({"method":"account/rateLimits/read","id":1,"params":null}),
+    ];
+    let responses = crate::cli_usage_rpc::request_jsonl_with_env(
+        Path::new(&binary),
+        &args,
+        &messages,
+        &[1],
+        Duration::from_secs(20),
+        &[
+            ("HOME".into(), home.into()),
+            ("CODEX_HOME".into(), codex_home.into()),
+        ],
+    )
+    .await?;
+    let limits = crate::cli_usage_rpc::decode_result(&responses, 1, "Codex rate limits")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    Ok(map_app_server_snapshot(
+        limits,
+        AppTokenUsageResponse {
+            summary: AppTokenSummary::default(),
+            daily_usage_buckets: None,
+        },
+        now,
+    )
+    .usage)
+}
+
 /// Fetch Codex rate-limit usage (powers the status bar ticker).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_codex_usage_api() -> Result<CodexUsageApiResponse, String> {

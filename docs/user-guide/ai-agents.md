@@ -394,3 +394,20 @@ ego output is not hidden by an earlier submitted prompt during composer repaint.
 ## Settings startup and Ego transport
 
 Assisted configuration uses the published Settings owner contract, not agent-session keystrokes or direct credential-file edits. Ego AI Chat uses ACP; a missing settings owner or ACP capability does not select a PTY fallback. Typed Settings `begin_login` opens a human-operated terminal using the configured Ego executable/workspace. `login_status` reads credential presence after termination; an exited command is not proof of authentication. See [Settings startup workflows](../backend/settings-startup.md#ego).
+
+### Usage in the mobile session menu
+
+Open **More session actions** to load usage for that session. Claude and Codex
+show **Account quota** and reported reset times for the live session profile.
+These are shared account windows, not the selected model's session spend.
+
+ego shows **Session usage** from its own durable ledger, with **Cost** when
+reported. **API-equivalent estimate** is a subscription estimate, not money
+spent. Unknown/partial costs retain their reasons. Session totals can include
+more than one model; the model label is ego's latest admitted model.
+
+The menu shows **Usage: loading…**, **Usage not available**, or an explicit
+stale label as applicable. **Model unavailable** means no verified model is
+available; it does not substitute a global default. The old terminal warning
+percentage is not presented as a fresh usage measurement. Remote sessions
+read their owning daemon's usage. No local account is used for a remote PTY.
