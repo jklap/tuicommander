@@ -117,6 +117,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 		return index <= 0 ? -1 : index;
 	});
 
+	const showProjectSelector = createMemo(() => !!props.embedded && (props.projects?.length ?? 0) > 0);
 	const isFlow = () => progressStore.view() === "flow";
 	const flowState = () => {
 		const path = project();
@@ -133,11 +134,11 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 			<div class={s.header}>
 				<div class={s.title}>
 					<h4>Progress</h4>
-					<Show when={!props.embedded}>
+					<Show when={!showProjectSelector()}>
 						<span class={s.project}>{displayName()}</span>
 					</Show>
 				</div>
-				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
+				<Show when={showProjectSelector()}>
 					<Select
 						compact
 						class={s.terminalSelect}

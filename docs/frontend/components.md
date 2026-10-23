@@ -630,8 +630,8 @@ marking where the last visit ended, and a blocked-only
 checkbox. Blocked entries are red, host-written `intent` entries are muted, and
 each row can be deleted. The list opens with at most 100 entries; **Load older**
 appends another cursor page. The control is disabled while a read is pending.
-The embedded mobile header uses its project selector as the project label; only
-the desktop dialog shows a separate project subtitle.
+The header uses its project selector as the project label when available.
+Without a selector, including on desktop, it shows a project subtitle instead.
 There is no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.

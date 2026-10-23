@@ -92,7 +92,9 @@ starts again at the newest page. A live update or deletion also refreshes the
 newest page. Older-page failures keep the entries already loaded and can be
 retried. The same paging applies on desktop and mobile.
 The mobile header identifies the project in its project selector, without a
-second project-name subtitle. In the mobile Progress tab, a long entry initially shows about four lines;
+second project-name subtitle. If the project selector is unavailable, the
+subtitle identifies the selected project instead. In the mobile Progress tab,
+a long entry initially shows about four lines;
 tap **More** to read it all and **Less** to collapse it again.
 Closed PTYs with saved entries remain selectable. A PTY with no entries has an
 empty view; it does not inherit another PTY's work. Entries recorded before

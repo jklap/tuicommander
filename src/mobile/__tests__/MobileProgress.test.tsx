@@ -40,12 +40,14 @@ afterEach(() => {
 });
 
 describe("mobile Progress", () => {
-	it.each([["/newer"], ["/newer", "/older"]])(
-		"does not repeat the selected project name above its mobile selector (%j)",
-		async (...projects) => {
+	it.each([{ projects: ["/newer"] }, { projects: ["/newer", "/older"] }, { projects: [] }, { projects: undefined }])(
+		"keeps the selected project name once with or without a mobile selector ($projects)",
+		async ({ projects }) => {
+			// Catch both a duplicate subtitle and a lost label while project discovery is unavailable.
+			progressStore.open("/newer", null);
 			render(() => <ProgressDialog embedded projects={projects} />);
 			await waitFor(() => expect(screen.getByText("Later work is blocked.")).toBeTruthy());
-			expect(screen.getByLabelText("Progress project")).toBeTruthy();
+			expect(screen.queryByLabelText("Progress project") !== null).toBe(!!projects?.length);
 			expect(screen.getAllByText("newer")).toHaveLength(1);
 		},
 	);
