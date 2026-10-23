@@ -209,7 +209,7 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn publish(&self, run: &AutomationRun) {
-        publish_event_draft_pr(run);
+        publish_event_draft_pr(self.0, run);
         let store = self.0.automation_runtime.notification_store();
         let notice = store.as_ref().is_some_and(|store| {
             super::notifications::publish(
@@ -237,7 +237,7 @@ impl CompletionEffects for NativeCompletion<'_> {
 
 /// A completed event run opens its draft PR; the agent pushed the branch itself.
 /// Allowlist and branch checks live in `publish`, which this only feeds.
-fn publish_event_draft_pr(run: &AutomationRun) {
+fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun) {
     let (
         RunStatus::Completed,
         RunTrigger::Event {
@@ -245,33 +245,48 @@ fn publish_event_draft_pr(run: &AutomationRun) {
             issue_number,
             ..
         },
-    ) = (run.status, &run.trigger)
+        Workspace::NewPerRun { base_branch },
+        Some(workspace),
+    ) = (
+        run.status,
+        &run.trigger,
+        &run.definition.workspace,
+        &run.workspace,
+    )
     else {
         return;
     };
-    let (Some(workspace), Workspace::NewPerRun { base_branch }) =
-        (run.workspace.clone(), run.definition.workspace.clone())
-    else {
-        tracing::warn!(source = "automations", run_id = %run.id, "Event run has no isolated workspace; draft PR not opened");
-        return;
-    };
-    let (repository, issue_number, run_id) = (repository.clone(), *issue_number, run.id.clone());
-    std::thread::spawn(move || {
-        let outcome = (|| {
+    let (state, repository, issue_number, base_branch, workspace, run_id) = (
+        state.clone(),
+        repository.clone(),
+        *issue_number,
+        base_branch.clone(),
+        workspace.clone(),
+        run.id.clone(),
+    );
+    tokio::spawn(async move {
+        let outcome = async {
             let intake = DefinitionStore::new().load()?.event_intake;
-            let workspace = std::path::Path::new(&workspace);
-            let head = super::publish::run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            let head = super::publish::run_git(
+                std::path::Path::new(&workspace),
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+            )?;
+            let api = crate::github_pr_api::RepoApi::resolve(&state, &workspace).await?;
+            let bound = format!("{}/{}", api.owner, api.repo);
             super::publish::publish_draft_pr(
                 &intake,
+                &api,
+                &bound,
                 &super::publish::DraftPr {
                     repository: &repository,
                     head: &head,
                     base: &base_branch,
                     issue_number,
                 },
-                |args| super::publish::run_gh_in(workspace, args),
             )
-        })();
+            .await
+        }
+        .await;
         match outcome {
             Ok(url) => tracing::info!(source = "automations", %run_id, %url, "Draft PR opened"),
             Err(error) => {

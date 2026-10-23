@@ -55,7 +55,7 @@ impl AutomationRuntime {
             let mut events = state.event_bus.subscribe();
             drop(state);
             // The poller emits only on change; an issue refused for capacity is retried from here.
-            let mut issues = std::collections::HashMap::new();
+            let mut issues = super::event_intake::IssueSnapshot::default();
             let mut timer = tokio::time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -64,14 +64,24 @@ impl AutomationRuntime {
                     event = events.recv() => {
                         match event {
                             Ok(crate::state::AppEvent::GitHubIssuesUpdate { repo_path, issues: update }) => {
-                                issues.insert(repo_path, update);
+                                issues.replace(repo_path, update);
                                 (false, true)
                             }
                             Ok(crate::state::AppEvent::ProgressRecorded { .. }
                                 | crate::state::AppEvent::PtyExit { .. }
                                 | crate::state::AppEvent::SessionClosed { .. }
-                                | crate::state::AppEvent::SessionStateChanged { .. })
-                                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => (false, false),
+                                | crate::state::AppEvent::SessionStateChanged { .. }) => (false, false),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // Issue updates may be among the lost events: drop the
+                                // snapshot and ask the poller to emit everything again.
+                                issues.lost_updates();
+                                if let Some(state) = weak.upgrade()
+                                    && let Err(error) = crate::github_poller::send_poller_cmd(&state, crate::github_poller::PollerCmd::ForceResync)
+                                {
+                                    tracing::warn!(source="automations", %error, "Issue resync after bus lag not requested");
+                                }
+                                (false, false)
+                            }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                             _ => continue,
                         }
@@ -96,7 +106,7 @@ impl AutomationRuntime {
                     effects: NativeEffects(state),
                 });
                 let blocking = dispatcher.clone();
-                let snapshot: Vec<_> = issues.values().flatten().cloned().collect();
+                let snapshot = issues.issues();
                 let runs = match tokio::task::spawn_blocking(move || {
                     // A failed half must not strand the other half's Reserved runs.
                     let now = chrono::Utc::now();

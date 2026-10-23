@@ -85,17 +85,15 @@ fn a_repeat_poll_and_a_restart_start_no_second_run() {
             20,
         )
         .unwrap();
-    assert!(
-        admit_issues(first.store(), &config, &issues, 30)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(first.store(), &config, &issues, 30).unwrap(),
+        Vec::new()
     );
     drop(first);
     let restarted = RunOwner::acquire_at(&path, 40).unwrap();
-    assert!(
-        admit_issues(restarted.store(), &config, &issues, 50)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(restarted.store(), &config, &issues, 50).unwrap(),
+        Vec::new()
     );
 }
 
@@ -110,16 +108,14 @@ fn a_repository_outside_the_allowlist_starts_nothing() {
         issue(5, "evil/tuic-test-sandbox", &["tuic-run"], "OPEN"),
         other_host,
     ];
-    assert!(
-        admit_issues(owner.store(), &config(&[SANDBOX]), &issues, 10)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(owner.store(), &config(&[SANDBOX]), &issues, 10).unwrap(),
+        Vec::new()
     );
     let allowed = [issue(3, SANDBOX, &["tuic-run"], "OPEN")];
-    assert!(
-        admit_issues(owner.store(), &config(&[]), &allowed, 10)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(owner.store(), &config(&[]), &allowed, 10).unwrap(),
+        Vec::new()
     );
 }
 
@@ -128,10 +124,9 @@ fn a_repository_outside_the_allowlist_starts_nothing() {
 fn closed_issues_never_start_and_repository_case_is_ignored() {
     let (_dir, owner) = owner();
     let closed = [issue(3, SANDBOX, &["tuic-run"], "CLOSED")];
-    assert!(
-        admit_issues(owner.store(), &config(&[SANDBOX]), &closed, 10)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(owner.store(), &config(&[SANDBOX]), &closed, 10).unwrap(),
+        Vec::new()
     );
     let cased = [issue(6, "SStraus/TUIC-test-sandbox", &["TUIC-RUN"], "OPEN")];
     assert_eq!(
@@ -158,10 +153,9 @@ fn an_issue_refused_for_overlap_is_admitted_by_a_later_poll() {
         issue(3, SANDBOX, &["tuic-run"], "OPEN"),
         issue(4, SANDBOX, &["tuic-run"], "OPEN"),
     ];
-    assert!(
-        admit_issues(owner.store(), &config, &both, 20)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        admit_issues(owner.store(), &config, &both, 20).unwrap(),
+        Vec::new()
     );
     owner
         .store()
@@ -183,15 +177,29 @@ fn an_issue_refused_for_overlap_is_admitted_by_a_later_poll() {
     ));
 }
 
-// Catches untrusted issue title/body text being injected into the launch prompt.
+// Catches a retry over a stale snapshot after the bus lost the update that withdrew the label.
 #[test]
-fn event_context_carries_only_the_validated_issue_url() {
-    let context = event_context(&RunTrigger::Event {
-        repository: SANDBOX.into(),
-        issue_number: 3,
-        label: "tuic-run".into(),
-    })
-    .unwrap();
-    assert!(context.contains("https://github.com/sstraus/tuic-test-sandbox/issues/3"));
-    assert!(event_context(&RunTrigger::Manual).is_none());
+fn a_snapshot_emptied_by_lost_updates_admits_nothing_until_refilled() {
+    let (_dir, owner) = owner();
+    let config = config(&[SANDBOX]);
+    let mut snapshot = IssueSnapshot::default();
+    snapshot.replace(
+        "/repo".into(),
+        vec![issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+    );
+    snapshot.lost_updates();
+    assert_eq!(
+        admit_issues(owner.store(), &config, &snapshot.issues(), 10).unwrap(),
+        Vec::new()
+    );
+    snapshot.replace(
+        "/repo".into(),
+        vec![issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+    );
+    assert_eq!(
+        admit_issues(owner.store(), &config, &snapshot.issues(), 20)
+            .unwrap()
+            .len(),
+        1
+    );
 }

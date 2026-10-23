@@ -65,6 +65,27 @@ pub(crate) fn admit_issues(
     Ok(admitted)
 }
 
+/// The poller's latest issues per repository, kept so a capacity-refused issue is
+/// retried. The poller emits only on change, so a lost update must empty it:
+/// retrying a stale snapshot would run an issue whose label was withdrawn.
+#[derive(Default)]
+pub(crate) struct IssueSnapshot(std::collections::HashMap<String, Vec<GitHubIssue>>);
+
+impl IssueSnapshot {
+    pub fn replace(&mut self, repo_path: String, issues: Vec<GitHubIssue>) {
+        self.0.insert(repo_path, issues);
+    }
+
+    /// Bus updates were dropped; admit nothing until a forced resync refills it.
+    pub fn lost_updates(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn issues(&self) -> Vec<GitHubIssue> {
+        self.0.values().flatten().cloned().collect()
+    }
+}
+
 /// Untrusted issue text never reaches the agent: only the validated URL does.
 pub(crate) fn event_context(trigger: &RunTrigger) -> Option<String> {
     match trigger {
