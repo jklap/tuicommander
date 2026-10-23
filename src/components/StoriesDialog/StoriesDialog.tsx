@@ -16,6 +16,7 @@ import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
 import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
+import { StoryNotes } from "./StoryNotes";
 
 interface Plan {
 	id: string;
@@ -1626,6 +1627,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													</button>
 												</Show>
 											</div>
+										</Show>
+										<Show when={`${props.project}:${story().id}`} keyed>
+											{() => (
+												<StoryNotes
+													project={props.project}
+													storyId={story().id}
+													revision={story().revision}
+													busy={busy()}
+												/>
+											)}
 										</Show>
 									</>
 								)}

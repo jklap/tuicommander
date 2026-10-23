@@ -27,6 +27,7 @@ const stories = [1, 40].map((count, index) => ({
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockImplementation(async (command, args) => {
 		if (command === "story_capabilities") return true;
+		if (args.action.action === "list_notes") return { type: "notes", value: [] };
 		if (args.action.action === "list_plans") return { type: "plans", value: plans };
 		if (args.action.action === "plan_view")
 			return { type: "plan_view", value: { stories, state: "active", wontFixCount: 0, allCancelled: false } };

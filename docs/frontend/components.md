@@ -920,3 +920,7 @@ cleanup, and renders backend-owned lines without usage computation. It has
 explicit loading, unavailable, unknown-model and stale presentation.
 
 Sidebar worktree diagnostics render recorded paths and repair guidance without buttons, tab focus or branch-selection handlers. The repository header retains a diagnostic count while folded. These transient inventory rows are separate from branch workspaces and are not saved in repository configuration.
+
+### StoryNotes (native story detail)
+
+`StoryNotes` renders the selected story's append-only notes and workflow receipt references. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.

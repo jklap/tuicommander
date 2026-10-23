@@ -1,7 +1,7 @@
 ## Native story notes (2172-6dee) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, add a note through MCP and list it through HTTP/CLI; confirm actor, time and subject revision persist and the story revision stays unchanged. Check a same-plan workflow receipt reference and refusal of a receipt from another plan. The peer did not restart or replace the daily app.
-- [ ] After the coordinator releases the StoriesDialog UI step, verify an MCP-added note appears in story detail and capture the owned isolated instance window. UI implementation and live verification are not claimed by the backend slice.
+- [ ] In the isolated notes UI build, verify an MCP-added note appears in story detail after Refresh notes and capture the owned window. Check append, retained drafts after rejection, and changing stories while an append is pending. The UI controls are implemented; live verification remains pending.
 
 ## Native story list filters and pagination (2174-6b3f) — Rust restart required
 

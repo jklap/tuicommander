@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show append-only notes and workflow receipt references in native story detail, with an add field, retained drafts on failure, and an explicit refresh for agent-added notes (#2172-6dee).
+
 - Add append-only native story notes with backend actor/time/revision provenance and validated workflow receipt references through the shared story service (#2172-6dee).
 
 - Add server-side native story state/priority/type filters and optional bounded keyset pages without changing legacy full-list reads or workflow dispatch order (#2174-6b3f).
