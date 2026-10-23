@@ -238,7 +238,7 @@ fn incident_working_sessions_are_not_inferred_stuck_and_paused_cause_is_honest()
 #[test]
 fn qa_story_incident_survives_completed_attempt_and_clears_after_approval() {
     use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).unwrap();
     let plan = store
         .create_plan(NewPlan {

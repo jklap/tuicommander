@@ -332,10 +332,8 @@ impl StoryStore {
                 if story.status != StoryStatus::InProgress {
                     return Err(wrong_status(&story, "in_progress"));
                 }
-                if !story.checked.iter().all(|checked| *checked) {
-                    if !only_manual_pending(&story) {
-                        return Err(incomplete_criteria(&story));
-                    }
+                if !story.checked.iter().all(|checked| *checked) && !only_manual_pending(&story) {
+                    return Err(incomplete_criteria(&story));
                 }
                 story.status = StoryStatus::Review;
             }
@@ -470,7 +468,7 @@ mod tests {
     /// Catches: the last automated check leaving manual-only work in progress.
     #[test]
     fn last_non_manual_criterion_moves_story_to_qa() {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("dir");
         let (store, story) = store_with_story(dir.path(), 1);
         let plan_id = story.plan_id;
         let story = store

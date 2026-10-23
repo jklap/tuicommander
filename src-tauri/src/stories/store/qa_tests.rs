@@ -1,7 +1,7 @@
 use super::*;
 
 fn setup(criteria: &[&str]) -> (tempfile::TempDir, StoryStore, Story) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).unwrap();
     let plan = store
         .create_plan(NewPlan {

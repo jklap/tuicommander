@@ -857,9 +857,9 @@ mod tests {
     /// Catches: the shared MCP/HTTP/CLI boundary dropping manual commands or hiding QA in summaries.
     #[test]
     fn qa_actions_roundtrip_and_summary_separates_manual_work() {
-        let config = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().into());
-        let project = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let project = project.path().to_str().unwrap();
         let StoryReply::Plan(plan) = story_action(
             project,
