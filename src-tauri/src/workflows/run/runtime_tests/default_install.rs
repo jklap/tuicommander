@@ -2,9 +2,10 @@
 use super::*;
 
 /// Start the Agent workflow under this saved config and wait until the daemon pauses it.
+/// Incidents are read before the run is cancelled: a cancelled attempt adds its own incident.
 async fn paused_run_under(
     agents_json: serde_json::Value,
-) -> (Arc<crate::state::AppState>, String, RunSnapshot) {
+) -> (RunSnapshot, Vec<crate::workflows::RunIncident>) {
     let (config, project, _plan, story, _template, guard) = fixture();
     let project_path = project.path().to_str().unwrap().to_owned();
     let published = definition(&project_path, false, true);
@@ -36,18 +37,29 @@ async fn paused_run_under(
     .await
     .expect("run did not pause");
     let current = store.snapshot(&run.id).unwrap();
+    let crate::workflows::RunReply::Incidents(incidents) =
+        crate::workflows::run_action_with_events(
+            &state,
+            &project_path,
+            crate::workflows::RunAction::Incidents {
+                run_id: run.id.clone(),
+            },
+        )
+        .unwrap()
+    else {
+        panic!("incidents expected");
+    };
     store
         .command(&run.id, "test:cancel", RunCommand::Cancel)
         .unwrap();
-    // The fixture guard and temp dirs must outlive the run; leak them for the test's lifetime.
-    std::mem::forget((config, project, guard));
-    (state, project_path, current)
+    drop((config, project, guard));
+    (current, incidents)
 }
 
 #[tokio::test]
 async fn a_run_on_a_config_without_sol_or_sonnet_reaches_the_agent_spawn_effect() {
     // catches: the first Agent step pausing before any spawn because the profile names sol/sonnet are hardcoded.
-    let (_state, _project, run) = paused_run_under(serde_json::json!({"agents": {
+    let (run, _incidents) = paused_run_under(serde_json::json!({"agents": {
         "codex": {"codex_bypass_migrated": true},
         "claude": {"run_configs": [{"name": "mine", "command": "claude"}]}
     }}))
@@ -62,7 +74,7 @@ async fn a_run_on_a_config_without_sol_or_sonnet_reaches_the_agent_spawn_effect(
 #[tokio::test]
 async fn incidents_name_the_pause_cause_the_daemon_knows() {
     // catches: Incidents saying no cause is retained while the pause reason is known.
-    let (state, project, run) = paused_run_under(serde_json::json!({"agents": {
+    let (_run, incidents) = paused_run_under(serde_json::json!({"agents": {
         "codex": {"codex_bypass_migrated": true},
         "claude": {"run_configs": [
             {"name": "alpha", "command": "claude"},
@@ -70,16 +82,6 @@ async fn incidents_name_the_pause_cause_the_daemon_knows() {
         ]}
     }}))
     .await;
-    let crate::workflows::RunReply::Incidents(incidents) =
-        crate::workflows::run_action_with_events(
-            &state,
-            &project,
-            crate::workflows::RunAction::Incidents { run_id: run.id },
-        )
-        .unwrap()
-    else {
-        panic!("incidents expected");
-    };
     assert_eq!(incidents.len(), 1, "{incidents:?}");
     assert!(
         !incidents[0].cause.contains("no more specific cause")
