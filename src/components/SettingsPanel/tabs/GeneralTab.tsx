@@ -686,6 +686,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreLeadingWhitespace}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_leading_whitespace"
 						checked={settingsStore.state.diffIgnoreLeadingWhitespace}
 						onChange={(v) => settingsStore.setDiffIgnoreLeadingWhitespace(v)}
 						label={t("general.toggle.diffIgnoreLeadingWhitespace", "Ignore leading whitespace")}
@@ -700,6 +701,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreTrailingWhitespace}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_trailing_whitespace"
 						checked={settingsStore.state.diffIgnoreTrailingWhitespace}
 						onChange={(v) => settingsStore.setDiffIgnoreTrailingWhitespace(v)}
 						label={t("general.toggle.diffIgnoreTrailingWhitespace", "Ignore trailing whitespace")}
@@ -714,6 +716,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreWhitespaceAmount}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_whitespace_amount"
 						checked={settingsStore.state.diffIgnoreWhitespaceAmount}
 						onChange={(v) => settingsStore.setDiffIgnoreWhitespaceAmount(v)}
 						label={t("general.toggle.diffIgnoreWhitespaceAmount", "Ignore whitespace amount")}
@@ -725,6 +728,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</ExpertSetting>
 				<ExpertSetting configKey="app.diff_ignore_case" value={settingsStore.state.diffIgnoreCase}>
 					<SettingToggle
+						settingId="app.diff_ignore_case"
 						checked={settingsStore.state.diffIgnoreCase}
 						onChange={(v) => settingsStore.setDiffIgnoreCase(v)}
 						label={t("general.toggle.diffIgnoreCase", "Ignore case")}
@@ -732,6 +736,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					/>
 				</ExpertSetting>
 				<SettingToggle
+					settingId="preferences.diff_soft_wrap"
 					checked={uiStore.state.diffSoftWrap}
 					onChange={(v) => uiStore.setDiffSoftWrap(v)}
 					label={t("general.toggle.diffSoftWrap", "Soft-wrap long lines")}
@@ -739,6 +744,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				/>
 				<ExpertSetting configKey="app.session_diff_auto_open" value={settingsStore.state.sessionDiffAutoOpen}>
 					<SettingSelect
+						settingId="app.session_diff_auto_open"
 						label={t("general.label.sessionDiffAutoOpen", "Auto-open Session Diff Review")}
 						value={settingsStore.state.sessionDiffAutoOpen}
 						onChange={(v) => settingsStore.setSessionDiffAutoOpen(v as "off" | "ask" | "auto")}
@@ -755,6 +761,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</ExpertSetting>
 				<ExpertSetting configKey="app.session_diff_truncate_lines" value={settingsStore.state.sessionDiffTruncateLines}>
 					<SettingSlider
+						settingId="app.session_diff_truncate_lines"
 						label={t("general.label.sessionDiffTruncateLines", "Truncate long changes")}
 						value={settingsStore.state.sessionDiffTruncateLines}
 						onChange={(v) => settingsStore.setSessionDiffTruncateLines(v)}
