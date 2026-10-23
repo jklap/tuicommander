@@ -2913,3 +2913,15 @@ The owner check precedes all local process/cache/provider reads. Connected
 remote PTYs forward to the owning daemon; an absent/failed route returns
 `remote session` unavailability. No local-account fallback is allowed. The
 frontend transport table also supports the normal session-owner routing.
+
+### TLS readiness
+
+`get_mcp_status` and `GET /mcp/status` expose `tls_active`. The loaded dual-protocol
+serving task owns a strong lifetime token; AppState holds only a weak token.
+Provisioning failure, no TCP listener, task completion, and cancellation do not
+leave HTTPS active. Replacing the token prevents an old task's exit from clearing
+a replacement listener. Tailscale detection retains its separate capability
+state for provisioning and Host trust. Settings and connect URLs use live TLS
+readiness, not that capability. The CLI provisioning fallback reads each PEM
+stream from stdout, because the sandboxed macOS app CLI cannot write into the
+caller's temporary directory.
