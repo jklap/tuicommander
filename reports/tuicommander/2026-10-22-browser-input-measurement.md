@@ -1386,3 +1386,163 @@ Static checks before commit: changed-file rustfmt check, `git diff --check`, and
 instruction-link validation pass (two pairs). `story-close.sh --check` correctly
 refuses unchecked criterion 3: help ratio plus echo under one frame while rows
 print. No criterion is checked to make that gate pass.
+
+
+## Controlled A–B–A–B admission follow-up (2026-10-23)
+
+### Contract and comparison boundary
+
+The coordinator requested one fixed-geometry A–B–A–B acquisition and no policy
+change. A uses `554b1fa02`; B uses `8b7f24d908f181908b53e5f2b529088bdb10e43a`.
+The observable effects are key-to-canvas-fill and reader-complete-to-matching-cut.
+The real state comes from native reader, serializer, IPC and binary-grid traces,
+plus observed input generations and send accounting. Only `/help` is submitted;
+unique glyph drafts are cleared with Ctrl+U. The decision rule is B idle p95 no
+worse than A within A's run-to-run spread, with better help p95. Do not substitute
+this rule for the original one-frame, under-33-ms or throughput criteria.
+
+Evidence root: `~/Gits/.tmp/2040-web/native-controlled-abab/`. The pre-run
+`contract.json` records this boundary. The series uses the same named isolated
+`agent-test-2040` instance on port 19890. Native binary replacement requires four
+sequential `make agent-test` lifecycles, not one continuously running process.
+Each lifecycle launches the same installed ego with no arguments, default home
+and configuration, and the same cwd and harness. The banner is `ego 0.1.2`, model
+`openai-codex/gpt-6-sol`, in all four runs. This is not a shared ego conversation
+across native process restarts.
+
+Only `pty.rs` and `pty/frame_priority.rs` are temporarily selected from A or B;
+the frontend and all other runtime source are identical. `series-state.json`
+records pre-observer and instrumented hashes. A1/A2 hashes match, B1/B2 hashes
+match, and all four frontend hashes match. Identical common observers capture
+native stages, credit state, input generations and grid geometry. B additionally
+records its retained deadline. Temporary observers are restored after acquisition.
+No implementation, credit, floor, gate, timer or state-machine change is retained.
+
+Every smoke and main binary receive header reports **37 columns × 14 rows**.
+Every run is **640×420 CSS pixels, DPR 2**, with the same WebKit UA. Each run has
+3 idle + 3 help smoke samples, then **200 idle + 200 help** main samples. No extra
+trial is selected or discarded. The lock check passes before each lifecycle and
+again after its build. Only these owned instances are used; no daily-app restart.
+
+### Per-run results
+
+Times are ms, median / p95 / max. These are synthetic frontend key events and
+actual canvas `fillText`, not OS keyboard-to-physical-scanout measurements.
+
+| Run | Idle key→fill, N=200 | Idle reader-complete→cut, N=200 | Help-candidate key→fill, N=200 | Help-candidate reader-complete→cut |
+|---|---:|---:|---:|---:|
+| A1 | 9.5 / 27 / 36 | 0.065 / 18.320 / 21.998 | 23 / 40 / 42 | 13.033 / 23.745 / 24.009 (N=199) |
+| B1 | 16 / 43 / 55 | 0.080 / 31.967 / 41.392 | 20 / 27 / 40 | 8.995 / 12.065 / 24.107 (N=199) |
+| A2 | 18 / 43 / 58 | 0.862 / 35.367 / 41.097 | 21 / 38 / 42 | 10.940 / 23.617 / 24.131 (N=200) |
+| B2 | 19.5 / 42 / 57 | 6.001 / 35.658 / 40.848 | 20 / 29 / 40 | 9.315 / 18.247 / 24.221 (N=199) |
+
+Verified main help overlaps, excluding non-overlaps rather than relabeling them:
+
+| Run | Verified N | Key→fill | Reader-complete→cut |
+|---|---:|---:|---:|
+| A1 | 189 | 23 / 40 / 42 | 14.425 / 23.712 / 24.009 (N=188) |
+| B1 | 195 | 20 / 27 / 40 | 9.058 / 12.065 / 24.107 (N=194) |
+| A2 | 185 | 21 / 38 / 42 | 11.350 / 23.653 / 24.131 (N=185) |
+| B2 | 190 | 20 / 29 / 40 | 9.366 / 12.200 / 24.221 (N=189) |
+
+All 1,600 main samples have reader, IPC, frontend acceptance and fill correlations.
+Three help candidates have no matching shared `frame_cut` observer: A1 `侙`,
+B1 `伦`, B2 `佯`. Their IPC and fill observations remain present; their missing
+cut stage is not assigned an invented timestamp. Cut distributions explicitly
+exclude them. No Working chunks appear. Counts of main samples with a strictly
+intervening sentinel rAF are A1/B1/A2/B2 = 0/1/2/3; do not reuse the previous run's
+zero-intervening-rAF claim. Cross-clock uncertainty remains about ±2 ms; epoch
+accounting replay uses a 0.25 ms classification tolerance.
+
+### Quota provenance and the remaining load confound
+
+| Main idle observation | A1 | B1 | A2 | B2 |
+|---|---:|---:|---:|---:|
+| Quota blocked at reader completion, /200 | 59 | 82 | 94 | 97 |
+| Quota blocked at actual input arm, /200 | 63 | 82 | 97 | 101 |
+| Matched floor deferrals | 0 | 53 | 59 | 61 |
+| Matched gate deferrals | 0 | 0 | 1 | 0 |
+| Accounted sends in idle block plus 55 ms tail | 400 | 388 | 389 | 393 |
+| Sends with min_interval=50 ms | 0 | 338 | 389 | 393 |
+| Sends retaining newer pending output | 0 | 0 | 0 | 0 |
+| Retained-retry records | 0 | 0 | 0 | 0 |
+
+Arm counts join the observed reader's `input_generation` to the actual `arm`
+record and its monotonic credit ages; they are not hand-set state. Reader counts
+replay real bypass accounting. Eligible decision checks all agree: A1 3,292,
+B1 3,335, A2 3,410, B2 3,392.
+
+The two B idle blocks have **no retained retries at all**, including their 55 ms
+cleanup tails, and no sends that preserve newer pending output. None of their
+quota-blocked idle echoes has a retained-retry bypass in its two occupied credit
+slots. The proposed mechanism—retained retries consume the next idle key's
+credit—is therefore **not observed in these runs**. This does not prove that
+such credit competition is impossible in every workload.
+
+Retained retries do spend bounded bypass credits during help: a conservative
+provenance match identifies 125 B1 and 136 B2 nonperiodic bypasses after matured
+retained deadlines, with no intervening decision or input generation. The B main
+help intervals contain 367/369 retained-retry records. All four help populations
+have zero quota-blocked echo reader completions and zero blocked echo input arms.
+Thus no measured next help key needed a credit that those retained retries spent.
+This is credit occupancy evidence, not a fully simulated counterfactual schedule.
+
+**Do not attribute the earlier 34→42 ms idle p95 change to grid geometry.** The
+old comparison was confounded. This fixed-grid series itself has A idle p95
+27→43 ms without the retained-retry change. The runtime's existing saturation
+floor is inactive throughout A1 idle and active for most/all of B1/A2/B2 idle.
+Those floor observations distinguish the runs; they do not isolate every source
+of scheduling variation or prove which process caused machine load. No artificial
+load was created, and system load was not held constant.
+
+### Decision and limits
+
+**LANDABLE under the coordinator's stated p95/run-spread rule.** A idle p95 spans
+27–43 ms, a 16 ms spread; B is 43/42 ms, within that range. With the saturation
+floor active, A2 is 43 ms and B1/B2 are 43/42 ms. Help p95 is consistently better:
+A 40/38 ms versus B 27/29 ms, also for verified-overlap subsets. No bounded fix or
+policy change is proposed from this evidence, because the suspected idle retry
+credit competition is not reproduced.
+
+This is not a universal non-regression certificate. There are only two runs per
+binary, machine load is uncontrolled, and common observers perturb timing.
+The one-frame and combined-under-33-ms idle requirements still fail. No new bulk,
+CPU or all-statistic heartbeat comparison is run; the previous adverse paced
+control results remain valid limitations. Criteria 3/4/24 remain untouched and
+unproved. Landing is the coordinator's decision, not an action taken by this peer.
+
+Coordinator-reported evidence, not rerun here: `critic-2040r2` passes on `8b7f24d9`
+with no production findings, crate 6,128, headless 5,837 and clippy 0. The old
+`sent` behavioral replay fails two of five frame-priority tests. This supersedes
+the earlier note that the follow-up critic and RED were pending. No additional
+unit suite, clippy or mutation run is needed for this measurement-only follow-up.
+
+### Reproduction and lifecycle
+
+Launch through the existing background wrapper, with the mbx shim on PATH:
+
+```sh
+python3 ~/Gits/.tmp/2040-web/native-controlled-abab/series.py
+```
+
+The helper checks the build freeze and lock state, stages only the compared
+source files, uses `make agent-test AGENT_TEST_INSTANCE=agent-test-2040
+AGENT_TEST_PORT=19890`, deletes its owned PTY, stops that instance and restores
+source. Build times A1/B1/A2/B2: 4m36s / 2m22s / 2m15s / 2m13s. Each mbx doctor
+reports zero failures and zero warnings. Whole series duration is 1,411.626 s
+(about 23m32s), including builds, not application latency. The initial generated
+Python harness had a quoting syntax error caught before launch; it was corrected
+before any acquisition. No failed timing run is hidden.
+
+Offline analysis uses each run's retained `analyze.py` and `analyze-stages.py`,
+then `analyze-control.py` and `finalize-analysis.py` in the evidence root. They
+produce `comparison.json`, `quota-timeline.json`, `quota-sends.json` and stage
+summaries. These retain all candidates, exclusions and provenance.
+
+Background helper 93501 and wrapper 93497, supervisors 93568/26202/49391/79048,
+and the last observed ego PID 86493 are absent at final inspection. Every PTY
+delete completes without a recorded error; each sanctioned stop returns 0 and
+its supervisor returns 2. The named desktop PID file is absent. The tree is clean
+before this report amendment, with all temporary production observers restored.
+The daily app remains untouched and still requires Boss's manual rebuild/restart
+to load the Rust candidate if it is landed.
