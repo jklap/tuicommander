@@ -2894,3 +2894,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Native story QA screenshot (#2168-7fbc): inspect the QA column and detail controls on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window screencapture failed with "could not create image from window" while loginwindow was frontmost; API and native DOM verification passed. --> EVIDENCE: `~/Gits/.tmp/results/tuic-2168-live/main-screenshot-error.txt`.
 
 - [ ] After a backend rebuild/restart, use Edit plan in Plans and Stories to rename a native plan and change its source. Confirm the saved revision survives restart, stale edits fail without writes, and a closed workflow reopens planning after a source correction. With a running plan coordinator, source changes must fail without writes while title-only edits succeed; cancel the coordinator and retry the source edit (#2170-d828).
+
+- [x] Story 2173: claimed story metadata, managed transition history and New story plan-step persistence. _(verified: isolated agent-test-2173 API and DOM evidence in `~/Gits/.tmp/results/tuic-2173-live/`; screenshot unavailable because no agent-test window was found.)_
