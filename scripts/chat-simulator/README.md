@@ -65,6 +65,15 @@ storage; obtain authorization for that storage when the task does not grant it.
    `xcrun simctl shutdown <owned-uuid>` and `xcrun simctl delete <owned-uuid>`.
    Verify both owned ports are closed.
 
+The probe also records snapshot fetch-to-headers and body-read intervals, JSON
+parse time for the synthetic snapshot, and a post-decode timer interval covering
+synchronous replay/render and its queued highlight/follow microtasks. It measures
+transcript `scrollHeight` reads separately as a subset of that interval, including
+forced style/layout work. These are measurement-only wrappers, not application
+instrumentation. Browser clock precision can report a sub-tick parse as zero;
+`bytes` is the decoded JavaScript string length, not a wire-byte measurement.
+The timer is not a CPU profile and its residual is not an exact render-only time.
+
 The probe observes a trusted click or a visible-document event and two animation
 frame opportunities around visible last-entry geometry. Do not call it physical
 first paint, OS foreground latency, network latency or a phone benchmark. The
