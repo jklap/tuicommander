@@ -11,4 +11,6 @@ Claude opened a real AskUserQuestion asking for a test color, with Red and Blue 
 
 Capture was enabled before session creation. Terminal bytes and input records are unmodified. TCAP does not contain process observations: the replay applies the shared foreground-observation seam after the captured output, using the confirmed shell return from the live API/OS evidence. It also checks that an unknown helper observation does not withdraw the question.
 
+The late-repaint regression reuses the captured open dialog, pauses the reader immediately after identity sampling, commits shell return through the real foreground seam and applies the queued withdrawal, then resumes the reader. Its explicit synthetic VT stimulus closes a synchronized frame and erases the question-title row while retaining the captured native footer. This models a partial exit repaint; it is not claimed as an additional live recording. The test fails on `bbfa575dc` because the released reader admits a wait after withdrawal.
+
 Live evidence is retained in the orchestrator report directory `reports/tuicommander/img/2026-10-23-1985/`: `refix-await-before.json`, `refix-await-after.json`, `refix-await-agent.txt`, and `refix-exit-logs.json`. The `refix-await-after.json` snapshot precedes all new shell input.
