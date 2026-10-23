@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show native ego selector controls on mobile when a question arrives or a waiting session opens. Reopen the question after a `selection_required` reply refusal without losing or sending the draft (#2176-03d3).
+
 - Report HTTPS active only while the TLS listener is running, and read Tailscale certificates from stdout to avoid macOS app sandbox write failures (#2165-b4de).
 
 - Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).

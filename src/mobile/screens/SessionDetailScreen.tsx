@@ -195,8 +195,22 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [openingQuestion, setOpeningQuestion] = createSignal(false);
 	const [codexQuestionOpen, setCodexQuestionOpen] = createSignal(false);
 	const [egoQuestionOpen, setEgoQuestionOpen] = createSignal(false);
+	let visibleEgoQuestion: string | undefined;
 	createEffect(() => {
-		if (!sessionState()?.awaiting_input) {
+		const state = sessionState();
+		const prompt = state?.agent_type === "ego" && state.awaiting_input ? state.choice_prompt : undefined;
+		// Highlight changes and identical polling snapshots must not undo a manual
+		// close. A new native selector, including one already waiting on entry, opens.
+		const signature = prompt
+			? JSON.stringify([
+					props.session.session_id,
+					prompt.title,
+					prompt.options.map((option) => [option.key, option.label]),
+				])
+			: undefined;
+		if (signature && signature !== visibleEgoQuestion) setEgoQuestionOpen(true);
+		visibleEgoQuestion = signature;
+		if (!state?.awaiting_input) {
 			setCodexQuestionOpen(false);
 			setEgoQuestionOpen(false);
 		}
@@ -229,6 +243,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	function openQuestion() {
 		if (egoQuestionWaiting()) setEgoQuestionOpen((open) => !open);
 		else void openCodexQuestion();
+	}
+	function revealRequiredSelection(sessionId: string) {
+		// A refusal may arrive after navigation. Never open another session's card
+		// or replay the refused text into a native selector.
+		if (sessionId !== props.session.session_id || !props.sessionExists) return;
+		if (egoQuestionWaiting()) setEgoQuestionOpen(true);
+		else if (codexQuestionWaiting()) void openCodexQuestion();
 	}
 
 	// Prefill value for CommandInput (set by slash menu selection).
@@ -597,6 +618,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
 					questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
 					codexQuestionOpen={codexQuestionOpen()}
+					onSelectionRequired={revealRequiredSelection}
 					onRegisterInsertText={(fn) => {
 						insertComposerText = fn;
 					}}

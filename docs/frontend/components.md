@@ -235,7 +235,7 @@ The backend preserves the full Claude `/resume` modal in both the initial HTTP
 screen and log-WebSocket frames, including session rows and no-match results;
 the mobile view does not reconstruct the picker from transcript text.
 
-Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
+Terminal ego selectors open the existing `ChoicePromptOverlay` when a new native question arrives or a waiting session is opened. The header question action can close and reopen it; equivalent polling snapshots and highlight changes preserve a manual close. Full titles and option labels, including descriptions, wrap within its scrollable overlay. A `selection_required` composer refusal reopens the current question without sending the refused draft. Free-text cards still open explicitly; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
