@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Automatically respawn dead stdio MCP upstreams during health recovery; preserve healthy processes after reply timeouts and discard late replies by request id (#2162-bf4a).
 - Restore empty or older pane layouts safely during settings refresh, and publish restored tree, groups and focus together (#2161-dc0d).
 - Show detached checkouts as informational sidebar rows without inventing branch workspaces; retain the main checkout for linked-input discovery, preserve newline paths, and exclude only the configured TUIC archive pool (#2156-2723).
 - Keep intermediate Chat prose readable in dark and light themes on desktop and mobile, and retain the list marker gutter inside green answer bars (#2159-857f).
