@@ -1,3 +1,8 @@
+## Progress cursor paging (2151-62ef)
+
+- [x] Targeted module/component checks verify a 1000-record journal opens with 100 rows and one read, then an older-page double click appends exactly 100 distinct rows. Scope changes and older-page failure/retry have regression coverage.
+- [ ] Capture the mobile Progress list after scrolling into an older page in an isolated worktree browser or agent-test instance. The headless Chrome attempts timed out without a screenshot (20s and 60s); no further screenshot attempts were made. Screen-lock state was not established. Evidence logs: `~/Gits/.tmp/results/2151/`. The reported historical duplicate-record cause is not established: this revision had no older-records control, only per-message More.
+
 ## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
 
 - [x] Isolated `agent-test-2040` native measurements exercised real ego echo and matching paced bulk output before/after the fix. The private-repair-plus-delta cycle disappeared; native echo p95 still exceeds one frame. Evidence: `~/Gits/.tmp/2040-web/native-final-fixed/` and the browser-input measurement report. This does not certify the remaining story criteria.
