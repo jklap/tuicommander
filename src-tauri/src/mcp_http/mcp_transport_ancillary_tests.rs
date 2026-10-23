@@ -904,6 +904,63 @@ fn story_tool_refuses_an_unbound_caller() {
     );
 }
 
+// Catches: the MCP workflow envelope dropping the typed amendment or caller project.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_story_mcp_persists_priority_for_bound_caller() {
+    let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let state = test_state();
+    state
+        .mcp
+        .to_session
+        .insert("update-story-mcp".into(), TEST_UUID_A.into());
+    insert_managed_test_session(
+        &state,
+        "update-story-pty",
+        &project.path().to_string_lossy(),
+    );
+    state.bind_live_pty(TEST_UUID_A, "update-story-pty");
+    crate::repo_watcher::start_watching(&project.path().to_string_lossy(), &state).unwrap();
+    let stories = crate::stories::StoryStore::open().unwrap();
+    let plan = stories
+        .create_plan(crate::stories::NewPlan {
+            project: project
+                .path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into(),
+            title: "Plan".into(),
+            source: "feature.md".into(),
+        })
+        .unwrap();
+    let story = stories
+        .create_story(crate::stories::NewStory {
+            plan_id: plan.id,
+            title: "Story".into(),
+            criteria: vec!["Done".into()],
+            priority: 1,
+            origin: crate::stories::StoryOrigin::Native,
+            file_scope: vec![],
+        })
+        .unwrap();
+    let result = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "workflow",
+        &serde_json::json!({"action": "story", "input": {
+            "action": "update_story", "story_id": story.id,
+            "expected_revision": story.revision, "patch": {"priority": 3}
+        }}),
+        Some("update-story-mcp"),
+    )
+    .await;
+    assert_eq!(result["Ok"]["value"]["priority"], 3, "{result}");
+    assert_eq!(stories.get_story(&story.id).unwrap().priority, 3);
+}
+
 #[cfg(unix)]
 #[test]
 fn story_tool_lists_plans_for_a_bound_caller() {

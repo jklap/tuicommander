@@ -1,6 +1,6 @@
 use super::model::{
     CRITERIA_INCOMPLETE, NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand,
-    StoryOrigin, StoryRead, StoryStatus, StoryTransition, StoryTransitionActor,
+    StoryOrigin, StoryPatch, StoryRead, StoryStatus, StoryTransition, StoryTransitionActor,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -10,6 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
 
+mod amendments;
 mod notes;
 #[cfg(test)]
 mod qa_tests;
@@ -493,12 +494,7 @@ fn validate_new_story(input: &NewStory) -> Result<(), String> {
     if let StoryOrigin::PlanStep { step } = &input.origin {
         validate_text("plan step", step, 200)?;
     }
-    if input.criteria.is_empty() || input.criteria.len() > 100 {
-        return Err("story must have between 1 and 100 criteria".into());
-    }
-    for criterion in &input.criteria {
-        validate_text("criterion", criterion, 2000)?;
-    }
+    validate_criteria(&input.criteria)?;
     if !(1..=3).contains(&input.priority) {
         return Err("priority must be 1, 2 or 3".into());
     }
@@ -532,6 +528,8 @@ fn build_story(input: NewStory) -> Story {
         status: StoryStatus::Ready,
         revision: 1,
         claim_session: None,
+        problem: None,
+        risk: None,
     }
 }
 

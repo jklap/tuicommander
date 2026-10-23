@@ -33,6 +33,16 @@ The result is JSON with a `type` and `value`. Supply the returned plan ID when c
 tuic story '{"action":"create_story","input":{"planId":"PLAN_ID","title":"Implement","criteria":["Behavior verified"],"priority":1,"origin":{"type":"native"},"fileScope":[]}}' --project /absolute/project
 ```
 
+## Amend a story
+
+`update_story` takes `story_id`, `expected_revision`, and a camel-case `patch`. Omitted fields stay unchanged. The patch accepts `title`, `priority` (1–3), `fileScope`, `origin` (including a plan step), optional `problem` and `risk` (`low`, `medium`, `high`), ordered `criteria`, and the final `dependencies` set. Null clears `problem` or `risk`; old story records default both to absent. Unknown fields, invalid values, cross-plan dependencies, duplicates, cycles and stale revisions are rejected without partial story writes. Only unclaimed Backlog/Ready stories without active or paused workflow ownership can be amended. Unique byte-identical criteria retain their checks after reorder; changed, new or ambiguous duplicate criteria become unchecked. A priority-only patch preserves all checks. Dependency changes recompute readiness. Planning and execution fingerprints include the amended requirements/revision, so existing evidence cannot certify changed work.
+
+```sh
+tuic story '{"action":"update_story","story_id":"STORY_ID","expected_revision":1,"patch":{"priority":3}}' --project /absolute/project
+```
+
+Read `get_story` first and use its current revision. After a revision conflict, reload the story before preparing another amendment. `criteria` and `dependencies` are final lists, not incremental commands. The existing `remove_dependency` action keeps its narrower cancelled-prerequisite rules; use `update_story` for a full requirement amendment before work starts. Plan ownership cannot be moved by this patch.
+
 Changes to an existing story take its current `revision` as `expected_revision`; a stale request is rejected. The `start_manual` transition moves a Ready story into progress without a PTY claim. A terminal `claim` instead takes `--session-id` with a live PTY ID from the same project. Closing that tab releases its claim. A session-bound agent can perform the same transitions as other trusted callers. `transition_history` shows who performed each committed transition, including approval. Any trusted caller can approve after checking the acceptance criteria. Sessionless local HTTP records `local_api` provenance; a valid token records `human` provenance. These labels describe the transport, not a verified person. The desktop and browser dialogs both offer approval.
 
 To remove a cancelled prerequisite, any trusted caller, including a session-bound agent, can send `{"action":"remove_dependency","story_id":"DEPENDENT_ID","dependency_id":"CANCELLED_ID","expected_revision":2}`. Use the dependent story's current revision as `expected_revision`. The dependent must be in Backlog and must already list the prerequisite as a dependency. The prerequisite must belong to the same plan and be Won't fix. Stale revisions, non-Backlog dependents, missing dependencies, and prerequisites in another plan or any state other than Won't fix are rejected.

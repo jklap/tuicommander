@@ -16,6 +16,16 @@ pub(super) fn validate_text(label: &str, value: &str, max: usize) -> Result<(), 
     Ok(())
 }
 
+pub(super) fn validate_criteria(criteria: &[String]) -> Result<(), String> {
+    if criteria.is_empty() || criteria.len() > 100 {
+        return Err("story must have between 1 and 100 criteria".into());
+    }
+    for criterion in criteria {
+        validate_text("criterion", criterion, 2000)?;
+    }
+    Ok(())
+}
+
 pub(super) fn validate_scope_path(path: &str) -> Result<(), String> {
     validate_text("file scope path", path, 4096)?;
     if crate::fs::is_absolute_on_any_platform(path)

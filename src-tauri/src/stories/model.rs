@@ -34,7 +34,7 @@ pub enum PlanState {
 
 /// Where a story came from: `{"type":"native"}`, `{"type":"plan_step","step":"..."}` or `{"type":"git_hub_issue","number":123}`.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StoryOrigin {
     Native,
     PlanStep {
@@ -125,6 +125,51 @@ pub struct StoryColumn {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum StoryRisk {
+    Low,
+    Medium,
+    High,
+}
+
+/// An amendment, not a whole-record replacement. Omitted fields remain unchanged.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryPatch {
+    pub title: Option<String>,
+    #[schemars(range(min = 1, max = 3))]
+    pub priority: Option<u8>,
+    pub file_scope: Option<Vec<String>>,
+    pub origin: Option<StoryOrigin>,
+    /// Null clears the problem; omission preserves it.
+    #[serde(
+        default,
+        deserialize_with = "nullable_patch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub problem: Option<Option<String>>,
+    /// Null clears the risk; omission preserves it.
+    #[serde(
+        default,
+        deserialize_with = "nullable_patch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub risk: Option<Option<StoryRisk>>,
+    /// Ordered final criteria. Only unique, byte-identical criteria retain checks.
+    pub criteria: Option<Vec<String>>,
+    /// Final same-plan dependency set. Cycles and duplicates are rejected.
+    pub dependencies: Option<Vec<String>>,
+}
+
+fn nullable_patch<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StoryStatus {
     Backlog,
     Ready,
@@ -168,6 +213,10 @@ pub struct Story {
     pub status: StoryStatus,
     pub revision: i64,
     pub claim_session: Option<String>,
+    #[serde(default)]
+    pub problem: Option<String>,
+    #[serde(default)]
+    pub risk: Option<StoryRisk>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -94,6 +94,39 @@ pub(crate) fn guard_manual_story_start(
     Ok(Some(conn))
 }
 
+/// Fence amendments against both graph reservations and legacy dispatched story executions.
+/// Always open the database so a concurrent first run cannot race an absent-file probe.
+pub(crate) fn guard_story_amendment(
+    path: &Path,
+    project: &str,
+    story_id: &str,
+) -> Result<Connection, String> {
+    let conn = RunStore::open_at(path)?.connect()?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| format!("lock story amendment reservations: {error}"))?;
+    runtime_start::require_available_story(&conn, project, story_id)?;
+    {
+        let mut stmt = conn.prepare(
+            "SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND status IN ('running','paused')"
+        ).map_err(|error| format!("prepare story amendment ownership: {error}"))?;
+        for row in stmt
+            .query_map([project], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("read story amendment ownership: {error}"))?
+        {
+            let run: RunSnapshot =
+                decode(&row.map_err(|error| format!("read story owner: {error}"))?)?;
+            if run
+                .stories
+                .iter()
+                .any(|execution| execution.story_id == story_id)
+            {
+                return Err("story is owned by an active workflow run".into());
+            }
+        }
+    }
+    Ok(conn)
+}
+
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 thread_local! {
@@ -1714,7 +1747,9 @@ pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<
                     story.dependencies,
                     story.priority,
                     story.origin,
-                    story.file_scope
+                    story.file_scope,
+                    story.problem,
+                    story.risk
                 ])
             }
         })

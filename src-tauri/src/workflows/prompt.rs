@@ -116,6 +116,8 @@ pub fn render_story_prompt(
         "criteria": story.criteria,
         "checked": story.checked,
         "fileScope": story.file_scope,
+        "problem": story.problem,
+        "risk": story.risk,
         "skills": skills,
         "feedback": feedback,
         "artifactSubject": artifact_subject,
@@ -341,6 +343,8 @@ mod tests {
             status: StoryStatus::Ready,
             revision: 4,
             claim_session: None,
+            problem: None,
+            risk: None,
         };
         let attempt = NodeAttempt {
             id: "attempt-1".into(),
