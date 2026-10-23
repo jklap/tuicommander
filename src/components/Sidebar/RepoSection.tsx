@@ -245,10 +245,9 @@ const UNMERGED_TOOLTIP = "Branch has commits not merged into the default branch.
  * sentence on one badge; rich splits it over the dirty chip (`dirty`) and the
  * commit-verdict chip (`commit`) so each chip explains only itself.
  */
-function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit"): string {
+function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit", isMain = false): string {
 	if (status.commitStatus === "unknown") {
-		const explanation =
-			"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
+		const explanation = isMain ? "Status unavailable." : "Status unavailable; removal is blocked.";
 		return status.error ? `${explanation} ${status.error}` : explanation;
 	}
 	const lost = status.dirtyFiles ?? 0;
@@ -791,6 +790,8 @@ export const BranchItem: Component<{
 		const status = githubStore.getRemoteStatus(props.branch.worktreePath ?? props.repoPath);
 		return status?.has_remote && status.current_branch === props.branch.branchName ? status : null;
 	});
+	const isMainCheckout = () =>
+		props.branch.isMain || props.branch.worktreePath?.replace(/\/$/, "") === props.repoPath.replace(/\/$/, "");
 	const facts = createMemo(() =>
 		branchFacts(
 			{
@@ -802,7 +803,7 @@ export const BranchItem: Component<{
 				dirtyFiles: props.branch.lifecycleStatus?.dirtyFiles,
 				isMerged: props.branch.isMerged,
 				commitStatus: props.branch.lifecycleStatus?.commitStatus,
-				isMain: props.branch.isMain,
+				isMain: isMainCheckout(),
 			},
 			// Compact prints no age, so its tooltip reads the clock once instead of subscribing.
 			rich() ? now() : Date.now(),
@@ -835,7 +836,8 @@ export const BranchItem: Component<{
 
 	const tipFor = (part: "dirty" | "commit") => {
 		const status = lifecycle();
-		return status ? lifecycleTooltip(status, part) : undefined;
+		if (!status || (isMainCheckout() && status.commitStatus !== "unknown")) return undefined;
+		return lifecycleTooltip(status, part, isMainCheckout());
 	};
 	const staleTooltip = () =>
 		t("sidebar.staleHint", "Stale: no commit for more than {days} days and not merged", {
@@ -852,7 +854,9 @@ export const BranchItem: Component<{
 			.join(" · ");
 	// The one overlay of the name: the full name, plus (compact only) the facts the row has no room for.
 	const nameTooltip = () =>
-		[rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")].filter(Boolean).join(" · ");
+		[...new Set([rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")])]
+			.filter(Boolean)
+			.join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -1229,7 +1233,7 @@ export const BranchItem: Component<{
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not
 				    exist. */}
-					<Show when={!rich() && !props.branch.isMain && props.branch.lifecycleStatus}>
+					<Show when={!rich() && !isMainCheckout() && props.branch.lifecycleStatus}>
 						{(status) => {
 							const lostFiles = () => status().dirtyFiles ?? 0;
 							const label = () => {
