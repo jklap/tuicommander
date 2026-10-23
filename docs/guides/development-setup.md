@@ -378,7 +378,7 @@ open, like `cat`); `--print <words…>` prints them; `--cat <file>` prints the f
 then echoes stdin (like `cat <file> -`); installed as `ps` (or run with
 `--ps`) it answers `-p <pid> -o comm=` natively, for a test that runs
 remote-side shell text such as `verified_kill` locally where `/bin/ps` cannot run.
-Covered by `crates/tuic-test-support/tests/identity_probe.rs`.
+Covered by `crates/tuic-test-support/tests/cases/identity_probe.rs`.
 
 ### Live peer-mail wake canary
 

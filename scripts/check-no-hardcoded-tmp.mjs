@@ -82,7 +82,7 @@ const ALLOWED = new Map([
 	["src-tauri/src/tunnels/agent.rs::launchd_socket", "macOS SSH_AUTH_SOCK discovery glob (connect only)"],
 	// Tests that assert a path is NOT under a shared temp dir.
 	[
-		"src-tauri/crates/tuic-test-support/tests/socket_root.rs::socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp",
+		"src-tauri/crates/tuic-test-support/tests/cases/socket_root.rs::socket_root_is_a_private_marked_dir_under_the_host_temp_dir_never_tmp",
 		"asserts the socket root is under none of them",
 	],
 	["scripts/test-run-remote-fixture.sh::no_tmp_mention", "asserts the launcher's output never names /tmp"],

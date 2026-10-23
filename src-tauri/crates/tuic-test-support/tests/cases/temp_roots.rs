@@ -5,9 +5,18 @@ use std::path::PathBuf;
 
 const CHILD: &str = "TUIC_TEMP_ROOTS_CHILD";
 
+/// `test`'s full libtest name: since the `tests/main.rs` consolidation the
+/// former target name is this module's prefix, and `--exact` needs it.
+fn exact(test: &str) -> String {
+    let module = module_path!().split_once("::").map_or("", |(_, path)| path);
+    format!("{module}::{test}")
+}
+
 fn run_child(test: &str, configure: impl FnOnce(&mut std::process::Command)) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    child.args(["--exact", test, "--nocapture"]).env(CHILD, "1");
+    child
+        .args(["--exact", &exact(test), "--nocapture"])
+        .env(CHILD, "1");
     for key in [
         "TUIC_TEST_TMP_ROOT",
         "TUIC_TEST_TMP_BASE",

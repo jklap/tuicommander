@@ -12,6 +12,13 @@ use tuic_test_support::{
 
 const CHILD: &str = "TUIC_SOCKET_ROOT_CHILD";
 
+/// `test`'s full libtest name: since the `tests/main.rs` consolidation the
+/// former target name is this module's prefix, and `--exact` needs it.
+fn exact(test: &str) -> String {
+    let module = module_path!().split_once("::").map_or("", |(_, path)| path);
+    format!("{module}::{test}")
+}
+
 /// The host temp dir this test process was given (before the constructor
 /// pointed TMPDIR at the per-run root).
 fn host() -> PathBuf {
@@ -75,7 +82,7 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 fn run_child(test: &str, configure: impl FnOnce(&mut std::process::Command)) -> String {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
     child
-        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .args(["--exact", &exact(test), "--nocapture", "--test-threads=1"])
         .env(CHILD, "1");
     configure(&mut child);
     let output = child.output().unwrap();
@@ -378,7 +385,7 @@ fn in_dir_refuses_a_process_that_runs_tests_in_parallel() {
     child
         .args([
             "--exact",
-            "child_in_dir_outside_one_test_per_process",
+            &exact("child_in_dir_outside_one_test_per_process"),
             "--nocapture",
         ])
         .env(CHILD, "1")

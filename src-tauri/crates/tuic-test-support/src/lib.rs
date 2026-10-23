@@ -293,7 +293,7 @@ pub const MDKB_STAGING_SOCKET: &str = ".mdkb/daemon-hook.sock.4194304.tmp";
 /// external tool's own scheme), as `(what, path relative to the per-test
 /// socket dir)`. Unlike every socket this crate names itself, these can
 /// overflow `sun_path` for a long host temp dir, so their tests go `UNCHECKED`
-/// instead of running. `tests/socket_environment.rs` fails the run when that
+/// instead of running. `tests/cases/socket_environment.rs` fails the run when that
 /// would happen; add every new fixed-name socket test's name here.
 pub const FIXED_NAME_SOCKETS: &[(&str, &str)] = &[("mdkb staging socket", MDKB_STAGING_SOCKET)];
 
