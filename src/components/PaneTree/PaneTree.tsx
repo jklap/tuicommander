@@ -544,7 +544,7 @@ const EditorPane: Component<{ tabId: string; onClose: (id: string) => void }> = 
 // ---- Helpers ----
 
 /** CSS class suffix for tab-type coloring in mini tab bar.
- *  Previously gave remote/PTY terminal tabs and html-preview tabs no tint
+ *  Previously gave agent-created (PTY) terminal tabs and html-preview tabs no tint
  *  at all here (unlike the main TabBar, which does distinguish them) —
  *  brought to parity as part of wiring these onto the indicator registry.
  *
@@ -556,7 +556,7 @@ export function tabColorClass(tab: PaneTab): string {
 	switch (tab.type) {
 		case "terminal": {
 			const term = terminalsStore.get(tab.id);
-			return term?.isRemote ? "pane-tab-remote" : "";
+			return term?.isExternallyCreated ? "pane-tab-remote" : "";
 		}
 		case "diff":
 			return "pane-tab-diff";

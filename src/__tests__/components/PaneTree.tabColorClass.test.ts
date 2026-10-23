@@ -32,7 +32,21 @@ describe("tabColorClass", () => {
 		expect(tabColorClass({ id, type: "terminal" })).toBe("");
 	});
 
-	it("gives a remote terminal tab pane-tab-remote", () => {
+	it("gives an agent-created terminal tab pane-tab-remote", () => {
+		const id = terminalsStore.add({
+			name: "Agent",
+			sessionId: null,
+			fontSize: 14,
+			cwd: null,
+			awaitingInput: null,
+			isExternallyCreated: true,
+		});
+		expect(tabColorClass({ id, type: "terminal" })).toBe("pane-tab-remote");
+	});
+
+	// `isRemote` means "runs on a configured remote connection", not "created
+	// by an agent": the tint follows `isExternallyCreated`, as TabViews' does.
+	it("does not tint a human-created tab on a remote connection", () => {
 		const id = terminalsStore.add({
 			name: "Remote",
 			sessionId: null,
@@ -40,8 +54,9 @@ describe("tabColorClass", () => {
 			cwd: null,
 			awaitingInput: null,
 			isRemote: true,
+			isExternallyCreated: false,
 		});
-		expect(tabColorClass({ id, type: "terminal" })).toBe("pane-tab-remote");
+		expect(tabColorClass({ id, type: "terminal" })).toBe("");
 	});
 
 	it("gives a diff tab pane-tab-diff", () => {
