@@ -36,6 +36,7 @@ beforeEach(() => {
 	vi.mocked(invoke).mockImplementation(async (command, args) => {
 		if (command === "story_capabilities") return true;
 		const action = (args as { action: { action: string; command?: unknown } }).action;
+		if (action.action === "transition_history") return { type: "transitions", value: [] };
 		if (action.action === "list_notes") return { type: "notes", value: [] };
 		if (action.action === "list_plans") return { type: "plans", value: [plan] };
 		if (action.action === "plan_view" || action.action === "filtered_plan_view")
