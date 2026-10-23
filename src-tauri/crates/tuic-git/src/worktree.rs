@@ -11617,6 +11617,87 @@ branch refs/heads/feat
         );
     }
 
+    // Catches: a packed-refs rewrite is treated as "nothing changed". Packing
+    // moves every loose ref into `packed-refs` (git's auto-maintenance does it
+    // after a commit once ~17 refs are loose), so the loose-file diff sees only
+    // deletions and must not be trusted; a ref moved and re-packed between two
+    // refreshes leaves no loose trace at all.
+    #[test]
+    fn monitoring_packed_refs_rewrite_reenumerates_once_and_keeps_targets() {
+        let (_temp, repo, _) = workspace_fixture();
+        let initial = rev_at(&repo, "HEAD").unwrap();
+        let mut branches: Vec<_> = (0..16).map(|i| format!("packed-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        // A branch without a reflog: only its ref target can tell it moved.
+        git_cmd(&repo)
+            .args(["-c", "core.logAllRefUpdates=false", "branch", "packed-only"])
+            .run()
+            .unwrap();
+        branches.push("packed-only".to_owned());
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "packed.txt", "one change\n");
+        // The shared test gitconfig disables auto-maintenance: the commit above
+        // must not have packed the refs this test packs on purpose.
+        assert!(
+            !repo.join(".git/packed-refs").exists(),
+            "auto-maintenance packed the fixture's refs"
+        );
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+
+        git_cmd(&repo)
+            .args(["pack-refs", "--all", "--prune"])
+            .run()
+            .unwrap();
+        assert!(repo.join(".git/packed-refs").exists());
+        MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(0));
+        let packed = monitoring_ref_keys(&repo, &branches).unwrap();
+        let enumerations = MONITORING_REF_ENUMERATIONS.with(std::cell::Cell::get);
+        assert_eq!(
+            enumerations, 1,
+            "packing all refs: {enumerations} full ref enumerations; expected exactly 1"
+        );
+        for branch in &branches {
+            assert_eq!(
+                before[branch], packed[branch],
+                "{branch} changed by packing"
+            );
+        }
+
+        // Move the reflog-less branch and pack again: no loose file survives.
+        let moved_to = rev_at(&repo, &branches[0]).unwrap();
+        assert_ne!(moved_to, initial);
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "core.logAllRefUpdates=false",
+                "update-ref",
+                "refs/heads/packed-only",
+                &moved_to,
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["pack-refs", "--all", "--prune"])
+            .run()
+            .unwrap();
+        MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(0));
+        let moved = monitoring_ref_keys(&repo, &branches).unwrap();
+        let enumerations = MONITORING_REF_ENUMERATIONS.with(std::cell::Cell::get);
+        assert_eq!(
+            enumerations, 1,
+            "re-packed move: {enumerations} enumerations"
+        );
+        assert_ne!(
+            packed["packed-only"], moved["packed-only"],
+            "a ref moved inside packed-refs kept its stale key"
+        );
+        for branch in &branches[..branches.len() - 1] {
+            assert_eq!(packed[branch], moved[branch], "{branch} changed");
+        }
+    }
+
     // Catches: a branch-only event stats sibling refs/logs or forgets its own reflog.
     #[test]
     fn monitoring_path_update_does_not_probe_sibling_signatures() {
