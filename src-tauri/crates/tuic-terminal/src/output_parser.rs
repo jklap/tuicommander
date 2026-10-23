@@ -2758,6 +2758,16 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
     } else {
         last_first_option
     }?;
+    // DEFERRED (2026-10-23) — a torn repaint can lend the dialog a prose title.
+    // When the post-answer full-screen repaint is split across two PTY reads,
+    // the first read has overwritten the title row with transcript prose while
+    // the old options and footer are still on screen, so this picks the prose
+    // row and the dedup sees a new signature: one extra `choice-prompt`, cleared
+    // by the next read (`claude_double_askuserquestion_second_missed.tcap`
+    // records 41/42, same timestamp; main 0e7623803 emits it too). The badge
+    // was already lit, so no push fires; a background tab hears one extra
+    // warning tone. Needs a frame-completeness signal, not a title heuristic:
+    // requiring `?` (wip's rule) would lose imperative titles again.
     let title = (0..first_option)
         .rev()
         .find(|&idx| !screen_rows[idx].trim().is_empty())?;
