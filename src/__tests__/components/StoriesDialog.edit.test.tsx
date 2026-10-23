@@ -160,6 +160,25 @@ it("catches optional clearing, ordered requirements and dependency changes lost 
 	});
 });
 
+it("catches editing one requirement splitting an untouched multiline criterion", () => {
+	const save = vi.fn();
+	const ui = render(() => (
+		<StoryEditForm
+			story={{ ...baseline, criteria: ["Verify output:\n  expected value", "Old requirement"] }}
+			candidates={[]}
+			busy={false}
+			error=""
+			onSave={save}
+			onCancel={() => {}}
+		/>
+	));
+	fireEvent.input(ui.getByLabelText("Acceptance criteria (one per line)"), {
+		target: { value: "Verify output:\n  expected value\nRevised requirement" },
+	});
+	fireEvent.click(ui.getByRole("button", { name: "Save" }));
+	expect(save).toHaveBeenCalledWith({ criteria: ["Verify output:\n  expected value", "Revised requirement"] });
+});
+
 it("catches priority-only edits normalizing untouched externally stored metadata", () => {
 	const save = vi.fn();
 	const ui = render(() => (
