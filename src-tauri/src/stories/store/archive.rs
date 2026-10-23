@@ -32,6 +32,7 @@ impl StoryStore {
             &self.db_path.with_file_name("workflow_runs.sqlite3"),
             &plan.project,
             &plan_id,
+            Some(id),
         )?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
@@ -63,6 +64,7 @@ impl StoryStore {
             &self.db_path.with_file_name("workflow_runs.sqlite3"),
             &plan.project,
             id,
+            None,
         )?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
@@ -99,6 +101,25 @@ impl StoryStore {
         // Read only after releasing this store's connection mutex.
         drop(conn);
         self.get_plan(id)
+    }
+
+    /// True only when every revision after acceptance is a durable archive event.
+    /// The primary key makes the count an exact contiguous-range check, not a heuristic.
+    pub(crate) fn archive_only_since(
+        &self,
+        id: &str,
+        accepted: i64,
+        current: i64,
+    ) -> Result<bool, String> {
+        if accepted <= 0 || current < accepted {
+            return Ok(false);
+        }
+        let conn = self.connect()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM archive_history WHERE entity_id=?1 AND revision>?2 AND revision<=?3",
+            params![id, accepted, current], |row| row.get(0),
+        ).map_err(|e| format!("read archive revision continuity: {e}"))?;
+        Ok(count == current - accepted)
     }
 
     pub fn archive_history(&self, id: &str) -> Result<Vec<ArchiveEvent>, String> {
@@ -151,6 +172,67 @@ fn record_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: archive history bridging an ordinary work revision and certifying changed work.
+    #[test]
+    fn archive_revision_continuity_rejects_work_changes_and_future_receipts() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).unwrap();
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Continuity".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let initial = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Work".into(),
+                criteria: vec!["Done".into()],
+                priority: 2,
+                story_type: None,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let actor = StoryTransitionActor::Human;
+        let archived = store
+            .set_story_archived(&initial.id, initial.revision, true, actor.clone())
+            .unwrap();
+        let restored = store
+            .set_story_archived(&initial.id, archived.revision, false, actor.clone())
+            .unwrap();
+        assert!(
+            store
+                .archive_only_since(&initial.id, initial.revision, restored.revision)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .archive_only_since(&initial.id, restored.revision + 1, restored.revision)
+                .unwrap()
+        );
+        let changed = store
+            .transition(&initial.id, restored.revision, StoryCommand::StartManual)
+            .unwrap();
+        let archived = store
+            .set_story_archived(&initial.id, changed.revision, true, actor.clone())
+            .unwrap();
+        let restored = store
+            .set_story_archived(&initial.id, archived.revision, false, actor)
+            .unwrap();
+        assert!(
+            !store
+                .archive_only_since(&initial.id, initial.revision, restored.revision)
+                .unwrap()
+        );
+        assert!(
+            store
+                .archive_only_since(&initial.id, changed.revision, restored.revision)
+                .unwrap()
+        );
+    }
 
     /// Catches: schema v4 documents without the new flag failing to decode or being rewritten during migration.
     #[test]

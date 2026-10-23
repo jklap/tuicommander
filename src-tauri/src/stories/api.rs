@@ -320,10 +320,10 @@ fn story_action_with_source(
             Ok(StoryReply::Stories(store.list_stories_filtered(
                 &plan_id,
                 &StoryListFilter {
+                    archived,
                     state,
                     priority,
                     story_type,
-                    archived,
                 },
                 limit,
                 cursor.as_deref(),
@@ -503,6 +503,16 @@ fn story_action_for_session_with_source(
     story_action_with_source(project, action, session_id, unauthenticated_http)
 }
 
+fn archive_actor(session: Option<&str>, unauthenticated_http: bool) -> super::StoryTransitionActor {
+    match session {
+        Some(id) => super::StoryTransitionActor::ManagedSession {
+            session_id: id.into(),
+        },
+        None if unauthenticated_http => super::StoryTransitionActor::LocalApi,
+        None => super::StoryTransitionActor::Human,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::StoryOrigin;
@@ -667,7 +677,7 @@ mod tests {
                 super::super::StoryTransitionActor::LocalApi,
             )
             .unwrap();
-        assert!(store.list_plans(project).unwrap().is_empty());
+        assert_eq!(store.list_plans(project).unwrap(), vec![]);
         assert_eq!(
             store.list_plans_archived(project, true).unwrap(),
             vec![archived_plan.clone()]
@@ -756,7 +766,7 @@ mod tests {
                 .contains("claimed")
         );
         assert_eq!(store.get_story(&story.id).unwrap(), claimed);
-        assert!(store.archive_history(&story.id).unwrap().is_empty());
+        assert_eq!(store.archive_history(&story.id).unwrap(), vec![]);
         let archived = store
             .set_story_archived(&sibling.id, sibling.revision, true, actor)
             .unwrap();
@@ -798,7 +808,10 @@ mod tests {
             "plan_archive_history",
         ] {
             let mut value = serde_json::json!({"action":action});
-            if action.contains("story") {
+            if matches!(
+                action,
+                "archive_story" | "unarchive_story" | "story_archive_history"
+            ) {
                 value["story_id"] = story.id.clone().into();
             } else {
                 value["plan_id"] = story.plan_id.clone().into();
@@ -1848,15 +1861,5 @@ mod tests {
                 &note
             );
         }
-    }
-}
-
-fn archive_actor(session: Option<&str>, unauthenticated_http: bool) -> super::StoryTransitionActor {
-    match session {
-        Some(id) => super::StoryTransitionActor::ManagedSession {
-            session_id: id.into(),
-        },
-        None if unauthenticated_http => super::StoryTransitionActor::LocalApi,
-        None => super::StoryTransitionActor::Human,
     }
 }

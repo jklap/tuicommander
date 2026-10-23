@@ -194,21 +194,38 @@ pub(crate) fn guard_plan_source_update_in(
 }
 
 /// Hold the workflow writer lock until the native archive transaction commits.
-/// Active plan runs own the plan's story set, not only currently dispatched attempts.
+/// Plan roots own all children; story roots own only their target/executions.
 pub(crate) fn guard_native_archive(
     path: &Path,
     project: &str,
     plan_id: &str,
+    story_id: Option<&str>,
 ) -> Result<Connection, String> {
-    let conn = RunStore::open_at(path)?.connect()?;
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| format!("lock archive reservations: {e}"))?;
-    let owned: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE project=?1 AND plan_id=?2 AND status IN ('running','paused'))",
-        params![project, plan_id], |row| row.get(0),
-    ).map_err(|e| format!("read archive reservations: {e}"))?;
-    if owned {
-        return Err("plan or story is owned by an active workflow run".into());
+    let (conn, has_runs) = lock_run_amendment(path)?;
+    if has_runs {
+        let mut stmt = conn.prepare(
+            "SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND plan_id=?2 AND status IN ('running','paused')"
+        ).map_err(|e| format!("read archive reservations: {e}"))?;
+        for row in stmt
+            .query_map(params![project, plan_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("read archive reservations: {e}"))?
+        {
+            let run: RunSnapshot = decode(&row.map_err(|e| format!("read archive owner: {e}"))?)?;
+            let owned = story_id.is_none_or(|id| match &run.root_target {
+                Some(RunTarget::Story(target)) => {
+                    target == id
+                        || run.stories.iter().any(|execution| execution.story_id == id)
+                        || run
+                            .graph_executions
+                            .iter()
+                            .any(|graph| graph.target_id == id)
+                }
+                Some(RunTarget::Plan(_)) | None => true,
+            });
+            if owned {
+                return Err("plan or story is owned by an active workflow run".into());
+            }
+        }
     }
     Ok(conn)
 }
@@ -874,7 +891,9 @@ impl RunStore {
             .ok_or("story execution not found")?;
         let revision = execution.accepted_revision.ok_or("story is not accepted")?;
         let story = StoryStore::open()?.get_story(story_id)?;
-        if story.status != StoryStatus::Done || story.revision != revision {
+        if story.status != StoryStatus::Done
+            || !story_work_revision_current(story_id, revision, story.revision)?
+        {
             return Err("integration requires the accepted story revision".into());
         }
         let worktree = Path::new(
@@ -1004,8 +1023,8 @@ impl RunStore {
             let story = stories.get_story(&execution.story_id)?;
             if story.status != StoryStatus::Done
                 || !execution.accepted
-                || execution.accepted_revision != Some(story.revision)
-                || receipt.story_revision != story.revision
+                || execution.accepted_revision != Some(receipt.story_revision)
+                || !story_work_revision_current(&story.id, receipt.story_revision, story.revision)?
                 || receipt.canonical_ref != canonical_ref
                 || !source_is_ancestor(canonical, &receipt.source_commit, &commit)?
             {
@@ -1504,6 +1523,18 @@ pub(crate) fn story_integrated_at_revision_in(
     Ok(false)
 }
 
+/// Archive history is the only revision change that does not change accepted work.
+fn story_work_revision_current(
+    story_id: &str,
+    accepted: i64,
+    current: i64,
+) -> Result<bool, String> {
+    if accepted == current {
+        return Ok(true);
+    }
+    StoryStore::open()?.archive_only_since(story_id, accepted, current)
+}
+
 pub(super) fn receipt_current(
     snapshot: &RunSnapshot,
     story_id: &str,
@@ -1520,8 +1551,8 @@ pub(super) fn receipt_current(
         return Ok(false);
     };
     if !execution.accepted
-        || execution.accepted_revision != Some(revision)
-        || receipt.story_revision != revision
+        || execution.accepted_revision != Some(receipt.story_revision)
+        || !story_work_revision_current(story_id, receipt.story_revision, revision)?
     {
         return Ok(false);
     }
@@ -2568,8 +2599,8 @@ fn choose_event(
                 .ok_or("story execution not found")?;
             if story.status != StoryStatus::Done
                 || !execution.accepted
-                || execution.accepted_revision != Some(story.revision)
-                || receipt.story_revision != story.revision
+                || execution.accepted_revision != Some(receipt.story_revision)
+                || !story_work_revision_current(&story.id, receipt.story_revision, story.revision)?
             {
                 return Err("integration receipt has a stale story revision".into());
             }

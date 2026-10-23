@@ -457,22 +457,32 @@ mod tests {
 
     #[test]
     fn recorded_merge_releases_dependents_and_ref_movement_invalidates_receipts() {
-        assert_recorded_merge_receipts(true, false);
+        assert_recorded_merge_receipts(true, false, false);
     }
 
     #[test]
     fn workflow_plan_done_requires_receipts_and_reopens_until_recertified() {
         // catches: approved stories make a workflow plan Done before integration,
         // or Done survives canonical ref movement which invalidates run completion.
-        assert_recorded_merge_receipts(false, false);
+        assert_recorded_merge_receipts(false, false, false);
     }
 
     #[test]
     fn preflight_git_does_not_hold_writers_and_post_probe_ref_movement_is_rejected_on_read() {
-        assert_recorded_merge_receipts(false, true);
+        assert_recorded_merge_receipts(false, true, false);
     }
 
-    fn assert_recorded_merge_receipts(with_dependent: bool, preflight_races: bool) {
+    /// Catches: archive metadata invalidating accepted work and reopening a completed plan.
+    #[test]
+    fn archive_round_trip_preserves_workflow_integration_evidence() {
+        assert_recorded_merge_receipts(false, false, true);
+    }
+
+    fn assert_recorded_merge_receipts(
+        with_dependent: bool,
+        preflight_races: bool,
+        archive_round_trip: bool,
+    ) {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let definitions = WorkflowStore::open().unwrap();
         let plan_draft = definitions.get_draft(&definition_id).unwrap();
@@ -807,6 +817,44 @@ mod tests {
         );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
         assert_plan_state(crate::stories::PlanState::Done);
+        if archive_round_trip {
+            store
+                .command(&run.id, "release-archive-owner", RunCommand::Cancel)
+                .unwrap();
+            let actor = crate::stories::StoryTransitionActor::Human;
+            let mut current = stories.get_story(&story_id).unwrap();
+            for _ in 0..2 {
+                let before = current.revision;
+                current = stories
+                    .set_story_archived(&story_id, before, true, actor.clone())
+                    .unwrap();
+                current = stories
+                    .set_story_archived(&story_id, current.revision, false, actor.clone())
+                    .unwrap();
+                assert_eq!(current.revision, before + 2);
+                assert!(
+                    story_integrated_at_revision(&story_id, current.revision).unwrap(),
+                    "archive metadata must preserve integration evidence"
+                );
+                assert_plan_state(crate::stories::PlanState::Done);
+            }
+            let dependent = stories
+                .create_story(NewStory {
+                    story_type: None,
+                    plan_id: plan_id.clone(),
+                    title: "After restore".into(),
+                    criteria: vec!["Done".into()],
+                    priority: 2,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![],
+                })
+                .unwrap();
+            let dependent = stories
+                .add_dependency(&dependent.id, &story_id, dependent.revision)
+                .unwrap();
+            assert_eq!(dependent.status, crate::stories::StoryStatus::Ready);
+            return;
+        }
         // catches: a receipt with an empty post_checks list passing `all()` vacuously and releasing dependents.
         let mut vacuous = integrated.snapshot.clone();
         vacuous
