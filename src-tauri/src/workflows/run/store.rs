@@ -378,6 +378,22 @@ impl RunStore {
         .collect()
     }
 
+    /// Validate immutable receipt identity and ownership without copying its payload.
+    pub(crate) fn receipt_belongs_to_plan(
+        &self,
+        run_id: &str,
+        command_id: &str,
+        project: &str,
+        plan_id: &str,
+    ) -> Result<bool, String> {
+        self.connect()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workflow_events e JOIN workflow_runs r ON r.id=e.run_id
+             WHERE e.run_id=?1 AND e.command_id=?2 AND r.project=?3 AND r.plan_id=?4)",
+            params![run_id, command_id, project, plan_id],
+            |row| row.get(0),
+        ).map_err(|error| format!("read workflow receipt identity: {error}"))
+    }
+
     pub fn events_after(
         &self,
         run_id: &str,

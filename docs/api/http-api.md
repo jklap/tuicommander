@@ -3563,3 +3563,12 @@ The request is bounded to 30 seconds locally; ego stdout is capped at 4 MiB.
 Worktree discovery diagnostics (#2157): `/repo/structure` and `/repo/summary` also return `worktree_diagnostics: Array<{path: string, branch: string | null, state: "missing" | "duplicate_branch", guidance: string}>`. These records have no workspace ID and cannot select a branch workspace. `/worktrees/paths` remains a branch map with the same deterministic primary path used by lifecycle resolution. Discovery failures return errors and are not cached as empty inventories. MCP repository list entries expose discovery failures as `worktree_error`; ACP workspace resource entries use `worktreeError`.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+
+### Append-only story notes
+
+The shared story service accepts `add_note` with `story_id`, `expected_revision`, `text`, and optional `receipts` (an array of `{runId, commandId}`). `list_notes` takes `story_id` and returns `{type:"notes",value:StoryNote[]}` in append order; `add_note` returns `{type:"note",value:StoryNote}`. Each note includes `id`, `storyId`, `storyRevision`, `text`, `actor`, `createdAt` (Unix milliseconds), and `receipts`.
+
+The backend derives actor provenance and time. It checks the current story revision atomically with the append. A note does not advance the story revision or change its status, claim, criteria, or integration proof. Notes have no edit or delete action. Text must be nonblank and at most 16,000 characters; a note can reference at most 16 distinct receipts. Invalid note input is a user error (HTTP 422).
+
+Receipt references identify persisted workflow event receipts by run ID and command ID, not a policy check name. Each receipt must exist in the same project and plan as the story. The note stores only these identifiers, not a copy of the receipt. A reference is historical evidence, not an assertion that the story is approved or its integration checks are current. All actions use the existing project-scoped IPC, HTTP, MCP, and CLI boundary.

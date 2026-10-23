@@ -10,6 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
 
+mod notes;
 #[cfg(test)]
 mod qa_tests;
 mod records;
@@ -19,7 +20,7 @@ use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug)]
 pub struct StoryStore {
@@ -137,7 +138,12 @@ impl StoryStore {
             let current: i64 = tx
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .map_err(|e| format!("read locked story schema: {e}"))?;
-            if current < SCHEMA_VERSION {
+            if current > SCHEMA_VERSION {
+                return Err(format!(
+                    "story schema version {current} is newer than supported version {SCHEMA_VERSION}"
+                ));
+            }
+            if current < 2 {
                 tx.execute_batch(
                     "CREATE TABLE stories_qa (
                         id TEXT PRIMARY KEY,
@@ -155,6 +161,17 @@ impl StoryStore {
                     CREATE UNIQUE INDEX one_story_per_session
                       ON stories(claim_session) WHERE claim_session IS NOT NULL;"
                 ).map_err(|e| format!("expand story QA status constraint: {e}"))?;
+            }
+            if current < 3 {
+                tx.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS story_notes (
+                        id TEXT PRIMARY KEY,
+                        story_id TEXT NOT NULL REFERENCES stories(id),
+                        document TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS notes_by_story ON story_notes(story_id);",
+                )
+                .map_err(|e| format!("add story note schema: {e}"))?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("save story schema version: {e}"))?;

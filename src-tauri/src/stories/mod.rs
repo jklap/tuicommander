@@ -8,6 +8,8 @@ mod list;
 #[cfg(test)]
 mod list_tests;
 mod model;
+#[cfg(test)]
+mod note_tests;
 mod sources;
 mod store;
 
@@ -59,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn new_store_sets_schema_version_two() {
+    fn new_store_sets_schema_version_three() {
         let dir = tempfile::tempdir().expect("temporary config");
         let db = dir.path().join("stories.sqlite3");
 
@@ -69,7 +71,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read schema version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -78,7 +80,7 @@ mod tests {
         let db = dir.path().join("stories.sqlite3");
         let connection = rusqlite::Connection::open(&db).expect("open database");
         connection
-            .pragma_update(None, "user_version", 3)
+            .pragma_update(None, "user_version", 4)
             .expect("set future schema version");
 
         let error = StoryStore::open_at(&db).expect_err("future schema is rejected");
@@ -111,7 +113,7 @@ mod tests {
             .expect("open database")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read schema version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
