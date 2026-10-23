@@ -1,5 +1,7 @@
 # Tauri Commands Reference
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 ## Scoped plugin settings
 
 `plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.

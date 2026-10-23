@@ -1068,7 +1068,7 @@ impl RunStore {
         }
         let snapshot = read_snapshot(&conn, run_id)?;
         drop(conn);
-        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let revisions = fingerprint(&snapshot.plan_id, &plan_stories(&snapshot)?, true)?;
         let current = snapshot
             .stories
             .iter()
@@ -1194,7 +1194,7 @@ impl RunStore {
         if expected_sequence.is_some_and(|expected| expected != snapshot.sequence) {
             return Err("stale workflow sequence".into());
         }
-        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let revisions = fingerprint(&snapshot.plan_id, &plan_stories(&snapshot)?, true)?;
         let dispatch_target = match &command {
             RunCommand::Graph {
                 transition: super::graph::GraphTransition::Start { target_id, .. },
@@ -1750,14 +1750,18 @@ fn validate_preflight(
     revisions: &str,
 ) -> Result<(), String> {
     if read_snapshot(conn, &snapshot.id)?.sequence != snapshot.sequence
-        || fingerprint(&plan_stories(snapshot)?, true)? != revisions
+        || fingerprint(&snapshot.plan_id, &plan_stories(snapshot)?, true)? != revisions
     {
         return Err("workflow or story revisions changed during command preflight; retry".into());
     }
     Ok(())
 }
 
-pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<String, String> {
+pub(super) fn fingerprint(
+    plan_id: &str,
+    stories: &[Story],
+    include_execution: bool,
+) -> Result<String, String> {
     let mut sorted = stories.to_vec();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let shape: Vec<_> = sorted
@@ -1781,7 +1785,11 @@ pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<
             }
         })
         .collect();
-    let bytes = serde_json::to_vec(&shape).map_err(|e| format!("encode plan fingerprint: {e}"))?;
+    // Plan metadata is a prompt and verification subject even when the plan has no stories.
+    let plan = StoryStore::open()?.get_plan(plan_id)?;
+    let subject = serde_json::json!([plan.title, plan.source, shape]);
+    let bytes =
+        serde_json::to_vec(&subject).map_err(|e| format!("encode plan fingerprint: {e}"))?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
@@ -1942,7 +1950,7 @@ fn choose_event(
         return Ok(RunEventKind::Paused);
     }
     let stories = plan_stories(snapshot)?;
-    let current_plan = fingerprint(&stories, false)?;
+    let current_plan = fingerprint(&snapshot.plan_id, &stories, false)?;
     if snapshot
         .planning_fingerprint
         .as_deref()
@@ -2540,7 +2548,7 @@ fn choose_event(
                 )?;
             }
             Ok(RunEventKind::VerificationPassed {
-                fingerprint: fingerprint(&stories, true)?,
+                fingerprint: fingerprint(&snapshot.plan_id, &stories, true)?,
             })
         }
         RunCommand::Complete => {
@@ -2554,7 +2562,7 @@ fn choose_event(
             }
             ready_to_verify(snapshot, &stories)?;
             if snapshot.verification_fingerprint.as_deref()
-                != Some(fingerprint(&stories, true)?.as_str())
+                != Some(fingerprint(&snapshot.plan_id, &stories, true)?.as_str())
             {
                 return Err("final verification is missing or stale".into());
             }

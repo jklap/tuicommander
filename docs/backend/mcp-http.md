@@ -1,5 +1,7 @@
 # MCP & HTTP Server
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 The compact `ui` description includes `design_start`, `design_stop`, `design_status`,
 `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and
 `design_eval`. `ui action=help` retains their full usage guidance together with

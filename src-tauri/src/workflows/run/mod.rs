@@ -2508,6 +2508,71 @@ mod tests {
         );
     }
 
+    /// Catches: a corrected plan source retaining closed planning and verified subjects.
+    #[test]
+    fn update_plan_source_reopens_planning_and_changes_verification_subject() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let closed = store
+            .command(&run.id, "close", RunCommand::ClosePlanning)
+            .unwrap();
+        assert!(closed.snapshot.planning_fingerprint.is_some());
+        let stories = StoryStore::open().unwrap();
+        let original = stories.get_plan(&plan_id).unwrap();
+        let before =
+            store::fingerprint(&plan_id, &stories.list_stories(&plan_id).unwrap(), true).unwrap();
+        let empty_before = store::fingerprint(&plan_id, &[], false).unwrap();
+        stories
+            .update_plan(
+                &plan_id,
+                original.revision,
+                crate::stories::PlanPatch {
+                    title: None,
+                    source: Some("moved.md".into()),
+                },
+            )
+            .unwrap();
+        assert_ne!(
+            before,
+            store::fingerprint(&plan_id, &stories.list_stories(&plan_id).unwrap(), true).unwrap()
+        );
+        assert_ne!(
+            empty_before,
+            store::fingerprint(&plan_id, &[], false).unwrap()
+        );
+        let reopened = store
+            .command(&run.id, "after-source-edit", RunCommand::ClosePlanning)
+            .unwrap();
+        assert!(matches!(
+            reopened.event.kind,
+            RunEventKind::PlanningReopened
+        ));
+        assert!(reopened.snapshot.planning_fingerprint.is_none());
+        assert!(reopened.snapshot.verification_fingerprint.is_none());
+        let reclosed = store
+            .command(&run.id, "reclose", RunCommand::ClosePlanning)
+            .unwrap();
+        assert_ne!(
+            closed.snapshot.planning_fingerprint,
+            reclosed.snapshot.planning_fingerprint
+        );
+    }
+
     #[test]
     fn command_events_and_projection_replay_after_reopen() {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();

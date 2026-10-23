@@ -13,6 +13,8 @@ use uuid::Uuid;
 mod amendments;
 mod notes;
 #[cfg(test)]
+mod plan_update_tests;
+#[cfg(test)]
 mod qa_tests;
 mod records;
 mod transitions;
@@ -21,7 +23,7 @@ use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug)]
 pub struct StoryStore {
@@ -174,6 +176,12 @@ impl StoryStore {
                 )
                 .map_err(|e| format!("add story note schema: {e}"))?;
             }
+            if current < 4 {
+                tx.execute_batch(
+                    "ALTER TABLE plans ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;",
+                )
+                .map_err(|e| format!("add plan revision: {e}"))?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("save story schema version: {e}"))?;
             tx.commit()
@@ -192,6 +200,7 @@ impl StoryStore {
             return Err("project must be an absolute path".into());
         }
         let plan = Plan {
+            revision: 1,
             id: Uuid::now_v7().to_string(),
             project: input.project.trim().into(),
             title: input.title.trim().into(),
@@ -209,7 +218,7 @@ impl StoryStore {
     pub fn get_plan(&self, id: &str) -> Result<Plan, String> {
         self.connect()?
             .query_row(
-                "SELECT id,project,title,source FROM plans WHERE id=?1",
+                "SELECT id,project,title,source,revision FROM plans WHERE id=?1",
                 [id],
                 |row| {
                     Ok(Plan {
@@ -217,6 +226,7 @@ impl StoryStore {
                         project: row.get(1)?,
                         title: row.get(2)?,
                         source: row.get(3)?,
+                        revision: row.get(4)?,
                     })
                 },
             )
@@ -228,7 +238,7 @@ impl StoryStore {
     pub fn list_plans(&self, project: &str) -> Result<Vec<Plan>, String> {
         let conn = self.connect()?;
         let mut stmt = conn
-            .prepare("SELECT id,project,title,source FROM plans WHERE project=?1 ORDER BY rowid")
+            .prepare("SELECT id,project,title,source,revision FROM plans WHERE project=?1 ORDER BY rowid")
             .map_err(|e| format!("prepare plan list: {e}"))?;
         stmt.query_map([project], |row| {
             Ok(Plan {
@@ -236,11 +246,73 @@ impl StoryStore {
                 project: row.get(1)?,
                 title: row.get(2)?,
                 source: row.get(3)?,
+                revision: row.get(4)?,
             })
         })
         .map_err(|e| format!("list plans: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("read plans: {e}"))
+    }
+
+    /// The immediate transaction serializes stale checks with both field writes.
+    pub fn update_plan(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        patch: super::PlanPatch,
+    ) -> Result<Plan, String> {
+        if patch.title.is_none() && patch.source.is_none() {
+            return Err("plan patch must change title or source".into());
+        }
+        if let Some(title) = &patch.title {
+            validate_text("plan title", title, 200)?;
+        }
+        if let Some(source) = &patch.source {
+            validate_text("plan source", source, 4096)?;
+        }
+        let revision = expected_revision
+            .checked_add(1)
+            .ok_or("plan revision exhausted")?;
+        let mut conn = self.connect()?;
+        let tx = immediate(&mut conn)?;
+        let mut plan = tx
+            .query_row(
+                "SELECT id,project,title,source,revision FROM plans WHERE id=?1",
+                [id],
+                |row| {
+                    Ok(Plan {
+                        id: row.get(0)?,
+                        project: row.get(1)?,
+                        title: row.get(2)?,
+                        source: row.get(3)?,
+                        revision: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| format!("read plan for update: {e}"))?
+            .ok_or_else(|| format!("plan not found: {id}"))?;
+        if plan.revision != expected_revision {
+            return Err(format!(
+                "stale plan revision: expected {expected_revision}, current {}",
+                plan.revision
+            ));
+        }
+        if let Some(title) = patch.title {
+            plan.title = title.trim().into();
+        }
+        if let Some(source) = patch.source {
+            plan.source = source.trim().into();
+        }
+        plan.revision = revision;
+        tx.execute(
+            "UPDATE plans SET title=?1,source=?2,revision=?3 WHERE id=?4 AND revision=?5",
+            params![plan.title, plan.source, revision, id, expected_revision],
+        )
+        .map_err(|e| format!("update plan: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit plan update: {e}"))?;
+        Ok(plan)
     }
 
     pub fn create_story(&self, input: NewStory) -> Result<Story, String> {

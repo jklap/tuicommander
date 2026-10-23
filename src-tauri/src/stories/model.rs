@@ -12,10 +12,19 @@ pub struct NewPlan {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    pub revision: i64,
     pub id: String,
     pub project: String,
     pub title: String,
     pub source: String,
+}
+
+/// Mutable plan metadata. Omitted fields retain their stored values.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanPatch {
+    pub title: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
