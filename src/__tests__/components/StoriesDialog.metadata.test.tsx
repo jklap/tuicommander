@@ -43,6 +43,7 @@ beforeEach(() => {
 	vi.mocked(invoke).mockImplementation(async (command, args) => {
 		if (command === "story_capabilities") return true;
 		const action = (args as { action: { action: string } }).action;
+		if (action.action === "list_notes") return { type: "notes", value: [] };
 		if (action.action === "list_plans")
 			return { type: "plans", value: [{ id: "p1", title: "API plan", project: "/repo" }] };
 		if (action.action === "plan_view")
