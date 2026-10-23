@@ -1167,8 +1167,10 @@ The mobile overflow uses `session_usage.rs`, not parsed warning percentages or
 user-configured terminal chrome. Claude reuses the live profile resolver and
 cache with primary OAuth GET only. Codex reads live process HOME/CODEX_HOME
 and profile flags, rejecting unbound configuration overrides and local-provider
-modes. ego requires the existing exact PID/session binding, an absolute configured
-executable, the manifest workspace and the actual store. Explicit CLI store
+modes. Codex root profile flags precede the App Server subcommand. ego requires
+the existing exact PID/session binding, the terminal executable (or normal agent
+binary discovery), the manifest workspace and the actual store. AI Chat ACP
+executable configuration is not required. Explicit CLI store
 overrides remain unavailable rather than guessed. Its `usage --json` output is
 capped at 4 MiB and 20 seconds; normalized session snapshots are cached for
 30 seconds. Codex snapshots are cached for five minutes. Cache entries are

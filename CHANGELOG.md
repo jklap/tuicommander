@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Preserve root profile argument order for Codex usage reads and use the terminal ego executable without requiring AI Chat configuration (#2150-4e0c).
 - Keep long mobile CLI file links inline with surrounding text and its hanging indent instead of centering wrapped paths (#2011-86b5).
 - Read nullable macOS WebView URLs without Wry unwraps in document recovery and detached-panel snapshots; a missing URL no longer reaches that panic path (#2120-9f3f).
 - Stop opening the installed CLI for writing during status checks; probe its install directory instead to avoid macOS signature invalidation without changed binary bytes (#2129-1dfd).

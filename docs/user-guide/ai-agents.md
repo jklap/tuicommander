@@ -402,7 +402,8 @@ show **Account quota** and reported reset times for the live session profile.
 These are shared account windows, not the selected model's session spend.
 
 ego shows **Session usage** from its own durable ledger, with **Cost** when
-reported. **API-equivalent estimate** is a subscription estimate, not money
+reported. Terminal usage uses the terminal executable and does not require the
+AI Chat ego executable setting. **API-equivalent estimate** is a subscription estimate, not money
 spent. Unknown/partial costs retain their reasons. Session totals can include
 more than one model; the model label is ego's latest admitted model.
 

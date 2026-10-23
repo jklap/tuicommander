@@ -232,7 +232,15 @@ async fn local_usage(state: &AppState, session_id: &str) -> Result<SessionUsage,
                 .get("workspace_root")
                 .and_then(Value::as_str)
                 .ok_or("ego workspace unavailable")?;
-            let program = PathBuf::from(state.config.read().ego_executable.trim());
+            // PTY usage follows the terminal executable, not AI Chat's ACP setting.
+            let program = match argv.first().map(PathBuf::from) {
+                Some(path) if path.is_absolute() && path.is_file() => path,
+                _ => crate::agent::detect_agent_binary("ego".into())
+                    .await
+                    .path
+                    .map(PathBuf::from)
+                    .ok_or("ego executable unavailable")?,
+            };
             if !home.is_absolute() || !program.is_absolute() || !Path::new(workspace).is_absolute()
             {
                 return Ok(SessionUsage::unavailable(
@@ -500,6 +508,117 @@ fn ego_snapshot(report: &Value, session_id: &str) -> Result<SessionUsage, String
 mod tests {
     use super::*;
     use crate::state::tests_support::make_test_app_state;
+
+    /// Catches: a live terminal ego ledger being hidden by empty ACP configuration.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_ego_usage_does_not_require_acp_executable() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let script = crate::test_support::fake_ssh_script(
+            "2150-terminal-ego-usage",
+            r#"[ "$1" = usage ] || exit 2
+cat "$EGO_HOME/report.json""#,
+            "exit /b 2",
+        );
+        let binary = dir.path().join("ego");
+        std::fs::copy(script, &binary).unwrap();
+        let id = "01a02491-6a90-7ae2-9089-fd6a8532eb82";
+        let session_dir = dir.path().join("sessions").join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let mut report = report_with_sessions();
+        report["sessions"][1]["session"] = serde_json::json!(id);
+        std::fs::write(dir.path().join("report.json"), report.to_string()).unwrap();
+        std::fs::write(
+            session_dir.join("manifest.json"),
+            serde_json::json!({
+                "workspace_root": dir.path().to_str().unwrap()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        // A real foreground process with an ego argv0 and isolated initial env.
+        // exec -a avoids writing or compiling a second native test executable.
+        let mut command = CommandBuilder::new("/bin/bash");
+        command.args(["-c", "exec -a \"$1\" /bin/sh -c 'read -r input'", "probe"]);
+        command.arg(&binary);
+        command.env("EGO_HOME", dir.path());
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let pid = child.process_id().unwrap();
+        loop {
+            if pair.master.process_group_leader() == Some(pid as i32)
+                && crate::process_env::read_process_argv0(pid).as_deref() == binary.to_str()
+            {
+                break;
+            }
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "terminal probe exited during setup"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lease_path = session_dir.join("lease");
+        std::fs::write(
+            &lease_path,
+            serde_json::json!({"pid":pid,"heartbeat":1}).to_string(),
+        )
+        .unwrap();
+        let lease = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lease_path)
+            .unwrap();
+        lease.lock().unwrap();
+        let state = make_test_app_state();
+        state.config.write().ego_executable.clear();
+        state.session_maps.sessions.insert(
+            "terminal-ego".into(),
+            parking_lot::Mutex::new(crate::state::PtySession {
+                launch_receipt: None,
+                writer: Arc::new(parking_lot::Mutex::new(pair.master.take_writer().unwrap())),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                initial_cwd: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/bash".into(),
+            }),
+        );
+        state.session_maps.session_states.insert(
+            "terminal-ego".into(),
+            crate::state::SessionState {
+                agent_type: Some("ego".into()),
+                ..Default::default()
+            },
+        );
+        let snapshot = get_session_usage_impl(&state, "terminal-ego").await;
+        state.config.write().ego_executable = "/unrelated/acp/ego".into();
+        let with_other_acp = get_session_usage_impl(&state, "terminal-ego").await;
+        let (_, session) = state.session_maps.sessions.remove("terminal-ego").unwrap();
+        let mut session = session.into_inner();
+        session._child.kill().unwrap();
+        session._child.wait().unwrap();
+        for snapshot in [snapshot, with_other_acp] {
+            assert_eq!(snapshot.availability, "available", "{:?}", snapshot.reason);
+            assert_eq!(snapshot.model.as_deref(), Some("current/model"));
+            assert!(
+                snapshot
+                    .lines
+                    .iter()
+                    .any(|line| line.value.contains("24 output"))
+            );
+            assert!(!snapshot.lines.iter().any(|line| line.value.contains("999")));
+        }
+    }
 
     fn report_with_sessions() -> Value {
         let mut report: Value =

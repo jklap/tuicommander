@@ -2822,4 +2822,4 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   session tokens/cost, unavailable and stale states. Never restart the daily app
   during active sessions for this check. Rust changes do not hot reload.
 
-- [ ] Capture the isolated 390×844 session-usage browser fixture after capture is available. The first headless Chrome attempt timed out after 15 seconds on 2026-10-23; it was stopped without retrying. Evidence: `~/Gits/.tmp/results/2150-visual/capture-status.txt`.
+- [x] Capture the isolated 390×844 session-usage browser fixture. _(verified 2026-10-23: available, unavailable and stale viewport PNGs captured with the authorized browser wrapper; accessibility text and DOM bounds checked. Fixture-only, not live provider evidence. Evidence: `~/Gits/personal/orchestrator/reports/tuicommander/img/2026-10-23-2150/README.md`.)_
