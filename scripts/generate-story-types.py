@@ -11,7 +11,7 @@ OUTPUT = ROOT / "src/types/stories.gen.ts"
 def generate():
     source = (ROOT / "src-tauri/src/stories/model.rs").read_text()
     declarations = []
-    for name in ("StoryStatus", "PlanState", "StoryType", "StoryVisibility"):
+    for name in ("StoryStatus", "PlanState", "StoryType", "StoryVisibility", "StoryRisk"):
         match = re.search(
             rf'#\[serde\(rename_all = "snake_case"\)\]\s*pub enum {name} \{{([^}}]+)\}}',
             source,
