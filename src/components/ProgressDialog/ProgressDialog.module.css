@@ -71,3 +71,6 @@
 
 .error { margin: 0; padding: 10px 16px; color: var(--error); font-size: var(--font-xs); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .empty { padding: 36px 16px; color: var(--fg-muted); text-align: center; }
+
+.loadOlder { display: block; min-height: 44px; margin: 8px auto; padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--fg-primary); font: inherit; cursor: pointer; }
+.loadOlder:disabled { opacity: 0.5; cursor: default; }

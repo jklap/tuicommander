@@ -55,8 +55,7 @@ export interface ProgressDialogProps {
 
 /**
  * The Progress journal for one project: one newest-first list, a line marking
- * where the last visit ended, and nothing else. There are no pages, no tabs and
- * no export — the plan's revision removed all three on purpose.
+ * where the last visit ended, and on-demand older pages.
  */
 export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 	if (!props.embedded) registerModal(() => void progressStore.close());
@@ -333,6 +332,16 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 							</>
 						)}
 					</For>
+				</Show>
+				<Show when={projectState()?.nextCursor != null}>
+					<button
+						type="button"
+						class={s.loadOlder}
+						disabled={projectState()?.loading}
+						onClick={() => void progressStore.loadOlder()}
+					>
+						{projectState()?.loading ? "Loading…" : "Load older"}
+					</button>
 				</Show>
 			</div>
 		</div>
