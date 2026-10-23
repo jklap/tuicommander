@@ -132,3 +132,10 @@
 
 .editCriteria { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-secondary); font-size: var(--font-xs); }
 .editCriterion { display: flex; flex-direction: column; gap: 4px; }
+
+.metadata { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; font-size: var(--font-sm); }
+.metadata dt { color: var(--fg-secondary); }
+.metadata dd { margin: 0; overflow-wrap: anywhere; }
+.sessionId { display: block; color: var(--fg-secondary); font-size: var(--font-xs); overflow-wrap: anywhere; }
+.transitionHistory { padding-left: 20px; font-size: var(--font-sm); overflow-wrap: anywhere; }
+.transitionHistory li + li { margin-top: 8px; }

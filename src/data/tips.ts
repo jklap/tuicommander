@@ -16,6 +16,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Story origin and history",
+		description:
+			"Select a native story to inspect its origin, claiming session and recorded transitions. New story can link the work to a plan step.",
+		shortcut: null,
+	},
+	{
 		feature: "Edit native stories",
 		description:
 			"Select an unclaimed Backlog or Ready story and choose Edit to change metadata, requirements and dependencies together. Save checks the original revision; Cancel discards the draft. QA and active work cannot be amended.",

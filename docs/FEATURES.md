@@ -126,6 +126,8 @@ The component is available for Tasks shell integration; it does not add a tab by
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
 
+Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
+
 Plans and Stories combines open/closed and optional story-type filters, including untyped historical stories, with a session-retained List/Kanban switch that also survives detach and reattach. Rust supplies the shared display projection; the native read-only board follows the Wiz Kanban layout without importing plugin code.
 
 Native stories support one revision-checked `update_story` patch through MCP, CLI, IPC and HTTP. It amends metadata including nullable story type, optional problem/risk, ordered criteria and dependencies on unclaimed Backlog/Ready stories without active run ownership. Changed requirements lose checks; priority-only edits keep them, and workflow evidence follows existing fingerprints. StoriesDialog provides one revision-checked Edit form with Save/Cancel, retained conflict drafts, and metadata, criteria and dependency fields. QA and other started work are not editable. Criteria use separate ordered entries so multiline requirement text is preserved during edits.
