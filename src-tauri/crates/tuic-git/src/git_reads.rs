@@ -1002,10 +1002,10 @@ impl GitReads for GixGitReads {
         // a path ending in `../..`, whose lexical parent is not the main checkout.
         let common = std::fs::canonicalize(grepo.common_dir())
             .map_err(|error| format!("Cannot resolve Git common directory: {error}"))?;
-        if !grepo.is_bare() {
-            if let Some(main) = common.parent() {
-                add(main);
-            }
+        if !grepo.is_bare()
+            && let Some(main) = common.parent()
+        {
+            add(main);
         }
         for proxy in grepo.worktrees().map_err(|e| e.to_string())? {
             let Ok(base) = proxy.base() else { continue };
