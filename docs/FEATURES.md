@@ -3339,3 +3339,11 @@ GitHub access diagnostics group exact API messages by account and owner, disting
 
 GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
 ordinary diagnostics reads do not alter the retry cache (#2133-9213).
+
+### Mobile session usage (#2150-4e0c)
+
+The session overflow loads a read-only usage block when opened. Claude and Codex
+show shared account quota for the live process profile. ego shows only the exact
+PID-bound session row from its v3 usage report, including separate API-equivalent
+estimates and unknown cost reasons. Unknown model, usage and stale data are
+labelled explicitly. Remote sessions use their owning daemon, never a local account.

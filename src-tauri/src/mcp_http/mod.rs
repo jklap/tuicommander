@@ -1129,6 +1129,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))
+        .route("/sessions/{id}/usage", get(session::get_session_usage))
         .route("/sessions/{id}/output", get(session::get_output))
         .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))

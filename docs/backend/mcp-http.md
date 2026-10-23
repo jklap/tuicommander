@@ -2905,3 +2905,11 @@ bridge whose agent removed the marker from the bridge environment. Ordinary
 foreground ego ancestry recovery and explicit identity headers are unchanged.
 The detached runner keeps its caller identity for completion queueing and mail.
 This is an identity boundary, not a security sandbox or a delivery-policy bypass.
+
+### Session usage reads
+
+`GET /sessions/{id}/usage` and `get_session_usage` share `session_usage.rs`.
+The owner check precedes all local process/cache/provider reads. Connected
+remote PTYs forward to the owning daemon; an absent/failed route returns
+`remote session` unavailability. No local-account fallback is allowed. The
+frontend transport table also supports the normal session-owner routing.

@@ -905,3 +905,10 @@ Shell workspace rows do not offer branch workflow actions or Git smart prompts.
 Shell-folder rows offer the same available-agent menu as Git workspace rows.
 Launching an agent uses the folder as its working directory, without creating a
 branch or worktree. The Add Terminal button also offers agents on a long press.
+
+### Mobile SessionUsageBlock
+
+`SessionUsageBlock` is mounted inside the session overflow. It loads
+`get_session_usage` on mount/session change, invalidates pending responses on
+cleanup, and renders backend-owned lines without usage computation. It has
+explicit loading, unavailable, unknown-model and stale presentation.

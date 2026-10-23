@@ -351,6 +351,7 @@
 /sessions/x/terminal/search-buffer
 /sessions/x/terminal/selection-text
 /sessions/x/terminal/styled-rows
+/sessions/x/usage
 /sessions/x/visible
 /sessions/x/write
 /sessions/x/write-parts
