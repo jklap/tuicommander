@@ -896,3 +896,86 @@ Criterion 3 stays unchecked: its help portion is within 2× against the requeste
 same-producer control, but its one-frame echo portion is still unmet. Criteria
 4/24 and throughput/heartbeat non-regression remain unsupported. The coordinator
 owns all story reconciliation; this peer changed no criteria.
+
+### Same-producer echo control — residual still exceeds one frame
+
+The coordinator requested the corresponding echo baseline, since native
+keydown-to-fill also includes ego's echo production. The same installed-ego
+plain-PTY harness and launch contract above were used, with a cursor-only DSR
+responder and no TUIC. The main run verified terminal local flags 65: both
+`ECHO` and `ICANON` were off. Thus the returned unique key is not kernel input
+echo. Only `/help` was submitted; CJK probe drafts were cleared with Ctrl+U,
+never Enter. Raw output contains zero `Working` chunks.
+
+A two-idle/two-help calibration preceded 200 idle keys and 200 help candidates.
+The native input schedule was retained: one outstanding unique key, 22 ms after
+echo, Ctrl+U and 30 ms idle delay; help letters 25 ms apart, a verified full
+`/help` draft before Enter, and a key 125–129 ms after Enter, then clear and
+220 ms delay. The plain harness waits for echo bytes rather than a canvas fill,
+so total iteration duration is not identical to the native renderer workload.
+
+All 200 idle probes echoed. Of 200 help candidates, **177** had a real help
+header before the key and the echoed key at or before the final footer, all on
+the same plain-harness monotonic clock. Header precedence was at least 17.181 ms.
+The other **23 candidates are excluded** from output-overlap statistics; they
+are not relabelled as overlapping. Native overlap statistics still use the
+previous 201 verified keys, not these 177 different-run keys.
+
+#### Requested producer subtraction
+
+Milliseconds, median / p95 / maximum:
+
+| Measurement | Idle | Verified help overlap |
+| --- | ---: | ---: |
+| Plain ego key write → echoed key byte read | **0.125 / 2.084 / 6.330** (N=200) | **0.093 / 2.994 / 11.365** (N=177) |
+| Native keydown → glyph fill | 20.5 / 42 / 58 (N=200) | 11 / 26 / 36 (N=201) |
+| Native statistic − corresponding plain statistic | **20.375 / 39.916 / 51.670** | **10.907 / 23.006 / 24.635** |
+| Native semantic acceptance → actual rAF | **6 / 16 / 18** | **8 / 16 / 17** |
+
+The subtraction row is the requested comparative overhead estimate, **not a
+measured distribution of per-key overhead**. In particular, subtracting two
+p95 values does not produce the p95 of their difference, and subtracting two
+maxima does not produce a worst-case overhead. These are separate runs with
+different input paths and terminal-response implementations. They do show that
+the sampled plain producer does not consume anything close to the native
+42/26 ms p95 key-to-fill times.
+
+The accepted-to-rAF p95 is 16 ms for both native arms, just below a 16.7 ms
+frame, but its maxima are 18/17 ms. More importantly, this starts **after grid
+acceptance** and cannot establish that TUIC's whole output share is one frame.
+
+#### Paired native output boundary
+
+The existing native timeline also permits a stronger within-run measurement:
+for each key, subtract its actual native PTY read timestamp from its glyph-fill
+timestamp. Ego has already emitted the echo at that read boundary. This
+includes subsequent native output processing, grid acceptance and paint wait,
+without subtracting a different run's producer distribution:
+
+| Actual native PTY read → matching glyph fill | Median | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Idle, N=200 | **19.2 ms** | **40.8 ms** | **56.3 ms** |
+| Verified help overlap, N=201 | **9.1 ms** | **23.7 ms** | **33.9 ms** |
+
+These cross-clock values retain the earlier approximately ±2 ms uncertainty;
+small negative minima are clock artifacts. The p95 excess over 16.7 ms is much
+larger than that uncertainty in both arms. **The measured TUIC output-side
+residual does not stay under one 16.7 ms frame at p95**, even after the echo has
+reached its PTY reader. It is therefore not valid to declare the full echo
+criterion passed merely from accepted-to-rAF p95 or from removing producer
+cost. This does not identify the remaining reader-to-grid cause or authorize a
+speculative scheduling fix.
+
+`plain-echo.py`, `plain-echo-2.json`, `plain-echo-200.json`,
+`plain-echo-200-bg.log`, `analyze-echo.py` and `plain-echo-analysis.json` under
+`~/Gits/.tmp/2040-web/native/` retain source, every raw read in hex, samples,
+terminal flags, overlap decisions and reproducible distributions. Analyzer
+assertions verified counts, disabled kernel echo/canonical mode, absent
+`Working` chunks and cleanup. Both recorded ego PIDs are absent after owned
+terminate/kill/wait cleanup. The main background wrapper exited 0; the child
+exited −9 after cleanup. No production source, story criterion, manual default
+config or credential file was changed; no build or application suite ran.
+
+The same-producer help comparison remains within 2×. The echo half of criterion
+3 remains unsupported as a pass and exceeds one frame in these measurements.
+The coordinator owns criterion reconciliation and any next investigation.
