@@ -120,13 +120,22 @@ pub(super) fn project_incidents(run: &RunSnapshot, state: Option<&AppState>) -> 
         }
     }
     if incidents.is_empty() && run.status == RunStatus::Paused {
-        incidents.push(incident(
-            run,
-            None,
-            "run_state",
-            "Run is paused; no more specific cause is retained".into(),
-            "Inspect the run timeline and evidence; use Resume run only when ready.",
-        ));
+        incidents.push(match run.pause_cause.as_deref() {
+            Some(cause) => incident(
+                run,
+                None,
+                "pause_cause",
+                cause.into(),
+                "Fix the cause, then use Resume run on the pending activation.",
+            ),
+            None => incident(
+                run,
+                None,
+                "run_state",
+                "Run is paused; no more specific cause is retained".into(),
+                "Inspect the run timeline and evidence; use Resume run only when ready.",
+            ),
+        });
     }
     incidents
 }

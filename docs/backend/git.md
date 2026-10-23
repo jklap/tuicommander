@@ -12,6 +12,15 @@ The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree o
 
 Workflow launch uses `validate_branch_worktree_path`: the canonical path must identify a registered isolated branch checkout outside the archive pool, with no Git operation in progress. Detached-orphan removal uses the separate `validate_worktree_path` guard, which continues to refuse attached branch checkouts. Launch authorization never grants removal permission (#1883-eba0).
 
+Orphan scans and orphan removal share the temporary-path policy in
+`tuic_core::temp_paths`. OS/environment temp roots, `~/Gits/.tmp` and Unix
+`/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` are excluded
+before per-checkout assessment. Component matching checks registered and resolved
+paths, including existing ancestors of missing checkouts. The path validator and
+low-level orphan remover recheck the exclusion, so stale or confirmed requests
+cannot remove temporary detached checkouts. Detached sidebar inventory is
+independent: it can display these checkouts without authorizing cleanup.
+
 Worktree removal verifies checkout and submodule safety before asking Git to unregister it. Git can return `Directory not empty` after removing the registration and some files. In that state, the removal call finishes deleting the known checkout directory and only then compares and deletes the branch ref. A failed cleanup reports the remaining path; an unregistered directory without TUIC ownership evidence is never recursively deleted.
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
@@ -269,7 +278,9 @@ local `main`, then local `master`, then `origin/HEAD` (local branch when present
 otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
-shows **No base branch**, with the full reason in its tooltip.
+shows **No base branch**, with the full reason in its tooltip. Each branch-name
+tooltip includes the status diagnostic once. Main checkouts do not show removal
+warnings, because the sidebar cannot remove them.
 
 The checked-out main worktree branch is another integration target: if it
 contains the candidate tip, removal records `integration_ancestry` even when
@@ -548,3 +559,15 @@ worktree.
 Explicit worktree removal uses the same current-cwd terminal cleanup as removal
 events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
 outside the removed checkout are rehomed after successful removal.
+
+### Checkout discovery inventory
+
+CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool; an unrelated directory with that name does not hide a checkout. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
+
+### Worktree discovery diagnostics
+
+The additive inventory also returns `worktree_diagnostics` records with `path`, nullable `branch`, `state` (`missing` or `duplicate_branch`), and `guidance`. Missing or broken checkouts never enter the selectable map. Discovery does not prune registrations. A forced duplicate branch keeps one deterministic primary checkout (lexicographically smallest path); additional paths become read-only diagnostics. Legacy lifecycle resolution uses the same primary ordering so an action does not target a different duplicate. Workspace IDs do not change.
+
+Synchronous and asynchronous inventory cache loaders retain only successful reads. MCP repository listings report `worktree_error` on discovery failure; ACP workspace snapshots report `worktreeError`. Bisect recovers `BISECT_START` only when it resolves to an existing local branch. Rebase recovery uses the shared Git directory resolver, including relative gitdir paths and the main checkout.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.

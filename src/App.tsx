@@ -744,8 +744,9 @@ const App: Component = () => {
 				onBranchClick={() => {
 					const activeRepo = repositoriesStore.getActive();
 					if (activeRepo?.activeWorkspaceId) {
-						gitOps.handleOpenRenameBranchDialog(activeRepo.path, activeRepo.activeWorkspaceId);
-						setRenameBranchDialogVisible(true);
+						if (gitOps.handleOpenRenameBranchDialog(activeRepo.path, activeRepo.activeWorkspaceId)) {
+							setRenameBranchDialogVisible(true);
+						}
 					}
 				}}
 				onRun={(shiftKey) => gitOps.handleRunCommand(shiftKey, () => setRunCommandDialogVisible(true))}
@@ -782,8 +783,9 @@ const App: Component = () => {
 					onAddTerminal={gitOps.handleAddTerminalToWorkspace}
 					onRemoveBranch={gitOps.handleRemoveWorkspace}
 					onRenameBranch={(repoPath, branchName) => {
-						gitOps.handleOpenRenameBranchDialog(repoPath, branchName);
-						setRenameBranchDialogVisible(true);
+						if (gitOps.handleOpenRenameBranchDialog(repoPath, branchName)) {
+							setRenameBranchDialogVisible(true);
+						}
 					}}
 					onCreateBranch={(repoPath, fromBranch) => {
 						gitOps.handleOpenCreateBranchDialog(repoPath, fromBranch);

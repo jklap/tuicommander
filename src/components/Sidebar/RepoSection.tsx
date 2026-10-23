@@ -245,10 +245,9 @@ const UNMERGED_TOOLTIP = "Branch has commits not merged into the default branch.
  * sentence on one badge; rich splits it over the dirty chip (`dirty`) and the
  * commit-verdict chip (`commit`) so each chip explains only itself.
  */
-function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit"): string {
+function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit", isMain = false): string {
 	if (status.commitStatus === "unknown") {
-		const explanation =
-			"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
+		const explanation = isMain ? "Status unavailable." : "Status unavailable; removal is blocked.";
 		return status.error ? `${explanation} ${status.error}` : explanation;
 	}
 	const lost = status.dirtyFiles ?? 0;
@@ -791,6 +790,8 @@ export const BranchItem: Component<{
 		const status = githubStore.getRemoteStatus(props.branch.worktreePath ?? props.repoPath);
 		return status?.has_remote && status.current_branch === props.branch.branchName ? status : null;
 	});
+	const isMainCheckout = () =>
+		props.branch.isMain || props.branch.worktreePath?.replace(/\/$/, "") === props.repoPath.replace(/\/$/, "");
 	const facts = createMemo(() =>
 		branchFacts(
 			{
@@ -802,7 +803,7 @@ export const BranchItem: Component<{
 				dirtyFiles: props.branch.lifecycleStatus?.dirtyFiles,
 				isMerged: props.branch.isMerged,
 				commitStatus: props.branch.lifecycleStatus?.commitStatus,
-				isMain: props.branch.isMain,
+				isMain: isMainCheckout(),
 			},
 			// Compact prints no age, so its tooltip reads the clock once instead of subscribing.
 			rich() ? now() : Date.now(),
@@ -835,7 +836,8 @@ export const BranchItem: Component<{
 
 	const tipFor = (part: "dirty" | "commit") => {
 		const status = lifecycle();
-		return status ? lifecycleTooltip(status, part) : undefined;
+		if (!status || (isMainCheckout() && status.commitStatus !== "unknown")) return undefined;
+		return lifecycleTooltip(status, part, isMainCheckout());
 	};
 	const staleTooltip = () =>
 		t("sidebar.staleHint", "Stale: no commit for more than {days} days and not merged", {
@@ -852,7 +854,9 @@ export const BranchItem: Component<{
 			.join(" · ");
 	// The one overlay of the name: the full name, plus (compact only) the facts the row has no room for.
 	const nameTooltip = () =>
-		[rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")].filter(Boolean).join(" · ");
+		[...new Set([rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")])]
+			.filter(Boolean)
+			.join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -955,7 +959,7 @@ export const BranchItem: Component<{
 				branchOps.push({ label: "Create Branch…", action: props.onCreateBranch });
 			}
 			branchOps.push({
-				label: isLinkedWorktree ? "Rename Worktree" : "Rename Branch",
+				label: "Rename Branch",
 				action: props.onRename,
 				disabled: props.branch.isMain,
 			});
@@ -1229,7 +1233,7 @@ export const BranchItem: Component<{
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not
 				    exist. */}
-					<Show when={!rich() && !props.branch.isMain && props.branch.lifecycleStatus}>
+					<Show when={!rich() && !isMainCheckout() && props.branch.lifecycleStatus}>
 						{(status) => {
 							const lostFiles = () => status().dirtyFiles ?? 0;
 							const label = () => {
@@ -1543,10 +1547,10 @@ export const RepoSection: Component<{
 					? (props.repo.workspaces[props.repo.activeWorkspaceId]?.branchName ?? null)
 					: null,
 				openPrs: githubStore.getAllOpenPrs(props.repo.path).length,
-				worktrees: countWorktrees(
-					props.repo.path,
-					branches().map((w) => w.worktreePath),
-				),
+				worktrees: countWorktrees(props.repo.path, [
+					...branches().map((w) => w.worktreePath),
+					...(props.repo.detachedWorktrees ?? []).map((w) => w.path),
+				]),
 				polledAt: githubStore.getLastPolled(props.repo.path),
 			},
 			now(),
@@ -1732,6 +1736,16 @@ export const RepoSection: Component<{
 					<span class={s.repoName} style={props.nameColor ? { color: props.nameColor } : undefined}>
 						{props.repo.displayName}
 					</span>
+					<Show when={props.repo.detachedWorktrees?.length}>
+						<span class={s.richChip} data-testid="detached-worktree-count">
+							{props.repo.detachedWorktrees?.length} {t("sidebar.detached", "detached")}
+						</span>
+					</Show>
+					<Show when={props.repo.worktreeDiagnostics?.length}>
+						<span class={s.richChip} data-testid="worktree-diagnostic-count">
+							{props.repo.worktreeDiagnostics?.length} {t("sidebar.worktreeDiagnostics", "diagnostics")}
+						</span>
+					</Show>
 					<Show when={props.repo.connectionId}>
 						<span
 							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
@@ -1936,7 +1950,36 @@ export const RepoSection: Component<{
 							</div>
 						)}
 					</For>
-					<Show when={sortedBranches().length === 0}>
+					<For each={props.repo.detachedWorktrees ?? []}>
+						{(checkout) => (
+							<div
+								class={s.detachedWorktree}
+								data-testid="detached-worktree"
+								data-tooltip={`${checkout.path}
+${checkout.head}`}
+							>
+								<span class={s.detachedName}>{checkout.directory_name}</span>
+								<span class={s.detachedState}>
+									{checkout.short_head} {t("sidebar.detached", "detached")}
+								</span>
+							</div>
+						)}
+					</For>
+					<For each={props.repo.worktreeDiagnostics ?? []}>
+						{(checkout) => (
+							<div class={s.worktreeDiagnostic} data-testid="worktree-diagnostic" data-tooltip={checkout.path}>
+								<div class={s.detachedName}>{checkout.path}</div>
+								<div class={s.diagnosticGuidance}>{checkout.guidance}</div>
+							</div>
+						)}
+					</For>
+					<Show
+						when={
+							sortedBranches().length === 0 &&
+							!props.repo.detachedWorktrees?.length &&
+							!props.repo.worktreeDiagnostics?.length
+						}
+					>
 						<div class={s.repoEmpty}>{t("sidebar.noBranches", "No branches loaded")}</div>
 					</Show>
 				</div>

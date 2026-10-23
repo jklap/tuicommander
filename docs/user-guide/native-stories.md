@@ -6,11 +6,11 @@ Open a project, then select **Plans and Stories** in the toolbar. Choose **New p
 
 The close button receives keyboard focus when the dialog opens. If the running backend predates native stories, the dialog asks you to restart TUICommander to load the newer backend.
 
-Before loading plans, the dialog checks whether the running backend has native story support. A missing capability prompts a restart; a story action error remains visible as that action's error.
+Before loading plans, the dialog checks whether the running backend has native story support. A missing capability prompts a restart; a story action error remains visible as that action's error, shown as the plain message (for example `criteria are incomplete: unchecked indexes 1` or `plan document not found: <path>`), not as the raw HTTP response. Workflow Designer: **Publish** is disabled while the draft has no edit since its last publication.
 
 "Won't fix" cancels a story without delivering its output. It never satisfies a dependency or releases a dependent story for work. The Rust service marks a story **abandoned** when it or any dependency path reaches a cancelled story; the dialog renders that label. A human can remove a direct cancelled prerequisite from a Backlog story; this changes that story's requirements and makes it Ready only when every remaining prerequisite is Done. A separate Blocked story is never automatically unblocked. A plan remains Active while an unfinished dependent remains. A nonempty plan becomes Done when every story is either Done or Won't fix; an empty plan stays Draft. The service supplies the cancellation count and **All cancelled** flag to the dialog.
 
-Select a Ready, unclaimed story and choose **Start story workflow**. Select an immutable published workflow revision, then choose **Start published workflow**. Unpublished drafts cannot be selected. Start errors appear in the dialog. **Start plan workflow · unavailable** indicates that this dialog does not yet select plan workflows. Published plan workflows can start through the owning daemon API with a plan target.
+Select a Ready, unclaimed story and choose **Start story workflow**. Select an immutable published workflow revision, then choose **Start published workflow**. Unpublished drafts cannot be selected. Start errors appear in the dialog. This dialog has no plan workflow start button. Published plan workflows can start through the owning daemon API with a plan target.
 
 Select **Run history** for the selected plan to inspect persisted workflow runs. A run shows its status, story and attempt counts, and ordered events. Use **Load more events** to continue beyond the first page. The timeline follows run change notifications while the dialog is open; **Refresh** reloads the list of runs. Manual story work does not require a run. Graph runs also show their pinned node activations, decisions with evidence, repair counts and pause reasons/targets. Expand **Event details** for the complete recorded payload. Use **Pause run** or **Cancel run** for an active graph. For recovery, answer any pending input, select the execution and activation, write an explicit **Resolution**, then choose **Resume run**. The backend refuses unresolved effects or invalid recovery targets. Legacy runs can be inspected and cancelled, but the UI cannot resume them.
 
@@ -61,9 +61,26 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 
 ## Workflow graph rollout
 
-The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. It needs run profiles named sol (implementation) and sonnet (review/validation). Missing profiles and failed effects pause with a repository progress notice. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
+The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. Each Agent step uses a run profile: one named `sol` (implementation, coordination, planning) or `sonnet` (review, validation) when saved, otherwise your default run profile in Settings > Agents (or the only one saved). A default profile that passes a permission-skipping flag such as `--dangerously-bypass-approvals-and-sandbox` is refused: save a profile named `sol` or `sonnet` to choose it for workflows. The Start dialog names a missing profile before the run starts and disables Start. Failed effects pause the run with a repository progress notice; Run history shows the cause, and Resume run offers the pending activation once the cause is fixed. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
 
 The Designer refuses new publications containing unsupported Gate or plan create/dispatch/coordinator nodes. Keep those graphs as drafts. Existing built-in publications remain readable; public graph start controls and full Resolve plan execution are still in development. A completed graph does not approve or merge a story by itself.
+
+### Designer actions without a UI control
+
+These actions exist in the backend and have no Designer or dialog control. Two surfaces reach them:
+
+- **HTTP and desktop IPC only:** `POST /workflows/definition/action` and `workflow_definition_action`. The MCP `workflow` tool has no definition action, so agents cannot call these.
+- **HTTP, desktop IPC and MCP:** `POST /workflows/run/action` and `workflow_run_action`. The MCP `workflow action=run` takes the same run actions.
+
+| Action | Surface | Designer limit |
+|---|---|---|
+| Remove one edge | `update_draft` with the full new graph (HTTP/IPC only) | **Remove node** drops that node's edges. **Connect** replaces an edge with the same source and outcome. No control removes a single edge. |
+| Agent role and capabilities | `update_draft` (fields of an Agent node; HTTP/IPC only) | The palette preset sets both when you add the node. The inspector edits only the prompt template. |
+| Closure policy | `update_closure` (HTTP/IPC only) | No control. New drafts use `human`. |
+| Required checks | `update_checks` (HTTP/IPC only) | No control. |
+| `execute_check` | run action (HTTP, IPC, MCP) | No control. Runs one pinned check in the story worktree. |
+| `record_integration` | run action (HTTP, IPC, MCP) | No control. Records a completed merge. |
+| `recertify_canonical` | run action (HTTP, IPC, MCP) | No control. |
 
 
 ### Workflow story policy (slice D)

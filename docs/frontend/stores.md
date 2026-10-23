@@ -658,7 +658,11 @@ Switching scopes loads the new mark; closing records every visited scope.
 It queries on open, for the one project the dialog shows — not once per
 registered repository, which is what made the old panel fire a request per repo
 and answer with a red block for each one that no longer existed. Boot reads
-nothing at all.
+nothing at all. Each read requests at most 100 entries. `nextCursor` is an
+exclusive entry ID returned by the backend, and `loadOlder` reads one page on
+demand with the current filters. Refreshes replace the list with the newest
+page. A request epoch discards stale reads after a refresh or selection change;
+the loading state prevents concurrent older-page appends.
 
 The unread count is the number of `progress-recorded` pushes that arrived while
 the dialog was closed, reset on open. It is deliberately not a query: the
@@ -796,6 +800,8 @@ semantics, awaiting state, or turn completion.
 `services/settingsRefresh.ts` owns one disposable settings-event subscription per window. Readers register a section and optional remote connection, plus separate read and non-saving apply functions. It coalesces same-turn hints, deduplicates each owner/section generation, invalidates older in-flight reads and refetches on SSE resync. Replacement reads wait for the invalidated operation to settle, crossing the IPC read-deduplication boundary. A remote-machine hint only reaches readers registered for that connection.
 
 App settings, notifications, preferences, repository defaults and overrides, registration metadata, agent configurations, prompts, pane layout, tunnels, connection metadata and upstream lists adopt reads without bootstrap migration. Mounted owner pages also refresh GitHub, ego, Telegram and plugin settings. Dirty form fields remain local; same-field conflicts produce a content-free notice. `createConfigDeltaWriter.adopt` advances the backend baseline. The existing save tail rebases queued edits onto that baseline: unrelated local changes still persist, while conflicting remote leaves are not overwritten automatically. Component-local launch-instruction drafts also survive incoming saved values until blur or explicit reset.
+
+Pane layout reads apply the Rust owner's defaults for omitted `root`, `groups` and `activeGroupId` before baseline adoption and disk restoration. Direct `restore` calls use the same defaults. Restore batches tree, groups, focus and revision publication so reactive consumers see a complete layout, while reconciliation keeps unchanged group and tab identities.
 
 Snapshot adoption merges object leaves. Arrays are atomic owner values: concurrent changes to the same list retain the local list and report a conflict instead of guessing an index-based merge. A remote disconnect cancels in-flight adoption; reconnect clears that owner's generation cursor and fetches a fresh snapshot. Successful daemon mirror stream subscriptions and owner-scoped lag notifications also trigger this resync, even when the health status stayed connected.
 

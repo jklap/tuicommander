@@ -43,6 +43,7 @@ export interface AppConfig {
 	mcp_capabilities: { denied: string[]; migration_unknown_tools: string[] };
 	settings_mcp_enabled: boolean;
 	collapse_tools: boolean;
+	mcp_call_audit_enabled: boolean;
 }
 
 /** Save a single config field (load-modify-save pattern matching other tabs) */

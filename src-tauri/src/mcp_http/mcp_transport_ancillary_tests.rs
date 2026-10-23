@@ -2548,3 +2548,96 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
         "Tool 'workflow' is disabled by configuration"
     );
 }
+
+fn register_git_repo(root: &std::path::Path, name: &str) -> String {
+    let dir = root.join(name);
+    std::fs::create_dir(&dir).unwrap();
+    crate::git_cli::git_cmd(&dir).args(["init"]).run().unwrap();
+    let path = dir.canonicalize().unwrap();
+    let path = tuic_core::path_spelling::portable_spelling(&path.to_string_lossy());
+    crate::config::register_repository(&crate::git::get_repo_info_impl(&path)).unwrap();
+    path
+}
+
+// Catches: repo status ignores `path` and answers an unregistered path with the full repository list.
+#[tokio::test]
+async fn repo_status_with_unregistered_path_names_the_path() {
+    let root = tempfile::tempdir().unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    register_git_repo(root.path(), "known");
+    let bogus = root
+        .path()
+        .join("not-registered")
+        .to_string_lossy()
+        .into_owned();
+
+    let result = handle_github(
+        &test_state(),
+        &serde_json::json!({"action": "status", "path": bogus}),
+    )
+    .await;
+
+    let error = result["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected error: {result}"));
+    assert!(error.contains(&bogus), "error must name the path: {error}");
+}
+
+// Catches: a registered `path` still returns every repository instead of that repository only.
+#[tokio::test]
+async fn repo_status_with_registered_path_returns_that_repo_only() {
+    let root = tempfile::tempdir().unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    let first = register_git_repo(root.path(), "first");
+    register_git_repo(root.path(), "second");
+
+    let result = handle_github(
+        &test_state(),
+        &serde_json::json!({"action": "status", "path": first}),
+    )
+    .await;
+
+    let rows = result
+        .as_array()
+        .unwrap_or_else(|| panic!("expected list: {result}"));
+    assert_eq!(rows.len(), 1, "{result}");
+    assert_eq!(rows[0]["path"], first);
+}
+
+// Catches: omitting `path` stops returning the cross-repo aggregate.
+#[tokio::test]
+async fn repo_status_without_path_returns_every_repo() {
+    let root = tempfile::tempdir().unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    register_git_repo(root.path(), "first");
+    register_git_repo(root.path(), "second");
+
+    let result = handle_github(&test_state(), &serde_json::json!({"action": "status"})).await;
+
+    assert_eq!(result.as_array().unwrap().len(), 2, "{result}");
+}
+
+// Catches: exact string comparison rejects a registered repo given with a trailing slash or via a symlink.
+#[cfg(unix)]
+#[tokio::test]
+async fn repo_status_matches_registered_path_through_slash_and_symlink() {
+    let root = tempfile::tempdir().unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    let first = register_git_repo(root.path(), "first");
+    register_git_repo(root.path(), "second");
+    let link = root.path().join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+
+    for spelling in [format!("{first}/"), link.to_string_lossy().into_owned()] {
+        let result = handle_github(
+            &test_state(),
+            &serde_json::json!({"action": "status", "path": spelling}),
+        )
+        .await;
+        let rows = result
+            .as_array()
+            .unwrap_or_else(|| panic!("{spelling}: {result}"));
+        assert_eq!(rows.len(), 1, "{spelling}: {result}");
+        assert_eq!(rows[0]["path"], first, "{spelling}");
+    }
+}

@@ -299,10 +299,18 @@ Frame emission is decoupled from PTY reading via a per-session **frame ticker** 
 **Bounded input priority.** Desktop and HTTP/PWA input arm a 100ms window before
 writing to the PTY. Only output applied by the reader after that input can wake
 the same ticker early. A priority frame waits at least 8ms after the previous
-frame; at most two priority bypasses are allowed in any rolling 100ms, even if
-input continues. Other output retains the sustained-animation 33ms floor and
+frame; at most four priority bypasses are allowed in any rolling 100ms, even if
+input continues. If newer reader output arrives during a send, send accounting
+retains its retry on this same ticker, with the same spacing, quota and expiry.
+Other output retains the sustained-animation 33ms floor and
 the typing-under-saturation 50ms floor. The desktop receipt gate, synchronized
-output buffering, frame ordering and shared-damage repair are unchanged.
+output buffering and frame ordering remain in force. Receipts only release the
+gate; they do not mark the terminal dirty. Real damage and repair debt remain
+pending while the desktop is paused. Recovery sends one private full frame to
+desktop and publishes the matching delta only to browsers. It does not offer that delta to desktop again or recreate
+the debt. Browsers retain their ordinary delta stream. These changes
+remove idle frame feedback, not the deliberate input budget or rate floors; native
+echo measurements still exceed one frame at p95 (story 2040-16b2).
 A generic PTY stream does not identify application echo: the second credit can
 serve later output if unrelated post-input output used the first. This is not a
 guarantee that every transient glyph survives viewport scrolling or that native
@@ -677,6 +685,8 @@ Goose appends its reply below the submitted `> prompt`, so the reader does not a
 **Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
 **Ego native approval lifecycle:** Each empty-title OSC 7770 awaiting marker is authoritative independently of selector repaint bookkeeping. A hard-wrapped MCP approval may not yet have a parsed title when its marker arrives. Screen-text dedup must not swallow the next marker after protocol busy clears the prior wait. The full-screen approval parser joins contiguous hard title rows before `Risk:` and publishes the native controls through the shared session-state accumulator.
+
+**Question lifetime on agent exit:** when an accepted foreground observation revokes an observed agent identity on confirmed shell return, it queues `protocol-question-cleared` through the lossless session-state reducer. This clears confident awaiting state, question text, choice controls and ranked awaiting evidence before any new shell input. The clear carries the current turn epoch so delayed exit processing cannot clear a later submitted turn. Reader admission of agent-owned Question/ChoicePrompt events holds the same session identity lock through enqueue and rejects a revoked or replaced cached identity. Thus an in-flight final repaint cannot enqueue a new wait after exit withdrawal. Unknown helpers, stale observations and startup presets do not trigger this withdrawal. `claude-await-exit-before-input-1985.tcap` covers the real question and exit with no subsequent input.
 
 **Post-exit dialog history:** full-screen Ink dialog recovery and silence-timer chat-question heuristics require an active agent identity. A shell can retain the old footer above its prompt after an agent exits; shell output must not turn those historical rows into a new confident question. `claude-question-exit-2091.tcap` and its accumulator replay cover the real question, exit and successful shell command.
 
@@ -1152,3 +1162,20 @@ unavailable, never as proof that work stopped.
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+### Session usage identity
+
+The mobile overflow uses `session_usage.rs`, not parsed warning percentages or
+user-configured terminal chrome. Claude reuses the live profile resolver and
+cache with primary OAuth GET only. Codex reads live process HOME/CODEX_HOME
+and profile flags, rejecting unbound configuration overrides and local-provider
+modes. Codex root profile flags precede the App Server subcommand. ego requires
+the existing exact PID/session binding, the terminal executable (or normal agent
+binary discovery), the manifest workspace and the actual store. AI Chat ACP
+executable configuration is not required. Explicit CLI store
+overrides remain unavailable rather than guessed. Its `usage --json` output is
+capped at 4 MiB and 20 seconds; normalized session snapshots are cached for
+30 seconds. Codex snapshots are cached for five minutes. Cache entries are
+bounded to 32, with per-identity single flight and two concurrent CLI reads.
+Cached fallback after a transient failure is visibly stale, limited to 30 minutes.
+Claude cache fallback retains its existing age policy and is explicitly stale.

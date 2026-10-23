@@ -20,6 +20,13 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_session_usage(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    Json(crate::session_usage::get_session_usage_impl(&state, &id).await).into_response()
+}
+
 pub(super) async fn get_prompt_receipt(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

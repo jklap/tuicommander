@@ -271,10 +271,7 @@ impl StoryStore {
                         .filter(|(_, checked)| !**checked)
                         .map(|(index, _)| index.to_string())
                         .collect();
-                    return Err(format!(
-                        "criteria are incomplete: unchecked indexes {}",
-                        open.join(", ")
-                    ));
+                    return Err(format!("{CRITERIA_INCOMPLETE}{}", open.join(", ")));
                 }
                 story.status = StoryStatus::Review;
             }

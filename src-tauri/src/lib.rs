@@ -55,6 +55,7 @@ pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
 pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
+pub(crate) mod session_usage;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -165,6 +166,8 @@ mod codex_binding;
 mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
+pub(crate) mod relay_tunnel;
+pub use relay_tunnel::service::{RelayPairOptions, relay_pair};
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod remote_deploy;
@@ -988,6 +991,15 @@ pub(crate) fn read_file_impl_with_limit(
         .map_err(|e| format!("Failed to resolve file path: {e}"))?;
 
     if !canonical_file.starts_with(&canonical_repo) {
+        if file_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(format!(
+                "Cannot open symbolic link \"{file}\": target \"{}\" is outside the repository.",
+                canonical_file.display()
+            ));
+        }
         return Err("Access denied: file is outside repository".to_string());
     }
 
@@ -1067,6 +1079,13 @@ pub(crate) fn write_external_file_impl(path: String, content: String) -> Result<
         dirs::home_dir().ok_or_else(|| "Could not resolve user home directory".to_string())?;
     fs::validate_external_write_path(p, &home)?;
     fs::atomic_write(p, content.as_bytes()).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+/// Body-free MCP tools/call outcome audit; `enabled: false` while the setting is off.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn get_mcp_audit(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+    Ok(mcp_http::mcp_call_audit::snapshot(&state))
 }
 
 /// Get MCP server status (running, port, active sessions).
@@ -2108,6 +2127,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
             remote_connection::set_remote_connection_password,
+            remote_connection::set_remote_connection_relay_pairing,
             remote_connection::remote_connection_password_exists,
             remote_connection::fetch_remote_connection_token,
             remote_runtime::connect_remote_connection,
@@ -2355,6 +2375,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             get_local_ips,
             updater::check_update_channel,
             get_mcp_status,
+            get_mcp_audit,
             deep_link_mcp_call,
             get_connect_url,
             regenerate_session_token,
@@ -2559,6 +2580,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             claude_usage::get_claude_usage_timeline,
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
+            session_usage::get_session_usage,
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
             grok_usage::get_grok_usage_api,
@@ -3146,6 +3168,28 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
+    // Outbound registration with the relay, when `--relay-pair` has stored a
+    // pairing. The agent can only reach this daemon's own loopback listener.
+    let relay_shutdown = Arc::new(tokio::sync::Notify::new());
+    let upstream = std::net::SocketAddr::new(
+        if options.bind.is_unspecified() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            options.bind
+        },
+        options.port,
+    );
+    match relay_tunnel::service::load_agent(upstream, &app_config.services.auth.session_token) {
+        Ok(Some(agent)) => {
+            let stop = relay_shutdown.clone();
+            tokio::spawn(relay_tunnel::daemon::run(agent, async move {
+                stop.notified().await;
+            }));
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(source = "remote", "Relay tunnel not started: {e}"),
+    }
+
     let router = mcp_http::build_remote_router(state.clone());
     let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let lifetime = remote_lifetime::expired(
@@ -3175,6 +3219,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         }
     };
 
+    relay_shutdown.notify_one();
     workflows::shutdown_checks();
     shutdown_result?;
     // Flush the last buffered log lines to disk before the process exits

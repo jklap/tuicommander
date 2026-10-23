@@ -130,7 +130,7 @@ renderer data loss.
 
 Desktop and HTTP/PWA interactive input arm a 100ms priority window before the
 PTY write. Only subsequent reader-applied output can wake the existing frame
-ticker early. Priority uses a rolling budget of two bypass cuts per 100ms and
+ticker early. Priority uses a rolling budget of four bypass cuts per 100ms and
 8ms coalescing from the previous ticker cut; repeated input does not reset the
 budget. The normal animation/load floors, desktop receipt gate, DEC-2026
 buffering, ordering and shared-damage repair remain on that same serializer.
@@ -506,7 +506,14 @@ Any inspection failure is `Unknown` and cannot authorize removal. Destructive
 UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
 confirmation cannot authorize changed state.
 
-For detached orphan worktrees, the Ask dialog automatically removes after a
+Detached checkouts under OS/environment temporary roots, `~/Gits/.tmp` and
+Unix `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` are excluded
+from orphan scans and orphan removal. Registered and resolved paths are checked,
+including missing checkouts. Detached sidebar inventory stays independent of
+cleanup eligibility. Repository refresh triggers cleanup; there is no separate
+orphan scan timer.
+
+For eligible detached orphan worktrees, the Ask dialog automatically removes after a
 configurable countdown only when every checkout is clean (including untracked
 files) and its HEAD is reachable from a branch. Otherwise it lists the unsafe
 reasons without a countdown. Keep and Escape cancel. An agent can answer the
@@ -1336,3 +1343,25 @@ Desktop sidebar session rows and mobile session cards mark a parentless plain sh
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
 
 GitHub Settings preserves per-alias API access errors by owner/account. Only explicit root NOT_FOUND responses receive the 24-hour exclusion; other denials retry on the normal poll and clear on success.
+
+### Detached checkout inventory
+
+Structure and summary snapshots include a separate detached-checkout vector (path, HEAD SHA, short SHA, directory name, detached state). The sidebar renders it without branch selection or actions and retains a header count when folded. Existing branch-workspace IDs and rich idle-session folding stay unchanged. Discovery excludes the configured TUIC archive pool, not every directory named `__archived`.
+
+### Session-owned mobile usage (#2150-4e0c)
+
+`get_session_usage(session_id)` / `GET /sessions/{id}/usage` returns display-ready
+Rust lines with agent, verified model when available, scope, source, availability,
+optional observation time and a stale flag. The overflow fetches on open and drops
+responses after its session changes or it closes. Unknown values are not zero.
+Claude uses profile-bound cache or its primary non-generating OAuth usage GET.
+Codex quota uses the live process home/profile and App Server rate-limits read;
+unbound configuration overrides are unavailable. ego uses exact PID/store/session
+binding and its v3 report, not workspace totals or native status text. The model
+is the latest admitted model, while session totals can span multiple models.
+Remote PTYs route to their owner or return unavailable with reason `remote session`.
+ACP usage is unchanged.
+
+Worktree discovery preserves existing branch workspace IDs. Forced duplicates use a deterministic primary checkout and read-only diagnostics for additional paths. Missing registrations are non-selectable with repair guidance, never auto-pruned by discovery. Cached discovery errors remain errors. Bisect and relative-gitdir rebase retain the branch recorded by Git.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.

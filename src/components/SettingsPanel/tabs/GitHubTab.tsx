@@ -128,6 +128,20 @@ export const GitHubTab: Component = () => {
 	const [copied, setCopied] = createSignal(false);
 	const [avatarBroken, setAvatarBroken] = createSignal(false);
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
+	// compute_diagnostics reports a cooled-down NOT_FOUND repo in both lists; the access error already names it.
+	const unexplainedNotFound = () => {
+		const d = diagnostics();
+		const explained = new Set(
+			(d?.repo_access_errors ?? []).flatMap((group) =>
+				group.repos.flatMap((repo) => {
+					const key = `${group.owner}/${repo.repo}`;
+					// Non-ambient (GHE/named) accounts key their cooldown as `<account_id>:owner/repo`.
+					return [key, `${group.account_id}:${key}`];
+				}),
+			),
+		);
+		return (d?.repos_not_found ?? []).filter((key) => !explained.has(key));
+	};
 	// DEFERRED (2026-10-17) — CircleCI settings catalogue owner is tracked in 1991-bd88.
 	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
 	const [circleCiToken, setCircleCiToken] = createSignal("");
@@ -669,28 +683,31 @@ export const GitHubTab: Component = () => {
 							Refresh status
 						</button>
 
-						{/* All good */}
+						{/* Not-found repos in cooldown carry no access error (compute_diagnostics skips them) */}
+						<Show when={unexplainedNotFound().length > 0}>
+							<div class={g.diagWarning}>
+								<div>
+									<strong>Cannot access {unexplainedNotFound().length} repo(s) with this token</strong>
+									<ul class={g.diagRepoList}>
+										<For each={unexplainedNotFound()}>{(repo) => <li>{repo}</li>}</For>
+									</ul>
+								</div>
+							</div>
+						</Show>
+
+						{/* Summary — always rendered so Status is never empty */}
 						<Show
-							when={
-								!diagnostics()?.circuit_breaker_open &&
-								diagnostics()?.repos_not_found?.length === 0 &&
-								!diagnostics()?.repo_access_errors?.length
-							}
+							when={(diagnostics()?.repos_monitored ?? 0) > 0}
+							fallback={<div class={g.diagHint}>No repositories are monitored yet</div>}
 						>
 							<div class={g.diagOk}>
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
 									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
 								</svg>
-								<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
-							</div>
-						</Show>
-
-						<Show when={(diagnostics()?.repos_monitored ?? 0) > 0 && (diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-							<div class={g.diagOk}>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-								</svg>
-								<span>{diagnostics()?.repos_monitored} repo(s) tracked successfully</span>
+								<span>
+									{diagnostics()?.circuit_breaker_open ? "" : "PR monitoring active — "}
+									{diagnostics()?.repos_monitored} repo(s) tracked
+								</span>
 							</div>
 						</Show>
 					</div>

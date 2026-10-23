@@ -119,6 +119,7 @@ impl RunStore {
             started_ms: now_ms(),
             paused_since_ms: None,
             paused_duration_ms: 0,
+            pause_cause: None,
             limits: request.limits.clone(),
             loops: 0,
             story_creations: 0,

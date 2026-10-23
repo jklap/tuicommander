@@ -893,7 +893,7 @@ async fn fetch_usage_from_api(token: &str) -> Result<UsageApiResponse, FetchErro
         retry_after_secs: None,
     })?;
 
-    serde_json::from_str(&body).map_err(|e| {
+    parse_primary_usage(&body).map_err(|e| {
         tracing::error!(source = "claude_usage", "Parse error: {e}\nBody: {body}");
         FetchError {
             status: 0,
@@ -901,6 +901,28 @@ async fn fetch_usage_from_api(token: &str) -> Result<UsageApiResponse, FetchErro
             retry_after_secs: None,
         }
     })
+}
+
+fn parse_primary_usage(body: &str) -> Result<UsageApiResponse, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(body)?;
+    for key in [
+        "five_hour",
+        "seven_day",
+        "seven_day_oauth_apps",
+        "seven_day_opus",
+        "seven_day_sonnet",
+        "seven_day_cowork",
+    ] {
+        if value.get(key).is_some_and(|bucket| !bucket.is_null())
+            && !value[key]["utilization"]
+                .as_f64()
+                .is_some_and(|percent| percent.is_finite() && (0.0..=100.0).contains(&percent))
+            && let Some(object) = value.as_object_mut()
+        {
+            object.remove(key);
+        }
+    }
+    serde_json::from_value(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,6 +1211,35 @@ pub(crate) async fn get_claude_usage_api_impl(
     }
 
     Err(last_err_msg)
+}
+
+/// Non-generating mobile read: cache or primary OAuth GET, never the messages fallback.
+/// Cache age is measured here; clients must not label an old fallback as fresh.
+pub(crate) async fn session_quota(
+    state: &crate::AppState,
+    session_id: &str,
+) -> Result<(UsageApiResponse, bool), String> {
+    let profile = profile_for_session(state, Some(session_id))?;
+    if let Some(data) = try_get_fresh_cache(&profile) {
+        return Ok((data, false));
+    }
+    let backing_off = RATE_LIMITED_UNTIL
+        .lock()
+        .get(&profile)
+        .is_some_and(|until| Instant::now() < *until);
+    if !backing_off {
+        let (token, _) = read_claude_credentials(profile.config_dir())?;
+        let token = token.ok_or("Claude account unavailable")?;
+        if let Ok(Ok(data)) =
+            tokio::time::timeout(Duration::from_secs(15), fetch_usage_from_api(&token)).await
+        {
+            cache_response(&profile, &data);
+            return Ok((data, false));
+        }
+    }
+    get_stale_cache(&profile)
+        .map(|data| (data, true))
+        .ok_or_else(|| "Claude quota unavailable".into())
 }
 
 /// Get token usage timeline reconstructed from session transcripts.
@@ -1630,6 +1681,15 @@ pub async fn get_claude_project_list() -> Result<Vec<ProjectEntry>, String> {
 
 #[cfg(test)]
 mod tests {
+    /// Catches: serde's bucket defaults turning missing provider utilization into 0%.
+    #[test]
+    fn primary_usage_missing_utilization_is_unknown_not_zero() {
+        let usage = super::parse_primary_usage(r#"{"five_hour":{},"seven_day":{"utilization":0}}"#)
+            .unwrap();
+        assert!(usage.five_hour.is_none());
+        assert_eq!(usage.seven_day.unwrap().utilization, 0.0);
+    }
+
     use super::*;
 
     #[test]

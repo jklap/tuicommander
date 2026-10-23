@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Desktop frame receipts no longer keep silent terminals redrawing; missed-frame recovery avoids offering the same desktop snapshot twice without recreating its own delivery debt (#2040-16b2).
+
 - Native MCP tools with long guidance expose compact action contracts and return the full guide through `action=help`; existing owner gates and Settings copy remain unchanged (#2069-7347).
 
 - Independent durable peer-mail readers filter routine lifecycle traffic, retain acknowledged cursors across reconnect, and support continuous HTTP/ACP notification delivery (#2004-4760).
@@ -132,7 +134,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-- **Bounded input frame priority** — Desktop and browser/PWA input can wake the existing grid ticker after reader-applied output, without waiting for animation rate floors. A rolling send budget preserves output coalescing; desktop receipt gates and synchronized output remain in force.
+- **Bounded input frame priority** — Desktop and browser/PWA input can wake the existing grid ticker after reader-applied output, without waiting for animation rate floors. A rolling send budget preserves output coalescing; newer reader work retains its bounded retry across a send. Desktop receipt gates and synchronized output remain in force.
 
 On desktop and mobile CLI views, adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. Mobile places this bar in a separate gutter outside the text box, so column-zero text stays clear and existing agent indentation stays unchanged. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. Fenced blocks keep a separate Copy row above the code on desktop and mobile, without covering wrapped text. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
@@ -183,9 +185,9 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Mobile session Chat appearance** — The session detail CLI/Chat view shares desktop prompt/answer theme tokens and transcript typography. Mobile keeps its existing touch-sized switch and native input; AI Chat is a separate surface.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
-- **Terminal Chat reading layout** — One rule-only answer card per turn with whole-answer Copy on hover or focus, 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
+- **Terminal Chat reading layout** — One reading card per turn with whole-answer Copy on hover or focus. The green bar follows only CLI-owned answer blocks, not the whole message, on desktop and mobile; 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
 - **Codex terminal Chat** — Completed rollout messages and tools use the shared ACP transcript after a native SessionStart hook supplies exact ownership. Live PID, rollout id and cwd are validated on every read; heuristic IDs never enable Chat. Requires trusted TUIC native hooks on macOS/Linux; unsupported or unbound terminals keep Chat unavailable.
-- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller and dimmer in the terminal Chat view, AI Chat and the mobile chat; the last text of a turn keeps the normal style. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
+- **Intermediate Chat text** — Assistant text that a tool call follows in the same turn renders smaller in the terminal Chat view, AI Chat and mobile chat, but keeps the normal readable text colour in dark and light themes; the last text of a turn keeps the normal size. Switch it off in **Settings → Appearance → Chat → Mute Intermediate Text** (`chat_mute_intermediate_text`, default on).
 - **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
@@ -523,6 +525,8 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
+
+- **Symbolic links**: link icon, target path and target kind in tree and list views; outside-target opens show a specific refusal without adding read access.
 - **Remote file drops**: native OS files dropped onto a connected remote repository are copied through its authenticated daemon connection; sources remain on the Mac. Directory copies require confirmation and existing names are skipped. Each top-level upload is limited to 256 MiB (including archive overhead) and 10,000 entries; symlinks and special files are rejected. Native destination filenames and safe executable permissions are preserved; uploads abort after 30 seconds without data.
 - Directory tree of active repository
 - **Auto-refresh**: directory watcher detects external file changes (create/delete/rename) and refreshes automatically within ~1s, preserving selection
@@ -1161,6 +1165,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
+- Orphan cleanup ignores detached checkouts under OS/environment temporary roots and `~/Gits/.tmp`, including symlink aliases and missing checkout registrations. Detached sidebar rows remain visible; stale removal requests are refused.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
@@ -1173,7 +1178,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
   - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
   - Read-only copied files and directories gain owner write permission in the new worktree only; symlinks are not followed
   - Parent tracked and untracked changes are not carried into the new checkout
-  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal
+  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal. Branch-name status diagnostics appear once; main-checkout tooltips do not describe removal
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
@@ -2700,6 +2705,12 @@ partial work, and their child processes may continue.
     shell, no-shell, auth-failed and unreachable results; free text remains valid
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
   - Fields: URL, auth username
+- **Relay** — Reaches a `tuic-remote` daemon that has no inbound port through a
+  relay. Paste the bundle printed by `tuic-remote --relay-pair <url>`; the end-to-end
+  secret never reaches the relay. The desktop exposes the daemon on a loopback port, so
+  repos, sessions and terminals use the same handlers as a direct connection. A lost
+  link shows a typed state (`relay_unreachable`, `daemon_offline`, `pairing_rejected`,
+  `link_lost`) and reconnects as a new attachment, without replaying what was in flight
 - **Update & restart remote** — For either connection type, compare the
   daemon's `/health` build SHA-256 with the release asset or a matching local
   build, show an out-of-date badge, confirm the number of live sessions that
@@ -2720,6 +2731,7 @@ partial work, and their child processes may continue.
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- The relay pairing bundle goes to the vault (`Credential::RelayPairing`), keyed by the connection UUID, never to `connections.json`
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon
@@ -2847,7 +2859,8 @@ Missing machine selection or missing ego acknowledgement refuses attachment.
 - An imperative reporting obligation in `initialize` rather than only a tool description: the descriptive version recorded zero entries across 39 repositories
 - One SQLite database in the configuration directory with the project as a column. Nothing is written inside a repository, so Progress produces no repository-change event, no Git-exclude entry and no indexing pass
 - Managed workspaces resolve to their parent project, so a worktree and its repository share one history; a directory belonging to no registered project is not recorded at all
-- A dialog, not a panel: one newest-first list for the active PTY by default, a selector for other PTYs and the repository aggregate, queried once per selected view
+- A dialog, not a panel: one newest-first list for the active PTY by default, a selector for other PTYs and the repository aggregate, opened with at most 100 entries, with cursor-based **Load older** on desktop and mobile
+- Mobile identifies the selected project once in its selector, or a subtitle when the selector is unavailable; the desktop dialog retains its subtitle
 - A last-visit divider frozen while the dialog is open, so it never moves under the line being read
 - Blocked entries in red, `intent` entries muted, one blocked-only filter, per-entry deletion scoped to the project
 - Aggregate notification-bell count plus exactly one live toast, silent by default; Progress entries are not duplicated into MESSAGES
@@ -3141,6 +3154,8 @@ Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with 
 
 The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
 
+MCP call audit view (#2136-dc79): Settings > MCP > Call audit lists the body-free `GET /mcp/audit` rows behind the `mcp_call_audit_enabled` setting (off in release, on in debug). Off records nothing.
+
 ### Background tray and menu-bar icon
 
 Tray and menu-bar icon: Settings > General offers Always, Only in background (default), or Never. The native menu shows live working/awaiting agent counts, Show TUICommander and Quit. An attention mark appears for awaiting agents while hidden and clears on Show. Left-click shows the app on macOS and Windows; Linux uses the menu. Never, a failed tray build, or a Linux desktop without a StatusNotifier host falls back to minimizing without clearing terminal visibility. A native notice appears on the first background entry of each app run.
@@ -3327,3 +3342,17 @@ GitHub access diagnostics group exact API messages by account and owner, disting
 
 GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
 ordinary diagnostics reads do not alter the retry cache (#2133-9213).
+
+Detached checkout visibility: the sidebar shows directory name, short HEAD SHA and detached state in non-selectable rows, with a header count when folded. Discovery preserves newline paths and distinguishes the configured archive pool from unrelated `__archived` folders.
+
+### Mobile session usage (#2150-4e0c)
+
+The session overflow loads a read-only usage block when opened. Claude and Codex
+show shared account quota for the live process profile. ego shows only the exact
+PID-bound session row from its v3 usage report, including separate API-equivalent
+estimates and unknown cost reasons. Unknown model, usage and stale data are
+labelled explicitly. Remote sessions use their owning daemon, never a local account.
+
+Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.

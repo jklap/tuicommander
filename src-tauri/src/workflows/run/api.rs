@@ -27,6 +27,11 @@ pub enum RunAction {
     Incidents {
         run_id: String,
     },
+    /// Say before a start what would stop the first Agent step.
+    StartReadiness {
+        definition_id: String,
+        definition_revision: i64,
+    },
     Get {
         run_id: String,
     },
@@ -73,6 +78,7 @@ pub enum RunReply {
     Events(Vec<RunEvent>),
     Receipt(Box<RunReceipt>),
     Incidents(Vec<super::RunIncident>),
+    Readiness(Vec<String>),
 }
 
 /// The live coordinator is the only inbox recipient for story-worker results.
@@ -125,6 +131,19 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
     match action {
         RunAction::StartGraph { .. } => {
             Err("graph start requires the owning daemon service".into())
+        }
+        RunAction::StartReadiness {
+            definition_id,
+            definition_revision,
+        } => {
+            let definition =
+                WorkflowStore::open()?.get_published(&definition_id, definition_revision)?;
+            Ok(RunReply::Readiness(
+                super::runtime::effects::profile_problems(
+                    &definition,
+                    &crate::config::load_agents_config(),
+                ),
+            ))
         }
         RunAction::StartPlan {
             plan_id,
@@ -315,7 +334,10 @@ pub fn run_action_with_events(
                 &receipt.snapshot.id,
                 receipt.sequence,
             ),
-            RunReply::Events(_) | RunReply::Runs(_) | RunReply::Incidents(_) => {
+            RunReply::Events(_)
+            | RunReply::Runs(_)
+            | RunReply::Incidents(_)
+            | RunReply::Readiness(_) => {
                 unreachable!("mutations return a snapshot or receipt")
             }
         };

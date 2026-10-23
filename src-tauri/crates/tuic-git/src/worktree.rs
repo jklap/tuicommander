@@ -1862,7 +1862,7 @@ pub fn resolve_any_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_worktree_workspace_paths(&listed.stdout)
@@ -1881,7 +1881,7 @@ fn resolve_archived_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     map_archived_workspace_paths(&listed.stdout)
@@ -2373,10 +2373,10 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
-/// Remove a detached orphan. A checkout whose directory is already gone holds
-/// nothing to lose, so dropping its registration is confirmed by the safety
-/// assessment instead of a `force` flag.
+/// Remove a detached orphan after the caller's removal guard. Missing checkout
+/// registrations require explicit confirmation; automatic safety rejects them.
 pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
+    refuse_temporary_orphan(&worktree.path)?;
     remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
 }
 
@@ -3699,18 +3699,20 @@ pub fn delete_integrated_local_branch_with_pr(
 }
 
 /// One block of `git worktree list --porcelain` output.
-struct WorktreeEntry {
-    path: String,
+pub(crate) struct WorktreeEntry {
+    pub(crate) path: String,
+    pub(crate) head: String,
     /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
-    branch: Option<String>,
-    detached: bool,
+    pub(crate) branch: Option<String>,
+    pub(crate) detached: bool,
 }
 
 fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
     let mut entries = Vec::new();
 
-    for block in porcelain.split("\n\n") {
-        let block = block.trim();
+    let nul = porcelain.contains('\0');
+    for block in porcelain.split(if nul { "\0\0" } else { "\n\n" }) {
+        let block = if nul { block } else { block.trim() };
         if block.is_empty() {
             continue;
         }
@@ -3718,12 +3720,15 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut detached = false;
+        let mut head = String::new();
 
-        for line in block.lines() {
+        for line in block.split(if nul { '\0' } else { '\n' }) {
             if let Some(p) = line.strip_prefix("worktree ") {
                 path = Some(p.to_string());
             } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
                 branch = Some(b.to_string());
+            } else if let Some(oid) = line.strip_prefix("HEAD ") {
+                head = oid.to_string();
             } else if line == "detached" {
                 detached = true;
             }
@@ -3732,6 +3737,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         if let Some(path) = path {
             entries.push(WorktreeEntry {
                 path,
+                head,
                 branch,
                 detached,
             });
@@ -3753,13 +3759,10 @@ const IN_PROGRESS_MARKERS: [&str; 6] = [
     "BISECT_LOG",
 ];
 
-/// Admin dir of a linked worktree: its `.git` is a *file* holding
-/// `gitdir: <repo>/.git/worktrees/<name>`. Returns `None` for the main worktree (where `.git`
-/// is a directory) and for paths that no longer exist.
+/// Resolve a checkout's admin directory, including a relative gitdir file or the
+/// main checkout's .git directory. Unavailable directories return None.
 fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(Path::new(worktree_path).join(".git")).ok()?;
-    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
-    Some(PathBuf::from(gitdir))
+    crate::git::resolve_git_dir(Path::new(worktree_path))
 }
 
 /// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
@@ -3774,8 +3777,8 @@ fn has_operation_in_progress(worktree_path: &str) -> bool {
 
 /// Branch a detached worktree was on before the in-flight operation started. Git records it in
 /// `head-name` for both rebase backends; merge/cherry-pick/revert never detach, so they have no
-/// equivalent (and need none). Bisect records only a raw name in `BISECT_START`, which we do not
-/// trust as a branch — such a worktree stays alive as an in-progress op, just without a row.
+/// equivalent (and need none). Bisect records the original name in `BISECT_START`;
+/// accept it only if Git resolves it as an existing local branch, never as an OID.
 ///
 /// **Stays path-addressed on purpose (#726-5ac7).** Story 726 asked for this to
 /// take a `workspace_id` alongside `worktree_dirtiness` and `check_worktree_dirty`,
@@ -3796,7 +3799,14 @@ pub fn operation_head_branch(worktree_path: &str) -> Option<String> {
             return Some(branch.to_string());
         }
     }
-    None
+    let start = std::fs::read_to_string(admin.join("BISECT_START")).ok()?;
+    let branch = start
+        .trim()
+        .strip_prefix("refs/heads/")
+        .unwrap_or(start.trim());
+    let repo = gix::open(worktree_path).ok()?;
+    repo.find_reference(&format!("refs/heads/{branch}")).ok()?;
+    Some(branch.to_string())
 }
 
 /// One workspace's checkout, resolved by opaque workspace id.
@@ -3817,6 +3827,133 @@ pub struct WorkspaceWorktree {
     /// action). Absent, not merely `None`, for callers that never compute it.
     #[serde(skip_serializing_if = "Option::is_none", default, skip_deserializing)]
     pub lifecycle_status: Option<WorkspaceLifecycleStatus>,
+}
+
+/// Discovery inventory keeps detached checkouts outside branch-addressed workspaces.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeInventory {
+    pub worktree_paths: HashMap<String, WorkspaceWorktree>,
+    pub detached_worktrees: Vec<DetachedWorktree>,
+    #[serde(default)]
+    pub worktree_diagnostics: Vec<WorktreeDiagnostic>,
+}
+
+/// Non-selectable registrations that cannot safely use the existing branch workspace id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeDiagnostic {
+    pub path: String,
+    pub branch: Option<String>,
+    pub state: WorktreeDiagnosticState,
+    pub guidance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeDiagnosticState {
+    Missing,
+    DuplicateBranch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetachedWorktreeState {
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedWorktree {
+    pub path: String,
+    pub head: String,
+    pub short_head: String,
+    pub directory_name: String,
+    pub state: DetachedWorktreeState,
+}
+
+/// The adapter supplies the configured TUIC pool; a basename alone is not ownership.
+pub(crate) fn checkout_inventory(
+    entries: impl IntoIterator<Item = WorktreeEntry>,
+    archive_pool: Option<&Path>,
+) -> WorktreeInventory {
+    let mut inventory = WorktreeInventory::default();
+    // Use the same deterministic primary checkout in discovery and legacy lifecycle resolution.
+    let mut entries: Vec<_> = entries.into_iter().collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+    for entry in entries {
+        let path = Path::new(&entry.path);
+        let parent = path
+            .parent()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+        if pool.is_some() && parent == pool {
+            continue;
+        }
+        if !path.is_dir() || crate::git::resolve_git_dir(path).is_none() {
+            inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                path: entry.path,
+                branch: entry.branch,
+                state: WorktreeDiagnosticState::Missing,
+                guidance: "Checkout unavailable or registration broken. Restore the checkout or run git worktree repair from its new location. Review git worktree list --porcelain before manually pruning a deleted registration.".to_string(),
+            });
+            continue;
+        }
+        if let Some(branch) = entry.branch.or_else(|| operation_head_branch(&entry.path)) {
+            if inventory
+                .worktree_paths
+                .contains_key(&workspace_id_of_worktree(&branch))
+            {
+                inventory.worktree_diagnostics.push(WorktreeDiagnostic {
+                    path: entry.path,
+                    branch: Some(branch),
+                    state: WorktreeDiagnosticState::DuplicateBranch,
+                    guidance: "Another checkout uses this branch workspace. Use a distinct branch to select this checkout independently; no checkout was removed.".to_string(),
+                });
+                continue;
+            }
+            inventory.worktree_paths.insert(
+                workspace_id_of_worktree(&branch),
+                WorkspaceWorktree {
+                    branch,
+                    path: entry.path,
+                    kind: WorkspaceKind::Worktree,
+                    warm_artifacts: None,
+                    lifecycle_status: None,
+                },
+            );
+        } else if entry.detached {
+            inventory.detached_worktrees.push(DetachedWorktree {
+                directory_name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                short_head: entry.head.chars().take(7).collect(),
+                path: entry.path,
+                head: entry.head,
+                state: DetachedWorktreeState::Detached,
+            });
+        }
+    }
+    inventory
+        .detached_worktrees
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    inventory
+        .worktree_diagnostics
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    inventory
+}
+
+pub fn get_worktree_inventory_raw(
+    repo_path: &str,
+    archive_pool: Option<&Path>,
+) -> Result<WorktreeInventory, String> {
+    let output = git_cmd(Path::new(repo_path))
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .run()
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    Ok(checkout_inventory(
+        parse_worktree_entries(&output.stdout),
+        archive_pool,
+    ))
 }
 
 /// The workspace id a freshly created **git worktree** gets.
@@ -3858,26 +3995,27 @@ pub(crate) fn is_archived_checkout(path: &Path) -> bool {
 fn map_checkouts(porcelain: &str, archived: bool) -> HashMap<String, WorkspaceWorktree> {
     let mut result = HashMap::new();
 
-    for entry in parse_worktree_entries(porcelain) {
+    let mut entries = parse_worktree_entries(porcelain);
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    for entry in entries {
         let branch = match entry.branch {
             Some(branch) => Some(branch),
             None => operation_head_branch(&entry.path),
         };
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
-            && Path::new(&entry.path).exists()
+            && crate::git::resolve_git_dir(Path::new(&entry.path)).is_some()
             && is_archived_checkout(Path::new(&entry.path)) == archived
         {
-            result.insert(
-                workspace_id_of_worktree(&branch),
-                WorkspaceWorktree {
+            result
+                .entry(workspace_id_of_worktree(&branch))
+                .or_insert_with(|| WorkspaceWorktree {
                     branch,
                     path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
                     warm_artifacts: None,
                     lifecycle_status: None,
-                },
-            );
+                });
         }
     }
 
@@ -3896,7 +4034,7 @@ pub fn get_worktree_paths_raw(
 ) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let base_repo = PathBuf::from(&repo_path);
     let output = git_cmd(&base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     Ok(map_worktree_workspace_paths(&output.stdout))
@@ -3923,7 +4061,7 @@ pub fn resolve_workspace(
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
     let out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain"])
+        .args(["worktree", "list", "--porcelain", "-z"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
@@ -4015,6 +4153,8 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
     if !entry.detached || entry.branch.is_some() {
         return Err("Cannot remove orphan worktree: checkout is not detached".into());
     }
+
+    refuse_temporary_orphan(&path)?;
 
     Ok(())
 }
@@ -4771,7 +4911,7 @@ mod tests {
     // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
     #[test]
     fn orphan_validation_refuses_a_bare_repository_entry() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let bare = repo.parent().unwrap().join("bare.git");
         git_cmd(&repo)
             .args([
@@ -6608,6 +6748,26 @@ mod tests {
         assert_eq!(status.error.as_deref(), Some(error.as_str()));
     }
 
+    /// Catches rejecting a committed master when origin/HEAD is absent.
+    #[test]
+    fn default_branch_master_without_remote_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-M", "master"])
+            .run()
+            .unwrap();
+        assert!(
+            git_cmd(&repo)
+                .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+                .run_silent()
+                .is_none()
+        );
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+    }
+
     #[test]
     fn get_remote_default_branch_from_test_repo() {
         let repo = setup_test_repo();
@@ -7169,9 +7329,9 @@ branch refs/heads/feat
     /// coupling callers to that representation.
     #[test]
     fn workspace_paths_are_keyed_by_id_and_carry_the_branch() {
-        // A real directory: the mapper drops entries whose path no longer exists,
-        // which is the post-prune safety guard, not something to work around.
-        let dir = TempDir::new().expect("temp dir");
+        // A real repository: the mapper requires resolvable Git metadata before
+        // making a checkout selectable.
+        let dir = setup_test_repo();
         let wt = dir.path().to_string_lossy().into_owned();
         let porcelain = format!("worktree {wt}\nHEAD abc123\nbranch refs/heads/main\n\n");
 
@@ -8355,7 +8515,17 @@ branch refs/heads/feat
     // ── linked workspace creation and warming ─────────────────────────────
 
     fn workspace_fixture() -> (TempDir, PathBuf, PathBuf) {
-        let temp = TempDir::new().expect("temp dir");
+        workspace_fixture_at(TempDir::new().expect("temp dir"))
+    }
+
+    fn orphan_workspace_fixture() -> (TempDir, PathBuf, PathBuf) {
+        workspace_fixture_at(
+            TempDir::new_in(tuic_test_support::non_temporary_fixture_root())
+                .expect("non-temporary worktree fixture"),
+        )
+    }
+
+    fn workspace_fixture_at(temp: TempDir) -> (TempDir, PathBuf, PathBuf) {
         let repo = temp.path().join("repo");
         let workspaces = temp.path().join("repo__wt");
         fs::create_dir_all(&repo).expect("repo dir");
@@ -12113,7 +12283,7 @@ branch refs/heads/feat
     #[cfg(unix)]
     #[test]
     fn orphan_validation_does_not_alias_literal_backslash_to_a_separator() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let parent = repo.parent().unwrap();
         let registered = parent.join(r"literal\checkout");
         git_cmd(&repo)
@@ -12142,7 +12312,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_a_detached_commit_without_a_durable_ref() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-only-head");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         commit_file(&path, "detached.txt", "only at detached HEAD\n");
@@ -12163,7 +12333,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_accepts_a_detached_head_reachable_from_a_ref() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-reachable");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         let detached_oid = rev_at(&path, "HEAD").unwrap();
@@ -12183,7 +12353,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_an_in_progress_operation() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-mid-operation");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         let admin = worktree_admin_dir(&path.to_string_lossy()).unwrap();
@@ -12274,7 +12444,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_an_attached_worktree_path() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "not-an-orphan");
 
         let error =
@@ -12283,10 +12453,135 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    // Catches: scratch checkouts being offered for cleanup merely because HEAD is detached.
+    #[test]
+    fn temporary_detached_worktrees_are_never_orphan_candidates() {
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
+        let scratch = tempfile::Builder::new()
+            .prefix("orphan-scratch-")
+            .tempdir_in(tuic_test_support::test_temp_root())
+            .unwrap();
+        let path = scratch.path().join("review");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &path.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "review".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        for state in ["clean", "dirty", "missing"] {
+            match state {
+                "dirty" => {
+                    fs::write(path.join("agent-notes.txt"), "agent is still writing\n").unwrap()
+                }
+                "missing" => fs::remove_dir_all(&path).unwrap(),
+                _ => {}
+            }
+            assert!(
+                detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned())
+                    .unwrap()
+                    .is_empty(),
+                "{state}: temporary detached checkout must never be offered as an orphan"
+            );
+            assert!(
+                assess_orphan_worktrees(&repo.to_string_lossy())
+                    .unwrap()
+                    .is_empty(),
+                "{state}"
+            );
+            let error = remove_orphan_worktree_internal(&worktree).unwrap_err();
+            assert!(error.contains("temporary directory"), "{state}: {error}");
+            let error = validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+                .unwrap_err();
+            assert!(error.contains("temporary directory"), "{state}: {error}");
+            if state == "dirty" {
+                assert_eq!(
+                    fs::read_to_string(path.join("agent-notes.txt")).unwrap(),
+                    "agent is still writing\n"
+                );
+            }
+            let listed = git_cmd(&repo)
+                .args(["worktree", "list", "--porcelain"])
+                .run()
+                .unwrap();
+            assert!(
+                listed.stdout.contains(&path.to_string_lossy().to_string()),
+                "{state}: registration must remain"
+            );
+        }
+    }
+
+    // Catches: string-prefix matching protects permanent siblings and misses temp aliases.
+    #[test]
+    fn temporary_orphan_roots_match_components_and_resolve_missing_symlink_children() {
+        use tuic_core::temp_paths::is_under_temp_roots;
+        let fixture = TempDir::new_in(tuic_test_support::test_temp_root()).unwrap();
+        let root = fixture.path().join("scratch");
+        fs::create_dir(&root).unwrap();
+        let roots = vec![root.clone()];
+        for (path, expected) in [
+            (root.clone(), true),
+            (root.join("missing/review"), true),
+            (fixture.path().join("scratch-other/review"), false),
+            (root.join("../persistent/review"), false),
+        ] {
+            assert_eq!(
+                is_under_temp_roots(&path, &roots),
+                expected,
+                "{}",
+                path.display()
+            );
+        }
+        #[cfg(unix)]
+        {
+            let alias = fixture.path().join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert!(is_under_temp_roots(&alias.join("missing/review"), &roots));
+            assert!(is_under_temp_roots(&root.join("missing"), &[alias]));
+        }
+    }
+
+    // Catches: the app's configured temp directory hiding standard OS and tooling roots.
+    #[test]
+    fn temporary_orphan_roots_include_standard_and_tooling_locations() {
+        use tuic_core::temp_paths::is_temporary_path;
+        assert!(is_temporary_path(&std::env::temp_dir().join("review")));
+        if cfg!(unix) {
+            for root in [
+                "/tmp",
+                "/private/tmp",
+                "/var/folders",
+                "/private/var/folders",
+            ] {
+                assert!(
+                    is_temporary_path(&Path::new(root).join("tuic-review/missing")),
+                    "{root}"
+                );
+            }
+        }
+        let home = tuic_core::temp_paths::recognized_temp_roots()
+            .into_iter()
+            .find(|root| root.ends_with("Gits/.tmp"))
+            .expect("tooling scratch root");
+        assert!(is_temporary_path(&home.join("review-r5-wt")));
+        assert!(!is_temporary_path(
+            &home.with_file_name(".tmp-other").join("review")
+        ));
+    }
+
     // Catches: a detached HEAD being mistaken for a deleted active branch.
     #[test]
     fn active_detached_checkout_is_not_an_orphan() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "active-detached");
         commit_file(&path, "active.txt", "recent branch work\n");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
@@ -12347,7 +12642,7 @@ branch refs/heads/feat
     // Catches: Keep cannot distinguish unchanged edits from new checkout state.
     #[test]
     fn orphan_assessment_fingerprint_follows_the_checkout_state() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-fingerprint");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         git_cmd(&repo)
@@ -12383,8 +12678,8 @@ branch refs/heads/feat
     /// The directory was moved away but git still lists the worktree. Spawning
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
-    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+    fn orphan_whose_directory_is_gone_requires_explicit_removal_to_drop_entry() {
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-moved-away");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         git_cmd(&repo)
@@ -12395,13 +12690,15 @@ branch refs/heads/feat
 
         let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
 
-        let entry = assessments
-            .iter()
-            .find(|entry| entry.path.ends_with("orphan-moved-away"))
-            .expect("the tracked orphan is still listed");
-        assert!(entry.safe, "{entry:?}");
-        let reason = entry.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("already gone"), "{reason}");
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path.ends_with("orphan-moved-away")),
+            "unavailable registrations must stay out of automatic cleanup"
+        );
+        let reason =
+            orphan_cleanup_safety(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
+        assert!(reason.contains("git worktree repair"), "{reason}");
         assert!(!reason.contains("spawn"), "{reason}");
 
         let worktree = WorktreeInfo {
@@ -13311,7 +13608,7 @@ branch refs/heads/feat
     // missed by the safety verdict, so ask mode now removes it without a dialog.
     #[test]
     fn orphan_assessment_is_unsafe_for_every_kind_of_unsaved_work() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let staged = detached_orphan(&repo, "orphan-staged");
         fs::write(staged.join("new.txt"), "x\n").unwrap();
         git_cmd(&staged).args(["add", "new.txt"]).run().unwrap();
@@ -13340,7 +13637,7 @@ branch refs/heads/feat
     // clean checkout survives it being moved to another commit.
     #[test]
     fn orphan_assessment_fingerprint_changes_when_a_clean_checkout_moves_head() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         commit_file(&repo, "second.txt", "two\n");
         let path = detached_orphan(&repo, "orphan-moves");
 
@@ -13360,18 +13657,27 @@ branch refs/heads/feat
         assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
-    // Catches (critic-1367): a vanished checkout reported with a fingerprint, so a Keep
-    // would hold for a directory nobody can inspect any more.
+    // Catches: a vanished checkout entering the fingerprint-based cleanup/Keep flow
+    // instead of remaining a repair diagnostic.
     #[test]
-    fn orphan_whose_directory_is_gone_has_no_fingerprint() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+    fn orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup() {
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-vanished");
         fs::remove_dir_all(&path).unwrap();
 
-        let entry = orphan_entry(&repo, "orphan-vanished");
-
-        assert!(entry.safe, "{entry:?}");
-        assert_eq!(entry.dirty_fingerprint, None);
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+        assert!(
+            !assessments
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
+        let inventory = get_worktree_inventory_raw(&repo.to_string_lossy(), None).unwrap();
+        assert!(
+            inventory
+                .worktree_diagnostics
+                .iter()
+                .any(|entry| entry.path == path.to_string_lossy())
+        );
     }
 
     // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"
@@ -13380,7 +13686,7 @@ branch refs/heads/feat
     #[test]
     fn clean_orphan_with_an_unreachable_head_is_unsafe_with_a_fingerprint_until_a_branch_holds_it()
     {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-unreachable");
         commit_file(&path, "only-here.txt", "x\n");
 
@@ -13415,7 +13721,7 @@ branch refs/heads/feat
     // verdict and the fingerprint, so a populated submodule's work is removed unasked.
     #[test]
     fn orphan_assessment_sees_edits_inside_a_populated_submodule() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         add_populated_submodule(&repo);
         let path = detached_orphan(&repo, "orphan-module");
         git_cmd(&path)
@@ -13439,6 +13745,14 @@ branch refs/heads/feat
     }
 }
 
+/// Temporary detached checkouts belong to their creator, not orphan cleanup.
+fn refuse_temporary_orphan(path: &Path) -> Result<(), String> {
+    if tuic_core::temp_paths::is_temporary_path(path) {
+        return Err("Cannot remove orphan worktree: checkout is in a temporary directory".into());
+    }
+    Ok(())
+}
+
 /// Blocking orphan scan; scheduling belongs to the app adapter.
 pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>, String> {
     let base_repo = PathBuf::from(&repo_path);
@@ -13448,7 +13762,11 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .map_err(|e| format!("git worktree list failed: {e}"))?;
     let mut default_branch = None;
     let mut orphans = Vec::new();
+    let temp_roots = tuic_core::temp_paths::recognized_temp_roots();
     for path in parse_orphan_worktrees(&out.stdout) {
+        if tuic_core::temp_paths::is_under_temp_roots(Path::new(&path), &temp_roots) {
+            continue;
+        }
         // Detached describes HEAD, not branch lifetime. A non-default branch
         // at this tip is evidence that the checkout still holds active work.
         // Missing directories can only have their stale registration removed.
@@ -13486,13 +13804,16 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
+            // An unavailable registration belongs to repair diagnostics, not the
+            // automatic sweep (including Ask mode's countdown confirmation).
+            .filter(|path| Path::new(path).is_dir())
             .map(|path| {
                 let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
                     .ok()
                     .map(|(fingerprint, _)| fingerprint);
                 match orphan_cleanup_safety(repo_path, &path) {
                     Ok(()) => OrphanCleanupAssessment {
-                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        reason: None,
                         path,
                         safe: true,
                         dirty_fingerprint,
@@ -13527,15 +13848,13 @@ fn non_default_local_branch_at_head(
     Ok(branches.stdout.lines().any(|branch| branch != default_ref))
 }
 
-const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
-
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
-    // Nothing to inspect: git cannot run in a missing cwd, and there is no
-    // work left to lose.
-    if !worktree.exists() {
-        return Ok(());
+    // Recheck at the automatic-removal boundary: the directory may have moved
+    // after assessment. Only an explicit removal may discard its registration.
+    if !worktree.is_dir() {
+        return Err("checkout unavailable; restore it or run git worktree repair; explicit removal is required to discard its registration".into());
     }
     let status = git_cmd(worktree)
         .args([

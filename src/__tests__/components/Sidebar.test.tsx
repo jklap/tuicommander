@@ -435,6 +435,68 @@ describe("Sidebar", () => {
 		});
 	});
 
+	// Catches detached metadata being omitted, made selectable, or hidden without a folded count.
+	it("renders detached checkouts without branch actions and keeps a folded indicator", () => {
+		const detached = {
+			path: "/external/detached-checkout",
+			head: "abcdef0123456789",
+			short_head: "abcdef0",
+			directory_name: "detached-checkout",
+			state: "detached",
+		};
+		setRepos({ "/repo1": makeRepo({ detachedWorktrees: [detached] }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const row = view.getByTestId("detached-worktree");
+		expect(row).toHaveTextContent("detached-checkout");
+		expect(row).toHaveTextContent("abcdef0 detached");
+		expect(row.getAttribute("data-tooltip")).toContain(detached.path);
+		expect(row.querySelector("button")).toBeNull();
+		expect(row.getAttribute("tabindex")).toBeNull();
+		fireEvent.click(row);
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, detachedWorktrees: [detached] }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("detached-worktree")).toBeNull();
+		expect(folded.getByTestId("detached-worktree-count")).toHaveTextContent("1 detached");
+	});
+
+	// Catches missing/duplicate registrations being hidden or acquiring branch click actions.
+	it("renders repair diagnostics without selectable controls", () => {
+		const diagnostics = [
+			{
+				path: "/old/missing",
+				branch: "feature",
+				state: "missing",
+				guidance: "Run git worktree repair from the new location.",
+			},
+			{
+				path: "/other/duplicate",
+				branch: "main",
+				state: "duplicate_branch",
+				guidance: "Use a distinct branch to select independently.",
+			},
+		];
+		setRepos({ "/repo1": makeRepo({ worktreeDiagnostics: diagnostics }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const rows = view.getAllByTestId("worktree-diagnostic");
+		expect(rows).toHaveLength(2);
+		rows.forEach((row, index) => {
+			expect(row).toHaveTextContent(diagnostics[index].path);
+			expect(row).toHaveTextContent(diagnostics[index].guidance);
+			expect(row.querySelector("button, [tabindex]")).toBeNull();
+			fireEvent.click(row);
+		});
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, worktreeDiagnostics: diagnostics }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("worktree-diagnostic")).toBeNull();
+		expect(folded.getByTestId("worktree-diagnostic-count")).toHaveTextContent("2 diagnostics");
+	});
+
 	describe("density attribute", () => {
 		beforeEach(() => densityMode("auto"));
 		const manyBranches = (n: number) =>
@@ -2335,6 +2397,34 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe("PR #256 — 1 uncommitted file");
 		});
 
+		// Catches: dirty and commit tooltip fragments repeat the same unknown diagnostic.
+		it("shows the status diagnostic once in the branch name tooltip", () => {
+			const error = "Cannot resolve default branch: no verified base.";
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown", error },
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip.split(error)).toHaveLength(2);
+			expect(tooltip.split("Status unavailable")).toHaveLength(2);
+		});
+
+		// Catches: a non-removable main checkout inherits linked-worktree removal warnings.
+		it.each([true, false])("keeps main checkout status free of removal wording (isMain=%s)", (isMain) => {
+			const container = renderLifecycle({
+				isMain,
+				worktreePath: "/repo1",
+				lifecycleStatus: {
+					dirtyFiles: null,
+					commitStatus: "unknown",
+					removalSafety: "unknown",
+					error: "git status failed",
+				},
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip).toContain("Status unavailable");
+			expect(tooltip).not.toMatch(/remov|delet|discard/i);
+		});
+
 		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
 			const container = renderLifecycle({
 				lifecycleStatus: {
@@ -2345,7 +2435,7 @@ describe("Sidebar", () => {
 				},
 			});
 			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toBe(
-				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
+				"Status unavailable; removal is blocked. git status failed",
 			);
 		});
 

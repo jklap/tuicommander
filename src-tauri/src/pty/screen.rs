@@ -1685,6 +1685,18 @@ pub(super) fn apply_foreground_agent_observation(
             if next.is_none() {
                 entry.agent_intent = None;
                 entry.current_task = None;
+                // A confirmed shell return ends the agent's question lifetime,
+                // including confident dialogs that screen absence cannot clear.
+                // Queue under the observation lock, through the shared reducer.
+                state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                    session_id: session_id.to_string(),
+                    parsed: serde_json::json!({
+                        "type": "protocol-question-cleared",
+                        "source": "agent-exit",
+                        "_turn_epoch": entry.turn_epoch,
+                    })
+                    .into(),
+                });
             }
             entry.agent_type = next;
             entry.hook_instrumented = hook_instrumented_for(

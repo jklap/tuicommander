@@ -9,6 +9,7 @@ use crate::workflows::{
 use std::sync::Arc;
 
 mod critic_c;
+mod default_install;
 mod parity;
 
 fn fixture() -> (
