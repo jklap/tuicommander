@@ -79,6 +79,8 @@ tuic_git_ceiling_with() {
 # at <dir>/gitconfig (the same content tuic-test-support writes) instead of the
 # developer's global/system config, so a test never depends on how a machine's
 # git is configured (merge.ff=only, url.*.insteadOf, hooksPath, signing, ...).
+# Automatic gc/maintenance is off: git 2.5x's detached post-commit
+# `maintenance run --auto` packs a fixture's loose refs behind its back.
 # Exports GIT_CONFIG_GLOBAL, so call it in the current shell, not in $(...).
 # A test that needs a specific global setting exports GIT_CONFIG_GLOBAL after.
 tuic_git_isolate_config() {
@@ -91,7 +93,9 @@ tuic_git_isolate_config() {
     '[init]' '	defaultBranch = main' \
     '[commit]' '	gpgSign = false' \
     '[tag]' '	gpgSign = false' \
-    '[core]' '	autocrlf = false' >"$_tuic_gitconfig.$$.tmp"
+    '[core]' '	autocrlf = false' \
+    '[gc]' '	auto = 0' \
+    '[maintenance]' '	auto = false' >"$_tuic_gitconfig.$$.tmp"
   mv -f "$_tuic_gitconfig.$$.tmp" "$_tuic_gitconfig"
   GIT_CONFIG_GLOBAL=$_tuic_gitconfig
   GIT_CONFIG_NOSYSTEM=1

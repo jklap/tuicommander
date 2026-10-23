@@ -51,6 +51,10 @@ const TEST_GITCONFIG: &str = "\
 \tgpgSign = false
 [core]
 \tautocrlf = false
+[gc]
+\tauto = 0
+[maintenance]
+\tauto = false
 ";
 
 /// Point every git process this test binary starts — the fixtures' own `git`
@@ -61,6 +65,14 @@ const TEST_GITCONFIG: &str = "\
 /// `.git/config` read it is compared against; rerere, hooks paths, excludes
 /// files and signing settings leak in the same way. A test that needs a
 /// specific global setting still sets `GIT_CONFIG_GLOBAL` itself, after this.
+///
+/// Automatic housekeeping is off (`gc.auto = 0`, `maintenance.auto = false`).
+/// Since git 2.5x every `commit`/`merge`/`fetch` starts a *detached*
+/// `git maintenance run --auto`, which ran `git pack-refs --all --prune --auto`
+/// as soon as a fixture had ~17 loose refs (16 linked worktrees): the refs a
+/// test had just snapshotted were moved into `packed-refs` behind its back, at
+/// a moment that depends on machine load. Tests that need packed refs or a
+/// repack run `git pack-refs`/`git gc` themselves.
 fn isolate_git_config(root: &std::path::Path) {
     let path = root.join("gitconfig");
     // Every test process of a nextest run writes this at once: write a private
@@ -1135,6 +1147,12 @@ mod tests {
         assert_eq!(
             git_config_get(dir.path(), "init.defaultBranch").as_deref(),
             Some("main")
+        );
+        // A fixture's refs and packs change only when the test changes them.
+        assert_eq!(git_config_get(dir.path(), "gc.auto").as_deref(), Some("0"));
+        assert_eq!(
+            git_config_get(dir.path(), "maintenance.auto").as_deref(),
+            Some("false")
         );
         for leaked in ["merge.ff", "pull.rebase", "rerere.enabled"] {
             assert_eq!(
