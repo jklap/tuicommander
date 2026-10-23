@@ -1,6 +1,9 @@
 ## Stdio MCP automatic recovery (2162-bf4a) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, confirm an exited stdio upstream recovers automatically on a health tick and a reply timeout does not kill a healthy upstream. A timed-out action may still complete; do not retry side-effecting actions without checking their outcome. The peer did not restart the daily app or edit its upstream configuration.
+## Temporary orphan exclusion (2160-4dcb) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the daily backend, confirm an agent scratch detached checkout under `~/Gits/.tmp` does not appear in the orphan dialog or Worktree Manager orphan list, even as its files change. Its read-only detached sidebar row may remain visible. This Rust change does not hot-reload; this peer did not restart the daily app.
 
 ## Confident question lifetime after agent exit (1985-45bd) — Rust restart required
 

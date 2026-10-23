@@ -4297,19 +4297,7 @@ pub(crate) fn replace_repositories_for_test(config: serde_json::Value) -> Result
 /// because a legitimate repository that is merely offline, unmounted, or on a
 /// different drive must survive the classifier unchanged.
 fn recognized_temp_roots() -> Vec<PathBuf> {
-    let mut roots = vec![std::env::temp_dir()];
-    for root in [
-        "/tmp",
-        "/private/tmp",
-        "/var/folders",
-        "/private/var/folders",
-    ] {
-        roots.push(PathBuf::from(root));
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Gits").join(".tmp"));
-    }
-    roots
+    tuic_core::temp_paths::recognized_temp_roots()
 }
 
 /// `Path::starts_with` compares path COMPONENTS, so it does not collapse a

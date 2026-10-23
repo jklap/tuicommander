@@ -121,7 +121,14 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **After merge** | Archive / Delete / Ask | Archive |
 
 A detached HEAD does not mean that a branch was deleted. Cleanup excludes a
-checkout when a non-default local branch still points at its HEAD. A missing
+checkout when a non-default local branch still points at its HEAD. Cleanup also
+ignores checkouts under temporary roots: the OS temporary directory, `TMPDIR`,
+`TMP`, `TEMP`, `~/Gits/.tmp`, and (on Unix) `/tmp`, `/private/tmp`,
+`/var/folders` and `/private/var/folders`. Both registered and resolved paths are
+checked, including missing paths below symlinked directories. These checkouts
+are never offered for orphan removal or removed by orphan cleanup, even after
+a previous review. They remain visible as read-only detached rows in the sidebar;
+visibility does not grant cleanup permission. Outside temporary roots, a missing
 checkout directory remains eligible for registration cleanup. Detached checkouts
 without that branch protection retain the dirty-file, operation and live-session
 checks. Clean, reachable checkouts without live sessions are removed silently;
@@ -129,6 +136,13 @@ other candidates require review in Ask mode. Choosing **Keep** holds until the
 checkout fingerprint changes. An agent can answer an open review through MCP
 `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; the backend
 checks removal again. Failed removals remain available for a later attempt.
+
+The scan runs during repository refresh, not on a dedicated orphan timer. It
+runs at startup and after repository operations or `repo-changed` events. Event
+refreshes are debounced for 500 ms (1000 ms if already refreshing), with automatic
+starts at least five seconds apart per repository; explicit UI operations can
+refresh sooner. Opening Worktree Manager also scans the displayed repositories
+and rescans when their revision changes.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
@@ -245,7 +259,7 @@ Each worktree row displays:
 - **Last commit timestamp** — relative time since last activity
 - **Main badge** — marks the main branch (actions disabled)
 
-Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button. Prune refuses a Git operation in progress and keeps detached commits that have no durable branch, tag, or other ref. Create a ref for that commit before retrying if you want to keep the commit and remove the checkout.
+Eligible orphan worktrees outside temporary roots (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button. Prune refuses a Git operation in progress and keeps detached commits that have no durable branch, tag, or other ref. Create a ref for that commit before retrying if you want to keep the commit and remove the checkout.
 
 ### Filtering
 

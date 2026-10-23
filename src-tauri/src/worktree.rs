@@ -1733,6 +1733,12 @@ mod tests {
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
 
+    fn setup_orphan_repo() -> TempDir {
+        tuic_git::test_fixtures::setup_test_repo_at(
+            TempDir::new_in(tuic_test_support::non_temporary_fixture_root()).unwrap(),
+        )
+    }
+
     // Catches: a cached proof for another branch/tip (or a miss) invents merged status.
     #[test]
     fn listing_pr_proof_requires_matching_definitive_cached_answer() {
@@ -2822,6 +2828,8 @@ mod tests {
     #[cfg(unix)]
     mod orphan_removal_guard_critic {
         use super::*;
+
+        use super::setup_orphan_repo as setup_test_repo;
         use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
 
         fn detached(repo: &Path, name: &str) -> PathBuf {
@@ -2927,6 +2935,8 @@ mod tests {
     #[cfg(unix)]
     mod orphan_session_guard {
         use super::*;
+
+        use super::setup_orphan_repo as setup_test_repo;
         use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
 
         fn detached(repo: &Path, name: &str) -> PathBuf {
@@ -2948,6 +2958,29 @@ mod tests {
                 &repo.to_string_lossy(),
                 &checkout.to_string_lossy(),
             )
+        }
+
+        // Catches: confirmed removal bypassing the temp exclusion used by automatic cleanup.
+        #[test]
+        fn temporary_orphan_removal_refuses_automatic_and_confirmed_requests() {
+            let repo = tuic_git::test_fixtures::setup_test_repo();
+            let linked = detached(repo.path(), "temporary-checkout");
+            let state = crate::state::tests_support::make_test_app_state();
+            for safe_only in [true, false] {
+                let error = remove_orphan_checkout(
+                    &state,
+                    &repo.path().to_string_lossy(),
+                    &linked.to_string_lossy(),
+                    safe_only,
+                    &[],
+                )
+                .unwrap_err();
+                assert!(
+                    error.contains("temporary directory"),
+                    "{safe_only}: {error}"
+                );
+                assert!(linked.join("README.md").exists());
+            }
         }
 
         // Catches: automatic cleanup deleting a checkout rescued by a branch after discovery.
@@ -3144,6 +3177,8 @@ mod tests {
 
     mod orphan_keep_settled_critic {
         use super::*;
+
+        use super::setup_orphan_repo as setup_test_repo;
 
         fn detached(repo: &Path, name: &str) -> PathBuf {
             let path = repo.join(name);

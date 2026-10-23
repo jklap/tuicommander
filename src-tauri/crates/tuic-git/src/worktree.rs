@@ -2377,6 +2377,7 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
 /// nothing to lose, so dropping its registration is confirmed by the safety
 /// assessment instead of a `force` flag.
 pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
+    refuse_temporary_orphan(&worktree.path)?;
     remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
 }
 
@@ -4107,6 +4108,8 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
         return Err("Cannot remove orphan worktree: checkout is not detached".into());
     }
 
+    refuse_temporary_orphan(&path)?;
+
     Ok(())
 }
 
@@ -4862,7 +4865,7 @@ mod tests {
     // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
     #[test]
     fn orphan_validation_refuses_a_bare_repository_entry() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let bare = repo.parent().unwrap().join("bare.git");
         git_cmd(&repo)
             .args([
@@ -8466,7 +8469,17 @@ branch refs/heads/feat
     // ── linked workspace creation and warming ─────────────────────────────
 
     fn workspace_fixture() -> (TempDir, PathBuf, PathBuf) {
-        let temp = TempDir::new().expect("temp dir");
+        workspace_fixture_at(TempDir::new().expect("temp dir"))
+    }
+
+    fn orphan_workspace_fixture() -> (TempDir, PathBuf, PathBuf) {
+        workspace_fixture_at(
+            TempDir::new_in(tuic_test_support::non_temporary_fixture_root())
+                .expect("non-temporary worktree fixture"),
+        )
+    }
+
+    fn workspace_fixture_at(temp: TempDir) -> (TempDir, PathBuf, PathBuf) {
         let repo = temp.path().join("repo");
         let workspaces = temp.path().join("repo__wt");
         fs::create_dir_all(&repo).expect("repo dir");
@@ -12224,7 +12237,7 @@ branch refs/heads/feat
     #[cfg(unix)]
     #[test]
     fn orphan_validation_does_not_alias_literal_backslash_to_a_separator() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let parent = repo.parent().unwrap();
         let registered = parent.join(r"literal\checkout");
         git_cmd(&repo)
@@ -12253,7 +12266,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_a_detached_commit_without_a_durable_ref() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-only-head");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         commit_file(&path, "detached.txt", "only at detached HEAD\n");
@@ -12274,7 +12287,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_accepts_a_detached_head_reachable_from_a_ref() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-reachable");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         let detached_oid = rev_at(&path, "HEAD").unwrap();
@@ -12294,7 +12307,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_an_in_progress_operation() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-mid-operation");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         let admin = worktree_admin_dir(&path.to_string_lossy()).unwrap();
@@ -12385,7 +12398,7 @@ branch refs/heads/feat
 
     #[test]
     fn orphan_removal_refuses_an_attached_worktree_path() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "not-an-orphan");
 
         let error =
@@ -12394,10 +12407,135 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    // Catches: scratch checkouts being offered for cleanup merely because HEAD is detached.
+    #[test]
+    fn temporary_detached_worktrees_are_never_orphan_candidates() {
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
+        let scratch = tempfile::Builder::new()
+            .prefix("orphan-scratch-")
+            .tempdir_in(tuic_test_support::test_temp_root())
+            .unwrap();
+        let path = scratch.path().join("review");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &path.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "review".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        for state in ["clean", "dirty", "missing"] {
+            match state {
+                "dirty" => {
+                    fs::write(path.join("agent-notes.txt"), "agent is still writing\n").unwrap()
+                }
+                "missing" => fs::remove_dir_all(&path).unwrap(),
+                _ => {}
+            }
+            assert!(
+                detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned())
+                    .unwrap()
+                    .is_empty(),
+                "{state}: temporary detached checkout must never be offered as an orphan"
+            );
+            assert!(
+                assess_orphan_worktrees(&repo.to_string_lossy())
+                    .unwrap()
+                    .is_empty(),
+                "{state}"
+            );
+            let error = remove_orphan_worktree_internal(&worktree).unwrap_err();
+            assert!(error.contains("temporary directory"), "{state}: {error}");
+            let error = validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy())
+                .unwrap_err();
+            assert!(error.contains("temporary directory"), "{state}: {error}");
+            if state == "dirty" {
+                assert_eq!(
+                    fs::read_to_string(path.join("agent-notes.txt")).unwrap(),
+                    "agent is still writing\n"
+                );
+            }
+            let listed = git_cmd(&repo)
+                .args(["worktree", "list", "--porcelain"])
+                .run()
+                .unwrap();
+            assert!(
+                listed.stdout.contains(&path.to_string_lossy().to_string()),
+                "{state}: registration must remain"
+            );
+        }
+    }
+
+    // Catches: string-prefix matching protects permanent siblings and misses temp aliases.
+    #[test]
+    fn temporary_orphan_roots_match_components_and_resolve_missing_symlink_children() {
+        use tuic_core::temp_paths::is_under_temp_roots;
+        let fixture = TempDir::new_in(tuic_test_support::test_temp_root()).unwrap();
+        let root = fixture.path().join("scratch");
+        fs::create_dir(&root).unwrap();
+        let roots = vec![root.clone()];
+        for (path, expected) in [
+            (root.clone(), true),
+            (root.join("missing/review"), true),
+            (fixture.path().join("scratch-other/review"), false),
+            (root.join("../persistent/review"), false),
+        ] {
+            assert_eq!(
+                is_under_temp_roots(&path, &roots),
+                expected,
+                "{}",
+                path.display()
+            );
+        }
+        #[cfg(unix)]
+        {
+            let alias = fixture.path().join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert!(is_under_temp_roots(&alias.join("missing/review"), &roots));
+            assert!(is_under_temp_roots(&root.join("missing"), &[alias]));
+        }
+    }
+
+    // Catches: the app's configured temp directory hiding standard OS and tooling roots.
+    #[test]
+    fn temporary_orphan_roots_include_standard_and_tooling_locations() {
+        use tuic_core::temp_paths::is_temporary_path;
+        assert!(is_temporary_path(&std::env::temp_dir().join("review")));
+        if cfg!(unix) {
+            for root in [
+                "/tmp",
+                "/private/tmp",
+                "/var/folders",
+                "/private/var/folders",
+            ] {
+                assert!(
+                    is_temporary_path(&Path::new(root).join("tuic-review/missing")),
+                    "{root}"
+                );
+            }
+        }
+        let home = tuic_core::temp_paths::recognized_temp_roots()
+            .into_iter()
+            .find(|root| root.ends_with("Gits/.tmp"))
+            .expect("tooling scratch root");
+        assert!(is_temporary_path(&home.join("review-r5-wt")));
+        assert!(!is_temporary_path(
+            &home.with_file_name(".tmp-other").join("review")
+        ));
+    }
+
     // Catches: a detached HEAD being mistaken for a deleted active branch.
     #[test]
     fn active_detached_checkout_is_not_an_orphan() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "active-detached");
         commit_file(&path, "active.txt", "recent branch work\n");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
@@ -12458,7 +12596,7 @@ branch refs/heads/feat
     // Catches: Keep cannot distinguish unchanged edits from new checkout state.
     #[test]
     fn orphan_assessment_fingerprint_follows_the_checkout_state() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-fingerprint");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         git_cmd(&repo)
@@ -12495,7 +12633,7 @@ branch refs/heads/feat
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
     fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = add_worktree(&repo, "orphan-moved-away");
         git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
         git_cmd(&repo)
@@ -13422,7 +13560,7 @@ branch refs/heads/feat
     // missed by the safety verdict, so ask mode now removes it without a dialog.
     #[test]
     fn orphan_assessment_is_unsafe_for_every_kind_of_unsaved_work() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let staged = detached_orphan(&repo, "orphan-staged");
         fs::write(staged.join("new.txt"), "x\n").unwrap();
         git_cmd(&staged).args(["add", "new.txt"]).run().unwrap();
@@ -13451,7 +13589,7 @@ branch refs/heads/feat
     // clean checkout survives it being moved to another commit.
     #[test]
     fn orphan_assessment_fingerprint_changes_when_a_clean_checkout_moves_head() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         commit_file(&repo, "second.txt", "two\n");
         let path = detached_orphan(&repo, "orphan-moves");
 
@@ -13475,7 +13613,7 @@ branch refs/heads/feat
     // would hold for a directory nobody can inspect any more.
     #[test]
     fn orphan_whose_directory_is_gone_has_no_fingerprint() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-vanished");
         fs::remove_dir_all(&path).unwrap();
 
@@ -13491,7 +13629,7 @@ branch refs/heads/feat
     #[test]
     fn clean_orphan_with_an_unreachable_head_is_unsafe_with_a_fingerprint_until_a_branch_holds_it()
     {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         let path = detached_orphan(&repo, "orphan-unreachable");
         commit_file(&path, "only-here.txt", "x\n");
 
@@ -13526,7 +13664,7 @@ branch refs/heads/feat
     // verdict and the fingerprint, so a populated submodule's work is removed unasked.
     #[test]
     fn orphan_assessment_sees_edits_inside_a_populated_submodule() {
-        let (_temp, repo, _workspaces) = workspace_fixture();
+        let (_temp, repo, _workspaces) = orphan_workspace_fixture();
         add_populated_submodule(&repo);
         let path = detached_orphan(&repo, "orphan-module");
         git_cmd(&path)
@@ -13550,6 +13688,14 @@ branch refs/heads/feat
     }
 }
 
+/// Temporary detached checkouts belong to their creator, not orphan cleanup.
+fn refuse_temporary_orphan(path: &Path) -> Result<(), String> {
+    if tuic_core::temp_paths::is_temporary_path(path) {
+        return Err("Cannot remove orphan worktree: checkout is in a temporary directory".into());
+    }
+    Ok(())
+}
+
 /// Blocking orphan scan; scheduling belongs to the app adapter.
 pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>, String> {
     let base_repo = PathBuf::from(&repo_path);
@@ -13559,7 +13705,11 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .map_err(|e| format!("git worktree list failed: {e}"))?;
     let mut default_branch = None;
     let mut orphans = Vec::new();
+    let temp_roots = tuic_core::temp_paths::recognized_temp_roots();
     for path in parse_orphan_worktrees(&out.stdout) {
+        if tuic_core::temp_paths::is_under_temp_roots(Path::new(&path), &temp_roots) {
+            continue;
+        }
         // Detached describes HEAD, not branch lifetime. A non-default branch
         // at this tip is evidence that the checkout still holds active work.
         // Missing directories can only have their stale registration removed.

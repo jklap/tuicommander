@@ -506,7 +506,14 @@ Any inspection failure is `Unknown` and cannot authorize removal. Destructive
 UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
 confirmation cannot authorize changed state.
 
-For detached orphan worktrees, the Ask dialog automatically removes after a
+Detached checkouts under OS/environment temporary roots, `~/Gits/.tmp` and
+Unix `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` are excluded
+from orphan scans and orphan removal. Registered and resolved paths are checked,
+including missing checkouts. Detached sidebar inventory stays independent of
+cleanup eligibility. Repository refresh triggers cleanup; there is no separate
+orphan scan timer.
+
+For eligible detached orphan worktrees, the Ask dialog automatically removes after a
 configurable countdown only when every checkout is clean (including untracked
 files) and its HEAD is reachable from a branch. Otherwise it lists the unsafe
 reasons without a countdown. Keep and Escape cancel. An agent can answer the
