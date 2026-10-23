@@ -2878,4 +2878,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After rebuilding, move a detached checkout manually: its old registration stays visible as a repair diagnostic and survives Ask/On automatic cleanup; explicit user removal can discard it.
 
-- [ ] Native story QA (#2168-7fbc): after a backend restart, mark a criterion Manual, finish development checks, verify QA, fail QA back to In progress, then pass all checks and approve. The current daily Rust process does not hot-reload this change.
+- [x] Native story QA (#2168-7fbc): the isolated native `agent-test-2168` instance verified QA-only filtering, the QA Kanban card, enabled manual checks, QA failed → In progress, Submit for QA → QA, and QA passed → Done. CLI/API and DOM evidence: `~/Gits/.tmp/results/tuic-2168-live/`. The daily Rust process still needs a manual restart to load this change.
+- [ ] Native story QA screenshot (#2168-7fbc): inspect the QA column and detail controls on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window screencapture failed with "could not create image from window" while loginwindow was frontmost; API and native DOM verification passed. --> EVIDENCE: `~/Gits/.tmp/results/tuic-2168-live/main-screenshot-error.txt`.
