@@ -7,6 +7,51 @@
   };
   const info = () => ({ standalone: navigator.standalone === true, displayStandalone: matchMedia('(display-mode: standalone)').matches, userAgent: navigator.userAgent, width: innerWidth, height: innerHeight });
   report({ kind: 'load', ...info() });
+  // Split transport/body decoding from synchronous transcript work. The wrapper
+  // preserves the application's response and JSON parsing paths.
+  const originalFetch = window.fetch;
+  window.fetch = async function (...args) {
+    const url = String(args[0]);
+    if (!url.includes('/chat-view')) return originalFetch.apply(this, args);
+    const start = performance.now();
+    const response = await originalFetch.apply(this, args);
+    const headersAt = performance.now();
+    const originalText = response.text.bind(response);
+    response.text = async () => {
+      const text = await originalText();
+      const bodyAt = performance.now();
+      report({ kind: 'snapshot-transfer', url, headersMs: headersAt - start, bodyMs: bodyAt - headersAt, elapsedMs: bodyAt - start, bytes: text.length });
+      return text;
+    };
+    return response;
+  };
+  let layoutMs = 0;
+  let layoutReads = 0;
+  const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
+  if (scrollHeight?.get && scrollHeight.configurable) {
+    Object.defineProperty(Element.prototype, 'scrollHeight', { ...scrollHeight, get() {
+      if (this.getAttribute('aria-label') !== 'Chat transcript') return scrollHeight.get.call(this);
+      const start = performance.now();
+      const height = scrollHeight.get.call(this);
+      layoutMs += performance.now() - start;
+      layoutReads++;
+      return height;
+    } });
+  }
+  const originalParse = JSON.parse;
+  JSON.parse = function (text, ...args) {
+    if (typeof text !== 'string' || !text.includes('SIM1770_ENTRY_')) return originalParse.call(this, text, ...args);
+    const start = performance.now();
+    const value = originalParse.call(this, text, ...args);
+    const end = performance.now();
+    report({ kind: 'snapshot-parse', elapsedMs: end - start, updates: value.updates?.length });
+    layoutMs = 0;
+    layoutReads = 0;
+    // Includes synchronous snapshot replay/render and its queued highlight and
+    // follow microtasks. scrollHeight measures their forced style/layout reads.
+    setTimeout(() => report({ kind: 'snapshot-consumer', elapsedMs: performance.now() - end, layoutMs, layoutReads }), 0);
+    return value;
+  };
   function start(kind) {
     const run = ++serial;
     pending = { kind, start: performance.now(), run };
