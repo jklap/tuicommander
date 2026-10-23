@@ -2702,11 +2702,11 @@ pub struct SessionMaps {
     // still blocked reading its now-orphaned PTY master — for as long as
     // that process happened to keep running on its own, potentially
     // forever for a long-lived shell/agent, not merely "until the tombstone
-    // sweep reaps it." `cleanup_session` (`pty.rs`) now shares
-    // `terminate_child_with_grace` with `close_pty_core` — the same
-    // wait-then-SIGKILL-with-foreground-process-group-kill fallback the
-    // explicit-kill path already had. Regression test:
-    // `pty::tests::cleanup_session_actually_kills_a_process_that_ignores_everything_but_sigkill`.
+    // sweep reaps it." On this tree `cleanup_session` is a test-only wrapper
+    // (`pty/lifecycle.rs`, `#[cfg(test)]`); every real close goes through
+    // `close_pty_core`, whose `terminate_child_with_grace` is the
+    // wait-then-SIGKILL-with-foreground-process-group-kill fallback.
+    // Regression test: `pty::tests::close_pty_core_kills_agent_grandchild`.
 }
 
 /// Read every entry of a per-session counter map and zero it in the same pass,
