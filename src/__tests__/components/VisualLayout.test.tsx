@@ -22,7 +22,10 @@ import { commandPaletteStore } from "../../stores/commandPalette";
 import { promptLibraryStore } from "../../stores/promptLibrary";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 
-vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue(null),
+	listen: vi.fn().mockResolvedValue(() => {}),
+}));
 vi.mock("../../stores/appLogger", () => ({
 	appLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
