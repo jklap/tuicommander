@@ -3051,7 +3051,8 @@ mod tests {
                 )
                 .unwrap();
             let current = stories.get_story(&story_id).unwrap();
-            let before = super::store::fingerprint(std::slice::from_ref(&current), true).unwrap();
+            let before =
+                super::store::fingerprint(&plan_id, std::slice::from_ref(&current), true).unwrap();
             let updated = stories
                 .update_story(
                     &story_id,
@@ -3059,7 +3060,10 @@ mod tests {
                     serde_json::from_value(patch).unwrap(),
                 )
                 .unwrap();
-            assert_ne!(before, super::store::fingerprint(&[updated], true).unwrap());
+            assert_ne!(
+                before,
+                super::store::fingerprint(&plan_id, &[updated], true).unwrap()
+            );
             let receipt = store
                 .command(
                     &run.id,
