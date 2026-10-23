@@ -1479,6 +1479,12 @@ describe("transport", () => {
 		});
 
 		// --- Claude Usage dashboard (story 063) ---
+		it("maps session usage to the encoded session-owned endpoint", () => {
+			expect(mapCommandToHttp("get_session_usage", { sessionId: "private/session" })).toEqual({
+				method: "GET",
+				path: "/sessions/private%2Fsession/usage",
+			});
+		});
 		it("maps get_claude_usage_api to GET /claude/usage", () => {
 			const result = mapCommandToHttp("get_claude_usage_api", {});
 			expect(result.method).toBe("GET");

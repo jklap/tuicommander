@@ -1068,3 +1068,13 @@ exact message, plus an OAuth app authorization URL for every github.com OAuth gr
 `github_diagnostics` accepts optional `refresh: boolean` (default false). True
 clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 `POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.
+
+### Session usage
+
+| Command | Arguments | Result |
+|---------|-----------|--------|
+| `get_session_usage` | `sessionId: string` | Session-owned usage snapshot; same shape as `GET /sessions/{id}/usage` |
+
+This async command runs outside the macOS main thread. Rust selects the owner,
+profile and exact ego ledger row. Missing usage is an explicit unavailable
+snapshot, not a zero quota or cost. No messages-generation fallback is used.
