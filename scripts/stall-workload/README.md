@@ -18,7 +18,7 @@ Run through build-slot, in the background through the managed runner:
 ```sh
 STALL_SECONDS=30 STALL_SESSIONS=4 STALL_VISIBLE=1 \
   "$HOME/Gits/personal/orchestrator/tools/build/build-slot.sh" \
-  node scripts/stall-workload/run.mjs "$HOME/Gits/.tmp/stall-workload-example"
+  node scripts/stall-workload/run.mjs "${TMPDIR%/}/stall-example"
 ```
 
 The output directory must not exist. Start with three seconds and one session
@@ -68,7 +68,7 @@ signal exit status is retained, including repeated signals during teardown.
 Summarize the raw data with nearest-rank quantiles:
 
 ```sh
-node scripts/stall-workload/summarize.mjs "$HOME/Gits/.tmp/stall-workload-example/report.json"
+node scripts/stall-workload/summarize.mjs "${TMPDIR%/}/stall-example/report.json"
 ```
 
 The recorder is intentionally lossy. Its 4 MiB budget can retain much less than
@@ -84,7 +84,9 @@ painting. No threshold in this harness marks story RED/GREEN.
 
 The headless remote router does not expose `/debug/frame-workload`; the harness
 saves recorder dumps itself. This does not validate the backend writer route.
-The backend gets a Gits-local HOME, config and temporary directory. No production
+The backend gets a HOME, config and temporary directory inside the output
+directory, which defaults to a short `stall-<time>` directory in the caller's
+temp dir (keep an explicit one short too: it holds the backend's Unix socket). No production
 configuration, credentials or repositories are copied.
 
 ## Later WKWebView paint replay
@@ -95,8 +97,8 @@ that already-running WebView:
 
 ```sh
 node scripts/stall-workload/desktop-replay.mjs \
-  "$HOME/Gits/.tmp/stall-workload-example/frame-workload.json" \
-  "$HOME/Gits/.tmp/stall-workload-example/wkwebview-report.json" agent-test 19876 \
+  "${TMPDIR%/}/stall-example/frame-workload.json" \
+  "${TMPDIR%/}/stall-example/wkwebview-report.json" agent-test 19876 \
   "<socket field from the agent-test dry-run JSON>"
 ```
 

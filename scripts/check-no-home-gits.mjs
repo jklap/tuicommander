@@ -42,6 +42,8 @@ const ALLOWED = new Map([
 	// Read-only lookups for the native verification scripts; their scratch comes
 	// from host_temp_dir() (pick 400 decision, 2026-10-23).
 	["scripts/maintainer_tools.py", "locates the maintainer's build-slot runner, browser-stealth wrapper and BUILD_FREEZE marker (read only, env-overridable), not scratch"],
+	["scripts/check-mobile-chat-layout.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
+	["scripts/check-mobile-session-chat-layout.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
 	["scripts/check-chat-code-copy-layout.py", "locates the maintainer's browser-stealth wrapper, not scratch"],
 	["scripts/design-mode-demo.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
 	["scripts/settings-visual/geometry.test.mjs", "comment citing where a recorded measurement came from, not filesystem access"],
@@ -59,6 +61,7 @@ const HOME_PATTERNS = [
 	["Python HOME + Gits", /environ(?:\.get)?[[(]\s*["']HOME["'][\s\S]{0,200}?["'][^"'\n]*Gits/],
 	["JS homedir() + Gits", /homedir\(\)[\s\S]{0,200}?["'`][^"'`\n]*Gits/],
 	["JS env.HOME + Gits", /env\.HOME[\s\S]{0,200}?["'`][^"'`\n]*Gits/],
+	["JS template ${...HOME}/Gits", /HOME\}\/+Gits\b/],
 	["path.join(HOME, Gits)", /HOME\s*,\s*["']Gits/],
 	["gitsRoot allow-list", /\bgitsRoot\b/],
 ];
@@ -114,6 +117,7 @@ if (selfTest) {
 			"g.py": 'root = Path.home() / "Gits" / ".tmp"\n',
 			"h.mjs": 'const gitsRoot = path.join(process.env.HOME, "Gits");\n',
 			"i.ts": 'const r = path.join(os.homedir(), "Gits", ".tmp");\n',
+			"j.mjs": "const e = `${process.env.HOME}/Gits/.tmp/x`;\n",
 		};
 		const clean = {
 			"ok.rs": 'assert_eq!(clean("~/Gits/personal/tuicommander"), "");\n// the old `~/Gits` layout\n',

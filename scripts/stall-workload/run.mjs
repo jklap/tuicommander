@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -10,7 +11,9 @@ import solid from "vite-plugin-solid";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 process.chdir(root);
-const evidence = resolve(process.argv[2] ?? `${process.env.HOME}/Gits/.tmp/stall-workload-${Date.now()}`);
+// Default under the caller's temp dir, short enough for the backend's named
+// socket in <evidence>/tmp (macOS sun_path).
+const evidence = resolve(process.argv[2] ?? resolve(process.env.TUIC_TEST_HOST_TMPDIR || tmpdir(), `stall-${Date.now().toString(36)}`));
 if (existsSync(evidence)) throw new Error(`Evidence directory already exists: ${evidence}`);
 mkdirSync(evidence, { recursive: true });
 const home = resolve(evidence, "home");
