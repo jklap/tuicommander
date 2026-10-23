@@ -13,6 +13,7 @@ import { MobileJumpBottom } from "../components/MobileJumpBottom";
 import { createOpenMarkdownTabs, OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
+import { SessionUsageBlock } from "../components/SessionUsageBlock";
 import { SuggestChips } from "../components/SuggestChips";
 import type { ComposerInputKey } from "../components/syncGuards";
 import { TerminalKeybar } from "../components/TerminalKeybar";
@@ -492,9 +493,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							Commands
 						</button>
 					</Show>
-					<Show when={sessionState()?.usage_limit_pct != null}>
-						<div class={styles.overflowInfo}>Usage {sessionState()!.usage_limit_pct}%</div>
-					</Show>
+					<SessionUsageBlock sessionId={props.session.session_id} />
 					<button type="button" onClick={() => void copySessionId()}>
 						Copy session ID
 					</button>

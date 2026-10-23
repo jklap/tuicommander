@@ -110,6 +110,8 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 };
 
 mockInvoke.mockImplementation(defaultInvoke);
+// Match app startup: preference writes must have a loaded comparison base.
+await uiStore.hydrate();
 
 const setBrowserMode = (enabled: boolean) => {
 	const globals = globalThis as Record<string, unknown>;
@@ -763,5 +765,35 @@ describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 		await dragFileOntoDir("mouse");
 		expect(renameCalls()).toHaveLength(1);
 		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+});
+
+describe("FileBrowserPanel symlink labels", () => {
+	it.each(["flat", "tree"] as const)("%s: catches links shown as ordinary file bytes", async (mode) => {
+		uiStore.setFileBrowserViewMode(mode);
+		listings.set("/repo|.", [
+			{
+				...file("linked-dir"),
+				size: 50,
+				symlink_target: "/shared/documents",
+				symlink_target_kind: "directory",
+			},
+		]);
+		const open = vi.fn();
+		const view = render(() => <FileBrowserPanel visible repoPath="/repo" onClose={() => {}} onFileOpen={open} />);
+		await waitFor(() => expect(view.getByText("directory link → /shared/documents")).toBeTruthy());
+		expect(view.queryByText("50 B")).toBeNull();
+		expect(
+			view.getByTitle("linked-dir\ndirectory link → /shared/documents", { normalizer: (value) => value }),
+		).toBeTruthy();
+		fireEvent.click(
+			view.getByTitle("linked-dir\ndirectory link → /shared/documents", { normalizer: (value) => value }),
+		);
+		expect(open).toHaveBeenCalledWith("/repo", "linked-dir");
+		// Catches refresh dedup hiding a retargeted link with unchanged timestamp.
+		listings.set("/repo|.", [{ ...listings.get("/repo|.")![0], symlink_target: "/shared/updated" }]);
+		repositoriesStore.bumpRevision("/repo");
+		await waitFor(() => expect(view.getByText("directory link → /shared/updated")).toBeTruthy());
+		view.unmount();
 	});
 });

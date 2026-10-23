@@ -6,7 +6,7 @@
 ## Progress cursor paging (2151-62ef)
 
 - [x] Targeted module/component checks verify a 1000-record journal opens with 100 rows and one read, then an older-page double click appends exactly 100 distinct rows. Scope changes and older-page failure/retry have regression coverage.
-- [ ] Capture the mobile Progress list after scrolling into an older page in an isolated worktree browser or agent-test instance. The headless Chrome attempts timed out without a screenshot (20s and 60s); no further screenshot attempts were made. Screen-lock state was not established. Evidence logs: `~/Gits/.tmp/results/2151/`. The reported historical duplicate-record cause is not established: this revision had no older-records control, only per-message More.
+- [x] Captured the mobile Progress list at 390×844 before and after paging, including a scroll into the older page. Parent reviewed the PNGs. Evidence: orchestrator `reports/tuicommander/img/2026-10-23-2151/`. Parent inspection of the original screenshot identified a repeated project name in the header, not duplicate journal records; the embedded header now keeps only the project selector. Regression coverage checks single- and multi-project mobile headers, empty/missing project discovery fallback, and the retained desktop subtitle. Updated header capture: `~/Gits/.tmp/results/2151/header-visual/after-header.png` (390×844; matching DOM snapshot has no separate project subtitle).
 
 ## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
 
@@ -2824,3 +2824,13 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] #2085-721d: A real attach is unchecked. Evidence 2026-10-23 on `make agent-test` (agent-test-2085, :19900), driven over the unix socket with `/debug/invoke_js`: Settings > Remote Machines > Add, transport select set to Relay shows the bundle textarea and the hint and hides the SSH and Direct fields (no auth-username input); typing a name and pasting a bundle then Save closes the form and lists `relay-dom | RELAY | via relay`; `connections.json` holds no bundle or relay bearer; Connect shows `Error` with `relay unreachable: ...` in the row. `PUT .../relay-pairing` rejects `junk` and accepts a valid bundle. Still open: a real attach to a running relay and daemon (`relay_tests` cover it). The "Deployment and lifetime" card held only the auto-update switch for Relay; it is now hidden (window screenshots 2026-10-23: before showed the card, after goes from the bundle hint straight to Save/Cancel). Rust does not hot-reload.
 - [ ] #2136-dc79: After a manual backend rebuild/restart, open Settings > MCP > Call audit, enable the toggle, make agent MCP calls, press Refresh and confirm rows appear; disable and confirm no new rows are recorded. Rust does not hot-reload.
+
+- [ ] After a deliberate Rust rebuild/restart, check Files shows a directory link with its target instead of 50 B, and opening an outside link names the target and refuses access (#2155-5da6).
+## Session usage menu (#2150-4e0c)
+
+- [ ] After a backend rebuild/restart, open the mobile overflow for Claude, Codex
+  and ego sessions. Check the live profile, shared quota/reset labels or exact ego
+  session tokens/cost, unavailable and stale states. Never restart the daily app
+  during active sessions for this check. Rust changes do not hot reload.
+
+- [x] Capture the isolated 390×844 session-usage browser fixture. _(verified 2026-10-23: available, unavailable and stale viewport PNGs captured with the authorized browser wrapper; accessibility text and DOM bounds checked. Fixture-only, not live provider evidence. Evidence: `~/Gits/personal/orchestrator/reports/tuicommander/img/2026-10-23-2150/README.md`.)_

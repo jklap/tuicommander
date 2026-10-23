@@ -542,7 +542,7 @@ are unaffected (they build `NSAlert`) and stay as they are.
 | `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
 | `resolve_terminal_paths` | `cwd, candidates` | `Vec<Option<ResolvedFilePath>>` | Batched form, answered **positionally**: entry `i` is the result for `candidates[i]`. One IPC round-trip per terminal screen instead of one per candidate |
 | `resolve_markdown_link` | `root, currentFile, href` | `MarkdownLinkTarget` | Decode and resolve a rendered Markdown link relative to its file; return a heading, file, missing path, or blocked network path. Runs filesystem work on the blocking pool |
-| `list_directory` | `path` | `Vec<DirEntry>` | List directory contents |
+| `list_directory` | `repoPath, subdir` | `Vec<DirEntry>` | List directory contents; links add `symlink_target` (link text) and `symlink_target_kind` (`directory`, `file`, `unavailable`), with size 0 |
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
@@ -1068,3 +1068,13 @@ exact message, plus an OAuth app authorization URL for every github.com OAuth gr
 `github_diagnostics` accepts optional `refresh: boolean` (default false). True
 clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 `POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.
+
+### Session usage
+
+| Command | Arguments | Result |
+|---------|-----------|--------|
+| `get_session_usage` | `sessionId: string` | Session-owned usage snapshot; same shape as `GET /sessions/{id}/usage` |
+
+This async command runs outside the macOS main thread. Rust selects the owner,
+profile and exact ego ledger row. Missing usage is an explicit unavailable
+snapshot, not a zero quota or cost. No messages-generation fallback is used.
