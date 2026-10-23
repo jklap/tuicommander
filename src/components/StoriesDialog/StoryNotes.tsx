@@ -114,7 +114,9 @@ export function StoryNotes(props: { project: string; storyId: string; revision: 
 								<time dateTime={new Date(note.createdAt).toISOString()}>
 									{new Date(note.createdAt).toLocaleString()}
 								</time>
-								<span>{t("stories.notes.revision", "Revision {revision}", { revision: note.storyRevision })}</span>
+								<span>
+									{t("stories.notes.revision", "Revision {revision}", { revision: String(note.storyRevision) })}
+								</span>
 							</div>
 							<p class={s.text}>{note.text}</p>
 							<Show when={note.receipts.length}>

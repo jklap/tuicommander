@@ -1629,7 +1629,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											</div>
 										</Show>
 										<Show when={`${props.project}:${story().id}`} keyed>
-											{() => (
+											{(_storyKey) => (
 												<StoryNotes
 													project={props.project}
 													storyId={story().id}
