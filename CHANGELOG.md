@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show sidebar status diagnostics once and omit removal warnings for main checkouts (#2152-765e).
+
 - Retain the existing bounded ticker retry when newer reader output arrives during a frame send; input credits, spacing, rate floors and receipt gates are unchanged (#2040-16b2).
 
 - Stop desktop receipt and recovery feedback from generating frames after terminal output goes quiet. Keep paused damage and bounded bulk-output pacing; native echo still exceeds one frame in measured p95 samples (#2040-16b2).

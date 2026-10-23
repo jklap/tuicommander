@@ -78,7 +78,7 @@ Each branch row can show:
 | **Dirty badge** | The workspace contains staged, unstaged, or untracked changes. Hover or focus the badge for the removal-safety explanation. |
 | **Merged badge** | Branches merged into main show a "Merged" badge |
 | **Unmerged mark** | A small outlined square means the worktree has commits outside the default branch. A zero diff or dirty count does not mean those commits are merged. |
-| **Unknown badge** | TUICommander could not verify the workspace state, so removal is blocked. Hover or focus the badge for the inspection error. |
+| **Unknown badge** | TUICommander could not verify the workspace state, so removal is blocked. Hover or focus the badge for the inspection error. A missing default branch shows **No base branch**. Branch-name tooltips show each diagnostic once; main checkouts do not show removal warnings. |
 | **Question icon** | An agent in this branch's terminal is asking a question |
 | **Grey icon** | No active terminals in the repo — branch icons dim to grey |
 
