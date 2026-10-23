@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Edit native stories",
+		description:
+			"Select an unclaimed Backlog or Ready story and choose Edit to change metadata, requirements and dependencies together. Save checks the original revision; Cancel discards the draft. QA and active work cannot be amended.",
+		shortcut: null,
+	},
+	{
 		feature: "Native story QA",
 		description:
 			"Prefix human checks with [MANUAL]. When development checks pass, the story enters QA; use the QA filter or Kanban column to find checks that wait for a person.",

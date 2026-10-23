@@ -1,7 +1,7 @@
 use super::{
     CRITERIA_INCOMPLETE, NewPlan, NewStory, PLAN_DOCUMENT_NOT_FOUND, Plan, PlanSource, PlanState,
-    PlanView, Story, StoryCommand, StoryListFilter, StoryListPage, StoryStatus, StoryStore,
-    StorySummary, StoryTransition,
+    PlanView, Story, StoryCommand, StoryListFilter, StoryListPage, StoryPatch, StoryStatus,
+    StoryStore, StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,12 @@ pub enum StoryAction {
     },
     CreateStory {
         input: NewStory,
+    },
+    /// Amend an unclaimed backlog/ready story atomically at its current revision.
+    UpdateStory {
+        story_id: String,
+        expected_revision: i64,
+        patch: StoryPatch,
     },
     /// Optional conjunctive filters; limit opts into bounded id-order keyset pages.
     ListStories {
@@ -238,6 +244,18 @@ fn story_action_with_source(
         StoryAction::CreateStory { input } => {
             plan_in_project(&input.plan_id)?;
             Ok(StoryReply::Story(store.create_story(input)?))
+        }
+        StoryAction::UpdateStory {
+            story_id,
+            expected_revision,
+            patch,
+        } => {
+            story_in_project(&story_id)?;
+            Ok(StoryReply::Story(store.update_story(
+                &story_id,
+                expected_revision,
+                patch,
+            )?))
         }
         StoryAction::ListStories {
             plan_id,
@@ -602,6 +620,395 @@ mod tests {
         (create("First"), create("Second"))
     }
 
+    /// Catches: a missing update arm in StoryAction across the shared transport boundary.
+    #[test]
+    fn update_story_changes_priority_on_shared_service() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        assert_eq!(story.priority, 1);
+        let action = serde_json::from_value(serde_json::json!({
+            "action": "update_story",
+            "story_id": story.id,
+            "expected_revision": story.revision,
+            "patch": {"priority": 3}
+        }))
+        .expect("update_story is a supported shared action");
+        let updated = story_of(story_action(project, action, None).expect("update priority"));
+        assert_eq!(updated.priority, 3);
+        let persisted = story_of(
+            story_action(project, StoryAction::GetStory { story_id: story.id }, None)
+                .expect("read persisted story"),
+        );
+        assert_eq!(persisted.priority, 3);
+        assert_eq!(persisted.revision, story.revision + 1);
+    }
+
+    /// Catches: accepting a typo as an omitted field, including nested origin fields.
+    #[test]
+    fn update_story_rejects_unknown_patch_and_origin_fields() {
+        for patch in [
+            serde_json::json!({"prioirty": 3}),
+            serde_json::json!({"origin": {"type": "native", "step": "ignored"}}),
+        ] {
+            assert!(serde_json::from_value::<StoryAction>(serde_json::json!({
+                "action": "update_story", "story_id": "s", "expected_revision": 1, "patch": patch
+            })).is_err());
+        }
+    }
+
+    /// Catches: stale or invalid patches persisting an earlier valid field before refusal.
+    #[test]
+    fn update_story_rolls_back_stale_and_invalid_dependency_patches() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, dependency) = two_stories(project);
+        let (foreign, _) = two_stories(project);
+        let store = StoryStore::open().unwrap();
+        for (revision, patch, message) in [
+            (
+                story.revision - 1,
+                serde_json::json!({"priority": 3}),
+                "stale",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 3, "dependencies": [foreign.id]}),
+                "one plan",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 3, "dependencies": [story.id]}),
+                "cycle",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 3, "dependencies": [dependency.id, dependency.id]}),
+                "duplicate",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 3, "criteria": []}),
+                "criteria",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 0, "title": "Changed"}),
+                "priority",
+            ),
+            (
+                story.revision,
+                serde_json::json!({"priority": 3, "fileScope": ["../outside"]}),
+                "relative",
+            ),
+        ] {
+            let patch = serde_json::from_value(patch).unwrap();
+            let error = store.update_story(&story.id, revision, patch).unwrap_err();
+            assert!(error.contains(message), "{error}");
+            assert_eq!(store.get_story(&story.id).unwrap(), story);
+        }
+    }
+
+    /// Catches: concurrent handles both accepting one revision and losing an amendment.
+    #[test]
+    fn update_story_allows_only_one_writer_at_the_expected_revision() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (story, _) = two_stories(repo.path().to_str().unwrap());
+        let first = StoryStore::open().unwrap();
+        let second = StoryStore::open().unwrap();
+        let results = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                first.update_story(
+                    &story.id,
+                    story.revision,
+                    StoryPatch {
+                        priority: Some(2),
+                        ..Default::default()
+                    },
+                )
+            });
+            let b = scope.spawn(|| {
+                second.update_story(
+                    &story.id,
+                    story.revision,
+                    StoryPatch {
+                        priority: Some(3),
+                        ..Default::default()
+                    },
+                )
+            });
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .all(|error| error.contains("stale") || error.contains("preflight")),
+            "{results:?}"
+        );
+        let winner = results.into_iter().find_map(Result::ok).unwrap();
+        assert_eq!(first.get_story(&story.id).unwrap(), winner);
+        assert_eq!(winner.revision, story.revision + 1);
+    }
+
+    /// Catches: metadata edits losing checks, reordered requirements receiving another check,
+    /// and changed/new or ambiguous duplicate requirements inheriting old proof.
+    #[test]
+    fn update_story_preserves_only_unchanged_unambiguous_criterion_checks() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        let store = StoryStore::open().unwrap();
+        let patch = |value| serde_json::from_value::<StoryPatch>(value).unwrap();
+        let mut story = store
+            .update_story(
+                &story.id,
+                story.revision,
+                patch(serde_json::json!({
+                    "criteria": ["First", "Second", "Duplicate", "Duplicate"]
+                })),
+            )
+            .unwrap();
+        for command in [
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::CheckCriterion(1),
+            StoryCommand::CheckCriterion(2),
+            StoryCommand::CheckCriterion(3),
+            StoryCommand::SubmitReview,
+            StoryCommand::RejectReview,
+        ] {
+            story = store
+                .transition(&story.id, story.revision, command)
+                .unwrap();
+        }
+        assert_eq!(story.status, StoryStatus::Ready);
+        let priority = store
+            .update_story(
+                &story.id,
+                story.revision,
+                patch(serde_json::json!({"priority": 3})),
+            )
+            .unwrap();
+        assert_eq!(priority.checked, vec![true; 4]);
+        let edited = store
+            .update_story(
+                &priority.id,
+                priority.revision,
+                patch(serde_json::json!({
+                    "criteria": ["Second", "Changed first", "New", "Duplicate"]
+                })),
+            )
+            .unwrap();
+        assert_eq!(edited.checked, vec![true, false, false, false]);
+        let duplicated = store
+            .update_story(
+                &edited.id,
+                edited.revision,
+                patch(serde_json::json!({
+                    "criteria": ["Second", "Second"]
+                })),
+            )
+            .unwrap();
+        assert_eq!(duplicated.checked, vec![false, false]);
+    }
+
+    /// Catches: dependency amendment leaving readiness stale or allowing a transitive cycle.
+    #[test]
+    fn update_story_reconciles_added_and_removed_dependencies_atomically() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (first, second) = two_stories(repo.path().to_str().unwrap());
+        let store = StoryStore::open().unwrap();
+        let patch = |value| serde_json::from_value::<StoryPatch>(value).unwrap();
+        let blocked = store
+            .update_story(
+                &second.id,
+                second.revision,
+                patch(serde_json::json!({
+                    "dependencies": [first.id]
+                })),
+            )
+            .unwrap();
+        assert_eq!(blocked.status, StoryStatus::Backlog);
+        let error = store
+            .update_story(
+                &first.id,
+                first.revision,
+                patch(serde_json::json!({
+                    "title": "Not persisted", "dependencies": [second.id]
+                })),
+            )
+            .unwrap_err();
+        assert!(error.contains("cycle"), "{error}");
+        assert_eq!(store.get_story(&first.id).unwrap(), first);
+        let ready = store
+            .update_story(
+                &blocked.id,
+                blocked.revision,
+                patch(serde_json::json!({
+                    "dependencies": []
+                })),
+            )
+            .unwrap();
+        assert_eq!(ready.status, StoryStatus::Ready);
+        assert_eq!(ready.dependencies, Vec::<String>::new());
+    }
+
+    /// Catches: amendments bypassing claim/lifecycle ownership and mutating terminal records.
+    #[test]
+    fn update_story_refuses_claimed_active_and_terminal_stories() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let store = StoryStore::open().unwrap();
+        let (claimed, _) = two_stories(project);
+        let claimed = store
+            .claim(&claimed.id, "session", claimed.revision)
+            .unwrap();
+        let (mut manual, _) = two_stories(project);
+        assert!(
+            store
+                .update_story(&claimed.id, claimed.revision, StoryPatch::default())
+                .unwrap_err()
+                .contains("claimed")
+        );
+        assert_eq!(store.get_story(&claimed.id).unwrap(), claimed);
+
+        for command in [
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::SubmitReview,
+            StoryCommand::Approve,
+        ] {
+            manual = store
+                .transition(&manual.id, manual.revision, command)
+                .unwrap();
+            let error = store
+                .update_story(&manual.id, manual.revision, StoryPatch::default())
+                .unwrap_err();
+            assert!(error.contains("only backlog or ready"), "{error}");
+            assert_eq!(store.get_story(&manual.id).unwrap(), manual);
+        }
+        let (cancelled, _) = two_stories(project);
+        let cancelled = store
+            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .unwrap();
+        assert!(
+            store
+                .update_story(&cancelled.id, cancelled.revision, StoryPatch::default())
+                .is_err()
+        );
+    }
+
+    /// Catches: the generic amendment dropping story type, clearing it on omission, or hiding it from filters.
+    #[test]
+    fn update_story_type_is_nullable_and_updates_the_shared_filter_projection() {
+        use super::super::{StoryFilter, StoryType};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        let update = |revision, patch| {
+            story_of(story_action(project, serde_json::from_value(serde_json::json!({
+            "action": "update_story", "story_id": story.id, "expected_revision": revision, "patch": patch
+        })).unwrap(), None).unwrap())
+        };
+        let typed = update(story.revision, serde_json::json!({"storyType": "fix"}));
+        assert_eq!(typed.story_type, Some(StoryType::Fix));
+        let store = StoryStore::open().unwrap();
+        let filtered = store
+            .filtered_plan_view(
+                &story.plan_id,
+                &StoryFilter {
+                    story_type: Some(StoryType::Fix),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(filtered.visible_story_ids, vec![story.id.clone()]);
+        let unchanged = update(typed.revision, serde_json::json!({"priority": 3}));
+        assert_eq!(unchanged.story_type, Some(StoryType::Fix));
+        let untyped = update(unchanged.revision, serde_json::json!({"storyType": null}));
+        assert_eq!(untyped.story_type, None);
+        let filtered = store
+            .filtered_plan_view(
+                &story.plan_id,
+                &StoryFilter {
+                    story_type: Some(StoryType::Fix),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(filtered.visible_story_ids, Vec::<String>::new());
+    }
+
+    /// Catches: old documents failing to decode or omitted optional fields clearing metadata.
+    #[test]
+    fn update_story_optional_metadata_defaults_and_null_clearing() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let (story, _) = two_stories(repo.path().to_str().unwrap());
+        let mut legacy = serde_json::to_value(&story).unwrap();
+        legacy.as_object_mut().unwrap().remove("problem");
+        legacy.as_object_mut().unwrap().remove("risk");
+        assert_eq!(serde_json::from_value::<Story>(legacy).unwrap(), story);
+        let store = StoryStore::open().unwrap();
+        let patch = |value| serde_json::from_value::<StoryPatch>(value).unwrap();
+        let metadata = store
+            .update_story(
+                &story.id,
+                story.revision,
+                patch(serde_json::json!({
+                    "title": "Amended", "fileScope": ["src/service.rs"],
+                    "origin": {"type": "plan_step", "step": "Step 2"},
+                    "problem": "Missing amendment", "risk": "high"
+                })),
+            )
+            .unwrap();
+        assert_eq!(metadata.title, "Amended");
+        assert_eq!(metadata.file_scope, vec!["src/service.rs"]);
+        assert_eq!(
+            metadata.origin,
+            StoryOrigin::PlanStep {
+                step: "Step 2".into()
+            }
+        );
+        assert_eq!(metadata.problem.as_deref(), Some("Missing amendment"));
+        assert_eq!(metadata.risk, Some(super::super::StoryRisk::High));
+        let unchanged = store
+            .update_story(
+                &metadata.id,
+                metadata.revision,
+                patch(serde_json::json!({"priority": 2})),
+            )
+            .unwrap();
+        assert_eq!(unchanged.problem, metadata.problem);
+        assert_eq!(unchanged.risk, metadata.risk);
+        let cleared = store
+            .update_story(
+                &unchanged.id,
+                unchanged.revision,
+                patch(serde_json::json!({"problem": null, "risk": null})),
+            )
+            .unwrap();
+        assert_eq!(cleared.problem, None);
+        assert_eq!(cleared.risk, None);
+    }
+
     /// Catches: counting stories of finished plans, counting won't-fix stories in the total, and
     /// counting stories abandoned behind a cancelled dependency, and leaking another project's plans into the summary.
     #[test]
@@ -840,6 +1247,27 @@ mod tests {
             .iter()
             .find(|variant| variant["properties"]["action"]["const"] == "create_story")
             .expect("create_story is published");
+        let update = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| variant["properties"]["action"]["const"] == "update_story")
+            .expect("update_story is published");
+        let patch = &update["properties"]["patch"];
+        assert_eq!(patch["additionalProperties"], false);
+        for field in [
+            "title",
+            "priority",
+            "fileScope",
+            "storyType",
+            "origin",
+            "problem",
+            "risk",
+            "criteria",
+            "dependencies",
+        ] {
+            assert!(patch["properties"][field].is_object(), "{field}: {patch}");
+        }
         let input = &create["properties"]["input"];
         assert_eq!(input["properties"]["priority"]["minimum"], 1);
         assert_eq!(input["properties"]["priority"]["maximum"], 3);

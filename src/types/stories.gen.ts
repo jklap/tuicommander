@@ -4,3 +4,4 @@ export type StoryStatus = "backlog" | "ready" | "in_progress" | "review" | "qa" 
 export type PlanState = "draft" | "active" | "done";
 export type StoryType = "feature" | "fix" | "refactor" | "chore" | "task";
 export type StoryVisibility = "all" | "open" | "closed" | "qa";
+export type StoryRisk = "low" | "medium" | "high";

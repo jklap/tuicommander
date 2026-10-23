@@ -15,6 +15,7 @@ import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
+import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
 
 interface Plan {
 	id: string;
@@ -30,19 +31,10 @@ interface StoryColumn {
 	status: StoryStatus;
 	storyIds: string[];
 }
-interface Story {
-	storyType?: StoryType;
-	id: string;
+interface Story extends EditableStory {
 	planId: string;
-	title: string;
-	criteria: string[];
 	checked: boolean[];
-	dependencies: string[];
-	priority: number;
-	origin: unknown;
-	fileScope: string[];
 	status: StoryStatus;
-	revision: number;
 	claimSession: string | null;
 	abandoned: boolean;
 }
@@ -151,7 +143,7 @@ const statusLabel = (status: StoryStatus): string => {
 	}
 };
 
-const storyTypeLabel = (kind: StoryType | undefined): string => {
+const storyTypeLabel = (kind: StoryType | null | undefined): string => {
 	switch (kind) {
 		case "feature":
 			return t("stories.type.feature", "Feature");
@@ -209,6 +201,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			.filter((story): story is Story => !!story) ?? stories();
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
+	const [editing, setEditing] = createSignal<Story | null>(null);
+	const [editError, setEditError] = createSignal("");
+	createEffect(
+		on(storyId, () => {
+			setEditing(null);
+			setEditError("");
+		}),
+	);
 	const [planState, setPlanState] = createSignal<string>("draft");
 	const [wontFixCount, setWontFixCount] = createSignal(0);
 	const [allCancelled, setAllCancelled] = createSignal(false);
@@ -593,6 +593,45 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	async function saveStory(patch: StoryEditPatch): Promise<void> {
+		const snapshot = editing();
+		if (!snapshot) return;
+		setBusy(true);
+		setEditError("");
+		try {
+			const reply = await call({
+				action: "update_story",
+				story_id: snapshot.id,
+				expected_revision: snapshot.revision,
+				patch,
+			});
+			if (reply.type !== "story") throw new Error("Invalid story update response");
+			if (editing() === snapshot) setEditing(null);
+			await refresh();
+		} catch (cause) {
+			appLogger.warn("store", "Stories: amendment failed", { error: String(cause) });
+			const message =
+				cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : String(cause);
+			if (editing() === snapshot)
+				setEditError(
+					message.includes("stale story revision")
+						? t(
+								"stories.edit.conflict",
+								"This story changed after editing started. Your draft is kept. Cancel and reopen Edit to load the latest revision.",
+							)
+						: message,
+				);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function cancelEdit(): void {
+		setEditing(null);
+		setEditError("");
+		void refresh();
 	}
 
 	async function createPlan(event: Event): Promise<void> {
@@ -1409,147 +1448,185 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												{statusLabel(story().status)}
 											</span>
 										</div>
-										<section>
-											<h4>{t("stories.criteria", "Acceptance criteria")}</h4>
-											<ul class={s.criteria}>
-												<For each={story().criteria}>
-													{(criterion, index) => (
-														<li>
-															<label>
-																<input
-																	type="checkbox"
-																	checked={story().checked[index()]}
-																	disabled={!["in_progress", "qa"].includes(story().status) || busy()}
-																	onChange={() =>
-																		transition({
-																			[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
-																		})
-																	}
-																/>
-																<span>{criterion}</span>
-															</label>
-														</li>
-													)}
-												</For>
-											</ul>
-										</section>
-										<section>
-											<h4>{t("stories.dependencies", "Dependencies")}</h4>
-											<Show
-												when={story().dependencies.length}
-												fallback={<p class={s.muted}>{t("stories.none", "None")}</p>}
-											>
-												<ul>
-													<For each={story().dependencies}>
-														{(id) => {
-															const dependency = stories().find((item) => item.id === id);
-															return (
-																<li class={s.dependencyRow}>
-																	<span>
-																		{dependency?.title ?? id} ·{" "}
-																		{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
-																		{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
-																	</span>
-																	<Show when={story().status === "backlog" && dependency?.status === "wont_fix"}>
-																		<button
-																			type="button"
-																			disabled={busy()}
-																			aria-label={t("stories.removeNamedDependency", "Remove {title}", {
-																				title: dependency?.title ?? id,
-																			})}
-																			onClick={() => removeDependency(id)}
-																		>
-																			{t("stories.remove", "Remove")}
-																		</button>
-																	</Show>
-																</li>
-															);
-														}}
+										<Show
+											when={editing()}
+											keyed
+											fallback={
+												<Show when={["backlog", "ready"].includes(story().status) && !story().claimSession}>
+													<div class={s.actions}>
+														<button
+															type="button"
+															disabled={busy()}
+															onClick={() => {
+																setEditing(structuredClone(story()));
+																setEditError("");
+															}}
+														>
+															{t("stories.edit.open", "Edit")}
+														</button>
+													</div>
+												</Show>
+											}
+										>
+											{(snapshot) => (
+												<StoryEditForm
+													story={snapshot}
+													candidates={stories().filter((candidate) => candidate.id !== snapshot.id)}
+													busy={busy()}
+													error={editError()}
+													onSave={saveStory}
+													onCancel={cancelEdit}
+												/>
+											)}
+										</Show>
+										<Show when={!editing()}>
+											<section>
+												<h4>{t("stories.criteria", "Acceptance criteria")}</h4>
+												<ul class={s.criteria}>
+													<For each={story().criteria}>
+														{(criterion, index) => (
+															<li>
+																<label>
+																	<input
+																		type="checkbox"
+																		checked={story().checked[index()]}
+																		disabled={!["in_progress", "qa"].includes(story().status) || busy()}
+																		onChange={() =>
+																			transition({
+																				[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
+																			})
+																		}
+																	/>
+																	<span>{criterion}</span>
+																</label>
+															</li>
+														)}
 													</For>
 												</ul>
-											</Show>
-											<Show when={story().status === "ready" || story().status === "backlog"}>
-												<div class={s.inline}>
-													<Select
-														aria-label={t("stories.addDependency", "Add dependency")}
-														value={dependencyId()}
-														onChange={(event) => setDependencyId(event.currentTarget.value)}
-													>
-														<option value="">{t("stories.selectStory", "Select story")}</option>
-														<For
-															each={stories().filter(
-																(candidate) =>
-																	candidate.id !== story().id && !story().dependencies.includes(candidate.id),
-															)}
-														>
-															{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
+											</section>
+											<section>
+												<h4>{t("stories.dependencies", "Dependencies")}</h4>
+												<Show
+													when={story().dependencies.length}
+													fallback={<p class={s.muted}>{t("stories.none", "None")}</p>}
+												>
+													<ul>
+														<For each={story().dependencies}>
+															{(id) => {
+																const dependency = stories().find((item) => item.id === id);
+																return (
+																	<li class={s.dependencyRow}>
+																		<span>
+																			{dependency?.title ?? id} ·{" "}
+																			{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
+																			{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
+																		</span>
+																		<Show when={story().status === "backlog" && dependency?.status === "wont_fix"}>
+																			<button
+																				type="button"
+																				disabled={busy()}
+																				aria-label={t("stories.removeNamedDependency", "Remove {title}", {
+																					title: dependency?.title ?? id,
+																				})}
+																				onClick={() => removeDependency(id)}
+																			>
+																				{t("stories.remove", "Remove")}
+																			</button>
+																		</Show>
+																	</li>
+																);
+															}}
 														</For>
-													</Select>
-													<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
-														{t("stories.addDependency", "Add dependency")}
+													</ul>
+												</Show>
+												<Show when={story().status === "ready" || story().status === "backlog"}>
+													<div class={s.inline}>
+														<Select
+															aria-label={t("stories.addDependency", "Add dependency")}
+															value={dependencyId()}
+															onChange={(event) => setDependencyId(event.currentTarget.value)}
+														>
+															<option value="">{t("stories.selectStory", "Select story")}</option>
+															<For
+																each={stories().filter(
+																	(candidate) =>
+																		candidate.id !== story().id && !story().dependencies.includes(candidate.id),
+																)}
+															>
+																{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
+															</For>
+														</Select>
+														<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
+															{t("stories.addDependency", "Add dependency")}
+														</button>
+													</div>
+												</Show>
+											</section>
+											<section>
+												<h4>{t("stories.fileScope", "File scope")}</h4>
+												<Show
+													when={story().fileScope.length}
+													fallback={<p class={s.muted}>{t("stories.unspecified", "Unspecified")}</p>}
+												>
+													<ul>
+														<For each={story().fileScope}>{(path) => <li class={s.path}>{path}</li>}</For>
+													</ul>
+												</Show>
+											</section>
+											<div class={s.actions}>
+												<Show when={story().status === "ready"}>
+													<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
+														{t("stories.startWork", "Start work")}
 													</button>
-												</div>
-											</Show>
-										</section>
-										<section>
-											<h4>{t("stories.fileScope", "File scope")}</h4>
-											<Show
-												when={story().fileScope.length}
-												fallback={<p class={s.muted}>{t("stories.unspecified", "Unspecified")}</p>}
-											>
-												<ul>
-													<For each={story().fileScope}>{(path) => <li class={s.path}>{path}</li>}</For>
-												</ul>
-											</Show>
-										</section>
-										<div class={s.actions}>
-											<Show when={story().status === "ready"}>
-												<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
-													{t("stories.startWork", "Start work")}
-												</button>
-											</Show>
-											<Show when={story().status === "in_progress"}>
-												<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
-													{t("stories.submitReview", "Submit for review")}
-												</button>
-											</Show>
-											<Show when={story().status === "review"}>
-												<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-													{t("stories.approve", "Approve")}
-												</button>
-												<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
-													{t("stories.requestChanges", "Request changes")}
-												</button>
-											</Show>
-											<Show when={["in_progress", "review"].includes(story().status)}>
-												<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
-													{t("stories.submitQa", "Submit for QA")}
-												</button>
-											</Show>
-											<Show when={story().status === "qa"}>
-												<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-													{t("stories.qaPassed", "QA passed")}
-												</button>
-												<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
-													{t("stories.qaFailed", "QA failed")}
-												</button>
-											</Show>
-											<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
-												<button type="button" disabled={busy()} onClick={() => transition("block")}>
-													{t("stories.block", "Block")}
-												</button>
-											</Show>
-											<Show when={story().status === "blocked"}>
-												<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
-													{t("stories.unblock", "Unblock")}
-												</button>
-											</Show>
-											<Show when={story().status !== "done" && story().status !== "wont_fix"}>
-												<button type="button" class={s.danger} disabled={busy()} onClick={() => transition("wont_fix")}>
-													{t("stories.status.wontFix", "Won't fix")}
-												</button>
-											</Show>
-										</div>
+												</Show>
+												<Show when={story().status === "in_progress"}>
+													<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
+														{t("stories.submitReview", "Submit for review")}
+													</button>
+												</Show>
+												<Show when={story().status === "review"}>
+													<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+														{t("stories.approve", "Approve")}
+													</button>
+													<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
+														{t("stories.requestChanges", "Request changes")}
+													</button>
+												</Show>
+												<Show when={["in_progress", "review"].includes(story().status)}>
+													<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
+														{t("stories.submitQa", "Submit for QA")}
+													</button>
+												</Show>
+												<Show when={story().status === "qa"}>
+													<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+														{t("stories.qaPassed", "QA passed")}
+													</button>
+													<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
+														{t("stories.qaFailed", "QA failed")}
+													</button>
+												</Show>
+												<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
+													<button type="button" disabled={busy()} onClick={() => transition("block")}>
+														{t("stories.block", "Block")}
+													</button>
+												</Show>
+												<Show when={story().status === "blocked"}>
+													<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
+														{t("stories.unblock", "Unblock")}
+													</button>
+												</Show>
+												<Show when={story().status !== "done" && story().status !== "wont_fix"}>
+													<button
+														type="button"
+														class={s.danger}
+														disabled={busy()}
+														onClick={() => transition("wont_fix")}
+													>
+														{t("stories.status.wontFix", "Won't fix")}
+													</button>
+												</Show>
+											</div>
+										</Show>
 									</>
 								)}
 							</Show>

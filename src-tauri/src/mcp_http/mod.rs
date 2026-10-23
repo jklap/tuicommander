@@ -4023,6 +4023,73 @@ mod tests {
         )
     }
 
+    // Catches: HTTP/CLI transport failing to route the shared amendment action to persisted state.
+    #[tokio::test]
+    async fn update_story_http_persists_priority_for_cli_clients() {
+        use crate::stories::{NewPlan, NewStory, StoryOrigin, StoryStore};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let store = StoryStore::open().unwrap();
+        let plan = store
+            .create_plan(NewPlan {
+                project: project
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into(),
+                title: "Plan".into(),
+                source: "feature.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                story_type: None,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let path = format!("/stories/action?path={}", project.path().display());
+        let app = build_router(test_state(), false, true);
+        let (status, error) = story_error_body(
+            &app,
+            &path,
+            serde_json::json!({
+                "action": "update_story", "story_id": story.id,
+                "expected_revision": story.revision, "patch": {"priority": 3}
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{error}");
+        assert_eq!(store.get_story(&story.id).unwrap().priority, 3);
+        let rejected = app
+            .oneshot(mcp_post_from(
+                &path,
+                &serde_json::json!({"action": {
+                    "action": "update_story", "story_id": story.id,
+                    "expected_revision": story.revision + 1, "patch": {"prioirty": 1}
+                }}),
+                SocketAddr::from(([127, 0, 0, 1], 0)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(rejected.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("unknown field")
+        );
+        assert_eq!(store.get_story(&story.id).unwrap().priority, 3);
+    }
+
     // Catches: a missing plan file or unchecked criteria answered as HTTP 500 (a server fault)
     // when the user made a fixable mistake.
     #[tokio::test]

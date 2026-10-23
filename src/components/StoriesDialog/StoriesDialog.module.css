@@ -124,3 +124,11 @@
 .boardCard small { color: var(--fg-muted); font-size: var(--font-xs); }
 .boardCardId { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .boardEmpty { padding: 12px 4px; color: var(--fg-muted); text-align: center; font-size: var(--font-xs); }
+
+.editDependencies { margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-secondary); font-size: var(--font-xs); }
+.editDependencies label { flex-direction: row; align-items: baseline; margin-top: 6px; }
+.editDependencies input { width: auto; accent-color: var(--accent); }
+.editError { margin: 0; color: var(--error); font-size: var(--font-sm); overflow-wrap: anywhere; }
+
+.editCriteria { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-secondary); font-size: var(--font-xs); }
+.editCriterion { display: flex; flex-direction: column; gap: 4px; }

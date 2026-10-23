@@ -257,3 +257,23 @@ fn qa_filters_and_kanban_keep_human_work_visible_and_unfinished() {
     assert_eq!(closed.visible_story_ids, Vec::<String>::new());
     assert_eq!(closed.state, PlanState::Active);
 }
+
+/// Catches: QA being amended as if it were unstarted work, invalidating manual evidence.
+#[test]
+fn update_story_refuses_qa_without_writing_metadata() {
+    let (_dir, store, story) = setup(&["[MANUAL] Hardware"]);
+    let qa = apply(&store, &story, StoryCommand::StartManual);
+    assert_eq!(qa.status, StoryStatus::Qa);
+    let error = store
+        .update_story(
+            &qa.id,
+            qa.revision,
+            StoryPatch {
+                priority: Some(3),
+                ..StoryPatch::default()
+            },
+        )
+        .unwrap_err();
+    assert!(error.contains("only backlog or ready"), "{error}");
+    assert_eq!(store.get_story(&qa.id).unwrap(), qa);
+}

@@ -2732,6 +2732,100 @@ mod tests {
         );
     }
 
+    /// Catches: legacy dispatched executions being editable because they lack a graph reservation.
+    #[test]
+    fn update_story_refuses_legacy_run_owned_stories() {
+        let (_config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let runs = RunStore::open().unwrap();
+        let run = runs
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        runs.command(
+            &run.id,
+            "attempt",
+            RunCommand::StartAttempt {
+                story_id: story_id.clone(),
+                node_id: "implement".into(),
+            },
+        )
+        .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let current = stories.get_story(&story_id).unwrap();
+        let error = stories
+            .update_story(
+                &story_id,
+                current.revision,
+                crate::stories::StoryPatch {
+                    priority: Some(3),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("owned by an active workflow"), "{error}");
+        assert_eq!(stories.get_story(&story_id).unwrap(), current);
+    }
+
+    /// Catches: amended requirements/metadata reusing planning or final verification evidence.
+    #[test]
+    fn update_story_reopens_planning_through_existing_fingerprints() {
+        let (_config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open().unwrap();
+        let stories = StoryStore::open().unwrap();
+        let run = store
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        for (index, patch) in [
+            serde_json::json!({"criteria": ["Revised acceptance"]}),
+            serde_json::json!({"problem": "New requirement context"}),
+            serde_json::json!({"risk": "high"}),
+            serde_json::json!({"storyType": "fix"}),
+            serde_json::json!({"priority": 3}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .command(
+                    &run.id,
+                    &format!("close-{index}"),
+                    RunCommand::ClosePlanning,
+                )
+                .unwrap();
+            let current = stories.get_story(&story_id).unwrap();
+            let before = super::store::fingerprint(std::slice::from_ref(&current), true).unwrap();
+            let updated = stories
+                .update_story(
+                    &story_id,
+                    current.revision,
+                    serde_json::from_value(patch).unwrap(),
+                )
+                .unwrap();
+            assert_ne!(before, super::store::fingerprint(&[updated], true).unwrap());
+            let receipt = store
+                .command(
+                    &run.id,
+                    &format!("verify-{index}"),
+                    RunCommand::FinalVerificationPassed,
+                )
+                .unwrap();
+            assert!(matches!(receipt.event.kind, RunEventKind::PlanningReopened));
+            assert!(receipt.snapshot.planning_fingerprint.is_none());
+            assert!(receipt.snapshot.verification_fingerprint.is_none());
+        }
+    }
+
     #[test]
     fn adding_a_story_reopens_planning_before_the_next_command() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();

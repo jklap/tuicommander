@@ -18,6 +18,12 @@
 
 - [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.
 - [ ] Capture and inspect the detached window after the screen is unlocked. Its native window was created at 1120×800, but `screencapture -l` failed while `loginwindow` was frontmost. The shared bring-back button is covered by the component test; the live reattach check invoked its shared event/close path rather than clicking inside the locked detached window.
+## Native story amendments (2169-bf61) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, open an unclaimed Backlog/Ready story, use Edit to change P1 to P3, Save and reopen to read P3; confirm dispatch uses the new priority. Amend from another client while the form is open: Save must retain the draft and show a revision conflict; Cancel/reopen loads the new revision. Cancel must not save. Edit a second criterion while the first contains multiple indented lines; the first must remain byte-identical after Save. Exercise Add, Remove, Up and Down without merging criterion boundaries. QA must not offer Edit. The peer does not restart the daily app; Rust changes do not hot-reload. _(verified in native agent-test-2169: MCP/CLI/dialog P1→P3 persistence, first-dispatch P2 before amended P3, multiline preservation and retained conflict drafts; evidence: ~/Gits/.tmp/results/tuic-2169-live/. Daily backend still needs Boss's chosen restart.)_
+
+- [ ] Inspect the native story amendment form on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window capture failed with "could not create image from window" while loginwindow was frontmost; native API/DOM evidence is retained at ~/Gits/.tmp/results/tuic-2169-live/. -->
+
 ## Tailscale HTTPS readiness (2165-b4de) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, confirm Remote Access reports HTTPS active only with a loaded TLS listener. Recheck retries unavailable TLS; certificate provisioning through the macOS app no longer writes into the caller's temp directory. The peer does not restart the daily app; Rust changes do not hot-reload.

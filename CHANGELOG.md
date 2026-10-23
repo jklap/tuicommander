@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view; retain these controls across detach and reattach (#2167-eedb).
 
 - Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).
+- Add one atomic, revision-checked `update_story` action for native story metadata, optional problem/risk, ordered criteria and dependencies; preserve checks only for unchanged requirements and refuse active ownership (#2169-bf61). StoriesDialog now exposes the amendment as one Edit form with Save/Cancel and revision-conflict handling; QA remains non-editable. Criteria use separate ordered entries so multiline requirement text is preserved during edits.
+
 - Report HTTPS active only while the TLS listener is running, and read Tailscale certificates from stdout to avoid macOS app sandbox write failures (#2165-b4de).
 - Native stories enter QA when only manual criteria remain. MCP, CLI, project summaries and run incidents distinguish human checks from development work; revision checks and existing story documents are retained (#2168-7fbc).
 
