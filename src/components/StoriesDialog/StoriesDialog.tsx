@@ -8,6 +8,7 @@ import { HttpRpcError, isTauri } from "../../transport";
 import type { PlanState, StoryStatus } from "../../types/stories.gen";
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
+import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
@@ -151,10 +152,12 @@ const planStateLabel = (state: string): string => {
 export interface StoriesDialogProps {
 	project: string;
 	onClose: () => void;
+	mode?: "inline" | "detached";
 }
 
 export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
-	registerModal(props.onClose);
+	const mode = () => props.mode ?? "inline";
+	if (mode() === "inline") registerModal(props.onClose);
 	const [plans, setPlans] = createSignal<Plan[]>([]);
 	const [planSources, setPlanSources] = createSignal<PlanSource[]>([]);
 	const [stories, setStories] = createSignal<Story[]>([]);
@@ -650,11 +653,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	});
 
 	return (
-		<div class={d.overlay} onClick={props.onClose}>
+		<div
+			class={mode() === "detached" ? s.detachedHost : d.overlay}
+			onClick={() => mode() === "inline" && props.onClose()}
+		>
 			<div
 				class={s.dialog}
+				classList={{ [s.detached]: mode() === "detached" }}
 				role="dialog"
-				aria-modal="true"
+				aria-modal={mode() === "inline" ? "true" : undefined}
 				aria-label={t("stories.title", "Plans and Stories")}
 				onClick={(event) => event.stopPropagation()}
 			>
@@ -706,25 +713,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							Designer
 						</button>
 					</div>
-					<button
-						ref={closeButton}
-						type="button"
-						class={s.iconButton}
-						aria-label={t("stories.close", "Close Plans and Stories")}
-						onClick={props.onClose}
-					>
-						<svg
-							viewBox="0 0 16 16"
-							width="15"
-							height="15"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							aria-hidden="true"
-						>
-							<path d="M3 3l10 10M13 3 3 13" />
-						</svg>
-					</button>
+					<div class={s.windowControls}>
+						<PanelWindowControls
+							panelId="stories"
+							mode={mode()}
+							onInlineClose={props.onClose}
+							closeLabel={t("stories.close", "Close Plans and Stories")}
+							closeButtonRef={(button) => {
+								closeButton = button;
+							}}
+						/>
+					</div>
 				</header>
 				<Show when={error()}>
 					<div class={s.error} role="alert">

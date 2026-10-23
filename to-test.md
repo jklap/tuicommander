@@ -1,3 +1,8 @@
+## Plans and Stories size and detachment (2166-11aa)
+
+- [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.
+- [ ] Capture and inspect the detached window after the screen is unlocked. Its native window was created at 1120×800, but `screencapture -l` failed while `loginwindow` was frontmost. The shared bring-back button is covered by the component test; the live reattach check invoked its shared event/close path rather than clicking inside the locked detached window.
+
 ## Tailscale app CLI mode (2164-4935) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, launch without a standalone `tailscale` on PATH and select Recheck in Remote Access. Confirm Running and the Tailscale FQDN. This Rust change does not hot-reload; the peer did not restart the daily app. The isolated pre-fix instance already detected Running on this machine, so the reported local failure was not reproduced here.
