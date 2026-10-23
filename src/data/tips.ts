@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Native story notes",
+		description:
+			"Select a story to read Notes and evidence or append a permanent note. Refresh notes loads entries added by agents or other windows without changing the story revision.",
+		shortcut: null,
+	},
+	{
 		feature: "Edit native stories",
 		description:
 			"Select an unclaimed Backlog or Ready story and choose Edit to change metadata, requirements and dependencies together. Save checks the original revision; Cancel discards the draft. QA and active work cannot be amended.",

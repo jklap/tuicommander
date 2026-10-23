@@ -59,6 +59,7 @@ beforeEach(() => {
 				action: { action: string; filter?: { visibility: string; storyType: string | null; untypedOnly: boolean } };
 			}
 		).action;
+		if (action.action === "list_notes") return { type: "notes", value: [] };
 		if (action.action === "list_plans") return { type: "plans", value: [plan] };
 		if (action.action === "plan_view") return view(["ready", "done"]);
 		if (action.action === "filtered_plan_view")

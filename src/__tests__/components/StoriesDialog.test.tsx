@@ -58,6 +58,7 @@ beforeEach(() => {
 	vi.mocked(invoke).mockImplementation(async (_command, args) => {
 		if (_command === "story_capabilities") return true;
 		const action = (args as { action: { action: string } }).action;
+		if (action.action === "list_notes") return { type: "notes", value: [] };
 		if (action.action === "list_plans") return { type: "plans", value: [plan] };
 		if (action.action === "plan_view")
 			return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
@@ -73,6 +74,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string; source?: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: created ? [plan] : [] };
 			if (action.action === "list_plan_sources")
 				return { type: "plan_sources", value: [{ title: "Plan A", source: "plans/a.md" }] };
@@ -97,6 +99,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [] };
 			if (action.action === "list_plan_sources")
 				return { type: "plan_sources", value: [{ title: "Agent plan", source: "plans/agent.md" }] };
@@ -110,6 +113,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [] };
 			if (action.action === "list_plan_sources")
 				return { type: "plan_sources", value: [{ title: "Agent plan", source: "plans/agent.md" }] };
@@ -202,6 +206,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string; input?: unknown } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return { type: "plan_view", value: { stories: rows, state: "active", wontFixCount: 0, allCancelled: false } };
@@ -244,6 +249,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -275,6 +281,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: created ? [plan] : [] };
 			if (action.action === "list_plan_sources") return { type: "plan_sources", value: [] };
 			if (action.action === "add_plan_source") {
@@ -316,6 +323,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -362,6 +370,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -397,6 +406,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return { type: "plan_view", value: { stories: [story], state: "done", wontFixCount: 1, allCancelled: true } };
@@ -414,6 +424,7 @@ describe("StoriesDialog", () => {
 			vi.mocked(invoke).mockImplementation(async (_command, args) => {
 				if (_command === "story_capabilities") return true;
 				const action = (args as { action: { action: string } }).action;
+				if (action.action === "list_notes") return { type: "notes", value: [] };
 				if (action.action === "list_plans") return { type: "plans", value: [plan] };
 				if (action.action === "plan_view")
 					return {
@@ -441,6 +452,7 @@ describe("StoriesDialog", () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -501,6 +513,7 @@ describe("StoriesDialog", () => {
 										],
 					};
 			}
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -573,6 +586,7 @@ describe("StoriesDialog", () => {
 				if (action.action === "events") return { type: "events", value: [] };
 				if (action.action === "command") return { type: "receipt", value: { snapshot: run } };
 			}
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -633,6 +647,7 @@ describe("StoriesDialog", () => {
 				if (action.action === "command")
 					return { type: "receipt", value: { snapshot: { ...run, status: "running", sequence: 6 } } };
 			}
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {
@@ -977,6 +992,7 @@ describe("StoriesDialog", () => {
 						},
 					],
 				};
+			if (action.action === "list_notes") return { type: "notes", value: [] };
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view")
 				return {

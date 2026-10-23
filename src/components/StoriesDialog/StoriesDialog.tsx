@@ -17,6 +17,7 @@ import { type EditablePlan, PlanEditForm, type PlanEditPatch } from "./PlanEditF
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
 import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
+import { StoryNotes } from "./StoryNotes";
 
 interface Plan extends EditablePlan {
 	project: string;
@@ -1702,6 +1703,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													</button>
 												</Show>
 											</div>
+										</Show>
+										<Show when={`${props.project}:${story().id}`} keyed>
+											{(_storyKey) => (
+												<StoryNotes
+													project={props.project}
+													storyId={story().id}
+													revision={story().revision}
+													busy={busy()}
+												/>
+											)}
 										</Show>
 									</>
 								)}

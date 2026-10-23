@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show append-only notes and workflow receipt references in native story detail, with an add field, retained drafts on failure, and an explicit refresh for agent-added notes (#2172-6dee).
+
 - Add append-only native story notes with backend actor/time/revision provenance and validated workflow receipt references through the shared story service (#2172-6dee).
 - Add a Plans-column editor with Save/Cancel and retained drafts on conflicts, backed by atomic revision-checked native plan title/source updates through the shared MCP, HTTP, IPC, and CLI service; include corrected metadata in workflow planning and verification subjects, and refuse source replacement while a plan coordinator is active (#2170-d828).
 
