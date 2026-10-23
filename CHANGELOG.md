@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Identify symbolic links and their target kind/path in Files; explain outside-repository link refusals without adding read access (#2155-5da6).
+
 - Show sidebar status diagnostics once and omit removal warnings for main checkouts (#2152-765e).
 
 - Retain the existing bounded ticker retry when newer reader output arrives during a frame send; input credits, spacing, rate floors and receipt gates are unchanged (#2040-16b2).
