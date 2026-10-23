@@ -1,6 +1,7 @@
 use super::{
     CRITERIA_INCOMPLETE, NewPlan, NewStory, PLAN_DOCUMENT_NOT_FOUND, Plan, PlanSource, PlanState,
-    PlanView, Story, StoryCommand, StoryStatus, StoryStore, StorySummary, StoryTransition,
+    PlanView, Story, StoryCommand, StoryListFilter, StoryListPage, StoryStatus, StoryStore,
+    StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,16 @@ pub enum StoryAction {
     CreateStory {
         input: NewStory,
     },
+    /// Optional conjunctive filters; limit opts into bounded id-order keyset pages.
     ListStories {
         plan_id: String,
+        state: Option<StoryStatus>,
+        #[schemars(range(min = 1, max = 3))]
+        priority: Option<u8>,
+        story_type: Option<super::StoryType>,
+        #[schemars(range(min = 1, max = 100))]
+        limit: Option<u16>,
+        cursor: Option<String>,
     },
     GetStory {
         story_id: String,
@@ -91,15 +100,21 @@ pub enum StoryReply {
     PlanView(PlanView),
     Summary(StorySummary),
     Story(Story),
-    Stories(Vec<Story>),
     Transitions(Vec<StoryTransition>),
+    // This reply already contains its type tag so the cursor is beside, not inside, value.
+    #[serde(untagged)]
+    Stories(StoryListPage),
 }
 
-/// True for an error the user can fix (a missing plan file, unchecked criteria).
+/// True for an error the user can fix (a missing plan file, unchecked criteria, invalid list filters).
 pub fn is_user_error(message: &str) -> bool {
-    [PLAN_DOCUMENT_NOT_FOUND, CRITERIA_INCOMPLETE]
-        .iter()
-        .any(|prefix| message.starts_with(prefix))
+    [
+        PLAN_DOCUMENT_NOT_FOUND,
+        CRITERIA_INCOMPLETE,
+        super::STORY_LIST_QUERY_INVALID,
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix))
 }
 
 /// All transports use this boundary, so an identifier alone never grants cross-project access.
@@ -206,9 +221,25 @@ fn story_action_with_source(
             plan_in_project(&input.plan_id)?;
             Ok(StoryReply::Story(store.create_story(input)?))
         }
-        StoryAction::ListStories { plan_id } => {
+        StoryAction::ListStories {
+            plan_id,
+            state,
+            priority,
+            story_type,
+            limit,
+            cursor,
+        } => {
             plan_in_project(&plan_id)?;
-            Ok(StoryReply::Stories(store.list_stories(&plan_id)?))
+            Ok(StoryReply::Stories(store.list_stories_filtered(
+                &plan_id,
+                &StoryListFilter {
+                    state,
+                    priority,
+                    story_type,
+                },
+                limit,
+                cursor.as_deref(),
+            )?))
         }
         StoryAction::GetStory { story_id } => Ok(StoryReply::Story(story_in_project(&story_id)?)),
         StoryAction::TransitionHistory { story_id } => {

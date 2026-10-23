@@ -97,6 +97,24 @@ pub struct StoryFilter {
     pub untyped_only: bool,
 }
 
+/// Optional conjunctive filters for the list service, separate from dispatch reads.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StoryListFilter {
+    pub state: Option<StoryStatus>,
+    pub priority: Option<u8>,
+    pub story_type: Option<StoryType>,
+}
+
+/// Keep the historical value array and add a sibling cursor only when more matches remain.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename = "stories")]
+pub struct StoryListPage {
+    pub value: Vec<Story>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryColumn {
@@ -104,7 +122,7 @@ pub struct StoryColumn {
     pub story_ids: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryStatus {
     Backlog,
@@ -182,6 +200,7 @@ pub struct PlanView {
 /// Error prefixes of mistakes the user can fix; the HTTP route answers them 422, not 500.
 pub const PLAN_DOCUMENT_NOT_FOUND: &str = "plan document not found: ";
 pub const CRITERIA_INCOMPLETE: &str = "criteria are incomplete: unchecked indexes ";
+pub const STORY_LIST_QUERY_INVALID: &str = "invalid story list query: ";
 
 /// A status command. Unit commands are plain strings (`"submit_review"`); the criterion commands
 /// carry a zero-based index (`{"check_criterion":0}`).
