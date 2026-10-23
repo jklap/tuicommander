@@ -942,6 +942,7 @@ async fn update_story_mcp_persists_priority_for_bound_caller() {
             title: "Story".into(),
             criteria: vec!["Done".into()],
             priority: 1,
+            story_type: None,
             origin: crate::stories::StoryOrigin::Native,
             file_scope: vec![],
         })

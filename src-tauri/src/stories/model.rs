@@ -34,7 +34,7 @@ pub enum PlanState {
 
 /// Where a story came from: `{"type":"native"}`, `{"type":"plan_step","step":"..."}` or `{"type":"git_hub_issue","number":123}`.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", from = "StrictStoryOrigin")]
 pub enum StoryOrigin {
     Native,
     PlanStep {
@@ -45,6 +45,26 @@ pub enum StoryOrigin {
         /// The GitHub issue number.
         number: u64,
     },
+}
+
+// Serde ignores extra fields on internally tagged unit variants, even with deny_unknown_fields.
+// An empty struct variant enforces the same strict contract for the native origin.
+#[derive(Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum StrictStoryOrigin {
+    Native {},
+    PlanStep { step: String },
+    GitHubIssue { number: u64 },
+}
+
+impl From<StrictStoryOrigin> for StoryOrigin {
+    fn from(origin: StrictStoryOrigin) -> Self {
+        match origin {
+            StrictStoryOrigin::Native {} => Self::Native,
+            StrictStoryOrigin::PlanStep { step } => Self::PlanStep { step },
+            StrictStoryOrigin::GitHubIssue { number } => Self::GitHubIssue { number },
+        }
+    }
 }
 
 /// A new story. Field names are camelCase.
@@ -60,8 +80,6 @@ pub struct NewStory {
     #[schemars(range(min = 1, max = 3))]
     pub priority: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    // DEFERRED (2026-10-23) — existing metadata editing belongs to the generic story
-    // update action being designed separately; do not add a type-only setter.
     pub story_type: Option<StoryType>,
     pub origin: StoryOrigin,
     /// Repo-relative paths the story may touch; may be empty.
@@ -140,6 +158,13 @@ pub struct StoryPatch {
     pub priority: Option<u8>,
     pub file_scope: Option<Vec<String>>,
     pub origin: Option<StoryOrigin>,
+    /// Null returns the story to the untyped historical category.
+    #[serde(
+        default,
+        deserialize_with = "nullable_patch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub story_type: Option<Option<StoryType>>,
     /// Null clears the problem; omission preserves it.
     #[serde(
         default,

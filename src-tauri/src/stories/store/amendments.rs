@@ -40,6 +40,9 @@ impl StoryStore {
         if let Some(scope) = patch.file_scope {
             story.file_scope = scope;
         }
+        if let Some(story_type) = patch.story_type {
+            story.story_type = story_type;
+        }
         if let Some(origin) = patch.origin {
             story.origin = origin;
         }
@@ -81,6 +84,7 @@ impl StoryStore {
             title: story.title.clone(),
             criteria: story.criteria.clone(),
             priority: story.priority,
+            story_type: story.story_type,
             origin: story.origin.clone(),
             file_scope: story.file_scope.clone(),
         })?;

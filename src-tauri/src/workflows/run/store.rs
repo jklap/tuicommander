@@ -101,10 +101,29 @@ pub(crate) fn guard_story_amendment(
     project: &str,
     story_id: &str,
 ) -> Result<Connection, String> {
-    let conn = RunStore::open_at(path)?.connect()?;
+    // This is a lock-only connection. RunStore::connect changes journal mode and initializes
+    // schema, which races a concurrent first amendment at PRAGMA journal_mode=WAL.
+    let conn = Connection::open(path)
+        .map_err(|error| format!("open story amendment reservations: {error}"))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("story amendment reservation timeout: {error}"))?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|error| format!("lock story amendment reservations: {error}"))?;
-    runtime_start::require_available_story(&conn, project, story_id)?;
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| format!("read story amendment run version: {error}"))?;
+    if version > RUN_STORE_SCHEMA_VERSION {
+        return Err(
+            "workflow run store is newer than this build supports; update TUICommander".into(),
+        );
+    }
+    let has_runs: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs')",
+        [], |row| row.get(0),
+    ).map_err(|error| format!("read story amendment run schema: {error}"))?;
+    if !has_runs {
+        return Ok(conn);
+    }
     {
         let mut stmt = conn.prepare(
             "SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND status IN ('running','paused')"
@@ -115,6 +134,13 @@ pub(crate) fn guard_story_amendment(
         {
             let run: RunSnapshot =
                 decode(&row.map_err(|error| format!("read story owner: {error}"))?)?;
+            if run
+                .graph_executions
+                .iter()
+                .any(|graph| graph.target_id == story_id)
+            {
+                return Err("story is reserved by an active workflow root".into());
+            }
             if run
                 .stories
                 .iter()
@@ -1749,7 +1775,8 @@ pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<
                     story.origin,
                     story.file_scope,
                     story.problem,
-                    story.risk
+                    story.risk,
+                    story.story_type
                 ])
             }
         })

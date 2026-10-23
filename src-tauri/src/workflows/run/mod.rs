@@ -2790,6 +2790,7 @@ mod tests {
             serde_json::json!({"criteria": ["Revised acceptance"]}),
             serde_json::json!({"problem": "New requirement context"}),
             serde_json::json!({"risk": "high"}),
+            serde_json::json!({"storyType": "fix"}),
             serde_json::json!({"priority": 3}),
         ]
         .into_iter()

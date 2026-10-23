@@ -118,6 +118,7 @@ pub fn render_story_prompt(
         "fileScope": story.file_scope,
         "problem": story.problem,
         "risk": story.risk,
+        "storyType": story.story_type,
         "skills": skills,
         "feedback": feedback,
         "artifactSubject": artifact_subject,

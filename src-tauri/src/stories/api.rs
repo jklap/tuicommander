@@ -750,7 +750,8 @@ mod tests {
             results
                 .iter()
                 .filter_map(|result| result.as_ref().err())
-                .all(|error| error.contains("stale") || error.contains("preflight"))
+                .all(|error| error.contains("stale") || error.contains("preflight")),
+            "{results:?}"
         );
         let winner = results.into_iter().find_map(Result::ok).unwrap();
         assert_eq!(first.get_story(&story.id).unwrap(), winner);
@@ -910,6 +911,49 @@ mod tests {
                 .update_story(&cancelled.id, cancelled.revision, StoryPatch::default())
                 .is_err()
         );
+    }
+
+    /// Catches: the generic amendment dropping story type, clearing it on omission, or hiding it from filters.
+    #[test]
+    fn update_story_type_is_nullable_and_updates_the_shared_filter_projection() {
+        use super::super::{StoryFilter, StoryType};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        let (story, _) = two_stories(project);
+        let update = |revision, patch| {
+            story_of(story_action(project, serde_json::from_value(serde_json::json!({
+            "action": "update_story", "story_id": story.id, "expected_revision": revision, "patch": patch
+        })).unwrap(), None).unwrap())
+        };
+        let typed = update(story.revision, serde_json::json!({"storyType": "fix"}));
+        assert_eq!(typed.story_type, Some(StoryType::Fix));
+        let store = StoryStore::open().unwrap();
+        let filtered = store
+            .filtered_plan_view(
+                &story.plan_id,
+                &StoryFilter {
+                    story_type: Some(StoryType::Fix),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(filtered.visible_story_ids, vec![story.id.clone()]);
+        let unchanged = update(typed.revision, serde_json::json!({"priority": 3}));
+        assert_eq!(unchanged.story_type, Some(StoryType::Fix));
+        let untyped = update(unchanged.revision, serde_json::json!({"storyType": null}));
+        assert_eq!(untyped.story_type, None);
+        let filtered = store
+            .filtered_plan_view(
+                &story.plan_id,
+                &StoryFilter {
+                    story_type: Some(StoryType::Fix),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(filtered.visible_story_ids.is_empty());
     }
 
     /// Catches: old documents failing to decode or omitted optional fields clearing metadata.
@@ -1216,6 +1260,7 @@ mod tests {
             "title",
             "priority",
             "fileScope",
+            "storyType",
             "origin",
             "problem",
             "risk",

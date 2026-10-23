@@ -4049,6 +4049,7 @@ mod tests {
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
                 priority: 1,
+                story_type: None,
                 origin: StoryOrigin::Native,
                 file_scope: vec![],
             })
@@ -4066,16 +4067,26 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{error}");
         assert_eq!(store.get_story(&story.id).unwrap().priority, 3);
-        let (status, _) = story_error_body(
-            &app,
-            &path,
-            serde_json::json!({
-                "action": "update_story", "story_id": story.id,
-                "expected_revision": story.revision + 1, "patch": {"prioirty": 1}
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let rejected = app
+            .oneshot(mcp_post_from(
+                &path,
+                &serde_json::json!({"action": {
+                    "action": "update_story", "story_id": story.id,
+                    "expected_revision": story.revision + 1, "patch": {"prioirty": 1}
+                }}),
+                SocketAddr::from(([127, 0, 0, 1], 0)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(rejected.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("unknown field")
+        );
         assert_eq!(store.get_story(&story.id).unwrap().priority, 3);
     }
 
