@@ -2,16 +2,10 @@
  * A stable id for THIS client (this browser profile/app install, or this
  * desktop app instance), persisted in `localStorage` so it survives reloads.
  *
- * Two independent features key state per-client with this id, at two
- * different granularities:
- *
- * - B.5 (`savedTerminalsByClient`, `stores/repositories.ts`): restart-recovery
- *   snapshots keyed one-per-install, so two clients' snapshots merge instead
- *   of clobbering each other. Use `CLIENT_INSTANCE_ID` directly.
- * - B.8 (per-viewer `session_visibility`): two desktop windows/panels of the
- *   SAME install are genuinely independent viewers for standby purposes —
- *   suffix with a window label (`${CLIENT_INSTANCE_ID}:${windowLabel}`)
- *   rather than using the bare id.
+ * Used by B.5 (`savedTerminalsByClient`, `stores/repositories.ts`):
+ * restart-recovery snapshots keyed one-per-install, so two clients' snapshots
+ * merge instead of clobbering each other. Standby visibility does not use
+ * it: the backend's `session_visibility` is keyed per session, not per viewer.
  *
  * `localStorage` can throw (private window, cleared/blocked site data) or come
  * back empty — every access is wrapped so a missing/broken store degrades to
@@ -35,9 +29,8 @@ function writeStoredId(id: string): void {
 		localStorage.setItem(STORAGE_KEY, id);
 	} catch {
 		// Best-effort only — a client that can't persist just mints a new id
-		// next load, which is a correctness no-op for both B.5 (that client's
-		// own snapshot key just changes) and B.8 (that client's viewer entry
-		// simply re-registers under a new id, which the TTL already tolerates).
+		// next load, which is a correctness no-op for B.5 (that client's own
+		// snapshot key just changes).
 	}
 }
 
@@ -48,8 +41,8 @@ function writeStoredId(id: string): void {
 export function resolveClientInstanceId(): string {
 	const existing = readStoredId();
 	if (existing) return existing;
-	// No prefix: callers that key a wire payload on this value (B.8's
-	// `viewer_id`) should not have to strip one first.
+	// No prefix: the id is used verbatim as a persisted map key
+	// (`savedTerminalsByClient`), so callers never have to strip one.
 	const fresh = randomId("");
 	writeStoredId(fresh);
 	return fresh;
