@@ -625,6 +625,8 @@ mod tests {
         assert!(archived.archived);
         assert_eq!(archived.revision, story.revision + 1);
         assert_eq!(archived.status, story.status);
+        // Catches: metadata amendments silently rewriting an archived story or parent.
+        assert!(call(serde_json::json!({"action":"update_story","story_id":story.id,"expected_revision":archived.revision,"patch":{"title":"Changed while archived"}})).unwrap_err().contains("archived"));
         assert!(call(serde_json::json!({"action":"unarchive_story","story_id":story.id,"expected_revision":story.revision})).unwrap_err().contains("stale"));
         let StoryReply::Stories(page) = call(serde_json::json!({"action":"list_stories","plan_id":story.plan_id,"archived":true,"limit":1})).unwrap() else { panic!("stories"); };
         assert_eq!(page.value, vec![archived.clone()]);
@@ -687,6 +689,7 @@ mod tests {
                 .unwrap_err()
                 .contains("archived")
         );
+        assert!(call(serde_json::json!({"action":"update_story","story_id":story.id,"expected_revision":restored.revision,"patch":{"title":"Changed under archived plan"}})).unwrap_err().contains("archived"));
         let restored_plan = store
             .set_plan_archived(
                 &plan.id,
