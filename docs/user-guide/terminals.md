@@ -46,7 +46,8 @@ New terminals inherit the working directory from the active branch's worktree pa
 
 Desktop frame receipts do not generate more terminal output. After a missed
 frame, desktop receives one full frame and connected browsers retain their delta stream. Output
-batching remains bounded; this does not guarantee echo within one display frame.
+batching remains bounded. Input-related output that arrives during a frame send
+keeps its bounded retry; this does not guarantee echo within one display frame.
 
 ### CWD Tracking (OSC 7)
 
