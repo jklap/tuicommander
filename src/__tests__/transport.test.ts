@@ -213,7 +213,10 @@ function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<str
 		subscribed.set(name, where);
 	};
 	for (const { path, source } of sources) {
-		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+		// Most frontend files cannot contain either supported call. Keep Unicode
+		// escapes eligible: TypeScript decodes escaped identifiers in the AST.
+		if (!source.includes("listen") && !source.includes("onEvent") && !source.includes("\\u")) continue;
+		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false);
 		for (const call of findNodes(file, ts.isCallExpression)) {
 			const argument = call.arguments[0];
 			if (argument && ts.isIdentifier(call.expression) && call.expression.text === "listen") {
@@ -233,6 +236,16 @@ function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<str
 }
 
 describe("PTY event source scan", () => {
+	// Catches: the cheap prefilter dropping escaped listeners or wrapped onEvent calls.
+	it.each([
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
+		["escaped listen", "li\\u0073ten(`pty-activity-${sessionId}`, () => {});"],
+		["wrapped onEvent", 'transport.onEvent(mutant ? "activity" : (coverage(), "activity"), handler);'],
+		["escaped onEvent", String.raw`transport.on\u0045vent("activity", handler);`],
+	])("finds the activity listener with %s", (_name, source) => {
+		expect(extractSubscribedPtyEvents([{ path: "src/transport.ts", source }]).has("pty-activity")).toBe(true);
+	});
+
 	it("finds the activity listener when instrumentation wraps its template argument", () => {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
 		const source = "listen(mutant ? `` : (coverage(), `pty-activity-${sessionId}`), () => {});";
@@ -253,6 +266,10 @@ describe("transport", () => {
 	 * consumes) is wasteful but harmless, and is deliberately not asserted.
 	 */
 	describe("per-session Tauri event parity", () => {
+		// Both assertions inspect one immutable repository snapshot, not two full AST scans.
+		let subscribed: Map<string, string[]> | undefined;
+		const subscriptions = () => (subscribed ??= extractSubscribedPtyEvents());
+
 		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
 			const rustSources = [
 				"src-tauri/src/pty.rs",
@@ -262,7 +279,7 @@ describe("transport", () => {
 				.map((relative) => readRepoFile(relative))
 				.join("\n");
 
-			const subscribed = extractSubscribedPtyEvents();
+			const subscribed = subscriptions();
 			expect(subscribed.size).toBeGreaterThan(0);
 
 			const orphaned = [...subscribed.entries()].filter(([name]) => !rustSources.includes(`${name}-{session_id}`));
@@ -273,7 +290,7 @@ describe("transport", () => {
 		it("includes the activity pulse, which is the signal that regressed", () => {
 			// Guards the guard: if the extraction above silently stopped matching,
 			// the parity test would pass vacuously for the very event it exists for.
-			expect([...extractSubscribedPtyEvents().keys()]).toContain("pty-activity");
+			expect([...subscriptions().keys()]).toContain("pty-activity");
 		});
 	});
 

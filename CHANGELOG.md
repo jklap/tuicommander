@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Withdraw confident agent questions when foreground detection confirms return to the shell, without waiting for another input (#1985-45bd).
 - Preserve root profile argument order for Codex usage reads and use the terminal ego executable without requiring AI Chat configuration (#2150-4e0c).
 - Show the selected project once in the mobile Progress header; keep the project selector, a subtitle when no selector is available, and the desktop subtitle (#2151-62ef).
 - Open mobile and desktop Progress lists with at most 100 entries; load older cursor pages on demand and discard stale page responses after filter changes (#2151-62ef).
