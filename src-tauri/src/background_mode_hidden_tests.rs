@@ -214,6 +214,120 @@ fn background_mode_remote_watchers_survive_hide_and_release_independently() {
     );
 }
 
+// Catches: the desktop IPC path (`desktop: true`, what `pty::set_session_visible` passes)
+// recording a terminal-store id ("term-6") that names no PTY session. Teardown only reaps
+// entries of real sessions, so a recorded one would never be removed.
+#[test]
+fn set_visible_from_client_desktop_path_ignores_an_id_that_names_no_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    for visible in [true, false] {
+        crate::background_mode::hidden::set_visible_from_client(&state, "term-6", visible, true);
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "desktop visibility for a non-session id must not be recorded (visible={visible})"
+        );
+    }
+}
+
+// Catches: a `visible: true` for an unknown id passing silently. It looks exactly like a
+// wake of a session that is simply not parked, so only the warning reveals the caller bug.
+#[test]
+fn set_visible_from_client_warns_only_when_showing_an_unknown_id() {
+    #[derive(Clone)]
+    struct Sink(std::sync::Arc<parking_lot::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+        type Writer = Sink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+    let state = crate::state::tests_support::make_test_app_state();
+    for (desktop, visible) in [(true, true), (false, true), (true, false), (false, false)] {
+        let output = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(output.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            crate::background_mode::hidden::set_visible_from_client(
+                &state, "term-6", visible, desktop,
+            );
+        });
+        let log = String::from_utf8(output.lock().clone()).unwrap();
+        let warnings: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("set_session_visible for a session that does not exist"))
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            usize::from(visible),
+            "desktop={desktop} visible={visible}: {log}"
+        );
+        if visible {
+            assert!(warnings[0].contains("WARN"), "{log}");
+            assert!(warnings[0].contains("term-6"), "{log}");
+        }
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "desktop={desktop} visible={visible}: nothing may be recorded"
+        );
+    }
+}
+
+// Catches: the generated `set_session_visible` IPC command (arguments extracted by
+// Tauri, not by hand) bypassing the unknown-id guard. Opt-in feature, like
+// `settings_mock_ipc_tests`: `cargo nextest run -p tuicommander --lib --features settings-ipc-test`.
+#[cfg(feature = "settings-ipc-test")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_session_visible_ipc_command_ignores_an_id_that_names_no_session() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let app = tauri::test::mock_builder()
+        .manage(state.clone())
+        .invoke_handler(tauri::generate_handler![crate::pty::set_session_visible])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "visibility-test", Default::default())
+        .build()
+        .unwrap();
+    for visible in [true, false] {
+        let response = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "set_session_visible".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: tauri::ipc::InvokeBody::Json(
+                    serde_json::json!({"sessionId": "term-6", "visible": visible}),
+                ),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        );
+        assert!(response.is_ok(), "visible={visible}: {response:?}");
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "the IPC command must not record a non-session id (visible={visible})"
+        );
+    }
+}
+
 #[path = "background_mode_stream_tests.rs"]
 mod streams;
 
