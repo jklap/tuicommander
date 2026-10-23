@@ -1394,7 +1394,7 @@ orchestrator instance" section for why `:9877`, not the orchestrator's `:14319`/
 
 ## Amber Tab Styling
 
-Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The tab bar applies an amber gradient background and amber bottom border (`rgba(251, 191, 36, ...)`) to visually distinguish remote-created sessions from locally spawned ones.
+Sessions an agent created (MCP, the tmux shim, or a raw HTTP caller without `user_initiated: true`) carry the backend `is_remote` flag, surfaced on the frontend as `isExternallyCreated` (not `isRemote`, which means the tab runs on a configured remote connection). The tab bar applies an amber gradient background and amber bottom border (`rgba(251, 191, 36, ...)`) to visually distinguish these agent-created sessions from ones a human started.
 
 ## Concurrency
 

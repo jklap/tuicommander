@@ -45,7 +45,8 @@ interface TerminalData {
   agentIntent: string | null;       // LLM-declared intent via intent: token
   currentTask: string | null;       // Current agent task from status-line parsing
   activeSubTasks: number;           // Count of running sub-agents from ›› status line
-  isRemote: boolean;                // Created via HTTP/MCP (not locally by the UI)
+  isRemote: boolean;                // Runs on a configured remote connection (Chat eligibility), not "created via HTTP/MCP"
+  isExternallyCreated: boolean;     // Created by an agent (MCP/tmux shim/raw HTTP), not by a human (`user_initiated`)
   exactAgentSessionId?: string | null; // Live, validated Codex hook binding; never persisted
   agentSessionId: string | null;    // Agent session ID for session-specific resume
   tuicSession: string | null;       // Stable tab UUID — injected as TUIC_SESSION env var
@@ -440,7 +441,7 @@ Editor wrap defaults for text and code live here too; they use localStorage, lik
 
 ### notificationsStore (`notifications.ts`)
 Notification sound preferences and playback. Remote orchestration muting uses
-the terminal's backend-preserved `isRemote` origin; completion lifecycle code
+the terminal's backend-preserved creation origin, `isExternallyCreated` (agent-created; `isRemote` means a configured remote connection); completion lifecycle code
 sets a per-busy-cycle latch before playback so idle and exit cannot both chime.
 The playback manager applies one 500 ms gate across every sound type, because
 all types share the same audio output and separate per-type gates allowed tones
