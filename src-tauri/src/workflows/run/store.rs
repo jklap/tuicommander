@@ -94,13 +94,8 @@ pub(crate) fn guard_manual_story_start(
     Ok(Some(conn))
 }
 
-/// Fence amendments against both graph reservations and legacy dispatched story executions.
-/// Always open the database so a concurrent first run cannot race an absent-file probe.
-pub(crate) fn guard_story_amendment(
-    path: &Path,
-    project: &str,
-    story_id: &str,
-) -> Result<Connection, String> {
+/// Story and plan amendments must share the lock-only open contract, including the first write.
+fn lock_run_amendment(path: &Path) -> Result<(Connection, bool), String> {
     // This is a lock-only connection. RunStore::connect changes journal mode and initializes
     // schema, which races a concurrent first amendment at PRAGMA journal_mode=WAL.
     let conn = Connection::open(path)
@@ -121,6 +116,17 @@ pub(crate) fn guard_story_amendment(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs')",
         [], |row| row.get(0),
     ).map_err(|error| format!("read story amendment run schema: {error}"))?;
+    Ok((conn, has_runs))
+}
+
+/// Fence amendments against both graph reservations and legacy dispatched story executions.
+/// Always open the database so a concurrent first run cannot race an absent-file probe.
+pub(crate) fn guard_story_amendment(
+    path: &Path,
+    project: &str,
+    story_id: &str,
+) -> Result<Connection, String> {
+    let (conn, has_runs) = lock_run_amendment(path)?;
     if !has_runs {
         return Ok(conn);
     }
@@ -160,9 +166,10 @@ pub(crate) fn guard_plan_source_update_in(
     db_path: &Path,
     plan_id: &str,
 ) -> Result<Connection, String> {
-    let conn = RunStore::open_at(db_path)?.connect()?;
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| format!("lock workflow plan source: {e}"))?;
+    let (conn, has_runs) = lock_run_amendment(db_path)?;
+    if !has_runs {
+        return Ok(conn);
+    }
     {
         let mut stmt = conn.prepare(
             "SELECT snapshot_json FROM workflow_runs WHERE plan_id=?1 AND status IN ('running','paused')"
