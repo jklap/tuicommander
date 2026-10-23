@@ -8307,11 +8307,10 @@ mod tests {
         assert!(linked.exists());
     }
 
-    // Catches (critic-1367): a checkout whose directory vanished being refused with
-    // "needs force confirmation" on the path route, so the stale registration that
-    // keeps the orphan listed can never be dropped through MCP.
+    // Catches: the safe-only MCP path route pruning a vanished checkout registration
+    // instead of preserving it for repair or explicit removal.
     #[tokio::test]
-    async fn worktree_remove_by_path_drops_the_registration_of_a_vanished_checkout() {
+    async fn worktree_remove_by_path_preserves_the_registration_of_a_vanished_checkout() {
         let repo = create_orphan_git_repo();
         let state = test_state();
         let linked = critic_detached_checkout(repo.path(), "vanished");
@@ -8319,13 +8318,18 @@ mod tests {
 
         let result = critic_remove_by_path(&state, repo.path(), linked.to_str().unwrap()).await;
 
-        assert_eq!(result["ok"], true, "{result}");
+        let error = result["error"]
+            .as_str()
+            .expect("safe-only removal must refuse");
+        assert!(error.contains("checkout unavailable"), "{result}");
+        assert!(error.contains("git worktree repair"), "{result}");
+        assert!(error.contains("explicit removal is required"), "{result}");
         let listed = crate::git_cli::git_cmd(repo.path())
             .args(["worktree", "list", "--porcelain"])
             .run()
             .unwrap()
             .stdout;
-        assert!(!listed.contains(linked.to_str().unwrap()), "{listed}");
+        assert!(listed.contains(linked.to_str().unwrap()), "{listed}");
     }
 
     #[tokio::test]

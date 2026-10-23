@@ -3017,10 +3017,9 @@ mod tests {
                 remove_orphan_checkout(&state, &repo_path, &path.to_string_lossy(), false, &[])
                     .expect("explicit removal remains available");
             }
-            assert!(
-                assess_orphan_cleanup_with_sessions(&state, &repo_path)
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                assess_orphan_cleanup_with_sessions(&state, &repo_path).unwrap(),
+                [] as [OrphanCleanupReview; 0]
             );
 
             // A checkout may disappear after a safe assessment; the automatic guard must recheck.

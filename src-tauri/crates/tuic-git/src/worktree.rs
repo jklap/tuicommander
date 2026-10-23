@@ -7329,9 +7329,9 @@ branch refs/heads/feat
     /// coupling callers to that representation.
     #[test]
     fn workspace_paths_are_keyed_by_id_and_carry_the_branch() {
-        // A real directory: the mapper drops entries whose path no longer exists,
-        // which is the post-prune safety guard, not something to work around.
-        let dir = TempDir::new().expect("temp dir");
+        // A real repository: the mapper requires resolvable Git metadata before
+        // making a checkout selectable.
+        let dir = setup_test_repo();
         let wt = dir.path().to_string_lossy().into_owned();
         let porcelain = format!("worktree {wt}\nHEAD abc123\nbranch refs/heads/main\n\n");
 
