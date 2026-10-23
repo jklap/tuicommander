@@ -125,6 +125,8 @@ describe("AgentsTab expert controls", () => {
 				return Promise.resolve(undefined);
 			}
 			if (cmd === "load_agents_config") return Promise.resolve({ agents: agentsConfig });
+			// AgentsTab reads `mcp_capabilities` to grey out the Prefer-TUIC toggles.
+			if (cmd === "load_config") return Promise.resolve({});
 			// The intent/progress/follow-up overrides render only with the bridge installed.
 			if (cmd === "get_agent_mcp_status")
 				return Promise.resolve({ supported: true, installed: true, config_path: null, shared_settings_file: false });

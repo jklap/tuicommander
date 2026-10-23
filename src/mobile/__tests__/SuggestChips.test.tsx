@@ -11,7 +11,9 @@ vi.mock("../../transport", () => ({
 	rpc: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+// The failure toast plays the error sound; jsdom has no AudioContext, so its
+// caught failure logs through `debug`.
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), debug: vi.fn() } }));
 
 import { rpc } from "../../transport";
 
