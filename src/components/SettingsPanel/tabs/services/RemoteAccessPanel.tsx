@@ -97,6 +97,7 @@ export const RemoteAccessPanel: Component = () => {
 	createEffect(() => {
 		const ip = activeIp();
 		void qrVersion(); // subscribe — re-run after token regeneration
+		void status()?.tls_active; // A listener restart can change the URL scheme.
 		if (!ip) {
 			setConnectUrl(null);
 			setQrDataUrl(null);
@@ -535,9 +536,11 @@ export const RemoteAccessPanel: Component = () => {
 						const ts = tailscaleState()!;
 						const statusText =
 							ts.state === "Running"
-								? ts.https_enabled
+								? status()?.tls_active
 									? `HTTPS active (${ts.fqdn})`
-									: "Running (HTTPS not enabled)"
+									: ts.https_enabled
+										? "Running (HTTPS unavailable)"
+										: "Running (HTTPS not enabled)"
 								: ts.state === "NotRunning"
 									? "Not running"
 									: "Not installed";
@@ -564,6 +567,12 @@ export const RemoteAccessPanel: Component = () => {
 											{t("services.action.recheck", "Recheck")}
 										</button>
 									</div>
+									<Show when={ts.state === "Running" && ts.https_enabled && !status()?.tls_active}>
+										<p class={s.hint}>
+											Enable remote access, then recheck Tailscale. If HTTPS remains unavailable, check the Tailscale
+											certificate errors in the app logs.
+										</p>
+									</Show>
 									<Show when={showHint}>
 										<p class={s.hint}>
 											{t(

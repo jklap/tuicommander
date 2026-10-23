@@ -1,3 +1,7 @@
+## Tailscale HTTPS readiness (2165-b4de) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, confirm Remote Access reports HTTPS active only with a loaded TLS listener. Recheck retries unavailable TLS; certificate provisioning through the macOS app no longer writes into the caller's temp directory. The peer does not restart the daily app; Rust changes do not hot-reload.
+
 ## Tailscale app CLI mode (2164-4935) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, launch without a standalone `tailscale` on PATH and select Recheck in Remote Access. Confirm Running and the Tailscale FQDN. This Rust change does not hot-reload; the peer did not restart the daily app. The isolated pre-fix instance already detected Running on this machine, so the reported local failure was not reproduced here.
