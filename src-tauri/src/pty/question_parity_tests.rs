@@ -170,6 +170,104 @@ async fn question_not_rearmed_from_scrollback_after_agent_exit() {
     assert!(session.choice_prompt.is_none());
 }
 
+/// Catches: foreground shell return drops agent identity but leaves its confident
+/// question latched until another input happens to clear it.
+#[tokio::test]
+async fn foreground_agent_exit_clears_captured_question_before_shell_input() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-await-exit-before-input-1985.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.expect("recorded native geometry");
+    let sid = "awaiting-agent-exit-before-input";
+    let (state, silence) = chunk_trace_state(sid);
+    state.config.write().progress_tracking = false;
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(rows, cols);
+    apply_foreground_agent_observation(
+        &state,
+        sid,
+        1,
+        Some("claude".into()),
+        false,
+        false,
+        "claude".into(),
+    );
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut saw_question = false;
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            crate::mcp_http::session::apply_input_bookkeeping(
+                &state,
+                sid,
+                std::str::from_utf8(&record.data).unwrap(),
+            );
+        } else {
+            let data = escapes.push(&utf8.push(&record.data));
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let session = state.session_maps.session_states.get(sid).unwrap();
+        saw_question |= session.awaiting_input && session.question_confident;
+    }
+    assert!(
+        saw_question,
+        "the real captured question must reach session state"
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+
+    // Non-agent helpers are not exit evidence and must preserve the question.
+    apply_foreground_agent_observation(&state, sid, 2, None, false, true, "sleep".into());
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+
+    // Recorded post-exit API/OS observations prove the shell owns foreground.
+    // TCAP records I/O, not process snapshots; no new user input follows exit.
+    apply_foreground_agent_observation(&state, sid, 3, None, true, false, "bash".into());
+    while let Ok(event) = rx.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(session.agent_type.is_none());
+    assert!(
+        !session.awaiting_input,
+        "returned shell retains exited agent question: {:?}",
+        session.question_text
+    );
+    assert!(session.question_text.is_none());
+    assert!(!session.question_confident);
+    assert!(session.choice_prompt.is_none());
+    drop(session);
+    assert!(
+        silence.lock().awaiting_rank().is_none(),
+        "exited agent still owns ranked awaiting evidence"
+    );
+}
+
 /// Catches: Codex 0.162 queued/open questions missing the shared answer controls.
 #[tokio::test]
 async fn captured_codex_0162_question_reaches_answer_controls() {
