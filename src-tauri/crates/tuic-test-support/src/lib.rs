@@ -74,12 +74,7 @@ const TEST_GITCONFIG: &str = "\
 /// a moment that depends on machine load. Tests that need packed refs or a
 /// repack run `git pack-refs`/`git gc` themselves.
 fn isolate_git_config(root: &std::path::Path) {
-    let path = root.join("gitconfig");
-    // Every test process of a nextest run writes this at once: write a private
-    // copy and rename it into place, so no git ever reads a half-written file.
-    let staging = root.join(format!("gitconfig.{}.tmp", std::process::id()));
-    std::fs::write(&staging, TEST_GITCONFIG).expect("write the test gitconfig");
-    std::fs::rename(&staging, &path).expect("install the test gitconfig");
+    let path = install_test_gitconfig(root);
     // SAFETY: called from the process constructor, before libtest starts threads.
     unsafe {
         std::env::set_var("GIT_CONFIG_GLOBAL", &path);
@@ -90,6 +85,28 @@ fn isolate_git_config(root: &std::path::Path) {
         std::env::remove_var("GIT_CONFIG_COUNT");
     }
     fence_git_discovery(root);
+}
+
+/// Install [`TEST_GITCONFIG`] at `<root>/gitconfig` and return its path.
+///
+/// Every process of a nextest run shares `root`, and nextest starts one per
+/// test for the whole run. The file is replaced only when its content differs:
+/// gix's cached repositories and the monitoring snapshots key on the global
+/// config's (mtime, len), so re-installing identical bytes from each new
+/// process looked like a config edit to every test already running, which
+/// then reopened its repository or redid a status scan it was asserting it
+/// would reuse (the "pass alone, fail in a full run" `monitoring_*` tests).
+/// A changed file is written to a private copy and renamed into place, so no
+/// git ever reads a half-written one.
+fn install_test_gitconfig(root: &std::path::Path) -> std::path::PathBuf {
+    let path = root.join("gitconfig");
+    if std::fs::read(&path).is_ok_and(|current| current == TEST_GITCONFIG.as_bytes()) {
+        return path;
+    }
+    let staging = root.join(format!("gitconfig.{}.tmp", std::process::id()));
+    std::fs::write(&staging, TEST_GITCONFIG).expect("write the test gitconfig");
+    std::fs::rename(&staging, &path).expect("install the test gitconfig");
+    path
 }
 
 /// Fail closed: no git process this test binary starts may discover a
@@ -1124,6 +1141,35 @@ mod tests {
         out.status
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Catches: each new test process re-installing identical gitconfig
+    /// bytes, which changes the file's (mtime, len) signature under every
+    /// test already running and reads to them as a global config edit.
+    #[test]
+    fn reinstalling_the_test_gitconfig_keeps_an_identical_file_untouched() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).expect("temp dir");
+        let path = super::install_test_gitconfig(dir.path());
+        let identity = |path: &std::path::Path| {
+            let meta = std::fs::metadata(path).expect("gitconfig metadata");
+            #[cfg(unix)]
+            let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+            #[cfg(not(unix))]
+            let inode = 0u64;
+            (meta.modified().expect("mtime"), meta.len(), inode)
+        };
+        let first = identity(&path);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(super::install_test_gitconfig(dir.path()), path);
+        assert_eq!(identity(&path), first, "identical gitconfig was rewritten");
+
+        std::fs::write(&path, "[user]\n\tname = stale\n").expect("stale gitconfig");
+        super::install_test_gitconfig(dir.path());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read gitconfig"),
+            super::TEST_GITCONFIG,
+            "a stale gitconfig must be replaced"
+        );
     }
 
     /// The constructor's config is the one git reads, whatever the invoking

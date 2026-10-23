@@ -79,6 +79,11 @@ pub fn review_agents(rows: &Value, repo: &Path) -> Result<Vec<Value>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // DEFERRED (2026-10-23) — tuic-ipc does not link tuic-test-support, so this
+    // fixture's git reads the developer's global config (no TEST_GITCONFIG:
+    // merge.ff, hooksPath, auto-maintenance). Harmless today (a few refs, no
+    // ref/config snapshot asserted); linking the crate would also move this
+    // crate's socket tests under the test temp root, which needs its own check.
     fn git(root: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")
             .arg("-C")

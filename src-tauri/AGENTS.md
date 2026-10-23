@@ -1553,7 +1553,13 @@ that config: `tuic-test-support`'s constructor points `GIT_CONFIG_GLOBAL` at
 `<test root>/gitconfig` (`TEST_GITCONFIG`) and sets `GIT_CONFIG_NOSYSTEM=1`, and
 `make test-shell` gives the shell tests the identical file through
 `TUIC_TEST_ISOLATE_GIT_CONFIG=1` (`scripts/test-with-test-tmp-git-config.sh` pins the
-two copies equal). Every other `scripts/with-test-tmp.sh` step keeps the developer's
+two copies equal). That file also turns off git's automatic housekeeping (`gc.auto = 0`,
+`maintenance.auto = false`): git 2.56's detached post-commit `maintenance run --auto` packed a
+16-worktree fixture's loose refs mid-test; a test that wants packed refs runs `git pack-refs`
+itself (`monitoring_packed_refs_rewrite_reenumerates_once_and_keeps_targets`). The constructor
+rewrites it only when its content differs, because gix's cached repositories key on its
+(mtime, len) and a rewrite by every newly started test process read as a config edit to the
+`monitoring_*` tests already running. Every other `scripts/with-test-tmp.sh` step keeps the developer's
 config on purpose — `pnpm audit`, `cargo audit` and the submodule/gitlink checks talk
 to real remotes and need the credential helper, `url.*.insteadOf` and proxy settings.
 A test that needs a specific global setting exports its own `GIT_CONFIG_GLOBAL`. If a
