@@ -105,7 +105,7 @@ fn story_filters_exclude_closed_records_across_the_whole_plan_without_hiding_dep
             },
         )
         .expect("untyped view");
-    assert!(untyped.visible_story_ids.is_empty());
+    assert_eq!(untyped.visible_story_ids, Vec::<String>::new());
 }
 
 #[test]

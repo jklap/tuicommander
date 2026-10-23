@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view (#2167-eedb).
+- Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view; retain these controls across detach and reattach (#2167-eedb).
 
 - Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).
 

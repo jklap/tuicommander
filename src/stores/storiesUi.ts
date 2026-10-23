@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import { togglePanel } from "../panelRouter";
 import type { StoryType, StoryVisibility } from "../types/stories.gen";
 import { uiStore } from "./ui";
@@ -11,6 +11,28 @@ const [storyType, setStoryType] = createSignal<StoryType | "all" | "untyped">("a
 const [view, setView] = createSignal<"list" | "kanban">("list");
 
 export const storiesUi = {
+	controls: () => ({ visibility: visibility(), storyType: storyType(), view: view() }),
+	restoreControls(data: unknown): void {
+		if (!data || typeof data !== "object") return;
+		const controls = data as Record<string, unknown>;
+		batch(() => {
+			if (controls.visibility === "all" || controls.visibility === "open" || controls.visibility === "closed") {
+				setVisibility(controls.visibility);
+			}
+			if (
+				controls.storyType === "all" ||
+				controls.storyType === "untyped" ||
+				controls.storyType === "feature" ||
+				controls.storyType === "fix" ||
+				controls.storyType === "refactor" ||
+				controls.storyType === "chore" ||
+				controls.storyType === "task"
+			) {
+				setStoryType(controls.storyType);
+			}
+			if (controls.view === "list" || controls.view === "kanban") setView(controls.view);
+		});
+	},
 	visibility,
 	setVisibility,
 	storyType,
