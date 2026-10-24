@@ -613,16 +613,6 @@
     ]
   },
   {
-    "file": "src/components/StatusBar/StatusBar.module.css",
-    "story": "2238-ac3b",
-    "rules": [
-      "[[],\".tickerPopoverClose\",[\"border: none\",\"padding: 0 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".toggleBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".toggleBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".micRecording\",[\"border-color: var(--accent) !important\"]]"
-    ]
-  },
-  {
     "file": "src/components/SuggestOverlay/SuggestOverlay.module.css",
     "story": "2241-2c67",
     "rules": [
