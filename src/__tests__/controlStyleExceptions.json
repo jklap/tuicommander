@@ -682,15 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/roadmap/roadmap.module.css",
-    "story": "2250-79c9",
-    "rules": [
-      "[[],\".roadmap button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 0 12px\"]]",
-      "[[],\".roadmap .task\",[\"height: 100%\",\"padding: 0\",\"border: 0\",\"border-bottom: 1px solid var(--border)\",\"border-radius: 0\"]]",
-      "[[\"@container (max-width: 700px)\"],\".roadmap button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/setup/TasksSetup.module.css",
     "story": "2251-f625",
     "rules": [
