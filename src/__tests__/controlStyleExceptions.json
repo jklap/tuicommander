@@ -406,14 +406,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/SettingsPrimitives.module.css",
-    "story": "2224-6593",
-    "rules": [
-      "[[],\".actions button, .status button, .empty button\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".actions button, .status button, .empty button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/fields/fields.module.css",
     "story": "2225-ef95",
     "rules": [
@@ -491,8 +483,7 @@
       "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
       "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]",
       "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".dangerBtn:hover\",[\"border-color: var(--error)\"]]"
+      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {

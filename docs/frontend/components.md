@@ -953,3 +953,6 @@ Settings shell and shared Settings actions use `ui/Button`; native navigation
 and search-result rows retain their layout marker and click semantics. Settings
 search lays out the icon, shared Input and clear Button as siblings. Select
 arrow clearance belongs to FormControls, not to Settings selectors.
+`SettingPageHeader`, `SectionCard`, `StatusSummary`, `ListRow`, `EmptyState`
+and `DangerZone` action slots arrange their children only. Pass shared UI
+controls into these slots; the containers do not set descendant button sizes.

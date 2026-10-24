@@ -591,13 +591,13 @@ const PromptEditor: Component<{
 					scope={props.prompt.name}
 					consequence="This permanently removes this custom prompt."
 				>
-					<button
+					<Button
+						variant="danger"
 						data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
-						class={sp.dangerBtn}
 						onClick={handleDelete}
 					>
 						Delete
-					</button>
+					</Button>
 				</DangerZone>
 			</Show>
 

@@ -19,6 +19,8 @@ const controls = new Set([
 	"select",
 	"textarea",
 	"Input",
+	"Button",
+	"ColorSwatch",
 	"Slider",
 	"ColorInput",
 	"Select",
