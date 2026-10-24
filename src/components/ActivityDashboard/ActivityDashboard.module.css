@@ -96,6 +96,7 @@
 /* Terminal name + optional project badge — both in the 1fr column */
 .nameCell {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -124,8 +125,9 @@
   background: var(--bg-tertiary);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  max-width: 90px;
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 0;
