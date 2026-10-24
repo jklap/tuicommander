@@ -25,6 +25,7 @@ import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import * as transport from "../../transport";
+import egoAwaiting2103 from "../fixtures/ego-awaiting-2103.json";
 import { makeTerminal, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -239,7 +240,7 @@ describe("initApp", () => {
 	});
 	beforeEach(({ task }) => {
 		if (
-			/^(live_created_caller_declaration|adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration)/.test(
+			/^(live_created_caller_declaration|adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration|offers Chat for a restored awaiting ego)/.test(
 				task.name,
 			)
 		) {
@@ -850,6 +851,22 @@ describe("initApp", () => {
 		expect(terminalsStore.get(ids[0])?.sessionId).toBe("sess-1");
 		expect(terminalsStore.get(ids[1])?.sessionId).toBe("sess-2");
 		expect(terminalsStore.get(ids[0])?.nameIsCustom).toBe(false);
+	});
+
+	// Catches: reload disables desktop ego Chat for a pending prompt in the Global Workspace.
+	// Recorded list_active_sessions row from the 2021-30cd live audit; see fixture provenance.
+	it("offers Chat for a restored awaiting ego session without a saved frontend binding", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([egoAwaiting2103]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		const id = terminalsStore.getTerminalForSession(egoAwaiting2103.session_id)!;
+		const restored = terminalsStore.get(id)!;
+		expect(restored).toMatchObject({ agentType: "ego", awaitingInput: "question", agentSessionId: null });
+		expect(chatViewAvailability(restored)).toEqual({ available: true });
 	});
 
 	it("preserves an explicitly customized surviving session name", async () => {

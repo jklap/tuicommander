@@ -183,6 +183,14 @@
   color: var(--fg-primary);
 }
 
+.entryLink {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+}
+
 .entryDir .entryName {
   font-weight: 500;
 }

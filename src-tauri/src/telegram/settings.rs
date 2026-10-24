@@ -37,13 +37,46 @@ pub(super) fn revision(paths: &Paths) -> Vec<Option<std::time::SystemTime>> {
         .collect()
 }
 pub(super) async fn changed(paths: &Paths, previous: &[Option<std::time::SystemTime>]) {
-    loop {
-        tokio::select! {
-            _ = CHANGED.notified() => return,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                if revision(paths) != previous { return; }
-            }
+    use notify::Watcher;
+    let (send, mut receive) = tokio::sync::mpsc::channel(1);
+    let directory = paths.directory.clone();
+    let watched_directory = directory.clone();
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let relevant = super::config::watch_event_relevant(
+            &event,
+            &watched_directory,
+            &["config.json", "bot.token"],
+            true,
+        );
+        if relevant {
+            let _ = send.try_send(());
         }
+    });
+    let mut watcher = match watcher {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            tracing::error!(source="telegram", %error, "Cannot watch Telegram setup; waiting for an explicit settings change");
+            CHANGED.notified().await;
+            return;
+        }
+    };
+    // An unconfigured install may not have the private directory yet. Watching
+    // its nearest existing parent wakes setup when the missing directory appears.
+    let watch_root = directory
+        .ancestors()
+        .find(|path| path.is_dir())
+        .unwrap_or(&directory);
+    if let Err(error) = watcher.watch(watch_root, notify::RecursiveMode::NonRecursive) {
+        tracing::error!(source="telegram", %error, "Cannot watch Telegram setup; waiting for an explicit settings change");
+        CHANGED.notified().await;
+        return;
+    }
+    if revision(paths) != previous {
+        return;
+    }
+    tokio::select! {
+        _ = CHANGED.notified() => {},
+        _ = receive.recv() => {},
     }
 }
 #[cfg(test)]

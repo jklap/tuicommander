@@ -167,6 +167,71 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
     std::fs::remove_file(socket).unwrap();
 }
 
+// Catches: a detached reviewer inherits the foreground peer and can block its
+// composer via progress, stranding the runner's own BG DONE behind that wait.
+#[test]
+fn bg_command_drops_parent_peer_identity_but_runner_still_wakes_caller_2100() {
+    let log = test_path("peer-isolation.log");
+    let socket = socket_path("peer-isolation.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream).0, "GET /sessions HTTP/1.1");
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        assert_eq!(request.0, "POST /sessions/pty-1/queue HTTP/1.1");
+        reply(&mut stream, r#"{"accepted":true}"#);
+        request.1
+    });
+    let output = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "env"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_PARENT", "foreground-parent")
+        .env("TUIC_SOCKET", &socket)
+        .env("BG_KEEP_CONFIG", "preserved")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    let status = wait_for_terminal_wake(&wake_file);
+    let request = server.join().unwrap();
+    assert_eq!(status["status"], "queued");
+    assert_eq!(status["tuic_session"], "caller-1");
+    assert!(
+        request["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("BG DONE exit=0 ")
+    );
+    let contents = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        contents
+            .lines()
+            .any(|line| line == "BG_KEEP_CONFIG=preserved")
+    );
+    assert!(
+        contents
+            .lines()
+            .any(|line| line == format!("TUIC_SOCKET={}", socket.display()))
+    );
+    assert!(contents.lines().any(|line| line == "TUIC_BG_COMMAND=1"));
+    for key in ["TUIC_SESSION=", "TUIC_PARENT="] {
+        assert!(
+            !contents.lines().any(|line| line.starts_with(key)),
+            "background command inherited foreground identity {key}"
+        );
+    }
+    std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(&log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(format!("{}.markers", log.display())).unwrap();
+}
+
 #[test]
 fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
     let log = test_path("retry-timeout.log");
@@ -654,7 +719,7 @@ fn bg_lost_queue_reply_and_failed_mail_retries_the_same_key_and_records_acceptan
     let status = wait_for_terminal_wake(&wake_file);
     let (first, retry) = server.join().unwrap();
     let key = first["idempotencyKey"].as_str().expect("stable job key");
-    assert!(!key.is_empty());
+    assert_ne!(key, "");
     assert_eq!(first, retry);
     assert_eq!(status["status"], "queued");
     assert_eq!(status["attempts"], 2);

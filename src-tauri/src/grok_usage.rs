@@ -4,9 +4,11 @@
 //! sessions; this module does not introduce ACP session routing or fallback.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::cli_usage_rpc::{UsageCache, looks_like_auth_failure, looks_like_contract_failure};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GrokMoney {
@@ -50,47 +52,8 @@ pub struct GrokUsageApiResponse {
     pub subscription_tier: Option<String>,
 }
 
-struct Cache(parking_lot::Mutex<Option<(GrokUsageApiResponse, Instant)>>);
-
-impl Cache {
-    const fn new() -> Self {
-        Self(parking_lot::Mutex::new(None))
-    }
-
-    fn get(&self, max_age: Duration) -> Option<GrokUsageApiResponse> {
-        let guard = self.0.lock();
-        let (value, at) = guard.as_ref()?;
-        (at.elapsed() < max_age).then(|| value.clone())
-    }
-
-    fn put(&self, value: &GrokUsageApiResponse) {
-        *self.0.lock() = Some((value.clone(), Instant::now()));
-    }
-}
-
-const CACHE_TTL: Duration = Duration::from_secs(300);
-const STALE_MAX_AGE: Duration = Duration::from_secs(1800);
-static CACHE: Cache = Cache::new();
+static CACHE: UsageCache<GrokUsageApiResponse> = UsageCache::new();
 static FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-fn looks_like_auth_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("not logged in")
-        || lower.contains("authentication")
-        || lower.contains("unauthorized")
-        || lower.contains("401")
-        || lower.contains("403")
-}
-
-fn looks_like_contract_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    message.contains("Failed to parse")
-        || message.contains("returned no result")
-        || message.contains("returned no response")
-        || lower.contains("method not found")
-        || lower.contains("unknown method")
-        || lower.contains("unsupported method")
-}
 
 async fn fetch_usage() -> Result<GrokUsageApiResponse, String> {
     let detection = crate::agent::detect_agent_binary("grok".to_string()).await;
@@ -122,11 +85,11 @@ async fn fetch_usage() -> Result<GrokUsageApiResponse, String> {
 }
 
 async fn cached_usage() -> Result<GrokUsageApiResponse, String> {
-    if let Some(value) = CACHE.get(CACHE_TTL) {
+    if let Some(value) = CACHE.fresh() {
         return Ok(value);
     }
     let _guard = FETCH_LOCK.lock().await;
-    if let Some(value) = CACHE.get(CACHE_TTL) {
+    if let Some(value) = CACHE.fresh() {
         return Ok(value);
     }
     match fetch_usage().await {
@@ -137,7 +100,7 @@ async fn cached_usage() -> Result<GrokUsageApiResponse, String> {
         Err(message)
             if !looks_like_auth_failure(&message) && !looks_like_contract_failure(&message) =>
         {
-            if let Some(value) = CACHE.get(STALE_MAX_AGE) {
+            if let Some(value) = CACHE.stale() {
                 tracing::info!(
                     source = "grok_usage",
                     "Returning stale cache after error: {message}"

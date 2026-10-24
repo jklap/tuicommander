@@ -1,0 +1,2 @@
+tuic bg: command=python3 -B scripts/agent-test-visible.py --instance at-2095 --port 19995 --duration 1800 --evidence-dir /Users/stefano.straus/Gits/.tmp/results/fix-2095-long
+FAIL agent_test_window_renders_visible_without_focus: agent-test took focus during observation; animation frames stopped during observation; compact corner geometry changed during observation; frontmost application changed during observation; unrelated frontmost PID changed during launch/paint; evidence=/Users/stefano.straus/Gits/.tmp/results/fix-2095-long

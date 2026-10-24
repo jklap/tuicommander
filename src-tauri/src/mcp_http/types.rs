@@ -34,6 +34,9 @@ pub(super) struct VersionResponse {
 #[serde(default)]
 pub(crate) struct SessionInfo {
     pub session_id: String,
+    /// Live PTY child, not the foreground agent or one of its tool subprocesses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_pid: Option<u32>,
     pub cwd: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
@@ -1123,6 +1126,11 @@ pub(super) struct GitUpdateFromBaseRequest {
 #[derive(Deserialize)]
 pub(super) struct RemoteConnectionPasswordRequest {
     pub password: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RemoteConnectionRelayPairingRequest {
+    pub bundle: String,
 }
 
 #[derive(Deserialize)]

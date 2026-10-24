@@ -20,6 +20,13 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_session_usage(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    Json(crate::session_usage::get_session_usage_impl(&state, &id).await).into_response()
+}
+
 pub(super) async fn get_prompt_receipt(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -137,6 +144,11 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                 .get(&session_id)
                 .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
             let mut row = SessionInfo {
+                child_pid: if state.session_maps.exit_codes.contains_key(&session_id) {
+                    None
+                } else {
+                    session._child.process_id()
+                },
                 cwd: session.cwd.clone(),
                 worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
                     session
@@ -316,6 +328,7 @@ pub(crate) fn write_pty_input_parts(
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &byte_parts)?;
 
     for part in parts {
@@ -354,6 +367,7 @@ pub(crate) fn write_pty_input_pair(
         .ok_or_else(|| "Session not found".to_string())?;
     let mut writer = writer.lock();
     state.retire_turn_interrupt(session_id);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(text.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -361,6 +375,7 @@ pub(crate) fn write_pty_input_pair(
         .flush()
         .map_err(|error| format!("Flush failed: {error}"))?;
     crate::pty::sleep_agent_enter_gap(agent_type);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(key.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -383,6 +398,7 @@ fn write_pty_input_bytes(
     crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &[data])?;
     crate::pty_capture::record_input(session_id, data);
     if let Ok(text) = std::str::from_utf8(data) {
@@ -398,7 +414,7 @@ fn write_pty_input_bytes(
 pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
-    crate::pty::stamp_input_ms(state, session_id);
+    crate::pty::record_input_ms(state, session_id);
     crate::state::resolve_choice_prompt_input(state, session_id, data);
 
     // Feed input through InputLineBuffer FSM to track slash_mode accurately.
@@ -507,8 +523,14 @@ pub(super) async fn resize_session(
     }
     // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545),
     // on the blocking pool — a whole-ring rewrap must not sit on a tokio worker.
-    match crate::pty::resize_session_off_thread(&state, session_id.clone(), body.rows, body.cols)
-        .await
+    match crate::pty::resize_session_off_thread(
+        &state,
+        session_id.clone(),
+        body.rows,
+        body.cols,
+        "http",
+    )
+    .await
     {
         Ok(Some(frame)) => {
             crate::pty::send_grid_frame(&state, &session_id, frame);
@@ -581,6 +603,11 @@ pub(super) async fn get_output(
 
     // format=log: return VT100-extracted clean log lines (best for mobile/REST consumers)
     if format == "log" {
+        // Snapshot identity before taking the grid lock, as in the log stream.
+        // Retained agent rows are history after confirmed shell return.
+        let agent_active = state
+            .session_state_with_shell(&session_id)
+            .is_some_and(|session| session.agent_type.is_some());
         let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
             Some(b) => b,
             None => return session_not_found(),
@@ -598,11 +625,9 @@ pub(super) async fn get_output(
         // so a client subtracting the length would land inside the window it already
         // holds and replay those lines when scrolling up.
         let window_start = offset.max(buf.oldest_offset()).min(total);
-        let trim = screen_chrome_cutoff(&buf);
-        // Get styled screen rows, trimmed to same cutoff
-        let styled = buf.screen_log_lines();
-        let screen: Vec<_> = styled.into_iter().take(trim.cutoff).collect();
-        let input_line = buf.prompt_input_text();
+        let projected = poll_screen(&buf, 0, agent_active);
+        let screen = projected.screen.unwrap_or_default();
+        let input_line = projected.input_line;
         let mut resp = serde_json::json!({
             "lines": lines,
             "total_lines": total,
@@ -666,37 +691,20 @@ pub(super) async fn close_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if state.session_maps.sessions.contains_key(&session_id) {
-        // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
-        // this session's per-session PTY channel, so the closed frame must be emitted
-        // while the channel still exists. broadcast keeps the buffered frame available
-        // to live subscribers even after the sender is dropped, so they drain the
-        // "closed" frame and THEN see the channel close (no lost close notification).
-        tracing::info!(source = "session", session_id = %session_id, "Session closed: explicit close");
-        state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-            session_id: session_id.clone(),
-            reason: "explicit_close".to_string(),
-        });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-closed",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "reason": "explicit_close",
-                }),
-            );
-        }
-
-        let cleanup_session_id = session_id.clone();
-        let cleanup_state = state.clone();
+    if state.session_maps.sessions.contains_key(&session_id)
+        || state.grid.vt_log_buffers.contains_key(&session_id)
+    {
+        let cleanup_state = Arc::clone(&state);
         if let Err(error) = tokio::task::spawn_blocking(move || {
-            crate::pty::close_pty_core(&cleanup_state, &cleanup_session_id, false);
-            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
+            super::mcp_transport_session_agent::handle_session(
+                &cleanup_state,
+                &serde_json::json!({"action":"close", "session_id":session_id}),
+                None,
+            )
         })
         .await
         {
-            tracing::warn!(session_id = %session_id, "session cleanup task failed: {error}");
+            tracing::warn!(%error, "session cleanup task failed");
         }
 
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
@@ -1906,7 +1914,17 @@ async fn handle_ws_log_session(
                 let (lines, new_offset, polled) = {
                     let buf = vt_log.lock();
                     let (l, o) = buf.lines_since_owned(offset, usize::MAX);
-                    (l, o, poll_screen(&buf, prev_screen_hash))
+                    (
+                        l,
+                        o,
+                        poll_screen(
+                            &buf,
+                            prev_screen_hash,
+                            prev_state
+                                .as_ref()
+                                .is_some_and(|session| session.agent_type.is_some()),
+                        ),
+                    )
                 }; // lock released
                 let input_line = polled.input_line;
                 let screen_lines = polled.screen;
@@ -2256,11 +2274,18 @@ struct ScreenPoll {
 ///
 /// The styled build stays inside the caller's lock because it reads the grid;
 /// what changed is how often it runs, not where.
-fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64) -> ScreenPoll {
+fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64, agent_active: bool) -> ScreenPoll {
     use std::hash::{Hash, Hasher};
 
-    let trim = screen_chrome_cutoff(buf);
-    let input_line = buf.prompt_input_text();
+    // Only a live agent owns composer chrome. After identity release, a
+    // retained prompt/selection cannot truncate later shell output or become
+    // the mobile input line. REST and WS share this projection.
+    let cutoff = if agent_active {
+        screen_chrome_cutoff(buf).cutoff
+    } else {
+        buf.grid_screen_lines()
+    };
+    let input_line = agent_active.then(|| buf.prompt_input_text()).flatten();
 
     let owned;
     let rows: &[String] = match buf.screen_rows_ref() {
@@ -2270,7 +2295,7 @@ fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64) -> ScreenPoll {
             &owned
         }
     };
-    let visible = &rows[..trim.cutoff.min(rows.len())];
+    let visible = &rows[..cutoff.min(rows.len())];
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for row in visible {
@@ -2287,11 +2312,7 @@ fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64) -> ScreenPoll {
         };
     }
 
-    let styled: Vec<_> = buf
-        .screen_log_lines()
-        .into_iter()
-        .take(trim.cutoff)
-        .collect();
+    let styled: Vec<_> = buf.screen_log_lines().into_iter().take(cutoff).collect();
     // screen_log_lines drops trailing blank rows, so a screen of nothing but
     // blanks styles to nothing. The old path sent no frame for it either.
     let screen = if styled.is_empty() {
@@ -2632,22 +2653,6 @@ pub(super) async fn terminal_get_cursor_line(
     }
 }
 
-pub(super) async fn terminal_hyperlink_at(
-    State(state): State<Arc<AppState>>,
-    Path(session_id): Path<String>,
-    Query(query): Query<super::types::TerminalCellQuery>,
-) -> impl IntoResponse {
-    match crate::pty::vt_try_read(&state, session_id, move |vt| {
-        vt.grid_hyperlink_at(query.row, query.col)
-    })
-    .await
-    {
-        Ok(Some(url)) => Json(serde_json::json!({"url": url})).into_response(),
-        Ok(None) => not_found_response(),
-        Err(e) => read_failed_response(&e),
-    }
-}
-
 pub(super) async fn terminal_request_frame(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -2904,15 +2909,15 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*bytes.lock().unwrap(), b"next task\x15");
-        assert!(
+        assert_eq!(
             state
                 .session_maps
                 .input_buffers
                 .get(sid)
                 .unwrap()
                 .lock()
-                .content()
-                .is_empty()
+                .content(),
+            ""
         );
         assert_eq!(
             crate::pty::list_queued_commands(&state, sid)[0].text,
@@ -3853,6 +3858,69 @@ mod tests {
         assert_eq!(result.cutoff, 0);
     }
 
+    // Catches: mobile log capture or chrome trimming drops a tool header while
+    // later output remains visible under an older header.
+    #[test]
+    fn captured_claude_consecutive_tools_keep_mobile_headers() {
+        for fixture in [
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-consecutive-tools-2109.tcap")
+                .as_slice(),
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-verbose-tools-2109.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(fixture)
+                .expect("recorded Claude consecutive tool calls");
+            let (rows, cols) = capture.geometry.expect("recorded geometry");
+            let mut grid = crate::state::VtLogBuffer::new(rows, cols, 10_000);
+            let mut utf8 = crate::state::Utf8ReadBuffer::new();
+            let mut escape = crate::state::EscapeAwareBuffer::new();
+            let mut checked = 0;
+            for (index, record) in capture.records.into_iter().enumerate() {
+                if record.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                grid.process(clean.as_bytes());
+                let (log, _) = grid.lines_since_owned(0, usize::MAX);
+                let mut mobile: Vec<_> = log.iter().map(|line| line.text()).collect();
+                let screen = grid.screen_log_lines();
+                mobile.extend(
+                    screen
+                        .into_iter()
+                        .take(screen_chrome_cutoff(&grid).cutoff)
+                        .map(|line| line.text()),
+                );
+                let mobile = mobile.join("\n");
+                for header in grid
+                    .grid_get_lines(0, grid.grid_total_lines())
+                    .into_iter()
+                    .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                {
+                    checked += 1;
+                    assert!(
+                        mobile.contains(header.trim_end()),
+                        "record {index}: mobile dropped canonical header {header:?}\n{mobile}"
+                    );
+                }
+            }
+            assert!(
+                checked > 6,
+                "capture must exercise consecutive tool headers across frames"
+            );
+            let headers = grid
+                .grid_get_lines(0, grid.grid_total_lines())
+                .into_iter()
+                .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                .count();
+            assert_eq!(
+                headers, 6,
+                "capture must finish all three Bash/Write rounds"
+            );
+        }
+    }
+
     // Catches: the highlighted Claude option is mistaken for the composer prompt,
     // so the mobile screen loses the remaining choices and its selection footer.
     #[test]
@@ -3951,7 +4019,7 @@ mod tests {
                 continue;
             };
             let visible = &rows[..trim_screen_chrome(&rows).cutoff];
-            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            let streamed = poll_screen(&grid, 0, true).screen.expect("log-WS screen");
             for expected in expected {
                 assert!(
                     visible.iter().any(|row| row.contains(expected)),
@@ -4002,7 +4070,7 @@ mod tests {
             }
             observed = true;
             let visible = &rows[..trim_screen_chrome(&rows).cutoff];
-            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            let streamed = poll_screen(&grid, 0, true).screen.expect("log-WS screen");
             for text in expected {
                 assert!(
                     visible.iter().any(|row| row.contains(text)),
@@ -4070,6 +4138,94 @@ mod tests {
         );
     }
 
+    // Catches: retained agent chrome hides shell output and revives the old input
+    // after a handled exit or SIGTERM, even though the canonical grid advanced.
+    #[tokio::test]
+    async fn captured_agent_exit_log_projection_keeps_shell_output() {
+        let mut failures = Vec::new();
+        for (mode, bytes, marker) in [
+            (
+                "normal",
+                include_bytes!("../fixtures/agent_prompts/claude-exit-normal-2178.raw").as_slice(),
+                "SHELL_NORMAL_2178",
+            ),
+            (
+                "sigterm",
+                include_bytes!("../fixtures/agent_prompts/claude-exit-sigterm-2178.raw").as_slice(),
+                "SHELL_SIGTERM_2178",
+            ),
+        ] {
+            let state = super::super::tests::test_state();
+            // Recorded PTY geometry; the captured /sessions snapshot has no agent
+            // identity after shell return. Do not infer identity from old rows.
+            let mut buf = VtLogBuffer::new(41, 128, 10_000);
+            buf.process(bytes);
+            assert!(
+                buf.grid_get_lines(0, buf.grid_total_lines())
+                    .join("\n")
+                    .contains(marker),
+                "{mode}: fixture must contain executed shell output"
+            );
+            state
+                .grid
+                .vt_log_buffers
+                .insert(mode.into(), parking_lot::Mutex::new(buf));
+            let response = get_output(
+                State(state),
+                Path(mode.into()),
+                Query(serde_json::from_value(serde_json::json!({"format":"log"})).unwrap()),
+            )
+            .await
+            .into_response();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let text = ["lines", "screen"]
+                .into_iter()
+                .flat_map(|key| json[key].as_array().unwrap())
+                .flat_map(|row| row["spans"].as_array().unwrap())
+                .map(|span| span["text"].as_str().unwrap())
+                .collect::<String>();
+            if !text.contains(marker)
+                || !text.contains("shell2178$")
+                || json.get("input_line").is_some()
+            {
+                failures.push(format!(
+                    "{mode}: output={}, prompt={}, stale_input={:?}",
+                    text.contains(marker),
+                    text.contains("shell2178$"),
+                    json.get("input_line")
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    // Catches: the log WS keeps its old trim/hash after identity release when
+    // no further PTY bytes arrive to repaint the retained agent prompt.
+    #[test]
+    fn screen_poll_releases_retained_chrome_when_agent_identity_is_gone() {
+        let mut buf = VtLogBuffer::new(41, 128, 10_000);
+        buf.process(include_bytes!(
+            "../fixtures/agent_prompts/claude-exit-sigterm-2178.raw"
+        ));
+        let before = poll_screen(&buf, 0, true);
+        assert_eq!(before.input_line.as_deref(), Some("✔ Dark mode"));
+        let after = poll_screen(&buf, before.hash, false);
+        let text = after
+            .screen
+            .expect("identity release must publish the untrimmed screen")
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("SHELL_SIGTERM_2178"));
+        assert!(text.contains("shell2178$"));
+        assert!(after.input_line.is_none());
+        assert!(poll_screen(&buf, after.hash, false).screen.is_none());
+    }
+
     // --- Log-WS screen polling (604-cb45 F14) ---
     //
     // The poll runs 5x/s per connected log client. Building the styled screen
@@ -4086,14 +4242,14 @@ mod tests {
     fn screen_poll_materializes_only_on_a_change() {
         let buf = vt_log_with("hello world\r\n");
 
-        let first = poll_screen(&buf, 0);
+        let first = poll_screen(&buf, 0, true);
         assert!(
             first.screen.is_some(),
             "the first poll has nothing to compare against"
         );
 
         // Same buffer, same hash: nothing to send, so nothing to build.
-        let second = poll_screen(&buf, first.hash);
+        let second = poll_screen(&buf, first.hash, true);
         assert!(
             second.screen.is_none(),
             "an unchanged screen must not be materialized"
@@ -4107,10 +4263,10 @@ mod tests {
     #[test]
     fn screen_poll_reports_a_change_after_new_output() {
         let mut buf = vt_log_with("first\r\n");
-        let first = poll_screen(&buf, 0);
+        let first = poll_screen(&buf, 0, true);
 
         buf.process(b"second\r\n");
-        let second = poll_screen(&buf, first.hash);
+        let second = poll_screen(&buf, first.hash, true);
 
         assert!(second.screen.is_some(), "new output must reach the client");
         assert_ne!(second.hash, first.hash);
@@ -4120,7 +4276,7 @@ mod tests {
     fn screen_poll_returns_the_same_rows_the_old_path_built() {
         let buf = vt_log_with("alpha\r\nbeta\r\n");
 
-        let polled = poll_screen(&buf, 0)
+        let polled = poll_screen(&buf, 0, true)
             .screen
             .expect("a fresh screen is a change");
         let expected: Vec<_> = buf
@@ -4150,7 +4306,7 @@ mod tests {
         // because the styled screen came back empty after trailing-blank
         // trimming, and the cheap hash must not start sending one.
         let buf = vt_log_with("");
-        assert!(poll_screen(&buf, 0).screen.is_none());
+        assert!(poll_screen(&buf, 0, true).screen.is_none());
     }
 
     // --- WebSocket catch-up/subscribe race ---
@@ -4378,7 +4534,7 @@ mod tests {
 
         let frame = full_frame_for_single_client(&state, "shared-damage")
             .expect("a dirty session must produce a frame");
-        assert!(!frame.is_empty());
+        assert_ne!(frame, [] as [u8; 0]);
 
         assert!(
             !ticker_frame(&state, "shared-damage").is_empty(),
@@ -4962,7 +5118,7 @@ mod tests {
             148,
             "registration must preserve the requested width"
         );
-        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148, "test")
             .await
             .expect("same-size resize");
         assert_eq!(
@@ -5142,6 +5298,26 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+        // Catches: the session list publishes an agent leaf PID instead of the PTY child.
+        let child_pid = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .unwrap()
+            .lock()
+            ._child
+            .process_id();
+        assert_eq!(row.child_pid, child_pid);
+        assert!(row.child_pid.is_some());
+        state.session_maps.exit_codes.insert(session_id.clone(), 0);
+        let ended = super::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .unwrap();
+        assert_eq!(
+            ended.child_pid, None,
+            "an exited child must not remain copyable"
+        );
     }
 
     #[tokio::test]

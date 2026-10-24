@@ -253,6 +253,11 @@ export function OutputView(props: OutputViewProps) {
 	);
 
 	onMount(async () => {
+		// Keyboard and rotation resize the clip without delivering new PTY output.
+		// Reuse the live-output follow path so detached readers and touches stay put.
+		const resizeObserver = new ResizeObserver(() => scrollToBottom());
+		if (containerEl) resizeObserver.observe(containerEl);
+		onCleanup(() => resizeObserver.disconnect());
 		containerEl?.addEventListener("scroll", handleScroll, { passive: true });
 		containerEl?.addEventListener("touchstart", handleTouchStart, { passive: true });
 		containerEl?.addEventListener("touchend", handleTouchEnd, { passive: true });
@@ -410,7 +415,6 @@ export function OutputView(props: OutputViewProps) {
 		const lineClass = isIntent && !partial ? `${styles.line} ${styles.intent}` : styles.line;
 		const wrapStyle = () => ({
 			"--wrap-indent": indent ? `${indent}ch` : undefined,
-			"box-shadow": isAnswer() ? ANSWER_RULE_SHADOW : undefined,
 		});
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
 		function content(start: number, end: number): JSX.Element[] {
@@ -428,13 +432,20 @@ export function OutputView(props: OutputViewProps) {
 							{label}
 						</a>
 					) : (
-						<button
-							type="button"
+						<span
+							role="button"
+							tabIndex={0}
 							class={styles.fileLink}
 							onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									event.currentTarget.click();
+								}
+							}}
 						>
 							{label}
-						</button>
+						</span>
 					),
 				);
 				offset = to;
@@ -444,6 +455,9 @@ export function OutputView(props: OutputViewProps) {
 		}
 		return (
 			<div class={lineClass} style={wrapStyle()} data-terminal-marker={marker()}>
+				<Show when={isAnswer()}>
+					<span aria-hidden="true" class={styles.answerRule} style={{ "box-shadow": ANSWER_RULE_SHADOW }} />
+				</Show>
 				{partial ? (
 					<>
 						<span class={styles.intent} data-terminal-marker="intent">

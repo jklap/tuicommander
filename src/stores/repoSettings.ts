@@ -452,6 +452,18 @@ function createRepoSettingsStore() {
 			);
 		},
 
+		/**
+		 * Follow a branch rename: the label moves to the new name. In-memory only —
+		 * the backend `rename_branch` command already moved it in the config file.
+		 */
+		moveLabel(repoPath: string, oldName: string, newName: string): void {
+			const current = state.settings[repoPath];
+			const label = current?.branchLabels[oldName];
+			if (!current || label === undefined) return;
+			const { [oldName]: _, ...rest } = current.branchLabels;
+			setState("settings", repoPath, "branchLabels", reconcile({ ...rest, [newName]: label }));
+		},
+
 		/** Remove settings for a repository */
 		remove(path: string): void {
 			const { [path]: _, ...rest } = state.settings;

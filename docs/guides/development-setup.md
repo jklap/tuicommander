@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-The macOS desktop app supports macOS 12 Monterey or later and requires system WebKit updated to Safari 17.4 or later for Mermaid diagrams. The bundle declares macOS 12.0 as its minimum; this does not guarantee that Safari updates are installed. The Rust deployment target stays at 10.15 for binary compilation. Windows uses the Evergreen WebView2 runtime; Linux builds use WebKitGTK 4.1 API packages.
+The macOS desktop app supports macOS 12 Monterey or later and requires system WebKit updated to Safari 17.4 or later for Mermaid diagrams. The bundle declares macOS 12.0 as its minimum; this does not guarantee that Safari updates are installed. `src-tauri/.cargo/config.toml` forces `MACOSX_DEPLOYMENT_TARGET=12.0` for Rust and native dependencies, including WebRTC and whisper.cpp, overriding inherited shell defaults. The Cargo config also forces `CMAKE_OSX_DEPLOYMENT_TARGET=12.0` so whisper.cpp updates existing CMake caches instead of retaining an older target. Make does not set a separate default. `scripts/test-macos-deployment-target.sh` checks both values against the bundle minimum and runs with system Python without extra dependencies. The installed Xcode SDK's libc++ `__configuration/availability.h` warns for macOS deployment targets below 11.0, so 12.0 needs no increase. Windows uses the Evergreen WebView2 runtime; Linux builds use WebKitGTK 4.1 API packages.
 
 - **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)
@@ -91,6 +91,8 @@ bundle, signing operation or installed executable is involved. Embedded frontend
 assets use `tauri/custom-protocol` even though this is a debug build.
 
 Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
+The isolated window starts at 1400 × 900 logical pixels so Tasks and other
+virtualized panels have a usable viewport. Its minimum size remains 640 × 420.
 Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
 AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
 Agents must connect through the instance's Unix socket, printed as `socket` and
@@ -120,10 +122,21 @@ It never seeds from the daily config. Never copy daily tokens or config there.
 
 The test window is 640×420 logical pixels, with matching minimum dimensions,
 at the bottom-right of the primary screen work area (16 logical pixels inset).
-It is always on top so macOS does not fully
-occlude its WebView behind the active application. It cannot become key or take
-keyboard focus. Background throttling is disabled (supported on macOS 14+), and
-initial application activation is disabled only for the agent-test runtime.
+It is always on top so ordinary application windows do not cover it. A higher
+or another floating window (a second agent-test instance in the same corner, a
+system authentication prompt) can still cover it fully; WebKit would then mark
+the page hidden and stop `requestAnimationFrame`. The agent-test WebView
+therefore disables WebKit window-occlusion detection, so the document stays
+visible while the window is ordered in. It cannot become key or take keyboard
+focus. Background throttling is disabled (supported on macOS 14+). The
+agent-test application uses the `Prohibited` activation policy, set between
+Tauri build and run: Tao 0.37.1 still calls `activateIgnoringOtherApps(false)`
+at launch, and macOS grants it when the launching application (usually the
+daily TUIC) is frontmost. As a result the test instance has no Dock icon or
+menu bar and never becomes the active application. A process-lifetime activity
+prevents App Nap during live latency checks but still permits idle system sleep.
+These changes apply only to the dedicated agent-test runtime; the daily app keeps
+its existing activation, occlusion and power-management behavior.
 It starts hidden: Tao 0.37.1 `app_state.rs::window_activation_hack` otherwise
 orders every visible window key even when `focus=false`. At Tauri Ready, after
 that sweep, the agent-test path calls native `NSWindow.orderFront` without
@@ -147,16 +160,27 @@ python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
   --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
 ```
 
+Add `--duration 300` to observe presentation for five minutes. Add `--cover` as
+well to put an opaque, non-activating panel from another process (accessory
+policy; it absorbs clicks without activating anything) over the window for the whole observation; this is the
+story 2095 regression for a covered test window. The observer records
+visibility changes, animation-frame progress and gaps, native window-server layers,
+application-hidden state, foreground identity, and compact-window geometry in
+`presentation.json`. It fails if presentation or animation frames stop, the test instance becomes
+frontmost or takes focus, or window geometry changes. Foreground changes between
+other applications are recorded, not failures: the check must pass while Boss works.
+The window-server query is read-only and does not activate or move other windows.
+These observations do not read `NSWindow.occlusionState` directly or prove App Nap activity.
+
 This needs explicit desktop-execution authorization, macOS, a linked worktree
 with build inputs, an unused named instance/port, and an unrelated foreground
-application. Keep that foreground application unchanged during the build and
-check. Do not use an existing instance with sessions. The evidence directory
+application at launch. Do not use an existing instance with sessions. The evidence directory
 must be new and under `~/Gits`.
 
 `agent_test_window_renders_visible_without_focus` checks document/native
 visibility, positive terminal canvas area, actual `fillText` paint, no native or
-document focus, and the same unrelated frontmost PID before launch, at readiness
-and after painting. It also verifies the compact viewport and corner geometry.
+document focus, and that the test instance is not frontmost at readiness or
+after painting. It also verifies the compact viewport and corner geometry.
 It retains JSON receipts, the native build log and canvas-only PNGs, deletes
 only sessions created by the check, calls `make agent-test-stop`, and checks
 `ps` for this worktree's executable. It never captures the desktop or drives
@@ -279,6 +303,28 @@ pnpm test:coverage     # Coverage report
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
 **Coverage:** ~80%+
+
+### Chat browser landing gate (macOS)
+
+Run `make check-chat-readability` at landing when Chat prose or answer-list CSS
+changes. This local gate starts an isolated fixture Vite on an OS-assigned port,
+runs the computed-colour, border and list-geometry regressions, then closes Vite
+in a cleanup trap. It does not start Tauri or use a running app. The browser
+harness closes its own named tab and does not close shared Chrome.
+
+Prerequisites: installed frontend dependencies, `agent-browser`, matching Chrome
+for Testing, and the approved `ab-stealth.sh` wrapper under
+`~/Gits/personal/brainstorming/tools/browser-stealth/`. Set
+`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path. Evidence defaults to a
+new `.tmp/chat-readability-*` directory in the checkout; set
+`TUIC_CHAT_EVIDENCE_DIR` to retain it elsewhere. Managed agents run this target
+through the shared build slot.
+
+The frontend CI job runs on Ubuntu and cannot use this macOS `.app`/`open` wrapper.
+This is a separate required local landing gate, not part of `make check` or the
+ordinary Vitest run. The direct test retains its explicit opt-in skip when
+`TUIC_CHAT_BROWSER_URL` is absent; the make target always supplies the URL and
+evidence directory, so it runs both regressions without skips.
 
 ### Rust build features
 

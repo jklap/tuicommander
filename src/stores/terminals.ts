@@ -91,6 +91,7 @@ export interface TerminalData {
 	agentState: AgentLifecycleState;
 	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
+	abandonedSinceMs?: number | null;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
@@ -145,6 +146,7 @@ type TerminalCreateData = Omit<
 	| "shellStateRevision"
 	| "agentState"
 	| "backgroundWork"
+	| "abandonedSinceMs"
 	| "queuedCommands"
 	| "completionNotified"
 	| "nameIsCustom"

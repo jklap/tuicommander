@@ -52,10 +52,29 @@ interface AuthStatus {
 	error?: string | null;
 }
 
+interface RepoAccessErrorGroup {
+	account_id: string;
+	host: string;
+	owner: string;
+	repos: {
+		repo: string;
+		reason: "not_found" | "forbidden" | "unknown";
+		message: string;
+	}[];
+	oauth_app_url: string | null;
+}
+
+const ACCESS_REASONS = {
+	not_found: "Not found or not visible to this token",
+	forbidden: "Access forbidden",
+	unknown: "Access reason unknown",
+};
+
 interface GitHubDiagnostics {
 	circuit_breaker_open: boolean;
 	circuit_breaker_status: string;
 	repos_not_found: string[];
+	repo_access_errors?: RepoAccessErrorGroup[];
 	repos_monitored: number;
 }
 
@@ -109,6 +128,20 @@ export const GitHubTab: Component = () => {
 	const [copied, setCopied] = createSignal(false);
 	const [avatarBroken, setAvatarBroken] = createSignal(false);
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
+	// compute_diagnostics reports a cooled-down NOT_FOUND repo in both lists; the access error already names it.
+	const unexplainedNotFound = () => {
+		const d = diagnostics();
+		const explained = new Set(
+			(d?.repo_access_errors ?? []).flatMap((group) =>
+				group.repos.flatMap((repo) => {
+					const key = `${group.owner}/${repo.repo}`;
+					// Non-ambient (GHE/named) accounts key their cooldown as `<account_id>:owner/repo`.
+					return [key, `${group.account_id}:${key}`];
+				}),
+			),
+		);
+		return (d?.repos_not_found ?? []).filter((key) => !explained.has(key));
+	};
 	// DEFERRED (2026-10-17) — CircleCI settings catalogue owner is tracked in 1991-bd88.
 	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
 	const [circleCiToken, setCircleCiToken] = createSignal("");
@@ -325,9 +358,9 @@ export const GitHubTab: Component = () => {
 		}
 	}
 
-	async function fetchDiagnostics() {
+	async function fetchDiagnostics(refresh = false) {
 		try {
-			const diag = await rpc<GitHubDiagnostics>("github_diagnostics");
+			const diag = await rpc<GitHubDiagnostics>("github_diagnostics", { refresh });
 			setDiagnostics(diag);
 		} catch (e) {
 			appLogger.warn("github", "Failed to fetch diagnostics", e);
@@ -605,40 +638,76 @@ export const GitHubTab: Component = () => {
 							</div>
 						</Show>
 
-						{/* Repos not found */}
-						<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-							<div class={g.diagWarning}>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-									<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-								</svg>
-								<div>
-									<div>Cannot access {diagnostics()?.repos_not_found?.length} repo(s) with this token:</div>
-									<ul class={g.diagRepoList}>
-										<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
-									</ul>
-									<div class={g.diagHint}>
-										The token may lack organization access or SSO authorization for these repos.
+						<For each={diagnostics()?.repo_access_errors}>
+							{(group) => (
+								<div class={g.diagWarning}>
+									<div>
+										<strong>{group.owner}</strong>
+										<div class={g.diagHint}>
+											{group.host} — {group.account_id}
+										</div>
+										<ul class={g.diagRepoList}>
+											<For each={group.repos}>
+												{(repo) => (
+													<li>
+														<strong>{repo.repo}</strong>: {ACCESS_REASONS[repo.reason]}
+														<div class={g.diagHint}>{repo.message}</div>
+													</li>
+												)}
+											</For>
+										</ul>
+										<Show when={group.oauth_app_url}>
+											{(url) => (
+												<button
+													class={g.btn}
+													data-non-setting="Open the authorized OAuth app page"
+													onClick={() => handleOpenUrl(url())}
+												>
+													Grant or request organization access
+												</button>
+											)}
+										</Show>
+										<div class={g.diagHint}>
+											Access denials are retried on the next monitoring poll. Refresh status also clears the 24-hour
+											NOT_FOUND retry delay for all accounts.
+										</div>
 									</div>
+								</div>
+							)}
+						</For>
+						<button
+							class={g.btn}
+							data-non-setting="Refresh GitHub access diagnostics without changing authentication"
+							onClick={() => fetchDiagnostics(true)}
+						>
+							Refresh status
+						</button>
+
+						{/* Not-found repos in cooldown carry no access error (compute_diagnostics skips them) */}
+						<Show when={unexplainedNotFound().length > 0}>
+							<div class={g.diagWarning}>
+								<div>
+									<strong>Cannot access {unexplainedNotFound().length} repo(s) with this token</strong>
+									<ul class={g.diagRepoList}>
+										<For each={unexplainedNotFound()}>{(repo) => <li>{repo}</li>}</For>
+									</ul>
 								</div>
 							</div>
 						</Show>
 
-						{/* All good */}
-						<Show when={!diagnostics()?.circuit_breaker_open && diagnostics()?.repos_not_found?.length === 0}>
+						{/* Summary — always rendered so Status is never empty */}
+						<Show
+							when={(diagnostics()?.repos_monitored ?? 0) > 0}
+							fallback={<div class={g.diagHint}>No repositories are monitored yet</div>}
+						>
 							<div class={g.diagOk}>
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
 									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
 								</svg>
-								<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
-							</div>
-						</Show>
-
-						<Show when={(diagnostics()?.repos_monitored ?? 0) > 0 && (diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-							<div class={g.diagOk}>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-								</svg>
-								<span>{diagnostics()?.repos_monitored} repo(s) tracked successfully</span>
+								<span>
+									{diagnostics()?.circuit_breaker_open ? "" : "PR monitoring active — "}
+									{diagnostics()?.repos_monitored} repo(s) tracked
+								</span>
 							</div>
 						</Show>
 					</div>

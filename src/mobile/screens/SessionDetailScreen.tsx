@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import type { ChatViewWake } from "../../stores/chatView";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { writeClipboard } from "../../utils/clipboard";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
@@ -12,6 +13,7 @@ import { MobileJumpBottom } from "../components/MobileJumpBottom";
 import { createOpenMarkdownTabs, OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
+import { SessionUsageBlock } from "../components/SessionUsageBlock";
 import { SuggestChips } from "../components/SuggestChips";
 import type { ComposerInputKey } from "../components/syncGuards";
 import { TerminalKeybar } from "../components/TerminalKeybar";
@@ -132,7 +134,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	async function copySessionId() {
 		setMoreOpen(false);
 		try {
-			await navigator.clipboard.writeText(props.session.session_id);
+			await writeClipboard(props.session.session_id);
 			toastsStore.add(
 				"Session ID copied",
 				props.session.session_id,
@@ -193,8 +195,22 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [openingQuestion, setOpeningQuestion] = createSignal(false);
 	const [codexQuestionOpen, setCodexQuestionOpen] = createSignal(false);
 	const [egoQuestionOpen, setEgoQuestionOpen] = createSignal(false);
+	let visibleEgoQuestion: string | undefined;
 	createEffect(() => {
-		if (!sessionState()?.awaiting_input) {
+		const state = sessionState();
+		const prompt = state?.agent_type === "ego" && state.awaiting_input ? state.choice_prompt : undefined;
+		// Highlight changes and identical polling snapshots must not undo a manual
+		// close. A new native selector, including one already waiting on entry, opens.
+		const signature = prompt
+			? JSON.stringify([
+					props.session.session_id,
+					prompt.title,
+					prompt.options.map((option) => [option.key, option.label]),
+				])
+			: undefined;
+		if (signature && signature !== visibleEgoQuestion) setEgoQuestionOpen(true);
+		visibleEgoQuestion = signature;
+		if (!state?.awaiting_input) {
 			setCodexQuestionOpen(false);
 			setEgoQuestionOpen(false);
 		}
@@ -227,6 +243,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	function openQuestion() {
 		if (egoQuestionWaiting()) setEgoQuestionOpen((open) => !open);
 		else void openCodexQuestion();
+	}
+	function revealRequiredSelection(sessionId: string) {
+		// A refusal may arrive after navigation. Never open another session's card
+		// or replay the refused text into a native selector.
+		if (sessionId !== props.session.session_id || !props.sessionExists) return;
+		if (egoQuestionWaiting()) setEgoQuestionOpen(true);
+		else if (codexQuestionWaiting()) void openCodexQuestion();
 	}
 
 	// Prefill value for CommandInput (set by slash menu selection).
@@ -491,9 +514,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							Commands
 						</button>
 					</Show>
-					<Show when={sessionState()?.usage_limit_pct != null}>
-						<div class={styles.overflowInfo}>Usage {sessionState()!.usage_limit_pct}%</div>
-					</Show>
+					<SessionUsageBlock sessionId={props.session.session_id} />
 					<button type="button" onClick={() => void copySessionId()}>
 						Copy session ID
 					</button>
@@ -597,6 +618,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
 					questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
 					codexQuestionOpen={codexQuestionOpen()}
+					onSelectionRequired={revealRequiredSelection}
 					onRegisterInsertText={(fn) => {
 						insertComposerText = fn;
 					}}

@@ -157,13 +157,15 @@ pub fn parse_ego_approval(rows: &[String]) -> Option<ParsedEvent> {
             confident: true,
         });
     }
-    if end < 4 || !rows[end - 3].trim().starts_with("Risk: ") {
+    let title_end = rows[..end]
+        .iter()
+        .rposition(|row| row.trim().starts_with("Risk: "))?;
+    if title_end == 0 || title_end + 1 == end {
         return None;
     }
     // Ego explicitly hard-wraps long approval titles with CRLF, so grid
     // soft-wrap joining cannot recover them. Read the contiguous title back
     // from Risk, without crossing a blank or another native surface.
-    let title_end = end - 3;
     let mut title_start = title_end - 1;
     while !rows[title_start].trim().starts_with("Allow ") {
         if title_start == 0 || is_question_boundary(&rows[title_start]) {
@@ -182,7 +184,16 @@ pub fn parse_ego_approval(rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         static ref KEY_RE: regex::Regex = regex::Regex::new(r"(?:^|\s)\[([yaned])\]\s+").unwrap();
     }
-    let footer = format!("{} {}", rows[end - 2].trim(), rows[end - 1].trim());
+    // Approval labels can contain explicit newlines as well as terminal wraps.
+    // Risk anchors the start; the exact final control keeps history fail-closed.
+    let footer = rows[title_end + 1..end]
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !footer.starts_with("[y] ") || !footer.ends_with("[d] details") {
+        return None;
+    }
     let keys: Vec<_> = KEY_RE.captures_iter(&footer).collect();
     if keys.iter().map(|key| &key[1]).collect::<Vec<_>>() != ["y", "a", "n", "e", "d"] {
         return None;
@@ -248,6 +259,90 @@ mod tests {
 
     fn rows(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    /// Catches: assuming Risk is third-last and joining only two footer rows.
+    #[test]
+    fn ego_approval_exports_captured_three_row_footer() {
+        // Exact approval rows from desk-2021b/p-ready.json, agents.ego-p.output.data.
+        let screen = rows(&[
+            "Allow run printf 'PARITY_P_OK\\n'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again for exec(printf PARITY_P_OK\\",
+            ")",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+            "",
+        ]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_ego_approval(&screen)
+        else {
+            panic!("captured three-row approval must expose answer controls");
+        };
+        assert_eq!(title, "Allow run printf 'PARITY_P_OK\\n'?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| (option.key.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("y", "yes"),
+                ("a", "yes, do not ask again for exec(printf PARITY_P_OK\\ )"),
+                ("n", "no, say what to do instead"),
+                ("e", "edit"),
+                ("d", "details"),
+            ]
+        );
+    }
+
+    /// Catches: variable footer scanning resurrecting approvals above newer output.
+    #[test]
+    fn ego_approval_rejects_history_and_incomplete_native_controls() {
+        let screen = rows(&[
+            "Allow run printf 'PARITY_P_OK\\n'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again for exec(printf PARITY_P_OK\\",
+            ")",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+        ]);
+        for newer in [">", "◓ Working 1s · Esc to interrupt", "Completed"] {
+            let mut history = screen.clone();
+            history.push(newer.to_owned());
+            assert!(parse_ego_approval(&history).is_none(), "{newer}");
+        }
+        for controls in [
+            "[n] no, say what to do instead   [e] edit",
+            "[n] no, say what to do instead   [d] details   [e] edit",
+            "[e] edit   [d] details",
+        ] {
+            let mut incomplete = screen.clone();
+            *incomplete.last_mut().unwrap() = controls.to_owned();
+            assert!(parse_ego_approval(&incomplete).is_none(), "{controls}");
+        }
+    }
+
+    /// Catches: dropping short approvals while removing the fixed footer height.
+    #[test]
+    fn ego_approval_keeps_short_footer_and_wrapped_title() {
+        let screen = rows(&[
+            "Allow run python3 -c",
+            "'print(987654321)'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+        ]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_ego_approval(&screen)
+        else {
+            panic!("short native approval lost");
+        };
+        assert_eq!(title, "Allow run python3 -c 'print(987654321)'?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.key.as_str())
+                .collect::<Vec<_>>(),
+            ["y", "a", "n", "e", "d"]
+        );
+        assert!(options[0].highlighted);
+        assert!(options[2].destructive);
     }
 
     #[test]

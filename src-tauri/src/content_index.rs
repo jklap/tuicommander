@@ -170,6 +170,8 @@ pub struct ContentIndex {
     ready: bool,
     /// When the last successful build completed.
     built_at: std::time::Instant,
+    /// Last completed no-change validation; independent of corpus rebuilds.
+    validated_at: Option<std::time::Instant>,
     /// Files confirmed binary (rel_path → stamp). Carried across rebuilds
     /// so we skip the 8KB read probe for files whose stamp hasn't changed.
     known_binaries: HashMap<String, FileStamp>,
@@ -347,6 +349,7 @@ impl ContentIndex {
             repo_root,
             ready: false,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries: HashMap::new(),
             engine_bytes: 0,
             last_used: AtomicU64::new(next_access_tick()),
@@ -470,6 +473,7 @@ impl ContentIndex {
             repo_root: canonical,
             ready: true,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries,
             engine_bytes,
             last_used: AtomicU64::new(next_access_tick()),
@@ -1028,7 +1032,12 @@ pub fn rebuild_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
 
     {
         let idx = index.read();
-        if idx.ready && idx.built_at.elapsed() < REBUILD_COOLDOWN {
+        if idx.ready
+            && (idx.built_at.elapsed() < REBUILD_COOLDOWN
+                || idx
+                    .validated_at
+                    .is_some_and(|at| at.elapsed() < REBUILD_COOLDOWN))
+        {
             tracing::trace!(repo = %repo_path, "content index rebuild skipped (cooldown)");
             return;
         }
@@ -1102,6 +1111,10 @@ fn rebuild_in_place(
     let (plan, prior_binaries) = {
         let idx = index.read();
         if idx.is_current() {
+            drop(idx);
+            // A completed no-op walk costs the same metadata I/O as any other
+            // validation. Re-arm admission without pretending the corpus changed.
+            index.write().validated_at = Some(std::time::Instant::now());
             tracing::debug!(repo = %repo, "content index rebuild skipped (no indexable change)");
             return;
         }
@@ -1136,6 +1149,7 @@ pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
                 // rewrites indexable files wholesale, so narrowing this to
                 // working-tree would leave the index describing the old branch.
                 Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) => {
+                    crate::fs::invalidate_filename_inventory(&repo_path);
                     // The in-memory cache, NOT `load_app_config()`: that holds the
                     // config mutex and a cross-process *file* lock across the whole
                     // read, and this arm runs on every RepoChanged — hundreds an
@@ -1151,6 +1165,7 @@ pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
                     tracing::trace!(source = "content_index", ?other, "ignored event");
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    crate::fs::invalidate_all_filename_inventories();
                     tracing::warn!(source = "content_index", lagged = n, "event bus lagged");
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -1387,6 +1402,7 @@ impl ContentIndex {
             repo_root,
             ready: true,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries,
             engine_bytes,
             last_used: AtomicU64::new(next_access_tick()),
@@ -1792,6 +1808,35 @@ mod tests {
         );
     }
 
+    /// Catches a no-op validation leaving the cooldown expired, so each later
+    /// RepoChanged schedules another full stat walk despite unchanged content.
+    #[tokio::test]
+    async fn unchanged_validation_rearms_repo_changed_cooldown() {
+        let repo = make_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut built = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
+        built.built_at = std::time::Instant::now() - REBUILD_COOLDOWN;
+        let index = Arc::new(parking_lot::RwLock::new(built));
+        state
+            .content_indices
+            .insert(repo_path.clone(), Arc::clone(&index));
+
+        rebuild_in_place(&index, &repo_path, None);
+        rebuild_index(&state, &repo_path);
+
+        assert!(
+            !state.index_in_flight.contains(&repo_path),
+            "an unchanged validation must suppress the next RepoChanged before scheduling any walk"
+        );
+
+        // Expiry must still admit a later event; no-op suppression is not a
+        // permanent exemption from checking working-tree content.
+        index.write().validated_at = Some(std::time::Instant::now() - REBUILD_COOLDOWN);
+        rebuild_index(&state, &repo_path);
+        assert!(state.index_in_flight.contains(&repo_path));
+    }
+
     #[test]
     fn rebuild_in_place_leaves_an_unchanged_index_alone() {
         let repo = make_test_repo();
@@ -1989,7 +2034,7 @@ mod tests {
         let dir = incremental_repo();
         let index = built(dir.path());
         let slots_before = index.read().entries.len();
-        assert!(hits(&index, "kumquat").is_empty());
+        assert_eq!(hits(&index, "kumquat"), [] as [std::string::String; 0]);
 
         fs::write(
             dir.path().join("file_7.rs"),
@@ -2051,7 +2096,7 @@ mod tests {
 
         assert!(hits(&index, "axolotl").contains(&"later.rs".to_string()));
         assert_eq!(index.read().entries.len(), slots_before);
-        assert!(index.read().free_ids.is_empty());
+        assert_eq!(index.read().free_ids, [] as [u32; 0]);
     }
 
     #[test]

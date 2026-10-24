@@ -315,7 +315,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
         .expect("silence state is registered before the threads start");
     assert!(
         state.grid.frame_dirty.contains_key(&sid)
-            && state.grid.sync_update_active.contains_key(&sid),
+            && state.grid.sync_update_active.contains_key(&sid)
+            && state.grid.input_frame_priority.contains_key(&sid),
         "precondition: the ticker owns both per-session entries"
     );
 
@@ -324,7 +325,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let ticker_alive = state.grid.frame_dirty.contains_key(&sid)
-            || state.grid.sync_update_active.contains_key(&sid);
+            || state.grid.sync_update_active.contains_key(&sid)
+            || state.grid.input_frame_priority.contains_key(&sid);
         let timer_alive = Arc::strong_count(&silence) > 1;
         if !ticker_alive && !timer_alive {
             break;
@@ -4924,64 +4926,6 @@ fn test_chunk_processor_planfile_normalizes_dotdot() {
     );
 }
 
-// --- transform_xterm tests ---
-
-#[test]
-fn test_transform_xterm_no_token_passes_through() {
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("just regular output");
-    assert_eq!(result.as_deref(), Some("just regular output"));
-}
-
-#[test]
-fn test_transform_xterm_intent_passes_through() {
-    // Intent coloring is now handled by the frontend MutationObserver.
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("intent: Fix the bug\n");
-    assert!(result.is_some());
-    let data = result.unwrap();
-    assert!(
-        data.contains("intent: Fix the bug"),
-        "intent must pass through to frontend"
-    );
-}
-
-#[test]
-fn test_transform_xterm_suggest_passes_through() {
-    // Suggest lines are no longer concealed in Rust — the frontend handles it.
-    let mut cp = ChunkProcessor::new(None, None);
-    let result = cp.transform_xterm("suggest: A | B | C\n");
-    assert!(result.is_some());
-    let data = result.unwrap();
-    assert!(
-        data.contains("suggest:"),
-        "suggest must pass through to frontend"
-    );
-}
-
-#[test]
-fn test_transform_xterm_incomplete_intent_passes_through() {
-    let mut cp = ChunkProcessor::new(None, None);
-    let r1 = cp.transform_xterm("intent: doing so");
-    assert!(r1.is_some(), "incomplete intent must pass through");
-}
-
-// --- alt buffer clear injection tests ---
-
-#[test]
-fn test_transform_xterm_alt_buffer_injects_clear() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer
-    cp.transform_xterm("\x1b[?1049h");
-    assert!(cp.in_alt_buffer);
-    // Cursor home should get ESC[2J injected
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        result.contains("\x1b[2J\x1b[H"),
-        "clear should be injected before cursor home"
-    );
-}
-
 #[test]
 fn test_inline_tui_mouse_mode_sets_fullscreen_without_1049() {
     let mut cp = ChunkProcessor::new(None, None);
@@ -5001,7 +4945,7 @@ fn test_inline_tui_mouse_mode_sets_fullscreen_without_1049() {
 #[test]
 fn test_inline_tui_does_not_override_alt_screen_mode() {
     let mut cp = ChunkProcessor::new(None, None);
-    cp.transform_xterm("\x1b[?1049h");
+    cp.observe_alt_buffer("\x1b[?1049h");
     cp.apply_inline_tui_mode(true, true, Some("grok"));
     match &cp.terminal_mode {
         crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { depth, .. } => {
@@ -5009,299 +4953,6 @@ fn test_inline_tui_does_not_override_alt_screen_mode() {
         }
         other => panic!("expected FullscreenTui, got {other:?}"),
     }
-}
-
-#[test]
-fn test_transform_xterm_normal_buffer_no_inject() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // NOT in alt buffer — no injection
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        !result.contains("\x1b[2J"),
-        "should not inject clear in normal buffer"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_exit_stops_inject() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter then exit alt buffer
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[?1049l");
-    assert!(!cp.in_alt_buffer);
-    let result = cp.transform_xterm("\x1b[Hcontent").unwrap();
-    assert!(
-        !result.contains("\x1b[2J"),
-        "should not inject after leaving alt buffer"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_no_clear_on_subsequent_redraws() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer — first cursor-home gets clear
-    cp.transform_xterm("\x1b[?1049h");
-    let r1 = cp.transform_xterm("\x1b[Hfirst redraw").unwrap();
-    assert!(r1.contains("\x1b[2J"), "first redraw must inject clear");
-
-    // Subsequent redraws must NOT inject clear (prevents per-keystroke flicker)
-    let r2 = cp.transform_xterm("\x1b[Hsecond redraw").unwrap();
-    assert!(
-        !r2.contains("\x1b[2J"),
-        "subsequent redraws must not inject clear"
-    );
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_clear_on_shrink() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer, consume initial clear
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit"); // consumes one-shot
-
-    // Simulate growing content: cursor-up 50 lines
-    cp.transform_xterm("\x1b[50A redraw tall");
-    assert_eq!(cp.last_cursor_up_n, 50);
-
-    // Simulate shrink: cursor-up only 20 lines (content got shorter)
-    let r = cp.transform_xterm("\x1b[20A\x1b[Hredraw short").unwrap();
-    assert!(
-        r.contains("\x1b[2J"),
-        "clear must be injected when content shrinks"
-    );
-    assert_eq!(cp.last_cursor_up_n, 20);
-
-    // Next redraw at same height — no clear
-    let r2 = cp.transform_xterm("\x1b[20A\x1b[Hsame height").unwrap();
-    assert!(!r2.contains("\x1b[2J"), "no clear when height stays same");
-}
-
-#[test]
-fn test_transform_xterm_alt_buffer_clear_on_growth() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer, consume initial clear via cursor-home
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit");
-
-    // Establish baseline height
-    cp.transform_xterm("\x1b[20Aredraw");
-    assert_eq!(cp.last_cursor_up_n, 20);
-
-    // Height grows — clear must fire (chrome shifted down, old top row is ghost)
-    let r = cp.transform_xterm("\x1b[25A\x1b[Hredraw taller").unwrap();
-    assert!(
-        r.contains("\x1b[2J"),
-        "clear must be injected when content grows"
-    );
-}
-
-#[test]
-fn test_transform_xterm_cursor_up_fallback_on_entry() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // Enter alt buffer (sets alt_buffer_needs_clear)
-    cp.transform_xterm("\x1b[?1049h");
-
-    // Ink re-renders with cursor-up only, no cursor-home.
-    // The fallback must inject ESC[2J before the cursor-up.
-    let r = cp.transform_xterm("\x1b[30Acontent").unwrap();
-    assert!(
-        r.contains("\x1b[2J\x1b[30A"),
-        "clear must inject before cursor-up fallback"
-    );
-    assert!(!cp.alt_buffer_needs_clear, "flag must be consumed");
-}
-
-#[test]
-fn test_transform_xterm_cursor_up_fallback_on_shrink() {
-    let mut cp = ChunkProcessor::new(None, None);
-    cp.transform_xterm("\x1b[?1049h");
-    cp.transform_xterm("\x1b[Hinit"); // consume entry flag
-
-    // Establish height
-    cp.transform_xterm("\x1b[40Aredraw");
-
-    // Shrink with cursor-up only (no cursor-home) — fallback path
-    let r = cp.transform_xterm("\x1b[25Aredraw short").unwrap();
-    assert!(
-        r.contains("\x1b[2J\x1b[25A"),
-        "cursor-up fallback must fire on shrink"
-    );
-}
-
-#[test]
-fn test_transform_xterm_no_clear_on_normal_buffer_cursor_up() {
-    let mut cp = ChunkProcessor::new(None, None);
-    // NOT in alt buffer — cursor-up must NOT trigger clear injection
-    let r = cp.transform_xterm("\x1b[10Acontent").unwrap();
-    assert!(!r.contains("\x1b[2J"), "must not inject in normal buffer");
-}
-
-#[test]
-fn test_extract_largest_cursor_up() {
-    assert_eq!(extract_largest_cursor_up("\x1b[5A"), Some(5));
-    assert_eq!(extract_largest_cursor_up("\x1b[10Afoo\x1b[3A"), Some(10));
-    assert_eq!(extract_largest_cursor_up("no cursor up here"), None);
-    assert_eq!(extract_largest_cursor_up("\x1b[H"), None); // cursor home, not up
-}
-
-// --- inject_clear_before_cursor_up tests ---
-
-#[test]
-fn test_inject_clear_before_cursor_up_basic() {
-    let result = inject_clear_before_cursor_up("\x1b[20Acontent");
-    assert_eq!(result, "\x1b[2J\x1b[20Acontent");
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_preserves_prefix() {
-    let result = inject_clear_before_cursor_up("prefix\x1b[10Acontent");
-    assert_eq!(result, "prefix\x1b[2J\x1b[10Acontent");
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_no_match() {
-    let input = "no cursor up \x1b[H here";
-    let result = inject_clear_before_cursor_up(input);
-    assert_eq!(
-        result, input,
-        "cursor-home must NOT match cursor-up injection"
-    );
-}
-
-#[test]
-fn test_inject_clear_before_cursor_up_bare_esc_a_ignored() {
-    // ESC[A (no number) means cursor-up 1, but has no digit before A
-    let input = "\x1b[Acontent";
-    let result = inject_clear_before_cursor_up(input);
-    assert_eq!(
-        result, input,
-        "bare ESC[A (no n) should not trigger injection"
-    );
-}
-
-// --- log_anomalous_sequences tests ---
-
-#[test]
-fn log_anomalous_detects_clear_screen() {
-    let found = detect_anomalous_sequences("\x1b[2J");
-    assert_eq!(found, vec!["ESC[2J (Clear Screen)"]);
-}
-
-#[test]
-fn log_anomalous_detects_cursor_home() {
-    let found = detect_anomalous_sequences("\x1b[H");
-    assert_eq!(found, vec!["ESC[H (Cursor Home)"]);
-}
-
-#[test]
-fn log_anomalous_detects_cursor_home_explicit() {
-    let found = detect_anomalous_sequences("\x1b[1;1H");
-    assert_eq!(found, vec!["ESC[1;1H (Cursor Home)"]);
-}
-
-#[test]
-fn log_anomalous_detects_clear_scrollback() {
-    let found = detect_anomalous_sequences("\x1b[3J");
-    assert_eq!(found, vec!["ESC[3J (Clear Scrollback)"]);
-}
-
-#[test]
-fn log_anomalous_detects_alt_screen_enter() {
-    let found = detect_anomalous_sequences("\x1b[?1049h");
-    assert_eq!(found, vec!["ESC[?1049h (Alt Screen Enter)"]);
-}
-
-#[test]
-fn log_anomalous_detects_alt_screen_exit() {
-    let found = detect_anomalous_sequences("\x1b[?1049l");
-    assert_eq!(found, vec!["ESC[?1049l (Alt Screen Exit)"]);
-}
-
-#[test]
-fn log_anomalous_multiple_in_one_chunk() {
-    let found = detect_anomalous_sequences("hello\x1b[2J\x1b[Hworld\x1b[3J");
-    assert_eq!(
-        found,
-        vec![
-            "ESC[2J (Clear Screen)",
-            "ESC[H (Cursor Home)",
-            "ESC[3J (Clear Scrollback)",
-        ]
-    );
-}
-
-#[test]
-fn log_anomalous_ignores_normal_sequences() {
-    let found = detect_anomalous_sequences("\x1b[5A\x1b[10B\x1b[32mhello\x1b[0m");
-    assert!(found.is_empty());
-}
-
-#[test]
-fn log_anomalous_ignores_cursor_position_not_home() {
-    // ESC[5;10H is a regular cursor position, not anomalous
-    let found = detect_anomalous_sequences("\x1b[5;10H");
-    assert!(found.is_empty());
-}
-
-// --- inject_clear_before_cursor_home tests ---
-
-#[test]
-fn inject_clear_no_cursor_home() {
-    let data = "hello world\x1b[5A\x1b[32mgreen\x1b[0m";
-    assert_eq!(inject_clear_before_cursor_home(data), data);
-}
-
-#[test]
-fn inject_clear_before_bare_home() {
-    let data = "\x1b[Hcontent after home";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "\x1b[2J\x1b[Hcontent after home"
-    );
-}
-
-#[test]
-fn inject_clear_before_explicit_home() {
-    let data = "\x1b[1;1Hcontent";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "\x1b[2J\x1b[1;1Hcontent"
-    );
-}
-
-#[test]
-fn inject_clear_preserves_prefix() {
-    let data = "prefix output\x1b[Hredraw content";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "prefix output\x1b[2J\x1b[Hredraw content"
-    );
-}
-
-#[test]
-fn inject_clear_only_first_home() {
-    // Only one ESC[2J should be injected, before the first ESC[H
-    let data = "\x1b[Hline1\x1b[Hline2";
-    let result = inject_clear_before_cursor_home(data);
-    assert_eq!(result, "\x1b[2J\x1b[Hline1\x1b[Hline2");
-    // Count occurrences of ESC[2J
-    assert_eq!(result.matches("\x1b[2J").count(), 1);
-}
-
-#[test]
-fn inject_clear_ignores_non_home_cursor_position() {
-    // ESC[5;10H is a regular cursor position, not home — should NOT inject
-    let data = "\x1b[5;10Hcontent";
-    assert_eq!(inject_clear_before_cursor_home(data), data);
-}
-
-#[test]
-fn inject_clear_preserves_utf8() {
-    let data = "héllo → \x1b[Hworld 🌍";
-    assert_eq!(
-        inject_clear_before_cursor_home(data),
-        "héllo → \x1b[2J\x1b[Hworld 🌍"
-    );
 }
 
 // --- is_wsl_shell tests ---
@@ -7728,8 +7379,11 @@ fn raw_stream_carry_is_bounded() {
 /// ends OSC with ESC-backslash would carry its whole stream forward.
 #[test]
 fn raw_stream_carry_recognises_st_termination() {
-    assert!(unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\").is_empty());
-    assert!(!unterminated_osc_tail("\x1b]777;notify;Codex;approval").is_empty());
+    assert_eq!(
+        unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\"),
+        ""
+    );
+    assert_ne!(unterminated_osc_tail("\x1b]777;notify;Codex;approval"), "");
 }
 
 // --- Awaiting-signal fixtures -----------------------------------------
@@ -8622,7 +8276,7 @@ async fn progress_open_intent_close_matrix() {
     ] {
         let (events, entries) = run_progress_intent_case(&chunks, 128, true, false);
         assert!(events.is_empty(), "cursor move or CR closed an open intent");
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [std::string::String; 0]);
     }
 
     let (events, entries) = run_progress_intent_case(
@@ -8632,7 +8286,7 @@ async fn progress_open_intent_close_matrix() {
         false,
     );
     assert!(events.is_empty(), "soft wrap closed an open intent");
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case(
         &[
@@ -8665,8 +8319,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case_ending(
         &["\x1b[4;1H\x1b[2K• intent: Inspect a closed store (Store error)"],
@@ -8681,7 +8341,7 @@ async fn progress_open_intent_close_matrix() {
         events.is_empty(),
         "failed journal write must not publish an intent"
     );
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let secret = format!("ghp_{}", "A".repeat(40));
     let chunk = format!("\x1b[4;1H\x1b[2K• intent: Inspect {secret} (Secret check)");
@@ -8768,8 +8428,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 }
 
 #[cfg(unix)]
@@ -8905,8 +8571,14 @@ async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
     }
     INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(0));
     let (events, entries) = run_progress_intent_case(&[&frame], 80, true, false);
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
     INTENT_CANDIDATE_GRID_READS.with(|reads| {
         assert!(
             reads.get() <= 2,
@@ -11725,63 +11397,6 @@ fn osc133_d_does_not_transition_alone() {
     );
 }
 
-#[test]
-fn osc133_d_without_c_records_no_outcome() {
-    // A 'D' (command finished) without a preceding 'C' (command started) —
-    // e.g. Enter on an empty prompt — must NOT record a phantom outcome
-    // (empty command, "unknown" error) that would pollute the knowledge
-    // panel and the agent's injected prompt.
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-osc133-d-no-c";
-    state
-        .session_maps
-        .has_osc133_integration
-        .insert(session_id.to_string(), ());
-
-    let mut proc = ChunkProcessor::new(None, None);
-    proc.handle_osc133_event('D', "1", session_id, &state);
-
-    let recorded = state
-        .ai
-        .session_knowledge
-        .get(session_id)
-        .map(|k| k.lock().commands.len())
-        .unwrap_or(0);
-    assert_eq!(recorded, 0, "D without C must not record an outcome");
-}
-
-#[test]
-fn osc133_c_then_d_records_outcome() {
-    // Regression guard: the normal path still records — C captures the
-    // command start, D finalizes the outcome.
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-osc133-c-then-d";
-    state.session_maps.shell_states.insert(
-        session_id.to_string(),
-        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
-    );
-    state
-        .session_maps
-        .shell_state_since_ms
-        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
-    state
-        .session_maps
-        .has_osc133_integration
-        .insert(session_id.to_string(), ());
-
-    let mut proc = ChunkProcessor::new(None, None);
-    proc.handle_osc133_event('C', "", session_id, &state);
-    proc.handle_osc133_event('D', "0", session_id, &state);
-
-    let recorded = state
-        .ai
-        .session_knowledge
-        .get(session_id)
-        .map(|k| k.lock().commands.len())
-        .unwrap_or(0);
-    assert_eq!(recorded, 1, "C→D should record exactly one outcome");
-}
-
 // --- is_cc_tool_call_header tests ---
 
 #[test]
@@ -11961,7 +11576,10 @@ fn check_pending_planfiles_empty_is_noop() {
     let state = crate::state::tests_support::make_test_app_state();
     let mut cp = ChunkProcessor::new(None, None);
     cp.check_pending_planfiles("sid", &state);
-    assert!(cp.pending_planfiles.is_empty());
+    assert_eq!(
+        cp.pending_planfiles,
+        [] as [(std::string::String, std::time::Instant); 0]
+    );
 }
 
 #[test]
@@ -13122,7 +12740,7 @@ mod vt_read_tests {
             .await
             .unwrap();
 
-        assert!(text.is_empty());
+        assert_eq!(text, "");
     }
 
     // The lock is taken inside the closure, on the pool thread. If it were taken
@@ -13483,6 +13101,343 @@ mod grid_delivery_tests {
             }
         });
         stop
+    }
+
+    struct ChunkReader(std::sync::mpsc::Receiver<Vec<u8>>);
+    impl Read for ChunkReader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.recv() {
+                Ok(chunk) => {
+                    bytes[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+    fn carries_echo(bytes: &[u8]) -> bool {
+        if bytes.len() < 26 {
+            return false;
+        }
+        let rows = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let mut at = 26usize;
+        for _ in 0..rows {
+            let flagged = u16::from_le_bytes([bytes[at + 2], bytes[at + 3]]);
+            at += 4;
+            if flagged & 0x4000 != 0 {
+                at += 2;
+            }
+            for _ in 0..(flagged & 0x3fff) {
+                let codepoint = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                if codepoint == '⑤' as u32 {
+                    return true;
+                }
+                at += 11;
+            }
+        }
+        false
+    }
+
+    /// Catches: an ordinary desktop receipt manufacturing cursor damage and
+    /// keeping an otherwise silent terminal in sustained-output throttling.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn desktop_receipts_do_not_generate_output() {
+        for missed in [false, true] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "receipt-is-not-damage";
+            let _rx = grid_session(&state, sid);
+            let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+            let (tx, reader) = std::sync::mpsc::channel();
+            spawn_reader_thread(
+                Box::new(ChunkReader(reader)),
+                Arc::new(AtomicBool::new(false)),
+                sid.into(),
+                state.clone(),
+                None,
+            );
+            tx.send(b"first".to_vec()).unwrap();
+            let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+                while frames.lock().is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                if missed {
+                    // Another real producer cuts damage while the desktop is
+                    // closed; the browser receives it, so desktop owes one repair.
+                    let frame = cut_frame(&state, sid, "missed while gated");
+                    send_grid_frame(&state, sid, frame);
+                }
+                commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 1, None);
+                if missed {
+                    while frames.lock().len() < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    }
+                    commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 2, None);
+                }
+                // This quiet interval is the behavior: a receipt must not produce
+                // even one new frame, regardless of the ticker's scheduling phase.
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let quiet_count = frames.lock().len();
+                tx.send("⑤".as_bytes().to_vec()).unwrap();
+                loop {
+                    if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                quiet_count
+            })
+            .await;
+            drop(tx);
+            assert_eq!(
+                observed.expect("real output did not reach the channel"),
+                if missed { 2 } else { 1 },
+                "desktop receipt or repair generated another frame without PTY output (missed={missed})"
+            );
+        }
+    }
+
+    /// Catches: retiring a paused tick's dirty hint, then depending on an ACK
+    /// to invent damage before a late real receipt can release retained output.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn paused_desktop_retains_reader_output_until_late_receipt() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "paused-retained-output";
+        let rx = grid_session(&state, sid);
+        let (gate, frames) = subscribe_a_frozen_webview(&state, sid);
+        drop(rx);
+        state.grid.watch.remove(sid);
+        for _ in 0..3 {
+            let frame = cut_frame(&state, sid, "unreceived");
+            send_grid_frame(&state, sid, frame);
+            gate.abandon();
+        }
+        assert!(gate.is_paused());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.into(),
+            state.clone(),
+            None,
+        );
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                let applied = state
+                    .grid
+                    .vt_log_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .read_rows_in_range(0, 24)
+                    .join("\n")
+                    .contains('⑤');
+                if applied {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            let before = frames.lock().len();
+            commands::ack_terminal_frame_core(&state, sid, gate.epoch(), 3, None);
+            loop {
+                if frames.lock().iter().any(|frame| carries_echo(frame)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            before
+        })
+        .await;
+        drop(tx);
+        assert_eq!(
+            observed.expect("late receipt lost retained reader output"),
+            3,
+            "paused desktop received output before a real receipt"
+        );
+    }
+
+    /// Catches: post-input echo remaining behind the sustained/typing rate floor
+    /// even though the real reader applied it and the subscriber is caught up.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_echo_reaches_grid_before_animation_floor() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-echo";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        let stop_feed = feed_continuously(&state, sid);
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            // Warm through ten actual publications. This guarantees the ticker
+            // has crossed six dirty ticks; setup speed is not the assertion.
+            for _ in 0..10 {
+                rx.changed().await.unwrap();
+                rx.borrow_and_update();
+            }
+            // The last publication just reset last_sent. Submit a controlled
+            // PTY chunk through the real reader, not by setting grid damage.
+            let submitted = std::time::Instant::now();
+            stamp_input_ms(&state, sid);
+            tx.send("⑤".as_bytes().to_vec()).unwrap();
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break submitted.elapsed();
+                }
+            }
+        })
+        .await;
+        stop_feed.store(true, Ordering::Relaxed);
+        drop(tx); // EOF stops the owned reader/ticker even when the assertion fails.
+        let elapsed = observed.expect("the real reader/ticker never delivered the echo");
+        // One 16ms tick plus 8ms scheduling tolerance, still well below the
+        // 33/50ms floor. The bound is the behavior, not a setup deadline.
+        assert!(
+            elapsed < std::time::Duration::from_millis(24),
+            "post-input echo waited {elapsed:?} for the animation/typing floor"
+        );
+    }
+
+    /// Catches: a fast echo arriving before arming, or post-write bookkeeping
+    /// replacing its already-applied generation. Exercises both write adapters.
+    #[cfg(all(unix, feature = "desktop"))]
+    #[tokio::test]
+    async fn input_priority_is_armed_before_desktop_and_http_writes() {
+        struct ImmediateOutput(Arc<frame_priority::InputFramePriority>);
+        impl Write for ImmediateOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let generation = self.0.generation();
+                assert_ne!(generation, 0, "PTY write preceded priority arming");
+                self.0.applied(generation, std::time::Instant::now());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        for desktop in [true, false] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "fast-input-arming";
+            let priority = Arc::new(frame_priority::InputFramePriority::default());
+            state
+                .grid
+                .input_frame_priority
+                .insert(sid.into(), priority.clone());
+            insert_session_with_writer(
+                &state,
+                sid,
+                Box::new(ImmediateOutput(priority.clone())),
+                TtyMode::Raw,
+            );
+            if desktop {
+                write_pty_parts_off_thread(state.clone(), sid.into(), vec!["x".into()])
+                    .await
+                    .unwrap();
+            } else {
+                crate::mcp_http::session::write_pty_input_parts(&state, sid, &["x"]).unwrap();
+            }
+            let retained = priority.request(std::time::Instant::now(), None).is_some();
+            close_pty_core(&state, sid, false);
+            assert!(retained, "post-write bookkeeping erased the fast echo hint");
+        }
+    }
+
+    /// Catches: an input-priority wake flushing DEC-2026 content before ESU.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_preserves_synchronized_output_until_esu() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-sync";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("\x1b[?2026h⑤".as_bytes().to_vec()).unwrap();
+        // Shorter than the protocol's 150ms safety timeout: no ESU was sent.
+        let premature = tokio::time::timeout(std::time::Duration::from_millis(60), async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await
+        .is_ok();
+        tx.send(b"\x1b[?2026l".to_vec()).unwrap();
+        let completed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await;
+        drop(tx);
+        assert!(
+            !premature,
+            "input priority exposed a partial synchronized update"
+        );
+        completed.expect("ESU did not release synchronized content");
+    }
+
+    /// Catches: input priority bypassing the desktop receipt gate.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_cannot_open_a_stalled_desktop_gate() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-gate";
+        let rx = grid_session(&state, sid);
+        let (gate, received) = subscribe_a_frozen_webview(&state, sid);
+        let initial = cut_frame(&state, sid, "initial");
+        send_grid_frame(&state, sid, initial);
+        drop(rx);
+        state.grid.watch.remove(sid); // Desktop is the sole subscriber.
+        assert!(!gate.is_open());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let applied = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .read_rows_in_range(0, 24)
+            .join("\n")
+            .contains('⑤');
+        let frames = received.lock().len();
+        drop(tx);
+        assert!(
+            applied,
+            "the controlled reader did not apply the input echo"
+        );
+        assert_eq!(
+            frames, 1,
+            "priority sent through an unacknowledged desktop frame"
+        );
     }
 
     /// Every frame a subscriber was handed, in the order it was handed them.
@@ -15908,4 +15863,82 @@ async fn ego_recorded_joined_intent_ends_at_title_closure_2060() {
             "trailing prose must remain in terminal output: {visible}"
         );
     }
+}
+
+// Catches: a clipped native AskUserQuestion exporting no controls and falling back to binary Yes/No.
+#[tokio::test(flavor = "current_thread")]
+async fn captured_claude_narrow_question_remains_answerable() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-narrow-2093.tcap"))
+            .expect("authentic narrow Claude capture");
+    assert_eq!(capture.geometry, Some((14, 37)));
+    assert!(
+        capture
+            .records
+            .iter()
+            .any(|r| r.direction == crate::pty_capture::CaptureDirection::Input)
+    );
+    let sid = "claude-narrow-2093";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(14, 37, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+    }
+    assert!(
+        await_session(&state, sid, |s| {
+            s.awaiting_input
+                && s.question_text.as_deref() == Some("Pick a colour?")
+                && s.choice_prompt.as_ref().is_some_and(|p| {
+                    serde_json::to_value(p).unwrap()["selection_mode"] == "navigate-only"
+                        && p.options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>()
+                            == ["↑", "↓", "↵"]
+                        && p.options
+                            .iter()
+                            .map(|o| o.label.as_str())
+                            .collect::<Vec<_>>()
+                            == [
+                                "Previous option",
+                                "Next option",
+                                "Select highlighted option",
+                            ]
+                })
+        })
+        .await,
+        "clipped choices need explicit native navigation, never an invented complete list or binary fallback"
+    );
+    assert!(!crate::state::resolve_choice_prompt_input(
+        &state, sid, "\x1b[B"
+    ));
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(crate::state::resolve_choice_prompt_input(&state, sid, "\r"));
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await
+    );
 }

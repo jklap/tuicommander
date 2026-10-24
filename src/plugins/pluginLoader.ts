@@ -277,30 +277,42 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
  * Handle the plugin-changed event from Rust's file watcher.
  * Rust emits payload as string[] (array of changed plugin IDs).
  */
-async function handlePluginChanged(event: { payload: string[] }): Promise<void> {
-	const changedIds = event.payload;
-	if (!Array.isArray(changedIds) || changedIds.length === 0) return;
+const pendingReloadIds = new Set<string>();
+let reloadInFlight: Promise<void> | null = null;
 
-	for (const pluginId of changedIds) {
-		// Skip disabled plugins early — no IPC, no store churn
-		if (disabledPluginIds.has(pluginId)) {
-			appLogger.debug("plugin", `Plugin "${pluginId}" changed but disabled, skipping`);
-			continue;
-		}
+function handlePluginChanged(event: { payload: string[] }): Promise<void> {
+	if (!Array.isArray(event.payload) || event.payload.length === 0) return Promise.resolve();
+	for (const id of event.payload) pendingReloadIds.add(id);
+	if (!reloadInFlight) {
+		reloadInFlight = Promise.resolve().then(async () => {
+			try {
+				while (pendingReloadIds.size > 0) {
+					const ids = [...pendingReloadIds];
+					pendingReloadIds.clear();
+					await reloadChangedPlugins(ids);
+				}
+			} finally {
+				reloadInFlight = null;
+			}
+		});
+	}
+	return reloadInFlight;
+}
 
+async function reloadChangedPlugins(changedIds: string[]): Promise<void> {
+	const enabledIds = [...new Set(changedIds)].filter((id) => !disabledPluginIds.has(id));
+	if (enabledIds.length === 0) return;
+	let manifests: PluginManifest[];
+	try {
+		manifests = await invoke<PluginManifest[]>("list_user_plugins", { pluginIds: enabledIds });
+	} catch (err) {
+		appLogger.error("plugin", "Failed to list plugins for reload", err);
+		return;
+	}
+	for (const pluginId of enabledIds) {
 		appLogger.info("plugin", `Plugin "${pluginId}" changed, reloading...`);
-		// pluginRegistry.unregister() already issues the Rust-side unregister.
 		await pluginRegistry.unregister(pluginId);
 		loadedPluginIds.delete(pluginId);
-
-		// Re-discover this specific plugin's manifest
-		let manifests: PluginManifest[];
-		try {
-			manifests = await invoke<PluginManifest[]>("list_user_plugins");
-		} catch (err) {
-			appLogger.error("plugin", "Failed to list plugins for reload", err);
-			return;
-		}
 
 		const manifest = manifests.find((m) => m.id === pluginId);
 		if (!manifest) {

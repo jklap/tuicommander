@@ -82,6 +82,9 @@ beforeEach(() => {
 describe("ProgressDialog", () => {
 	it("lets the reader switch PTYs and see the whole repository", () => {
 		render(() => <ProgressDialog />);
+		// Removing the mobile subtitle must not remove desktop's only project label.
+		expect(screen.getAllByText("Example")).toHaveLength(1);
+		expect(screen.queryByLabelText("Progress project")).toBeNull();
 		const selector = screen.getByLabelText("Progress terminal") as HTMLSelectElement;
 		expect(selector.value).toBe("pty-a");
 		expect(Array.from(selector.options).map((option) => option.text)).toEqual(["All repo", "Agent A", "Agent B"]);

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const menuCss = readFileSync(resolve(__dirname, "../components/MobileComposerMenu.module.css"), "utf-8");
 const css = readFileSync(resolve(__dirname, "../components/CommandInput.module.css"), "utf-8");
 // All blocks for a selector (including the shared `.send, .dictate` one), in source order.
 const rule = (name: string) =>
@@ -55,9 +56,10 @@ describe("mobile command input layout (send outside the box)", () => {
 		expect(-inset(sendHit).left).toBeLessThanOrEqual(gap);
 	});
 
-	// Catches: growing paddings, mic, gap or send so the textarea wrap width drops under 286px at 390px.
-	it("keeps the horizontal space around the text within the 70px budget", () => {
+	// Catches: growing the combined button and spacing budget at the expense of the textarea.
+	it("keeps the horizontal space around the text within the 114px budget", () => {
 		const budget =
+			px(menuCss.match(/\.trigger\s*\{([^}]*)\}/)?.[1] ?? "", "width") +
 			sides(rule("input")).left +
 			sides(rule("input")).right +
 			px(rule("composer"), "padding-right") +
@@ -65,7 +67,7 @@ describe("mobile command input layout (send outside the box)", () => {
 			px(form, "gap") +
 			marginLeft(send) +
 			px(send, "width");
-		expect(budget).toBeLessThanOrEqual(70);
+		expect(budget).toBeLessThanOrEqual(114);
 	});
 
 	// Catches: a fixed px width/max-width on the textarea or its box, which would stop it filling

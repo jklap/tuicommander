@@ -1,0 +1,365 @@
+{
+  "observer_start": {
+    "owned_pid": 16786,
+    "front_before": {
+      "pid": 90186,
+      "name": "PlatformSSOUIAgent"
+    },
+    "front_ready": {
+      "pid": 14678,
+      "name": "tuicommander"
+    },
+    "front_after": {
+      "pid": 14678,
+      "name": "tuicommander"
+    },
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "failures": [
+      "agent-test took focus during observation",
+      "animation frames stopped during observation",
+      "compact corner geometry changed during observation",
+      "frontmost application changed during observation",
+      "unrelated frontmost PID changed during launch/paint"
+    ]
+  },
+  "samples": 344,
+  "elapsed_ms": 1800029,
+  "frames": 100665,
+  "max_frame_gap_ms": 1073,
+  "front_sample_counts": {
+    "tuicommander": 301,
+    "Google Chrome for Testing": 35,
+    "tuicommander-agent-test": 8
+  },
+  "document_hidden_sample_count": 0,
+  "native_hidden_sample_count": 0,
+  "application_hidden_sample_count": 0,
+  "focus_sample_count": 0,
+  "transitions": [
+    {
+      "sample": 0,
+      "elapsed": 27,
+      "frames": 2,
+      "maxFrameGap": 11,
+      "lastFrameAge": 16,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 153,
+      "elapsed": 809979,
+      "frames": 44804,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 2,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 81136,
+        "name": "Google Chrome for Testing"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 187,
+      "elapsed": 993064,
+      "frames": 54160,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 16,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 194,
+      "elapsed": 1029100,
+      "frames": 56323,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 1,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 81136,
+        "name": "Google Chrome for Testing"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 195,
+      "elapsed": 1034308,
+      "frames": 56635,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 10,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 214,
+      "elapsed": 1134033,
+      "frames": 60717,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 2,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 56447,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 215,
+      "elapsed": 1139184,
+      "frames": 61026,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 3,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1632,
+        "y": 1092
+      },
+      "size": {
+        "width": 1280,
+        "height": 840
+      },
+      "front": {
+        "pid": 16786,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 216,
+      "elapsed": 1144354,
+      "frames": 61333,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 7,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1448,
+        "y": -1085
+      },
+      "size": {
+        "width": 938,
+        "height": 475
+      },
+      "front": {
+        "pid": 16786,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 217,
+      "elapsed": 1149509,
+      "frames": 61642,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 11,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1280,
+        "y": -1142
+      },
+      "size": {
+        "width": 1106,
+        "height": 532
+      },
+      "front": {
+        "pid": 16786,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 219,
+      "elapsed": 1159823,
+      "frames": 62261,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 6,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1280,
+        "y": -1142
+      },
+      "size": {
+        "width": 1106,
+        "height": 532
+      },
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 284,
+      "elapsed": 1499279,
+      "frames": 82624,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 7,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1280,
+        "y": -1142
+      },
+      "size": {
+        "width": 1106,
+        "height": 532
+      },
+      "front": {
+        "pid": 62699,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false
+    },
+    {
+      "sample": 287,
+      "elapsed": 1514771,
+      "frames": 83553,
+      "maxFrameGap": 1073,
+      "lastFrameAge": 13,
+      "visibility": "visible",
+      "focus": false,
+      "nativeFocus": false,
+      "visible": true,
+      "position": {
+        "x": 1280,
+        "y": -1142
+      },
+      "size": {
+        "width": 1106,
+        "height": 532
+      },
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false
+    }
+  ],
+  "first_frame_gap_over_second": {
+    "sample": 114,
+    "elapsed": 601098,
+    "frames": 33215,
+    "maxFrameGap": 1052,
+    "lastFrameAge": 11,
+    "visibility": "visible",
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "front": {
+      "pid": 14678,
+      "name": "tuicommander"
+    },
+    "applicationHidden": false
+  },
+  "visibility_events": [
+    {
+      "at": 2416,
+      "state": "visible"
+    }
+  ]
+}

@@ -1187,22 +1187,6 @@ pub async fn get_recent_branches(
         .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
 
-/// Rich context for the Git Operations Panel (single IPC round-trip).
-#[derive(Debug, Clone, Serialize)]
-pub struct GitPanelContext {
-    pub branch: String,
-    pub is_detached: bool,
-    pub status: String, // "clean", "dirty", "conflict"
-    pub ahead: Option<u32>,
-    pub behind: Option<u32>,
-    pub staged_count: u32,
-    pub changed_count: u32,
-    pub stash_count: u32,
-    pub last_commit: Option<RecentCommit>,
-    pub in_rebase: bool,
-    pub in_cherry_pick: bool,
-}
-
 /// Core logic for fetching git panel context (no caching, no Tauri state).
 /// CLI status counts via `git status --porcelain=v2` (staged/changed/conflict).
 /// Untracked entries count toward `changed` (matches the panel's prior behavior).
@@ -1287,96 +1271,6 @@ pub fn ahead_behind_cli(repo: &Path, left: &str, right: &str) -> Result<(u32, u3
         return Ok((a, b));
     }
     Err(format!("unexpected rev-list output: {:?}", out.stdout))
-}
-
-pub fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
-    let git_dir = resolve_git_dir(path);
-
-    // Branch & detached state
-    let head_branch = read_branch_from_head(path);
-    let is_detached = head_branch.is_none();
-    let branch = head_branch.unwrap_or_else(|| {
-        // Detached HEAD: show short hash
-        git_cmd(path)
-            .args(["rev-parse", "--short", "HEAD"])
-            .run_silent()
-            .map(|o| o.stdout.trim().to_string())
-            .unwrap_or_default()
-    });
-
-    // Status (porcelain v2 for staged vs unstaged), routed through the port.
-    let counts = git_reads().status_counts(path);
-    let (status, staged_count, changed_count) = (counts.status, counts.staged, counts.changed);
-
-    // Ahead/behind (only when there's an upstream)
-    let (ahead, behind) = if !is_detached {
-        git_cmd(path)
-            .args([
-                "rev-list",
-                "--left-right",
-                "--count",
-                &format!("{branch}...{branch}@{{u}}"),
-            ])
-            .run_silent()
-            .and_then(|o| {
-                let parts: Vec<&str> = o.stdout.trim().split('\t').collect();
-                if parts.len() == 2 {
-                    Some((parts[0].parse::<u32>().ok(), parts[1].parse::<u32>().ok()))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or((None, None))
-    } else {
-        (None, None)
-    };
-
-    // Stash count
-    let stash_count = git_cmd(path)
-        .args(["stash", "list"])
-        .run_silent()
-        .map(|o| o.stdout.lines().count() as u32)
-        .unwrap_or(0);
-
-    // Last commit
-    let last_commit = git_cmd(path)
-        .args(["log", "--format=%H%x00%h%x00%s", "-n", "1"])
-        .run_silent()
-        .and_then(|o| {
-            let parts: Vec<&str> = o.stdout.trim().splitn(3, '\0').collect();
-            if parts.len() == 3 {
-                Some(RecentCommit {
-                    hash: parts[0].to_string(),
-                    short_hash: parts[1].to_string(),
-                    subject: parts[2].to_string(),
-                })
-            } else {
-                None
-            }
-        });
-
-    // Rebase / cherry-pick detection via .git directory markers
-    let (in_rebase, in_cherry_pick) = match &git_dir {
-        Some(gd) => (
-            gd.join("rebase-merge").exists() || gd.join("rebase-apply").exists(),
-            gd.join("CHERRY_PICK_HEAD").exists(),
-        ),
-        None => (false, false),
-    };
-
-    GitPanelContext {
-        branch,
-        is_detached,
-        status,
-        ahead,
-        behind,
-        staged_count,
-        changed_count,
-        stash_count,
-        last_commit,
-        in_rebase,
-        in_cherry_pick,
-    }
 }
 
 // --- Working tree status (porcelain v2) ---
@@ -2589,7 +2483,10 @@ mod tests {
     #[test]
     fn list_remotes_empty_for_non_repo() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(list_remotes(dir.path()).is_empty());
+        assert_eq!(
+            list_remotes(dir.path()),
+            [] as [(std::string::String, std::string::String); 0]
+        );
     }
 
     // --- canonical_repo_root ---
@@ -2755,7 +2652,7 @@ mod tests {
     fn sort_branches_empty_input() {
         let mut branches: Vec<serde_json::Value> = vec![];
         sort_branches(&mut branches);
-        assert!(branches.is_empty());
+        assert_eq!(branches, [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -3275,14 +3172,14 @@ mod tests {
         assert_eq!(status.staged.len(), 1);
         assert_eq!(status.staged[0].path, "src/main.rs");
         assert_eq!(status.staged[0].status, "M");
-        assert!(status.unstaged.is_empty());
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
     }
 
     #[test]
     fn parse_porcelain_v2_unstaged_modified() {
         let output = "1 .M N... 100644 100644 100644 abc123 def456 src/lib.rs\n";
         let status = parse_porcelain_v2(output);
-        assert!(status.staged.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
         assert_eq!(status.unstaged.len(), 1);
         assert_eq!(status.unstaged[0].path, "src/lib.rs");
         assert_eq!(status.unstaged[0].status, "M");
@@ -3344,10 +3241,10 @@ mod tests {
         assert_eq!(status.ahead, 0);
         assert_eq!(status.behind, 0);
         assert_eq!(status.stash_count, 0);
-        assert!(status.staged.is_empty());
-        assert!(status.unstaged.is_empty());
-        assert!(status.untracked.is_empty());
-        assert!(status.conflicted.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
+        assert_eq!(status.untracked, [] as [std::string::String; 0]);
+        assert_eq!(status.conflicted, [] as [StatusEntry; 0]);
     }
 
     #[test]
@@ -3360,8 +3257,8 @@ mod tests {
         assert_eq!(status.conflicted[0].path, "src/conflict.rs");
         assert_eq!(status.conflicted[0].status, "UU");
         // Conflicted files must not leak into staged/unstaged.
-        assert!(status.staged.is_empty());
-        assert!(status.unstaged.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
     }
 
     #[test]
@@ -3963,18 +3860,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // --- get_git_panel_context_impl tests ---
-
-    #[test]
-    fn git_panel_context_nonexistent_repo_returns_defaults() {
-        let ctx = get_git_panel_context_impl(Path::new("/nonexistent/repo"));
-        assert!(ctx.branch.is_empty(), "branch should be empty for non-repo");
-        assert_eq!(ctx.staged_count, 0);
-        assert_eq!(ctx.changed_count, 0);
-        assert_eq!(ctx.stash_count, 0);
-        assert!(ctx.last_commit.is_none());
-    }
-
     // --- parse_commit_log_line tests ---
 
     #[test]
@@ -4012,8 +3897,8 @@ mod tests {
     fn parse_commit_log_line_no_parents_no_refs() {
         let line = "abc123\x00\x00\x00Bob\x002024-01-15T10:30:00Z\x00Root commit";
         let entry = parse_commit_log_line(line).expect("should parse");
-        assert!(entry.parents.is_empty());
-        assert!(entry.refs.is_empty());
+        assert_eq!(entry.parents, [] as [std::string::String; 0]);
+        assert_eq!(entry.refs, [] as [std::string::String; 0]);
         assert!(entry.body.is_none());
     }
 
@@ -4041,7 +3926,7 @@ mod tests {
         assert_eq!(commits[0].hash.len(), 40);
         assert!(commits[0].hash.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(commits[0].author_name, "Test");
-        assert!(!commits[0].author_date.is_empty());
+        assert_ne!(commits[0].author_date, "");
         assert_eq!(commits[0].subject, "commit 8", "newest commit comes first");
     }
 

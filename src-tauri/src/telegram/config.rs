@@ -63,7 +63,7 @@ impl Paths {
     }
 }
 
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
@@ -96,6 +96,84 @@ impl Config {
         }
         paths.allowlist_entries()?;
         Ok(Some(config))
+    }
+}
+
+/// One event relevance contract for both configuration watchers. A watched
+/// ancestor is relevant while setup waits for its private directory to appear.
+pub(super) fn watch_event_relevant(
+    event: &notify::Result<notify::Event>,
+    directory: &Path,
+    names: &[&str],
+    ancestors: bool,
+) -> bool {
+    match event {
+        Ok(event) if event.need_rescan() => true,
+        Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
+        Ok(event) => event.paths.iter().any(|path| {
+            path == directory
+                || (ancestors && directory.starts_with(path))
+                || path
+                    .file_name()
+                    .is_some_and(|name| names.iter().any(|expected| name == *expected))
+        }),
+        Err(_) => true,
+    }
+}
+
+/// The runtime's opt-in snapshot changes only after a configuration event.
+/// Authorization at actual send/delivery boundaries still reads the allowlist.
+pub(super) struct WatchedConfig {
+    current: std::sync::Arc<std::sync::Mutex<Result<Option<Config>, Error>>>,
+    _watcher: notify::RecommendedWatcher,
+}
+
+impl WatchedConfig {
+    pub(super) fn new(paths: Paths) -> Result<Self, Error> {
+        use notify::Watcher;
+        let current = std::sync::Arc::new(std::sync::Mutex::new(Ok(None)));
+        let target = current.clone();
+        let watched_paths = paths.clone();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let relevant = watch_event_relevant(
+                    &event,
+                    &watched_paths.directory,
+                    &["config.json", "allowed_chat_ids"],
+                    false,
+                );
+                if relevant {
+                    let mut current = target.lock().unwrap_or_else(|e| e.into_inner());
+                    *current = match event {
+                        Ok(_) => Config::load(&watched_paths),
+                        Err(_) => Err(Error::PrivateFile),
+                    };
+                }
+            })
+            .map_err(|_| Error::PrivateFile)?;
+        watcher
+            .watch(&paths.directory, notify::RecursiveMode::NonRecursive)
+            .map_err(|_| Error::PrivateFile)?;
+        // Watch before reading, and serialize with the callback so an edit that
+        // races startup cannot be overwritten by an older startup snapshot.
+        {
+            let mut snapshot = current.lock().unwrap_or_else(|e| e.into_inner());
+            *snapshot = Config::load(&paths);
+        }
+        Ok(Self {
+            current,
+            _watcher: watcher,
+        })
+    }
+
+    pub(super) fn enabled(&self, alias: &str) -> bool {
+        self.current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .is_some_and(|config| config.bot_alias == alias)
     }
 }
 
@@ -147,6 +225,10 @@ pub(super) fn private_open(path: &Path, create: bool) -> Result<File, Error> {
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
+    #[cfg(test)]
+    {
+        *PRIVATE_FILE_OPENS.entry(path.to_path_buf()).or_default() += 1;
+    }
     let file = options.open(path).map_err(|_| Error::PrivateFile)?;
     let meta = file.metadata().map_err(|_| Error::PrivateFile)?;
     if !meta.is_file() {
@@ -181,4 +263,124 @@ pub(super) fn private_text(path: &Path) -> Result<Zeroizing<String>, Error> {
         return Err(Error::PrivateFile);
     }
     Ok(text)
+}
+
+#[cfg(test)]
+static PRIVATE_FILE_OPENS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+#[cfg(test)]
+mod file_read_tests {
+    use super::*;
+
+    // Catches: inotify overflow is pathless, so both watchers discard lost-state recovery.
+    #[test]
+    fn telegram_pathless_rescan_wakes_both_configuration_watchers() {
+        // Recorded from notify 8.2.0 src/inotify.rs:212-214, Q_OVERFLOW arm.
+        let event =
+            Ok(notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan));
+        let directory = Path::new("telegram");
+        for (names, ancestors) in [
+            (&["config.json", "allowed_chat_ids"][..], false),
+            (&["config.json", "bot.token"][..], true),
+        ] {
+            assert!(
+                watch_event_relevant(&event, directory, names, ancestors),
+                "pathless rescan must wake watcher for {names:?}"
+            );
+        }
+    }
+
+    // Catches: a cached opt-in survives disable, atomic replacement or allowlist revocation.
+    #[tokio::test]
+    async fn telegram_watched_snapshot_observes_external_configuration_changes() {
+        let (_dir, paths) = crate::telegram::tests::setup();
+        let config = Config::load(&paths).unwrap().unwrap();
+        let mut runtime = crate::telegram::runtime::Runtime::new(
+            std::sync::Arc::new(crate::state::tests_support::make_test_app_state()),
+            config,
+            paths.clone(),
+            "watched-telegram".into(),
+        )
+        .unwrap();
+        async fn reaches(runtime: &crate::telegram::runtime::Runtime, enabled: bool) {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while runtime.enabled() != enabled {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("configuration watcher did not apply the file event");
+        }
+        assert!(runtime.enabled());
+        // An invalid envelope proves the enabled runtime reaches protocol parsing
+        // without touching Telegram. Disabled delivery must stop before parsing.
+        let mail = crate::telegram::mail::PendingMail {
+            id: "watcher-gate".into(),
+            recipient: "test-bot".into(),
+            content: "{}".into(),
+        };
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Protocol)
+        ));
+        std::fs::write(
+            paths.file("config.json"),
+            r#"{"enabled":false,"bot_alias":"test-bot"}"#,
+        )
+        .unwrap();
+        reaches(&runtime, false).await;
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Config)
+        ));
+        // Atomic rename is the setup writer's production publication pattern.
+        let replacement = paths.file("replacement.json");
+        std::fs::copy(paths.file("config.json"), &replacement).unwrap();
+        std::fs::write(&replacement, r#"{"enabled":true,"bot_alias":"test-bot"}"#).unwrap();
+        std::fs::rename(&replacement, paths.file("config.json")).unwrap();
+        reaches(&runtime, true).await;
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Protocol)
+        ));
+        std::fs::remove_file(paths.file("allowed_chat_ids")).unwrap();
+        reaches(&runtime, false).await;
+        assert!(matches!(runtime.deliver(mail).await, Err(Error::Config)));
+    }
+
+    // Catches: every bus event and one-second tick reopens unchanged config and allowlist.
+    #[test]
+    fn telegram_idle_enabled_checks_do_not_reopen_unchanged_files() {
+        let (_dir, paths) = crate::telegram::tests::setup();
+        let config = Config::load(&paths).unwrap().unwrap();
+        let runtime = crate::telegram::runtime::Runtime::new(
+            std::sync::Arc::new(crate::state::tests_support::make_test_app_state()),
+            config,
+            paths.clone(),
+            "bounded-telegram".into(),
+        )
+        .unwrap();
+        assert!(runtime.enabled());
+        let opens = || {
+            ["config.json", "allowed_chat_ids"]
+                .iter()
+                .map(|name| {
+                    PRIVATE_FILE_OPENS
+                        .get(&paths.file(name))
+                        .map(|n| *n)
+                        .unwrap_or(0)
+                })
+                .sum::<usize>()
+        };
+        let before = opens();
+        for _ in 0..100 {
+            assert!(runtime.enabled());
+        }
+        assert_eq!(
+            opens() - before,
+            0,
+            "idle enabled checks must use the watched snapshot"
+        );
+    }
 }

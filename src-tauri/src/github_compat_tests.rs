@@ -177,7 +177,10 @@ fn candidate_order_collapses_identical_across_all_sources() {
 #[test]
 fn candidate_order_empty_when_no_sources() {
     let got = github_auth::order_token_candidates(None, None, None);
-    assert!(got.is_empty());
+    assert_eq!(
+        got,
+        [] as [(std::string::String, tuic_git::github_auth::TokenSource); 0]
+    );
 }
 
 #[test]
@@ -197,7 +200,7 @@ fn diagnostics_fresh_state_reports_healthy_empty() {
     let diag = github_auth::compute_diagnostics(&state);
     assert!(!diag.circuit_breaker_open);
     assert_eq!(diag.circuit_breaker_status, "OK");
-    assert!(diag.repos_not_found.is_empty());
+    assert_eq!(diag.repos_not_found, [] as [std::string::String; 0]);
     assert_eq!(diag.repos_monitored, 0);
 }
 

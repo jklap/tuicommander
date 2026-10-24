@@ -1,3 +1,54 @@
+/// Catches: a hard-wrapped approval footer losing mobile controls or latching after answer.
+#[tokio::test]
+async fn captured_ego_wrapped_approval_reaches_mobile_answer_controls() {
+    let mut answered = false;
+    let mut resumed = false;
+    replay_native_question(
+        "ego-wrapped-approval-2102.tcap",
+        "ego",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && record.data == b"y"
+            {
+                assert!(session.awaiting_input && session.question_confident);
+                let prompt = session
+                    .choice_prompt
+                    .as_ref()
+                    .expect("wrapped native approval controls");
+                assert_eq!(prompt.title, "Allow run printf 'PARITY_P_OK\\n'?");
+                assert_eq!(
+                    session.question_text.as_deref(),
+                    Some(prompt.title.as_str())
+                );
+                assert_eq!(
+                    prompt
+                        .options
+                        .iter()
+                        .map(|option| option.key.as_str())
+                        .collect::<Vec<_>>(),
+                    ["y", "a", "n", "e", "d"]
+                );
+                assert_eq!(prompt.options[1].label, "yes, remember rule (details: d)");
+                answered = true;
+            }
+            if answered
+                && record.direction == crate::pty_capture::CaptureDirection::Output
+                && record
+                    .data
+                    .windows(b"7770;state=busy".len())
+                    .any(|bytes| bytes == b"7770;state=busy")
+            {
+                assert!(!session.awaiting_input && session.choice_prompt.is_none());
+                resumed = true;
+            }
+        },
+    );
+    assert!(
+        answered && resumed,
+        "mobile approval must reach the native CLI and resume it"
+    );
+}
+
 /// Catches: a successful tool receipt leaking into the shared native selector title.
 #[tokio::test]
 async fn captured_ego_selector_title_excludes_tool_receipts() {

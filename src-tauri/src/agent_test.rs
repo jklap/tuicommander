@@ -49,6 +49,22 @@ pub(crate) fn apply_config(config: &mut crate::config::AppConfig, port: u16) {
     config.prevent_sleep_when_busy = false;
 }
 
+/// Tao's launch calls `activateIgnoringOtherApps(false)`, which macOS still grants
+/// when the launching app (the daily TUIC) is frontmost (story 2095). Tauri runs
+/// `setup` after that call, so the policy is set between build and run.
+#[cfg(feature = "desktop")]
+pub(crate) fn without_launch_activation(app: tauri::App) -> tauri::App {
+    #[cfg(target_os = "macos")]
+    let app = {
+        let mut app = app;
+        if active() {
+            app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
+        }
+        app
+    };
+    app
+}
+
 /// Ready runs on the main thread, after Tao's initial application activation.
 /// The test window starts hidden so Tao's visible-window activation sweep skips it.
 #[cfg(all(feature = "desktop", target_os = "macos"))]
@@ -62,6 +78,27 @@ pub(crate) fn present_without_focus(window: &tauri::WebviewWindow) -> tauri::Res
             area.position.y + (area.size.height as i32 - size.height as i32 - margin).max(0),
         ))?;
     }
+    // Always-on-top does not stop a higher or another floating window (a second
+    // agent-test, a system prompt) from fully covering the corner. WebKit then
+    // reports the page hidden and stops rAF (story 2095). Visibility here must
+    // follow window visibility only.
+    window.with_webview(|view| {
+        use objc2::{msg_send, runtime::AnyObject, sel};
+        // SAFETY: with_webview runs on AppKit's main thread with this live
+        // window's WKWebView; the selector is checked before it is sent.
+        unsafe {
+            let webview = &*view.inner().cast::<AnyObject>();
+            let supported: bool =
+                msg_send![webview, respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)];
+            if supported {
+                let _: () = msg_send![webview, _setWindowOcclusionDetectionEnabled: false];
+            } else {
+                tracing::warn!(
+                    "WebKit cannot ignore occlusion; a covered agent-test page turns hidden"
+                );
+            }
+        }
+    })?;
     let pointer = window.ns_window()?;
     // SAFETY: Tauri returns this live window's NSWindow; Ready is on AppKit's
     // main thread and the borrowed native window cannot outlive the Tauri window.

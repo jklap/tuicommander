@@ -21,6 +21,8 @@ interface CommandInputProps {
 	sessionId: string;
 	serverVoiceRecording?: boolean;
 	onBrowserDictating?: (recording: boolean) => void;
+	/** Reveal the native answer controls after an authoritative composer refusal. */
+	onSelectionRequired?: (sessionId: string) => void;
 	/** When set, prefills the textarea and focuses it. Seq counter ensures re-fire on same text. */
 	prefillValue?: { text: string; seq: number };
 	/** Current PTY input line text (synced from terminal prompt via WebSocket). */
@@ -349,6 +351,7 @@ export function CommandInput(props: CommandInputProps) {
 					detail?: string;
 				}>("submit_agent_reply", { sessionId, input: text });
 				if (!receipt.submitted) {
+					if (receipt.reason === "selection_required") props.onSelectionRequired?.(sessionId);
 					toastsStore.add(
 						"Reply not sent",
 						receipt.detail ?? receipt.reason ?? "The session is not ready for a reply",
@@ -376,6 +379,7 @@ export function CommandInput(props: CommandInputProps) {
 							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
 						const detail =
 							typeof result === "object" && result !== null && "detail" in result ? result.detail : undefined;
+						if (reason === "selection_required") props.onSelectionRequired?.(sessionId);
 						if (typeof detail === "string" && detail.trim()) msg = detail;
 						else if (reason === "session_not_found") msg = "This session has ended";
 						else if (reason === "agent_not_ready")
@@ -469,6 +473,8 @@ export function CommandInput(props: CommandInputProps) {
 				setCodexNotesMode(true);
 				textareaEl?.focus();
 			});
+			// Navigation reveals native rows; it does not submit the question.
+			if (prompt?.selection_mode === "navigate-only" && key !== "↵") setChoiceSending(false);
 		} catch (err) {
 			setChoiceSending(false);
 			appLogger.warn("terminal", "ChoicePrompt sendPtyKey failed", { error: err });

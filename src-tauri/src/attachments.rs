@@ -176,38 +176,6 @@ pub(crate) async fn upload_http(
     upload(state, query, headers, body).await.map(Json)
 }
 
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn upload_attachment(
-    state: tauri::State<'_, Arc<AppState>>,
-    kind: String,
-    id: String,
-    session: Option<String>,
-    name: String,
-    bytes: Vec<u8>,
-) -> Result<AttachmentReceipt, String> {
-    // Desktop IPC carries a byte array. The HTTP peer streams the same bytes
-    // through the shared writer without encoding them as JSON base64.
-    upload(
-        Arc::clone(&state),
-        UploadQuery {
-            kind,
-            id,
-            session,
-            name,
-        },
-        HeaderMap::new(),
-        Body::from(bytes),
-    )
-    .await
-    .map_err(|(_, json)| {
-        json.0["error"]
-            .as_str()
-            .unwrap_or("attachment upload failed")
-            .to_owned()
-    })
-}
-
 async fn upload(
     state: Arc<AppState>,
     query: UploadQuery,

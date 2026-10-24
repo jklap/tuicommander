@@ -93,6 +93,12 @@ pub struct DirEntry {
     pub git_status: String,
     /// Whether the file is listed in .gitignore.
     pub is_ignored: bool,
+    /// Link text from read_link; absent for ordinary entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+    /// Target metadata only: directory, file, or unavailable (dangling/inaccessible).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symlink_target_kind: Option<&'static str>,
 }
 
 /// A single line match returned by `search_content`.
@@ -500,7 +506,26 @@ pub(crate) fn list_directory_impl(
             .map_err(|e| format!("Failed to read metadata for {name}: {e}"))?;
 
         let is_dir = metadata.is_dir();
-        let size = if is_dir { 0 } else { metadata.len() };
+        let is_symlink = metadata.file_type().is_symlink();
+        let symlink_target = if is_symlink {
+            std::fs::read_link(entry.path())
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let symlink_target_kind = is_symlink.then(|| match std::fs::metadata(entry.path()) {
+            Ok(target) if target.is_dir() => "directory",
+            Ok(target) if target.is_file() => "file",
+            _ => "unavailable",
+        });
+        // A link's lstat length counts its target spelling, not file content.
+        // Keep is_dir/navigation unchanged; target kind is display metadata only.
+        let size = if is_dir || is_symlink {
+            0
+        } else {
+            metadata.len()
+        };
         let modified_at = metadata
             .modified()
             .ok()
@@ -558,6 +583,8 @@ pub(crate) fn list_directory_impl(
             modified_at,
             git_status,
             is_ignored,
+            symlink_target,
+            symlink_target_kind,
         });
     }
 
@@ -1138,6 +1165,93 @@ fn grep_file_with_cancel(
     Ok(stopped_by_cancel)
 }
 
+#[cfg(test)]
+thread_local! {
+    static FILENAME_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Path-only inventories are shared by both transports. Per-repo locking
+/// coalesces cold queries; invalidation never waits for a blocking tree walk.
+#[derive(Default)]
+struct FilenameInventorySlot {
+    generation: std::sync::atomic::AtomicU64,
+    inventory: parking_lot::Mutex<Option<FilenameInventory>>,
+}
+
+struct FilenameInventory {
+    generation: u64,
+    built_at: std::time::Instant,
+    paths: Arc<Vec<(String, String)>>,
+}
+
+static FILENAME_INVENTORIES: std::sync::LazyLock<
+    moka::sync::Cache<PathBuf, Arc<FilenameInventorySlot>>,
+> = std::sync::LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(8)
+        .time_to_idle(std::time::Duration::from_secs(10 * 60))
+        .build()
+});
+
+pub(crate) fn invalidate_filename_inventory(repo_path: &str) {
+    if let Ok(repo) = std::fs::canonicalize(repo_path)
+        && let Some(slot) = FILENAME_INVENTORIES.get(&repo)
+    {
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn invalidate_all_filename_inventories() {
+    for (_, slot) in FILENAME_INVENTORIES.iter() {
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn filename_inventory(repo: &Path) -> Arc<Vec<(String, String)>> {
+    let slot = FILENAME_INVENTORIES.get_with(repo.to_path_buf(), || {
+        Arc::new(FilenameInventorySlot::default())
+    });
+    let mut inventory = slot.inventory.lock();
+    let generation = slot.generation.load(Ordering::Acquire);
+    if let Some(current) = inventory.as_ref()
+        && current.generation == generation
+        && current.built_at.elapsed() < std::time::Duration::from_secs(60)
+    {
+        return Arc::clone(&current.paths);
+    }
+    #[cfg(test)]
+    FILENAME_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let paths = Arc::new(
+        ignore::WalkBuilder::new(repo)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .filter_entry(|e| !is_always_excluded_dir(e))
+            .build()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .filter_map(|e| {
+                let relative = e
+                    .path()
+                    .strip_prefix(repo)
+                    .ok()?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                Some((e.file_name().to_string_lossy().into_owned(), relative))
+            })
+            .collect(),
+    );
+    // Keep the generation sampled BEFORE the walk. An event during traversal
+    // makes the next query rebuild, rather than publishing that walk as current.
+    *inventory = Some(FilenameInventory {
+        generation,
+        built_at: std::time::Instant::now(),
+        paths: Arc::clone(&paths),
+    });
+    paths
+}
+
 pub(crate) fn search_files_impl(
     repo_path: String,
     query: String,
@@ -1153,45 +1267,20 @@ pub(crate) fn search_files_impl(
 
     let mut results = Vec::new();
 
-    // Walk using the `ignore` crate: respects .gitignore, .git/info/exclude,
-    // global gitignore — skips ignored directories entirely during traversal.
-    let walker = ignore::WalkBuilder::new(&canonical_repo)
-        .hidden(false) // show dotfiles (except .git which is always skipped)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .filter_entry(|e| !is_always_excluded_dir(e))
-        .build();
-
-    for entry in walker {
+    if max_results == 0 {
+        return Ok(results);
+    }
+    let paths = filename_inventory(&canonical_repo);
+    for (name, relative) in paths.iter() {
         if results.len() >= max_results {
             break;
         }
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let is_file = entry.file_type().is_some_and(|ft| ft.is_file());
-        if !is_file {
+        if !pattern.is_match(name) && !pattern.is_match(relative) {
             continue;
         }
-
-        let relative = match entry.path().strip_prefix(&canonical_repo) {
-            Ok(p) => p.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Match against file name or relative path
-        if !pattern.is_match(&name) && !pattern.is_match(&relative) {
-            continue;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
+        let metadata = match std::fs::metadata(canonical_repo.join(relative)) {
+            Ok(m) if m.is_file() => m,
+            _ => continue,
         };
 
         let modified_at = metadata
@@ -1201,13 +1290,15 @@ pub(crate) fn search_files_impl(
             .map_or(0, |d| d.as_secs());
 
         results.push(DirEntry {
-            name,
-            path: relative,
+            name: name.clone(),
+            path: relative.clone(),
             is_dir: false,
             size: metadata.len(),
             modified_at,
             git_status: String::new(), // populated below
             is_ignored: false,         // walker already filtered gitignored entries
+            symlink_target: None,
+            symlink_target_kind: None,
         });
     }
 
@@ -2520,6 +2611,86 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlink_listing_does_not_disguise_external_directory_as_file_bytes() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-dir")).unwrap();
+        let entries = list_directory_impl(dir.path().to_string_lossy().into(), ".".into()).unwrap();
+        let link = entries.iter().find(|e| e.name == "linked-dir").unwrap();
+        let wire = serde_json::to_value(link).unwrap();
+        assert_eq!(
+            wire["symlink_target"],
+            outside.path().to_string_lossy().as_ref()
+        );
+        assert_eq!(wire["symlink_target_kind"], "directory");
+        assert_eq!(link.size, 0, "link text length is not file content size");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_open_names_external_target_instead_of_generic_access_denied() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-dir")).unwrap();
+        let error = crate::read_file_impl(dir.path().to_string_lossy().into(), "linked-dir".into())
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "Cannot open symbolic link \"linked-dir\": target \"{}\" is outside the repository.",
+                outside.path().canonicalize().unwrap().display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_metadata_preserves_internal_reads_and_dangling_entries() {
+        // Catches following links for lstat size, dropping broken links, or denying internal reads.
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(outside.path().join("private.txt"), "outside content").unwrap();
+        for (name, target) in [
+            ("internal", PathBuf::from("README.md")),
+            ("external", outside.path().join("private.txt")),
+            ("dangling", PathBuf::from("missing")),
+        ] {
+            std::os::unix::fs::symlink(target, dir.path().join(name)).unwrap();
+        }
+        let repo = dir.path().to_string_lossy().into_owned();
+        let entries = list_directory_impl(repo.clone(), ".".into()).unwrap();
+        for (name, kind) in [
+            ("internal", "file"),
+            ("external", "file"),
+            ("dangling", "unavailable"),
+        ] {
+            let link = entries.iter().find(|e| e.name == name).unwrap();
+            let wire = serde_json::to_value(link).unwrap();
+            assert_eq!(wire["symlink_target_kind"], kind, "{name}");
+            assert_eq!(link.size, 0, "{name}");
+        }
+        assert_eq!(
+            crate::read_file_impl(repo.clone(), "internal".into()).unwrap(),
+            "# Test"
+        );
+        assert!(
+            crate::read_file_impl(repo.clone(), "external".into())
+                .unwrap_err()
+                .contains("is outside the repository")
+        );
+        assert!(crate::read_file_impl(repo, "dangling".into()).is_err());
+        let ordinary = entries.iter().find(|e| e.name == "README.md").unwrap();
+        assert!(
+            serde_json::to_value(ordinary)
+                .unwrap()
+                .get("symlink_target")
+                .is_none()
+        );
+        assert_eq!(ordinary.size, 6);
+    }
+
     #[test]
     fn test_list_directory_root() {
         let dir = setup_test_repo();
@@ -2982,6 +3153,126 @@ mod tests {
     }
 
     // --- search_files tests ---
+
+    /// Catches a fresh repository traversal for every selective/no-match query.
+    /// The second query must filter the inventory already collected by the first.
+    #[test]
+    fn test_search_files_reuses_inventory_for_no_match_queries() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        assert!(
+            search_files_impl(repo.clone(), "absent-needle-one".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            search_files_impl(repo, "absent-needle-two".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        FILENAME_WALKS.with(|walks| {
+            assert_eq!(
+                walks.get(),
+                1,
+                "no-match queries must share one inventory walk"
+            )
+        });
+    }
+
+    /// Catches inventory reuse after file membership or ignore rules change,
+    /// and stale result metadata being returned from the path-only cache.
+    #[test]
+    fn test_search_files_inventory_invalidation_and_fresh_metadata() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        assert!(
+            search_files_impl(repo.clone(), "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        fs::write(dir.path().join("new-needle.txt"), "one").unwrap();
+        invalidate_filename_inventory(&repo);
+        let first = search_files_impl(repo.clone(), "new-needle".into(), None).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].size, 3);
+        fs::write(dir.path().join("new-needle.txt"), "a longer payload").unwrap();
+        let updated = search_files_impl(repo.clone(), "new-needle".into(), None).unwrap();
+        assert_eq!(updated[0].size, 16, "metadata is not cached with names");
+        fs::write(dir.path().join(".gitignore"), "new-needle.txt\n").unwrap();
+        invalidate_filename_inventory(&repo);
+        assert!(
+            search_files_impl(repo.clone(), "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        fs::remove_file(dir.path().join("new-needle.txt")).unwrap();
+        invalidate_filename_inventory(&repo);
+        assert!(
+            search_files_impl(repo, "new-needle".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Catches a zero-limit request performing a cold walk, or a stale
+    /// generation remaining valid until TTL despite an explicit invalidation.
+    #[test]
+    fn test_search_files_zero_limit_and_inventory_expiry() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        let canonical = dir.path().canonicalize().unwrap();
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        assert!(
+            search_files_impl(repo.clone(), "needle".into(), Some(0))
+                .unwrap()
+                .is_empty()
+        );
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 0));
+        let first = filename_inventory(&canonical);
+        let slot = FILENAME_INVENTORIES.get(&canonical).unwrap();
+        slot.inventory.lock().as_mut().unwrap().built_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(60);
+        let second = filename_inventory(&canonical);
+        assert!(!Arc::ptr_eq(&first, &second));
+        slot.generation.fetch_add(1, Ordering::AcqRel);
+        let third = filename_inventory(&canonical);
+        assert!(!Arc::ptr_eq(&second, &third));
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 3));
+    }
+
+    /// Explicit corpus measurement; also catches a warm lookup rebuilding the
+    /// measured cold inventory instead of reusing its allocation.
+    #[test]
+    #[ignore = "benchmark: requires TUIC_FILENAME_INVENTORY_REPO pointing at an authorized corpus"]
+    fn filename_inventory_cold_walk_measurement_2099() {
+        let repo = PathBuf::from(
+            std::env::var("TUIC_FILENAME_INVENTORY_REPO").expect("authorized corpus path"),
+        )
+        .canonicalize()
+        .unwrap();
+        FILENAME_INVENTORIES.invalidate(&repo);
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        let start = std::time::Instant::now();
+        let paths = filename_inventory(&repo);
+        let elapsed = start.elapsed();
+        let capacity_bytes = std::mem::size_of_val(paths.as_ref())
+            + paths.capacity() * std::mem::size_of::<(String, String)>()
+            + paths
+                .iter()
+                .map(|(name, relative)| name.capacity() + relative.capacity())
+                .sum::<usize>();
+        println!(
+            "{}",
+            serde_json::json!({
+                "repo": repo, "files": paths.len(), "elapsed_micros": elapsed.as_micros(),
+                "retained_vector_and_string_capacity_bytes": capacity_bytes,
+                "excludes": "allocator headers, Arc headers, slot and cache-map overhead"
+            })
+        );
+        assert!(Arc::ptr_eq(&paths, &filename_inventory(&repo)));
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 1));
+    }
 
     #[test]
     fn test_search_files_basic() {
@@ -4567,7 +4858,7 @@ mod tests {
 
         assert_eq!(res.moved, 1);
         assert_eq!(res.skipped, 1);
-        assert!(res.errors.is_empty());
+        assert_eq!(res.errors, [] as [std::string::String; 0]);
     }
 
     // --- Cross-repo content search (search_content_all_impl) ---

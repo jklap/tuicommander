@@ -1,0 +1,323 @@
+{
+  "visibility": "visible",
+  "focus": false,
+  "nativeFocus": false,
+  "visible": true,
+  "position": {
+    "x": 1632,
+    "y": 1092
+  },
+  "size": {
+    "width": 1280,
+    "height": 840
+  },
+  "innerSize": {
+    "width": 1280,
+    "height": 840
+  },
+  "monitor": {
+    "name": "Monitor #41054",
+    "scaleFactor": 2,
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "size": {
+      "width": 3024,
+      "height": 1964
+    },
+    "workArea": {
+      "position": {
+        "x": 0,
+        "y": 66
+      },
+      "size": {
+        "width": 2944,
+        "height": 1898
+      }
+    }
+  },
+  "draws": [
+    "s",
+    "t",
+    "e",
+    "f",
+    "a",
+    "n",
+    "o",
+    ".",
+    "s",
+    "t",
+    "r",
+    "a",
+    "u",
+    "s",
+    "@",
+    "D",
+    "G",
+    "Q",
+    "T",
+    "9",
+    "2",
+    "C",
+    "J",
+    "F",
+    "P",
+    "~"
+  ],
+  "canvases": [
+    {
+      "width": 604,
+      "height": 640,
+      "rect": {
+        "x": 313,
+        "y": 57,
+        "width": 302,
+        "height": 320,
+        "top": 57,
+        "right": 615,
+        "bottom": 377,
+        "left": 313
+      }
+    },
+    {
+      "width": 604,
+      "height": 560,
+      "rect": {
+        "x": 313,
+        "y": 77,
+        "width": 302,
+        "height": 280,
+        "top": 77,
+        "right": 615,
+        "bottom": 357,
+        "left": 313
+      }
+    },
+    {
+      "width": 604,
+      "height": 560,
+      "rect": {
+        "x": 313,
+        "y": 77,
+        "width": 302,
+        "height": 280,
+        "top": 77,
+        "right": 615,
+        "bottom": 357,
+        "left": 313
+      }
+    }
+  ],
+  "owned_pid": 72876,
+  "front_before": {
+    "pid": 14678,
+    "name": "tuicommander"
+  },
+  "front_ready": {
+    "pid": 72876,
+    "name": "tuicommander-agent-test"
+  },
+  "front_after": {
+    "pid": 72876,
+    "name": "tuicommander-agent-test"
+  },
+  "native": {
+    "front": {
+      "pid": 72876,
+      "name": "tuicommander-agent-test"
+    },
+    "applicationHidden": false,
+    "windows": [
+      {
+        "pid": 72876,
+        "number": 4659,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 500,
+          "Y": 482,
+          "Width": 500
+        }
+      },
+      {
+        "pid": 72876,
+        "number": 4658,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 33,
+          "Y": 0,
+          "Width": 1512
+        }
+      },
+      {
+        "pid": 72876,
+        "number": 4657,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 33,
+          "Y": 0,
+          "Width": 1512
+        }
+      },
+      {
+        "pid": 72876,
+        "number": 4656,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 33,
+          "Y": 0,
+          "Width": 1512
+        }
+      },
+      {
+        "pid": 72876,
+        "number": 4655,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 33,
+          "Y": 0,
+          "Width": 1512
+        }
+      },
+      {
+        "pid": 72876,
+        "number": 4654,
+        "layer": 5,
+        "onScreen": true,
+        "alpha": 1,
+        "bounds": {
+          "X": 816,
+          "Height": 420,
+          "Y": 546,
+          "Width": 640
+        }
+      }
+    ]
+  },
+  "cover": {
+    "rect": [
+      808,
+      538,
+      656,
+      436
+    ],
+    "covered": {
+      "X": 816,
+      "Height": 420,
+      "Y": 546,
+      "Width": 640
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 73875,
+          "number": 4661,
+          "layer": 25,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 808,
+            "Height": 436,
+            "Y": 538,
+            "Width": 656
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  "failures": [
+    "agent-test took focus during observation",
+    "animation frames stopped during observation",
+    "document/window lost presentation during observation",
+    "frontmost application changed during observation",
+    "unrelated frontmost PID changed during launch/paint"
+  ]
+}

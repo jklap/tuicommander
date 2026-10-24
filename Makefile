@@ -27,14 +27,10 @@ SIGN_IDENTITY?=-
 TAURI_TARGET=src-tauri/target/release/bundle/macos
 APP_BUNDLE=$(TAURI_TARGET)/$(APP_NAME).app
 
-# whisper-rs-sys bundles whisper.cpp which uses std::filesystem::path (macOS 10.15+).
-# Must be exported so CMake subprocesses inherit it (.cargo/config.toml [env] alone is insufficient).
-export MACOSX_DEPLOYMENT_TARGET ?= 10.15
-
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding check-chat-readability cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -139,6 +135,10 @@ fmt:
 # Check the production embedding path; unit tests use fixed transport fixtures.
 check-desktop-embedding:
 	@bash scripts/check-desktop-embedding.sh
+
+# Local macOS landing gate for Chat CSS; real browser, isolated fixture Vite, no app launch.
+check-chat-readability:
+	@scripts/with-test-tmp.sh node scripts/check-chat-readability.mjs
 
 # Type-check, lint, format, and test (no Tauri build)
 check: test-shell check-desktop-embedding

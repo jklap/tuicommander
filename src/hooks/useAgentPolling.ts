@@ -17,6 +17,7 @@ type BackendSessionState = {
 	agent_type?: string | null;
 	shell_state?: string;
 	agent_state?: string;
+	abandoned_since_ms?: number;
 	agent_intent?: string | null;
 	last_prompt?: string | null;
 	awaiting_input?: boolean;
@@ -93,6 +94,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		questionText: isAwaiting ? (state?.question_text ?? null) : null,
 		choicePrompt: isAwaiting ? (state?.choice_prompt ?? null) : null,
 		backgroundWork: state?.background_work === true,
+		abandonedSinceMs: state?.abandoned_since_ms ?? null,
 		// Omitted by the backend when zero (serde skips it), so absence is an
 		// empty queue — not "unknown".
 		queuedCommands: state?.queued_commands ?? 0,

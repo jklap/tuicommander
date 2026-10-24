@@ -69,7 +69,83 @@ try {{
     raise RuntimeError(f"native evaluation {nonce} did not return within the harness budget")
 
 
-def agent_test_window_renders_visible_without_focus(instance, port, evidence):
+def presentation_snapshot(pid):
+    # Read only the window server; never activate or change another app's windows.
+    script = '''ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+const front=$.NSWorkspace.sharedWorkspace.frontmostApplication;
+const rows=ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(0,0)));
+JSON.stringify({front:{pid:front.processIdentifier,name:front.localizedName.js},
+ applicationHidden:$.NSRunningApplication.runningApplicationWithProcessIdentifier(__PID__).hidden,
+ activationPolicy:$.NSRunningApplication.runningApplicationWithProcessIdentifier(__PID__).activationPolicy,
+ windows:rows.filter(x=>x.kCGWindowOwnerPID===__PID__ || x.kCGWindowOwnerPID===front.processIdentifier)
+ .map(x=>({pid:x.kCGWindowOwnerPID,number:x.kCGWindowNumber,layer:x.kCGWindowLayer,
+ onScreen:x.kCGWindowIsOnscreen,alpha:x.kCGWindowAlpha,bounds:x.kCGWindowBounds}))})'''
+    return json.loads(subprocess.check_output(
+        ["osascript", "-l", "JavaScript", "-e", script.replace("__PID__", str(pid))], text=True))
+
+
+COVER = '''ObjC.import("Cocoa");
+function run(argv) {
+ const [x, y, w, h, seconds] = argv.map(Number);
+ $.NSApplication.sharedApplication.setActivationPolicy(1);
+ const top = $.NSScreen.screens.objectAtIndex(0).frame.size.height;
+ const panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+  $.NSMakeRect(x, top - y - h, w, h), 128, 2, false);
+ panel.setLevel(25); panel.setOpaque(true); panel.setHasShadow(false);
+ panel.setBackgroundColor($.NSColor.grayColor);
+ panel.orderFrontRegardless;
+ $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
+}'''
+
+
+def cover_window(native, pid, seconds):
+    # Another application's opaque, non-activating panel (accessory policy, so it
+    # never becomes frontmost) above the floating window: the covered-corner case.
+    # It absorbs clicks, so a user click cannot reach and activate the test window.
+    bounds = max((w["bounds"] for w in native["windows"] if w["pid"] == pid and w.get("onScreen")),
+                 key=lambda b: b["Width"] * b["Height"])
+    pad = 8
+    rect = [bounds["X"] - pad, bounds["Y"] - pad, bounds["Width"] + 2 * pad, bounds["Height"] + 2 * pad]
+    process = subprocess.Popen(["osascript", "-l", "JavaScript", "-e", COVER, *map(str, rect), str(seconds)])
+    time.sleep(2)
+    return process, {"rect": rect, "covered": bounds, "native": presentation_snapshot(process.pid)}
+
+
+def observe_presentation(socket, pid, seconds, evidence):
+    # Bug caught: inactive/occluded agent-test windows stop rAF and hide the document.
+    evaluate(socket, '''
+const state={started:performance.now(),frames:0,maxFrameGap:0,lastFrame:null,
+ visibility:[{at:performance.now(),state:document.visibilityState}]};
+const changed=()=>state.visibility.push({at:performance.now(),state:document.visibilityState});
+document.addEventListener('visibilitychange',changed);
+const frame=now=>{if(state.lastFrame!==null)state.maxFrameGap=Math.max(state.maxFrameGap,now-state.lastFrame);
+ state.lastFrame=now;state.frames++;state.handle=requestAnimationFrame(frame);};
+state.handle=requestAnimationFrame(frame);state.changed=changed;window.__agentTestPresentation=state;
+return true;''', evidence)
+    samples = []
+    started = time.monotonic()
+    try:
+        while True:
+            sample = evaluate(socket, '''
+const s=window.__agentTestPresentation,w=window.__TAURI__.window.getCurrentWindow();
+return {elapsed:performance.now()-s.started,frames:s.frames,maxFrameGap:s.maxFrameGap,
+ lastFrameAge:s.lastFrame===null?null:performance.now()-s.lastFrame,
+ visibility:document.visibilityState,changes:s.visibility,focus:document.hasFocus(),
+ nativeFocus:await w.isFocused(),visible:await w.isVisible(),
+ position:await w.outerPosition(),size:await w.outerSize()};''', evidence)
+            sample["native"] = presentation_snapshot(pid)
+            samples.append(sample)
+            (evidence / "presentation.json").write_text(json.dumps(samples, indent=2))
+            if time.monotonic() - started >= seconds:
+                return samples
+            time.sleep(min(5, seconds - (time.monotonic() - started)))
+    finally:
+        evaluate(socket, '''const s=window.__agentTestPresentation;
+cancelAnimationFrame(s.handle);document.removeEventListener('visibilitychange',s.changed);
+delete window.__agentTestPresentation;return true;''', evidence)
+
+
+def agent_test_window_renders_visible_without_focus(instance, port, evidence, duration=0, covered=False):
     if sys.platform != "darwin" or not (ROOT / ".git").is_file():
         raise RuntimeError("native observer requires an authorized macOS linked worktree")
     evidence = evidence.resolve()
@@ -177,8 +253,10 @@ try {
                 failures.append("terminal canvas has no visible area")
             if not result["draws"]:
                 failures.append("terminal did not paint real text within ten seconds")
-            if ready["pid"] != before["pid"] or after["pid"] != before["pid"] or after["pid"] == owned_pid:
-                failures.append("unrelated frontmost PID changed during launch/paint")
+            # Boss keeps working in other applications: only the test instance
+            # itself becoming frontmost is a focus steal.
+            if owned_pid in (ready["pid"], after["pid"]):
+                failures.append("agent-test became frontmost during launch/paint")
             monitor = result["monitor"]
             if monitor is None:
                 failures.append("primary monitor geometry unavailable")
@@ -191,10 +269,32 @@ try {
                     gap = area["position"][axis] + area["size"][size] - result["position"][axis] - result["size"][size]
                     if not 0 <= gap <= 64 * scale:
                         failures.append(f"window is not at the primary work-area corner ({axis} gap={gap})")
-            result["failures"] = failures
+            result["native"] = presentation_snapshot(owned_pid)
+            if duration:
+                cover = None
+                if covered:
+                    cover, result["cover"] = cover_window(result["native"], owned_pid, duration + 60)
+                try:
+                    samples = observe_presentation(launch["socket"], owned_pid, duration, evidence)
+                finally:
+                    if cover is not None:
+                        cover.terminate()
+                        cover.wait(timeout=10)
+                previous_frames = -1
+                for sample in samples:
+                    if sample["visibility"] != "visible" or not sample["visible"] or any(change["state"] != "visible" for change in sample["changes"]):
+                        failures.append("document/window lost presentation during observation")
+                    if sample["focus"] or sample["nativeFocus"] or sample["native"]["front"]["pid"] == owned_pid:
+                        failures.append("agent-test took focus during observation")
+                    if previous_frames >= 0 and (sample["frames"] <= previous_frames or sample["lastFrameAge"] is None or sample["lastFrameAge"] > 1000 or sample["maxFrameGap"] > 1000):
+                        failures.append("animation frames stopped during observation")
+                    if sample["position"] != result["position"] or sample["size"] != result["size"]:
+                        failures.append("compact corner geometry changed during observation")
+                    previous_frames = sample["frames"]
+            result["failures"] = sorted(set(failures))
             (evidence / "observer.json").write_text(json.dumps(result, indent=2))
             if failures:
-                raise AssertionError("; ".join(failures))
+                raise AssertionError("; ".join(result["failures"]))
         finally:
             if owned_pid is not None:
                 try:
@@ -225,9 +325,13 @@ def main():
     parser.add_argument("--instance", default="at-2090")
     parser.add_argument("--port", default="19883")
     parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--duration", type=int, default=0, help="observe visibility and animation frames for this many seconds")
+    parser.add_argument("--cover", action="store_true", help="cover the window with another application's panel while observing")
     args = parser.parse_args()
+    if args.duration < 0 or (args.cover and not args.duration):
+        parser.error("duration must not be negative; --cover needs a duration")
     try:
-        agent_test_window_renders_visible_without_focus(args.instance, args.port, args.evidence_dir)
+        agent_test_window_renders_visible_without_focus(args.instance, args.port, args.evidence_dir, args.duration, args.cover)
     except (AssertionError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"FAIL {TEST}: {error}; evidence={args.evidence_dir}", file=sys.stderr)
         return 1

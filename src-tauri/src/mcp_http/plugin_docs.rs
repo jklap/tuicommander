@@ -13,7 +13,7 @@ Create directory `{id}/` containing `manifest.json` + `main.js` under the platfo
 - Linux: `~/.config/tuicommander/plugins/`
 - Windows: `%APPDATA%/com.tuic.commander/plugins/`
 
-Hot reload: editing any file in the plugin directory triggers automatic unload + re-import. Adding a new plugin directory or symlink after the app has started is also discovered live — no restart needed.
+Hot reload: editing any file in the plugin directory triggers automatic unload + re-import. Adding a new plugin directory or symlink after the app has started is also discovered live — no restart needed. Reload batches deduplicate changed enabled IDs and share a serialized queue. Discovery reads only those plugin roots; unchanged payload file hashes are reused by modification time and size. Startup still uses full discovery.
 
 ## manifest.json
 

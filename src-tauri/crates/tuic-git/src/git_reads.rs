@@ -46,6 +46,11 @@ pub trait GitReads: Send + Sync {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String>;
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String>;
     fn status_counts(&self, repo: &Path) -> StatusCounts;
     fn diff_stats(&self, repo: &Path, scope: Option<&str>) -> DiffStats;
     fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String>;
@@ -83,6 +88,14 @@ impl GitReads for CliGitReads {
         crate::worktree::get_worktree_paths_raw(&repo.to_string_lossy())
     }
 
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
+        crate::worktree::get_worktree_inventory_raw(&repo.to_string_lossy(), archive_pool)
+    }
+
     fn status_counts(&self, repo: &Path) -> StatusCounts {
         crate::git::status_counts_cli(repo)
     }
@@ -102,6 +115,52 @@ fn git_spelling(path: &str) -> String {
     tuic_core::path_spelling::portable_spelling(path)
 }
 
+#[cfg(test)]
+thread_local! {
+    static MONITORING_STATUS_TRAVERSALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REPOSITORY_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_repository_open() {
+    REPOSITORY_OPENS.with(|count| count.set(count.get() + 1));
+}
+
+/// One porcelain dirty record per tracked path, even when both staged and edited.
+#[derive(Default)]
+struct DirtyStatus {
+    paths: std::collections::HashSet<gix::bstr::BString>,
+    untracked: usize,
+}
+
+impl DirtyStatus {
+    fn record(&mut self, item: &gix::status::Item) {
+        use gix::status::Item;
+        use gix::status::index_worktree::Item as IwItem;
+        use gix::status::plumbing::index_as_worktree::EntryStatus;
+        let changed = match item {
+            Item::TreeIndex(_) => true,
+            Item::IndexWorktree(IwItem::Modification { status, .. }) => {
+                !matches!(status, EntryStatus::NeedsUpdate(_))
+            }
+            Item::IndexWorktree(IwItem::DirectoryContents { entry, .. }) => {
+                if matches!(entry.status, gix::dir::entry::Status::Untracked) {
+                    self.untracked += 1;
+                }
+                false
+            }
+            Item::IndexWorktree(IwItem::Rewrite { .. }) => true,
+        };
+        if changed {
+            self.paths.insert(item.location().to_owned());
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.paths.len() + self.untracked
+    }
+}
+
 /// In-process gix adapter. Implements the same port as the CLI adapter; ops are
 /// flipped to gix one at a time in later steps, each gated by a parity test.
 ///
@@ -109,7 +168,139 @@ fn git_spelling(path: &str) -> String {
 /// refs and the object DB layout, so we keep a `ThreadSafeRepository` per path
 /// and cheaply derive a thread-local `Repository` per call.
 pub struct GixGitReads {
-    handles: moka::sync::Cache<PathBuf, gix::ThreadSafeRepository>,
+    handles: moka::sync::Cache<PathBuf, CachedRepository>,
+}
+
+#[derive(Clone)]
+struct CachedRepository {
+    handle: gix::ThreadSafeRepository,
+    config_files: Vec<(PathBuf, Option<(std::time::SystemTime, u64)>)>,
+    stable: bool,
+}
+
+fn config_signature(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+impl CachedRepository {
+    fn open(path: &Path) -> Result<Self, String> {
+        let started = std::time::SystemTime::now();
+        #[cfg(test)]
+        record_repository_open();
+        let handle = gix::ThreadSafeRepository::open(path).map_err(|e| e.to_string())?;
+        let repo = handle.to_thread_local();
+        let mut paths = std::collections::BTreeSet::from([
+            repo.common_dir().join("config"),
+            repo.git_dir().join("config.worktree"),
+        ]);
+        // Include absent standard user configs too, so creating one refreshes
+        // the snapshot. Existing system and included sources come from gix's
+        // own provenance rather than a second configuration loader.
+        let home = gix::path::env::home_dir();
+        if let Some(home) = &home {
+            paths.insert(home.join(".gitconfig"));
+            paths.insert(home.join(".config/git/config"));
+        }
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            paths.insert(PathBuf::from(xdg).join("git/config"));
+        }
+        for key in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+            if let Some(path) = std::env::var_os(key) {
+                paths.insert(PathBuf::from(path));
+            }
+        }
+        let config = repo.config_snapshot();
+        // Status semantics also depend on out-of-tree ignore/attribute sources.
+        // Keep their cheap signatures beside config provenance; no content polling.
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".config")));
+        if let Some(xdg) = xdg {
+            paths.insert(xdg.join("git/attributes"));
+            paths.insert(xdg.join("git/ignore"));
+        }
+        paths.insert(repo.common_dir().join("info/attributes"));
+        paths.insert(repo.common_dir().join("info/exclude"));
+        for name in ["core.attributesFile", "core.excludesFile"] {
+            if let Some(value) = config.string(name) {
+                let path = gix::path::from_bstr(&value).map_err(|e| e.to_string())?;
+                let resolved = if let Ok(relative) = path.strip_prefix("~") {
+                    home.as_ref().map(|home| home.join(relative))
+                } else if path.is_absolute() {
+                    Some(path.into_owned())
+                } else {
+                    Some(path.as_ref().to_path_buf())
+                };
+                if let Some(path) = resolved {
+                    paths.insert(if path.is_absolute() {
+                        path
+                    } else {
+                        repo.workdir().unwrap_or(repo.git_dir()).join(path)
+                    });
+                }
+            }
+        }
+        paths.extend(
+            config
+                .sections()
+                .filter_map(|section| section.meta().path.clone()),
+        );
+        for name in ["include", "includeIf", "includeif"] {
+            if let Some(sections) = config.sections_by_name(name) {
+                // Conditional onbranch includes depend on the symbolic HEAD,
+                // not the branch's moving tip.
+                if name != "include" {
+                    paths.insert(repo.git_dir().join("HEAD"));
+                }
+                for section in sections {
+                    for value in section.values("path") {
+                        let path = gix::path::from_bstr(&value).map_err(|e| e.to_string())?;
+                        let resolved = if let Ok(relative) = path.strip_prefix("~") {
+                            home.as_ref().map(|home| home.join(relative))
+                        } else if path.is_absolute() {
+                            Some(path.into_owned())
+                        } else {
+                            section
+                                .meta()
+                                .path
+                                .as_deref()
+                                .and_then(Path::parent)
+                                .map(|parent| parent.join(path.as_ref()))
+                        };
+                        if let Some(path) = resolved {
+                            paths.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+        let config_files: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                let signature = config_signature(&path);
+                (path, signature)
+            })
+            .collect();
+        // A file modified while gix was loading might belong to a newer
+        // generation than the parsed snapshot. Do not retain that handle.
+        let stable = config_files
+            .iter()
+            .all(|(_, signature)| signature.is_none_or(|(modified, _)| modified < started));
+        Ok(Self {
+            handle,
+            config_files,
+            stable,
+        })
+    }
+
+    fn config_is_current(&self) -> bool {
+        self.stable
+            && self
+                .config_files
+                .iter()
+                .all(|(path, previous)| config_signature(path) == *previous)
+    }
 }
 
 impl Default for GixGitReads {
@@ -128,56 +319,40 @@ impl GixGitReads {
     /// Open (or reuse a cached) repository handle for `repo` and return a
     /// thread-local `Repository` for use on the current thread.
     pub fn repo(&self, repo: &Path) -> Result<gix::Repository, String> {
-        let tsr = self
+        if let Some(cached) = self.handles.get(repo) {
+            if cached.config_is_current() {
+                return Ok(cached.handle.to_thread_local());
+            }
+            self.handles.invalidate(repo);
+        }
+        let cached = self
             .handles
-            .try_get_with(repo.to_path_buf(), || {
-                // Box the (large) open error to keep the Result small.
-                gix::ThreadSafeRepository::open(repo).map_err(Box::new)
-            })
-            .map_err(|e: Arc<Box<gix::Error>>| e.to_string())?;
-        Ok(tsr.to_thread_local())
+            .try_get_with(repo.to_path_buf(), || CachedRepository::open(repo))
+            .map_err(|error: Arc<String>| error.as_ref().clone())?;
+        Ok(cached.handle.to_thread_local())
     }
 
     /// Porcelain dirty record count for sidebar monitoring. Tracked paths staged
     /// and modified count once; untracked records count separately.
     /// Unsupported repos use the CLI caller.
     pub(crate) fn dirty_files(repo: &Path) -> Option<usize> {
-        use gix::status::Item;
-        use gix::status::index_worktree::Item as IwItem;
-        use gix::status::plumbing::index_as_worktree::EntryStatus;
-
-        let grepo = gix::open(repo).ok()?;
+        let grepo = cached_repo(repo).ok()?;
         if Self::gix_repo_unsupported(&grepo) {
             return None;
         }
+        #[cfg(test)]
+        MONITORING_STATUS_TRAVERSALS.with(|count| count.set(count.get() + 1));
         let iter = grepo
             .status(gix::progress::Discard)
             .ok()?
             .untracked_files(gix::status::UntrackedFiles::Files)
             .into_iter(std::iter::empty::<gix::bstr::BString>())
             .ok()?;
-        let mut paths = std::collections::HashSet::new();
-        let mut untracked = 0;
+        let mut dirty = DirtyStatus::default();
         for item in iter {
-            let item = item.ok()?;
-            let changed = match &item {
-                Item::TreeIndex(_) => true,
-                Item::IndexWorktree(IwItem::Modification { status, .. }) => {
-                    !matches!(status, EntryStatus::NeedsUpdate(_))
-                }
-                Item::IndexWorktree(IwItem::DirectoryContents { entry, .. }) => {
-                    if matches!(entry.status, gix::dir::entry::Status::Untracked) {
-                        untracked += 1;
-                    }
-                    false
-                }
-                Item::IndexWorktree(IwItem::Rewrite { .. }) => true,
-            };
-            if changed {
-                paths.insert(item.location().to_owned());
-            }
+            dirty.record(&item.ok()?);
         }
-        Some(paths.len() + untracked)
+        Some(dirty.count())
     }
 
     /// Compute staged / changed counts via gix `status`, mapped onto the same
@@ -286,6 +461,11 @@ impl GixGitReads {
     /// sparse-checkout / submodule repos or on any gix error. Binary files are
     /// excluded from the line totals, matching git.
     fn gix_diff_stats_worktree(&self, repo: &Path) -> Option<DiffStats> {
+        self.gix_monitoring_status_worktree(repo)
+            .map(|(diff, _)| diff)
+    }
+
+    fn gix_monitoring_status_worktree(&self, repo: &Path) -> Option<(DiffStats, Option<usize>)> {
         use gix::bstr::ByteSlice;
         use gix::status::Item;
         use gix::status::index_worktree::Item as IwItem;
@@ -296,13 +476,18 @@ impl GixGitReads {
             return None;
         }
 
+        #[cfg(test)]
+        MONITORING_STATUS_TRAVERSALS.with(|count| count.set(count.get() + 1));
         let platform = grepo.status(gix::progress::Discard).ok()?;
         let iter = platform
+            .untracked_files(gix::status::UntrackedFiles::Files)
             .into_iter(std::iter::empty::<gix::bstr::BString>())
             .ok()?;
 
         let mut added = 0i64;
         let mut removed = 0i64;
+        let mut dirty = DirtyStatus::default();
+        let mut any_error = false;
         for item in iter {
             // One unreadable status entry must not abort the whole diff pass —
             // skip it (and warn) rather than discarding accumulated counts.
@@ -313,8 +498,10 @@ impl GixGitReads {
                     "gix diff_stats: skipping unreadable status entry"
                 );
             }) else {
+                any_error = true;
                 continue;
             };
+            dirty.record(&item);
             // Only unstaged changes to tracked files (git diff, no --cached);
             // untracked entries and purely-staged files are not counted.
             let Item::IndexWorktree(IwItem::Modification {
@@ -339,6 +526,7 @@ impl GixGitReads {
                         error = %e,
                         "gix diff_stats: skipping entry with unreadable index blob"
                     );
+                    any_error = true;
                     continue;
                 }
             };
@@ -357,6 +545,7 @@ impl GixGitReads {
                         error = %e,
                         "gix diff_stats: skipping entry with unreadable worktree file"
                     );
+                    any_error = true;
                     continue;
                 }
             };
@@ -365,9 +554,12 @@ impl GixGitReads {
                 removed += i64::from(r);
             }
         }
-        Some(crate::git::DiffStats::from_counts(
-            added.min(i64::from(i32::MAX)) as i32,
-            removed.min(i64::from(i32::MAX)) as i32,
+        Some((
+            crate::git::DiffStats::from_counts(
+                added.min(i64::from(i32::MAX)) as i32,
+                removed.min(i64::from(i32::MAX)) as i32,
+            ),
+            (!any_error).then(|| dirty.count()),
         ))
     }
 }
@@ -777,77 +969,49 @@ impl GitReads for GixGitReads {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
-        use gix::bstr::ByteSlice;
+        let mut paths = self.worktree_inventory(repo, None)?.worktree_paths;
+        // Legacy lifecycle callers still address branch workspaces only.
+        paths.retain(|_, entry| !crate::worktree::is_archived_checkout(Path::new(&entry.path)));
+        Ok(paths)
+    }
+
+    fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
         let grepo = self.repo(repo)?;
-        let mut map = HashMap::new();
-
-        let branch_of = |r: &gix::Repository| -> Option<String> {
-            r.head_ref()
-                .ok()
-                .flatten()
-                .map(|href| href.name().shorten().to_str_lossy().into_owned())
+        let mut entries = Vec::new();
+        let mut add = |base: &Path| {
+            let path = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+            let head = crate::git::resolve_git_dir(&path)
+                .and_then(|dir| std::fs::read_to_string(dir.join("HEAD")).ok())
+                .unwrap_or_default();
+            let branch = crate::git::read_branch_from_head(&path);
+            entries.push(crate::worktree::WorktreeEntry {
+                path: git_spelling(&path.to_string_lossy()),
+                detached: branch.is_none() && !head.trim().is_empty() && !head.starts_with("ref:"),
+                branch,
+                head: head.trim().to_string(),
+            });
         };
-        // `git worktree list` reports resolved real paths (symlinks followed,
-        // e.g. macOS /var -> /private/var). Match that so paths are byte-equal.
-        let real = |p: &Path| -> String {
-            let resolved = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-            git_spelling(&resolved.to_string_lossy())
-        };
-
-        // Main worktree (gix's worktrees() lists only LINKED ones). Standard
-        // non-bare layout: the main work dir is the `.git` directory's parent.
-        if let Some(main_wd) = grepo.common_dir().parent()
-            && main_wd.exists()
-            && let Ok(main_repo) = gix::open(main_wd)
-            && let Some(branch) = branch_of(&main_repo)
+        // Resolve common-dir before taking its parent: linked discovery may return
+        // a path ending in `../..`, whose lexical parent is not the main checkout.
+        let common = std::fs::canonicalize(grepo.common_dir())
+            .map_err(|error| format!("Cannot resolve Git common directory: {error}"))?;
+        if !grepo.is_bare()
+            && let Some(main) = common.parent()
         {
-            // A git worktree's workspace id currently is its branch.
-            map.insert(
-                branch.clone(),
-                crate::worktree::WorkspaceWorktree {
-                    branch,
-                    path: real(main_wd),
-                    kind: crate::worktree::WorkspaceKind::Worktree,
-                    warm_artifacts: None,
-                    lifecycle_status: None,
-                },
-            );
+            add(main);
         }
-
-        // Linked worktrees on a branch whose directory still exists.
         for proxy in grepo.worktrees().map_err(|e| e.to_string())? {
-            let Ok(base) = proxy.base() else { continue };
-            if !base.exists() {
-                continue;
-            }
-            let Ok(wt_repo) = proxy.into_repo() else {
-                continue;
-            };
-            // Recycled checkouts parked in `__archived/` are a pool, not workspaces.
-            if crate::worktree::is_archived_checkout(&base) {
-                continue;
-            }
-            let path = real(&base);
-            // A worktree mid-rebase is on a detached HEAD, so gix reports no branch. Recover the
-            // pre-rebase branch from git's own state files, otherwise the row vanishes from the
-            // sidebar and its terminals are closed mid-conflict-resolution (GH #112).
-            let branch = branch_of(&wt_repo)
-                .or_else(|| crate::worktree::operation_head_branch(&base.to_string_lossy()));
-            if let Some(branch) = branch {
-                map.insert(
-                    branch.clone(),
-                    crate::worktree::WorkspaceWorktree {
-                        branch,
-                        path,
-                        kind: crate::worktree::WorkspaceKind::Worktree,
-                        warm_artifacts: None,
-                        lifecycle_status: None,
-                    },
-                );
-            }
+            let base = proxy.base().map_err(|error| format!(
+                "Cannot read worktree registration {}: {error}. Inspect git worktree list --porcelain and run git worktree repair from the checkout.",
+                proxy.git_dir().display()
+            ))?;
+            add(&base);
         }
-
-        Ok(map)
+        Ok(crate::worktree::checkout_inventory(entries, archive_pool))
     }
 
     // status_counts via gix: classify status items into the panel's staged /
@@ -1053,6 +1217,19 @@ impl GitReadsRouter {
         Ok(paths)
     }
 
+    pub fn worktree_inventory(
+        &self,
+        repo: &Path,
+        archive_pool: Option<&Path>,
+    ) -> Result<crate::worktree::WorktreeInventory, String> {
+        let mut inventory = match self.backend.worktree_paths {
+            Backend::Cli => self.cli.worktree_inventory(repo, archive_pool),
+            Backend::Gix => self.gix.worktree_inventory(repo, archive_pool),
+        }?;
+        crate::worktree::attach_warm_statuses(&mut inventory.worktree_paths);
+        Ok(inventory)
+    }
+
     pub fn status_counts(&self, repo: &Path) -> StatusCounts {
         match self.backend.status_counts {
             Backend::Cli => self.cli.status_counts(repo),
@@ -1067,6 +1244,36 @@ impl GitReadsRouter {
         }
     }
 
+    /// Both status-derived values used by one sidebar monitoring refresh.
+    pub fn monitoring_status(&self, repo: &Path) -> (DiffStats, Result<usize, String>) {
+        let (diff, dirty, _) = self.monitoring_status_with_cacheability(repo);
+        (diff, dirty)
+    }
+
+    /// Only a complete supported gix pass may become a reusable monitoring snapshot.
+    pub fn monitoring_status_with_cacheability(
+        &self,
+        repo: &Path,
+    ) -> (DiffStats, Result<usize, String>, bool) {
+        if matches!(self.backend.diff_stats, Backend::Gix)
+            && let Some((diff, dirty)) = self.gix.gix_monitoring_status_worktree(repo)
+        {
+            let complete = dirty.is_some();
+            return (
+                diff,
+                dirty
+                    .map(Ok)
+                    .unwrap_or_else(|| crate::worktree::dirty_files_at(repo)),
+                complete,
+            );
+        }
+        (
+            self.diff_stats(repo, None),
+            crate::worktree::dirty_files_at(repo),
+            false,
+        )
+    }
+
     pub fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
         match self.backend.blame {
             Backend::Cli => self.cli.blame(repo, file),
@@ -1076,6 +1283,32 @@ impl GitReadsRouter {
 }
 
 static ROUTER: OnceLock<GitReadsRouter> = OnceLock::new();
+
+/// Reuse the process-wide handle cache for monitoring and lifecycle reads too.
+pub(crate) fn cached_repo(repo: &Path) -> Result<gix::Repository, String> {
+    git_reads().gix.repo(repo)
+}
+
+/// Cheap status dependencies; unsupported repositories never authorize snapshot reuse.
+pub fn monitoring_status_signature(path: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let router = git_reads();
+    let repo = router.gix.repo(path).ok()?;
+    if GixGitReads::gix_repo_unsupported(&repo) {
+        return None;
+    }
+    let cached = router.gix.handles.get(path)?;
+    if !cached.stable {
+        return None;
+    }
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    cached.config_files.hash(&mut hash);
+    config_signature(&repo.git_dir().join("index")).hash(&mut hash);
+    config_signature(&repo.git_dir().join("HEAD")).hash(&mut hash);
+    // Replacement is not watch identity; creation time survives ordinary directory edits.
+    std::fs::metadata(path).ok()?.created().ok().hash(&mut hash);
+    Some(hash.finish())
+}
 
 /// Global read-ops router. All git read call sites go through this.
 pub fn git_reads() -> &'static GitReadsRouter {
@@ -1376,6 +1609,356 @@ mod tests {
         assert_eq!(gix_head, cli_head);
     }
 
+    /// Catches branch-keyed insertion silently overwriting a forced duplicate checkout.
+    #[test]
+    fn discovery_2157_duplicate_branch_preserves_every_path() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let duplicate = linked.path().join("duplicate-main");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                duplicate.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let third = linked.path().join("another-main");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                third.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let expected = [repo.clone(), duplicate, third];
+        let mut failures = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let actual = reads.worktree_inventory(&repo, None).unwrap();
+            let legacy = crate::worktree::get_worktree_paths_raw(repo.to_str().unwrap()).unwrap();
+            assert_eq!(
+                actual.worktree_paths["main"].path, legacy["main"].path,
+                "discovery and lifecycle must address the same duplicate checkout"
+            );
+            let inventory = serde_json::to_value(actual).unwrap();
+            for path in &expected {
+                let path = git_spelling(&std::fs::canonicalize(path).unwrap().to_string_lossy());
+                let selectable = inventory["worktree_paths"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .any(|w| w["path"] == path);
+                let diagnostic = inventory["worktree_diagnostics"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter()
+                            .any(|w| w["path"] == path && w["state"] == "duplicate_branch")
+                    });
+                if !selectable && !diagnostic {
+                    failures.push(format!("{name}: {path}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "duplicate checkouts lost: {failures:?}"
+        );
+    }
+
+    /// Catches moved/deleted registrations disappearing without non-selectable repair guidance.
+    #[test]
+    fn discovery_2157_missing_registrations_have_repair_diagnostics() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let mut expected = Vec::new();
+        for branch in ["deleted-registration", "moved-registration"] {
+            let path = linked.path().join(branch);
+            run_git(
+                &repo,
+                &["worktree", "add", "-b", branch, path.to_str().unwrap()],
+            );
+            expected.push(git_spelling(
+                &std::fs::canonicalize(&path).unwrap().to_string_lossy(),
+            ));
+            if branch.starts_with("deleted") {
+                std::fs::remove_dir_all(path).unwrap();
+            } else {
+                std::fs::rename(&path, linked.path().join("new-location")).unwrap();
+            }
+        }
+        let before = run_git(&repo, &["worktree", "list", "--porcelain", "-z"]);
+        let mut failures = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory =
+                serde_json::to_value(reads.worktree_inventory(&repo, None).unwrap()).unwrap();
+            for path in &expected {
+                if !inventory["worktree_diagnostics"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter().any(|w| {
+                            w["path"] == *path
+                                && w["state"] == "missing"
+                                && w["guidance"]
+                                    .as_str()
+                                    .is_some_and(|s| s.contains("git worktree repair"))
+                        })
+                    })
+                {
+                    failures.push(format!("{name}: {path}"));
+                }
+                assert!(
+                    !inventory["worktree_paths"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .any(|w| w["path"] == *path)
+                );
+            }
+        }
+        assert_eq!(
+            run_git(&repo, &["worktree", "list", "--porcelain", "-z"]),
+            before,
+            "discovery must not prune registrations"
+        );
+        assert!(
+            failures.is_empty(),
+            "missing repair diagnostics: {failures:?}"
+        );
+    }
+
+    /// Catches bisect detachment losing the original branch despite Git's BISECT_START.
+    #[test]
+    fn discovery_2157_bisect_recovers_original_branch() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("bisect");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "bisect-work",
+                path.to_str().unwrap(),
+            ],
+        );
+        run_git(&path, &["bisect", "start", "HEAD", "HEAD~2"]);
+        assert_eq!(
+            run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "HEAD"
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, None).unwrap();
+            if !inventory
+                .worktree_paths
+                .values()
+                .any(|w| w.branch == "bisect-work")
+            {
+                missing.push(name);
+            }
+        }
+        run_git(&path, &["bisect", "reset"]);
+        assert!(missing.is_empty(), "bisect branch lost in {missing:?}");
+    }
+
+    /// Catches interpreting a relative gitdir against the process cwd during rebase recovery.
+    #[test]
+    fn discovery_2157_relative_gitdir_rebase_recovers_branch() {
+        let (_guard, repo) = fixture_repo();
+        let path = repo.join("relative-checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "rebase-work",
+                path.to_str().unwrap(),
+                "feature",
+            ],
+        );
+        let relative = run_git(&path, &["rev-parse", "--path-format=relative", "--git-dir"]);
+        std::fs::write(path.join(".git"), format!("gitdir: {}\n", relative.trim())).unwrap();
+        assert!(
+            crate::git_cli::git_cmd(&path)
+                .args(["rebase", "--exec", "exit 1", "main"])
+                .run()
+                .is_err()
+        );
+        assert_eq!(
+            run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "HEAD"
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, None).unwrap();
+            if !inventory
+                .worktree_paths
+                .values()
+                .any(|w| w.branch == "rebase-work")
+            {
+                missing.push(name);
+            }
+        }
+        run_git(&path, &["rebase", "--abort"]);
+        assert!(
+            missing.is_empty(),
+            "relative-gitdir rebase branch lost in {missing:?}"
+        );
+    }
+
+    /// Catches detached HEAD checkouts disappearing instead of reaching the sidebar inventory.
+    #[test]
+    fn discovery_2156_detached_checkouts_are_explicit() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let detached = linked.path().join("detached-checkout");
+        run_git(
+            &repo,
+            &["worktree", "add", "--detach", detached.to_str().unwrap()],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&detached).unwrap().to_string_lossy());
+        let expected_head = run_git(&detached, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let actual = reads.worktree_inventory(&repo, None).unwrap();
+            if !actual.detached_worktrees.iter().any(|entry| {
+                entry.path == expected
+                    && entry.head == expected_head
+                    && entry.short_head == expected_head[..7]
+                    && entry.directory_name == "detached-checkout"
+                    && entry.state == crate::worktree::DetachedWorktreeState::Detached
+            }) {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "detached checkout missing from {missing:?}: {expected}"
+        );
+    }
+
+    /// Catches taking the parent of an unresolved common-dir from a linked checkout.
+    #[test]
+    fn discovery_2156_linked_input_keeps_main_checkout() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked-input",
+                path.to_str().unwrap(),
+            ],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&repo).unwrap().to_string_lossy());
+        let actual = GixGitReads::new().worktree_paths(&path).unwrap();
+        assert!(
+            actual.values().any(|entry| entry.path == expected),
+            "main checkout omitted for linked input: {actual:?}"
+        );
+    }
+
+    /// Catches treating a user's unrelated __archived directory as a TUIC recycling pool.
+    #[test]
+    fn discovery_2156_unowned_archive_name_keeps_checkout() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("unrelated/__archived/user-checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "user-archive-name",
+                path.to_str().unwrap(),
+            ],
+        );
+        let pool = linked.path().join("configured/__archived");
+        let pooled = pool.join("pooled");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "tuic-pool",
+                pooled.to_str().unwrap(),
+            ],
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, Some(&pool)).unwrap();
+            assert!(
+                !inventory.worktree_paths.contains_key("tuic-pool"),
+                "{name} exposed the configured recycling pool"
+            );
+            if !inventory.worktree_paths.contains_key("user-archive-name") {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "ordinary checkout hidden by archive basename in {missing:?}"
+        );
+    }
+
+    /// Catches line-based porcelain parsing dropping a legal newline in a checkout path.
+    #[cfg(unix)]
+    #[test]
+    fn discovery_2156_newline_path_matches_git_inventory() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("line\nbreak");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "newline-path",
+                path.to_str().unwrap(),
+            ],
+        );
+        let expected = git_spelling(&std::fs::canonicalize(&path).unwrap().to_string_lossy());
+        let actual = CliGitReads.worktree_paths(&repo).unwrap();
+        assert_eq!(
+            actual.get("newline-path").map(|entry| &entry.path),
+            Some(&expected),
+            "CLI lost newline path from real Git"
+        );
+    }
+
     /// Step 10: gix worktree_paths == CLI, including the main worktree (gix
     /// omits it) and a linked worktree; detached/missing worktrees excluded.
     #[test]
@@ -1401,6 +1984,201 @@ mod tests {
             "pending"
         );
         crate::worktree::clear_warm(&wt);
+    }
+
+    /// Catches full config/ref-store reopens on every unchanged sidebar refresh.
+    #[test]
+    fn worktree_inventory_does_not_reopen_warmed_repositories() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let mut paths = Vec::new();
+        for n in 0..8 {
+            let path = linked.path().join(format!("linked-{n}"));
+            run_git(
+                &repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &format!("wt-{n}"),
+                    path.to_str().unwrap(),
+                ],
+            );
+            paths.push(path);
+        }
+        let reads = GixGitReads::new();
+        assert_eq!(
+            reads.worktree_paths(&repo).unwrap(),
+            CliGitReads.worktree_paths(&repo).unwrap()
+        );
+        let before = REPOSITORY_OPENS.with(std::cell::Cell::get);
+        // Inventory must observe current HEAD without rebuilding every repository.
+        run_git(&paths[0], &["switch", "-c", "replacement"]);
+        run_git(&paths[1], &["switch", "--detach"]);
+        std::fs::remove_dir_all(&paths[2]).unwrap();
+        for _ in 0..10 {
+            let actual = reads.worktree_paths(&repo).unwrap();
+            assert_eq!(actual, CliGitReads.worktree_paths(&repo).unwrap());
+            assert!(actual.contains_key("replacement"));
+            assert!(!actual.contains_key("wt-0"));
+            assert!(!actual.contains_key("wt-1"));
+            assert!(!actual.contains_key("wt-2"));
+        }
+        let opens = REPOSITORY_OPENS.with(std::cell::Cell::get) - before;
+        assert_eq!(
+            opens, 0,
+            "warm inventory reopened full repositories {opens} times"
+        );
+    }
+
+    // Catches reopening global Git configuration for every monitoring dirty read.
+    // A config edit must still be visible after handle reuse is introduced.
+    #[test]
+    fn monitoring_dirty_reads_reuse_handles_and_observe_config_edits() {
+        let (_guard, repo) = fixture_repo();
+        cached_repo(&repo).unwrap();
+        let before = REPOSITORY_OPENS.with(std::cell::Cell::get);
+        for _ in 0..10 {
+            assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
+        }
+        assert_eq!(
+            REPOSITORY_OPENS.with(std::cell::Cell::get) - before,
+            0,
+            "warmed dirty checks must not reopen repository configuration"
+        );
+        run_git(&repo, &["config", "core.sparseCheckout", "true"]);
+        assert!(
+            cached_repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout")
+                .unwrap()
+        );
+        assert_eq!(
+            GixGitReads::dirty_files(&repo),
+            None,
+            "a fresh sparse-checkout setting must retain the CLI fallback"
+        );
+        run_git(&repo, &["config", "core.sparseCheckout", "false"]);
+        assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
+    }
+
+    // Catches config snapshots remaining frozen after an optional include appears,
+    // changes or disappears, including branch-conditional include selection.
+    /// Catches the two independent status walks used for one monitoring refresh.
+    #[test]
+    fn monitoring_status_uses_one_traversal_with_cli_equivalent_results() {
+        let (_guard, repo) = fixture_repo();
+        // One path staged and then modified must count once, not twice, as dirty.
+        run_git(&repo, &["add", "a.txt"]);
+        std::fs::write(repo.join("a.txt"), "staged then modified\n").unwrap();
+        std::fs::create_dir(repo.join("untracked-dir")).unwrap();
+        std::fs::write(repo.join("untracked-dir/one.txt"), "one\n").unwrap();
+        std::fs::write(repo.join("untracked-dir/two.txt"), "two\n").unwrap();
+        let expected_diff = CliGitReads.diff_stats(&repo, None);
+        let expected_dirty = run_git(&repo, &["status", "--porcelain", "--untracked-files=all"])
+            .lines()
+            .count();
+        let before = MONITORING_STATUS_TRAVERSALS.with(std::cell::Cell::get);
+        let (diff, dirty) = git_reads().monitoring_status(&repo);
+        assert_eq!(
+            serde_json::to_value(&diff).unwrap(),
+            serde_json::to_value(&expected_diff).unwrap()
+        );
+        assert_eq!(dirty.unwrap(), expected_dirty);
+        assert_eq!(
+            MONITORING_STATUS_TRAVERSALS.with(std::cell::Cell::get) - before,
+            1,
+            "one monitoring refresh repeated the tracked-file status traversal"
+        );
+    }
+
+    /// Catches a combined status read replacing the sparse-checkout CLI fallback.
+    #[test]
+    fn monitoring_status_keeps_unsupported_repository_cli_results() {
+        let (_guard, repo) = fixture_repo();
+        run_git(&repo, &["config", "core.sparseCheckout", "true"]);
+        let (diff, dirty) = git_reads().monitoring_status(&repo);
+        assert_eq!(
+            serde_json::to_value(diff).unwrap(),
+            serde_json::to_value(CliGitReads.diff_stats(&repo, None)).unwrap()
+        );
+        assert_eq!(
+            dirty.unwrap(),
+            run_git(&repo, &["status", "--porcelain", "--untracked-files=all"])
+                .lines()
+                .count()
+        );
+    }
+
+    #[test]
+    fn cached_repository_observes_included_configuration_changes() {
+        let (_guard, repo) = clean_repo();
+        let extra = repo.join(".git/extra-config");
+        run_git(&repo, &["config", "include.path", extra.to_str().unwrap()]);
+        let reads = GixGitReads::new();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        std::fs::write(&extra, "[core]\n sparseCheckout = true\n").unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(true)
+        );
+        std::fs::write(&extra, "[core]\n sparseCheckout = false\n").unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(false)
+        );
+        std::fs::remove_file(&extra).unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        run_git(&repo, &["config", "--unset", "include.path"]);
+        std::fs::write(&extra, "[core]\n sparseCheckout = true\n").unwrap();
+        run_git(
+            &repo,
+            &[
+                "config",
+                "includeIf.onbranch:feature.path",
+                extra.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        run_git(&repo, &["switch", "-c", "feature"]);
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(true)
+        );
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.
