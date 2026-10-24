@@ -238,13 +238,6 @@
     ]
   },
   {
-    "file": "src/components/ProcessManagerModal/ProcessManagerModal.module.css",
-    "story": "2215-be65",
-    "rules": [
-      "[[],\".close\",[\"padding: 0 4px\",\"border: none\"]]"
-    ]
-  },
-  {
     "file": "src/components/ProgressDialog/ProgressDialog.module.css",
     "story": "2216-e56b",
     "rules": [
