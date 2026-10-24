@@ -184,14 +184,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/StashesTab.module.css",
-    "story": "2202-dff2",
-    "rules": [
-      "[[],\".actionBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".diffToggle\",[\"border: none\",\"padding: 2px 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/SyncRow.module.css",
     "story": "2203-f9ff",
     "rules": [
