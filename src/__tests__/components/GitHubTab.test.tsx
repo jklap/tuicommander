@@ -1,6 +1,8 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import oauthScopes from "../../data/github-oauth-scopes.txt?raw";
+
 // Shared, hoisted RPC stub + mutable account list so add/remove round-trip.
 const h = vi.hoisted(() => {
 	type Account = { id: string; host: { host: string }; login: string | null; kind: string };
@@ -144,6 +146,13 @@ describe("GitHubTab — single-account collapse (006)", () => {
 	beforeEach(async () => {
 		resetState();
 		GitHubTab = await loadTab();
+	});
+
+	// Catches: the consent text omits scopes added to the actual login request.
+	it("shows every requested OAuth scope before login", async () => {
+		const { findByText } = render(() => <GitHubTab />);
+		const permissions = await findByText(/Requested permissions:/);
+		expect(permissions.querySelector("strong")?.textContent).toBe(oauthScopes.trim());
 	});
 
 	it("collapses the account manager + bindings to a single affordance when there is only the default account", async () => {

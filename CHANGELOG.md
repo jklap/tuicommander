@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
+
 - Identify Activity Dashboard sessions by repository name and linked-worktree branch, including detached dashboards; keep folder names for sessions outside repositories (#2180-5105).
 - Replace the mobile Sessions Active total with Working, Idle and Awaiting counts that share each row badge state, including the Working hold across poll updates. Agents running sub-tasks count as Working. Finished sessions are not counted (#2181-c98f).
 
