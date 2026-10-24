@@ -238,14 +238,6 @@
     ]
   },
   {
-    "file": "src/components/PrDiffTab/PrDiffTab.module.css",
-    "story": "2213-dd22",
-    "rules": [
-      "[[],\".modeBtn\",[\"height: 18px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeBtnActive\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/PrDiffTab/ReviewThreads.module.css",
     "story": "2214-430b",
     "rules": [
