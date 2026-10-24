@@ -956,3 +956,5 @@ arrow clearance belongs to FormControls, not to Settings selectors.
 `SettingPageHeader`, `SectionCard`, `StatusSummary`, `ListRow`, `EmptyState`
 and `DangerZone` action slots arrange their children only. Pass shared UI
 controls into these slots; the containers do not set descendant button sizes.
+`SettingButton`, account add/retry actions and list add/remove actions also
+use `ui/Button`; field CSS owns their width and row layout only.

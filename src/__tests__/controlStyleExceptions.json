@@ -406,14 +406,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/fields/fields.module.css",
-    "story": "2225-ef95",
-    "rules": [
-      "[[],\".button\",[\"min-height: var(--control-height, 36px)\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/AgentsTab.module.css",
     "story": "2226-5941",
     "rules": [

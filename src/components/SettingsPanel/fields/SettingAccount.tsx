@@ -1,3 +1,4 @@
+import { Button } from "../../ui/Button";
 import { type Component, createResource, createSignal, For, Show } from "solid-js";
 import { invoke } from "../../../invoke";
 import { Select } from "../../ui/Select";
@@ -63,13 +64,13 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 								{(account) => <option value={account.id}>{account.label}</option>}
 							</For>
 						</Select>
-						<button type="button" class={s.button} disabled={props.disabled || adding()} onClick={() => void add()}>
+						<Button type="button" class={s.button} disabled={props.disabled || adding()} onClick={() => void add()}>
 							Add account
-						</button>
+						</Button>
 					</div>
 					<Show when={accounts.error || addFailed()}>
 						<div role="alert">Could not load or add accounts. Try again.</div>
-						<button
+						<Button
 							type="button"
 							class={s.button}
 							disabled={accounts.loading || adding()}
@@ -78,7 +79,7 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 							}}
 						>
 							Retry
-						</button>
+						</Button>
 					</Show>
 				</div>
 			)}
