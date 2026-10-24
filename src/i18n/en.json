@@ -356,6 +356,7 @@
 	"fileBrowser.addGitignore": "Add to .gitignore",
 	"fileBrowser.copy": "Copy",
 	"fileBrowser.copyFailed": "Copy failed",
+	"fileBrowser.deleteFailed": "Delete failed",
 	"fileBrowser.copyPath": "Copy Path",
 	"fileBrowser.create": "Create",
 	"fileBrowser.cut": "Cut",

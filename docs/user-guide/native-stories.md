@@ -153,3 +153,19 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+## Ideas through the planner
+
+Ideas are separate from append-only story notes. They use the Ideas panel's `notes.json`, not the story database. No plan is required.
+
+```sh
+tuic story '{"action":"add_idea","text":"Investigate a smaller build","source":"ego"}' --project /absolute/project
+tuic story '{"action":"list_ideas"}' --project /absolute/project
+tuic story '{"action":"update_idea","idea_id":"note-ID","text":"Investigate the incremental build"}' --project /absolute/project
+```
+
+The same inputs work under `workflow` with `action:"story"` and `input` set to the JSON action. MCP uses the calling session's project. CLI and HTTP use the named project. `add_idea` records this project as `repoPath`; `list_ideas` includes that project's Ideas and global Ideas, just like the panel. `update_idea` can change only text on an Idea owned by that project. It preserves the id, timestamp, source, image list, used state and repository assignment. Global Ideas are visible but cannot be updated through a project-scoped action.
+
+Text is trimmed and must contain 1–16000 characters. Optional `source` must contain 1–256 characters after trimming. Without it, the source is the bound session id, or `local-api` for a sessionless request. Replies are `{type:"idea",value:Idea}` for add/update and `{type:"ideas",value:Idea[]}` for list. Idea records have camelCase fields: `id`, `text`, `createdAt` (Unix milliseconds), `repoPath`, `repoDisplayName`, `usedAt`, `images` and `source`.
+
+All mutations use the backend's locked notes writer. An `ideas-changed` desktop/SSE event reloads the panel without saving the read back. Local edits finish before reload; stale UI snapshots apply only their changed ids and fields to current disk state. They cannot remove unseen agent additions or restore a remotely deleted Idea. Concurrent text edits use the last committed text intent.

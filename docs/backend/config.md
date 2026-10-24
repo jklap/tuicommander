@@ -916,9 +916,9 @@ struct PromptEntry {
 
 ### Notes (`notes.json`)
 
-**Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
+**Type:** `serde_json::Value` with backend-owned keyed mutations. The legacy `notes` array and extra document fields remain compatible.
 
-**Commands:** `load_notes()`, `save_notes(base, config)`
+**Commands:** `load_notes()`, `save_notes(base, config)`. Planner `add_idea`, `list_ideas`, and `update_idea` use the same `ConfigFile` strict locked writer. UI saves remove only ids present in their baseline and merge only changed fields of existing records; concurrent additions survive and deleted records are not resurrected. Other top-level fields retain merge-patch semantics. Invalid JSON fails rather than becoming an empty snapshot. Planner additions retain a `source` string and the envelope project's `repoPath`. Successful mutation routes dual-emit `ideas-changed`; frontend reloads wait for queued local writes and never save a reload.
 
 ### Keybindings (`keybindings.json`)
 

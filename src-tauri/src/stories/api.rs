@@ -10,6 +10,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StoryAction {
+    /// Add an Idea in the envelope project. Source defaults to the bound session.
+    AddIdea {
+        text: String,
+        source: Option<String>,
+    },
+    /// List project and global Ideas, matching the panel filter.
+    ListIdeas,
+    /// Change text without replacing metadata or image assets; project-owned ids only.
+    UpdateIdea {
+        idea_id: String,
+        text: String,
+    },
     /// Create a plan record for a plan file (`source` is its repo-relative path).
     CreatePlan {
         title: String,
@@ -146,6 +158,8 @@ pub enum StoryAction {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoryReply {
+    Idea(serde_json::Value),
+    Ideas(Vec<serde_json::Value>),
     Plan(Plan),
     Plans(Vec<Plan>),
     PlanSources(Vec<PlanSource>),
@@ -165,6 +179,7 @@ pub enum StoryReply {
 /// True for an error the user can fix, including a plan source still used by a coordinator.
 pub fn is_user_error(message: &str) -> bool {
     [
+        "invalid idea",
         PLAN_DOCUMENT_NOT_FOUND,
         super::PLAN_SOURCE_IN_USE,
         CRITERIA_INCOMPLETE,
@@ -211,6 +226,15 @@ fn story_action_with_source(
         Ok(story)
     };
     match action {
+        StoryAction::AddIdea { text, source } => Ok(StoryReply::Idea(crate::config::add_idea(
+            &project,
+            &text,
+            source.as_deref().or(actor_session).unwrap_or("local-api"),
+        )?)),
+        StoryAction::ListIdeas => Ok(StoryReply::Ideas(crate::config::list_ideas(&project)?)),
+        StoryAction::UpdateIdea { idea_id, text } => Ok(StoryReply::Idea(
+            crate::config::update_idea(&project, &idea_id, &text)?,
+        )),
         StoryAction::CreatePlan { title, source } => {
             Ok(StoryReply::Plan(store.create_plan(NewPlan {
                 project: project.clone(),
@@ -500,7 +524,15 @@ fn story_action_for_session_with_source(
     if matches!(action, StoryAction::Claim { .. }) && session_id.is_none() {
         return Err("claim requires a live session".into());
     }
-    story_action_with_source(project, action, session_id, unauthenticated_http)
+    let changes_ideas = matches!(
+        action,
+        StoryAction::AddIdea { .. } | StoryAction::UpdateIdea { .. }
+    );
+    let reply = story_action_with_source(project, action, session_id, unauthenticated_http)?;
+    if changes_ideas {
+        state.notify_ideas_changed();
+    }
+    Ok(reply)
 }
 
 fn archive_actor(session: Option<&str>, unauthenticated_http: bool) -> super::StoryTransitionActor {

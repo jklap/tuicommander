@@ -78,6 +78,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 
 | Event | Payload | Emitted from | Frontend listener |
 |-------|---------|-------------|-------------------|
+| `ideas-changed` | `{}` | Planner and UI notes mutations after persistence; desktop plus `/events` SSE | `ideasStore.hydrate()` reloads after local writes; reconnect also reloads |
 | `open-markdown-tabs-changed` | `{}` | `open_markdown_tabs::publish`: desktop IPC and `/events` SSE after a changed metadata snapshot | `createOpenMarkdownTabs` refetches one session-owned list shared by the mobile menu and wide-screen dropdown |
 | `background-mode-changed` | `{ state: "hidden" \| "unloaded" \| "visible" }` | Rust background lifecycle, desktop + `/events` SSE | `useAppInit.ts` logs desktop state; remote clients may display it |
 | `close-dialog` | `{ kind: "ask" \| "confirm_quit", sessions: number, background_available: boolean }` | Rust background close policy; dual-emit to desktop and `/events` SSE | `useAppInit.ts` presents it on desktop only |
