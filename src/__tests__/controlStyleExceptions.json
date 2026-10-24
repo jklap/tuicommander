@@ -750,13 +750,6 @@
     ]
   },
   {
-    "file": "src/components/Terminal/ChatPresentation.module.css",
-    "story": "2252-5add",
-    "rules": [
-      "[[],\".paste button\",[\"border: 0\",\"padding: 4px 0 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/Terminal/Terminal.module.css",
     "story": "2253-a676",
     "rules": [
