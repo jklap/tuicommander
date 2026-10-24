@@ -682,15 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/setup/TasksSetup.module.css",
-    "story": "2251-f625",
-    "rules": [
-      "[[],\".setup button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".setup .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".setup button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Terminal/ChatPresentation.module.css",
     "story": "2252-5add",
     "rules": [
