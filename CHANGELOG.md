@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Align GitHub settings actions with shared desktop and touch button geometry.
+
+- Align agent settings and launch-editor controls with shared desktop/touch geometry and native validation states.
+
 - Share native invalid-field borders and installed/removal toggle states across UI controls.
 
 - Add a shared compact auto-grow textarea with bounded growth and native scrolling.

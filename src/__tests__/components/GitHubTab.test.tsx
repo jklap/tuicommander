@@ -155,6 +155,31 @@ describe("GitHubTab — single-account collapse (006)", () => {
 		expect(permissions.querySelector("strong")?.textContent).toBe(oauthScopes.trim());
 	});
 
+	// Catches: migrating login actions dropping disabled state or the polling Cancel handler.
+	it("disables login while starting and cancels the device-flow view", async () => {
+		let finishStart!: (value: unknown) => void;
+		h.rpc.mockImplementation((command, args) => {
+			if (command === "github_start_login")
+				return new Promise((resolve) => {
+					finishStart = resolve;
+				});
+			return h.defaultRpc(command, args);
+		});
+		const view = render(() => <GitHubTab />);
+		fireEvent.click(await view.findByRole("button", { name: "Login with GitHub" }));
+		expect(view.getByRole("button", { name: "Starting..." })).toBeDisabled();
+		finishStart({
+			device_code: "fixture",
+			user_code: "TEST-CODE",
+			verification_uri: "https://github.com/login/device",
+			expires_in: 900,
+			interval: 5,
+		});
+		fireEvent.click(await view.findByRole("button", { name: "Cancel" }));
+		expect(view.queryByText("TEST-CODE")).toBeNull();
+		expect(view.getByRole("button", { name: "Login with GitHub" })).not.toBeDisabled();
+	});
+
 	it("collapses the account manager + bindings to a single affordance when there is only the default account", async () => {
 		const { findByText, queryByText } = render(() => <GitHubTab />);
 		// Only the compact disclosure shows.
