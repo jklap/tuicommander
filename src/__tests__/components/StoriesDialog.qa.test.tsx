@@ -87,7 +87,7 @@ it("catches QA labels disappearing from list/filter/Kanban and QA criteria stayi
 			},
 		}),
 	);
-	fireEvent.click(ui.getByRole("button", { name: /^Kanban$/ }));
+	fireEvent.click(ui.getByRole("tab", { name: /^Kanban$/ }));
 	const column = within(ui.getByRole("region", { name: "QA" }));
 	expect(column.getByRole("button", { name: /Check device/ })).toBeTruthy();
 	fireEvent.click(details.getByRole("checkbox"));
