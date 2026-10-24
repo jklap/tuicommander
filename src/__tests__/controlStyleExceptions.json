@@ -474,60 +474,6 @@
     ]
   },
   {
-    "file": "src/components/Terminal/ChatPresentation.module.css",
-    "story": "2252-5add",
-    "rules": [
-      "[[],\".paste button\",[\"border: 0\",\"padding: 4px 0 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Terminal/Terminal.module.css",
-    "story": "2253-a676",
-    "rules": [
-      "[[],\".resumeDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".resumeButton\",[\"padding: 4px 14px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Terminal/TerminalChatView.module.css",
-    "story": "2254-2a7d",
-    "rules": [
-      "[[],\".toggleButton\",[\"padding: 2px 8px\",\"border: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/TipOfTheDay/TipOfTheDay.module.css",
-    "story": "2255-54a8",
-    "rules": [
-      "[[],\".arrow\",[\"height: 28px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ToastContainer/ToastContainer.module.css",
-    "story": "2256-dd37",
-    "rules": [
-      "[[],\".action\",[\"padding: 2px 8px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".repoAction\",[\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Toolbar/Toolbar.module.css",
-    "story": "2257-ebf1",
-    "rules": [
-      "[[],\".sidebarToggle, .filterToggle\",[\"height: 26px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".densityToggle\",[\"padding: 0 6px\"]]",
-      "[[],\".branch\",[\"height: 26px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".bell, .watcherBtn\",[\"height: 26px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".dismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".notifClose\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".activityDismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".pluginToggle\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".activityItemDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".lastItemBtn\",[\"height: 26px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".bell.storiesPillBtn\",[\"padding: 0 7px\"]]"
-    ]
-  },
-  {
     "file": "src/components/TunnelsPanel/TunnelsPanel.module.css",
     "story": "2258-a504",
     "rules": [

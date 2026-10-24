@@ -39,7 +39,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
         assert.ok(row.controls.length >= 2, 'Stretch cases must exercise multiple button sizes');
@@ -89,13 +89,35 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      result.containment = [];
       measurements.push({width,...result,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
       console.log(path);
+      // Catches: platform-specific desktop height wins over wrapped touch rows.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
+        for (const platform of ['linux', 'windows']) {
+          await evaluate(`document.documentElement.className='platform-${platform}'; new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+          const bounds = await evaluate(`(()=>{const toolbar=document.querySelector('#toolbar'); const box=toolbar.getBoundingClientRect(); const buttons=[...toolbar.querySelectorAll('button')]; return {toolbarBottom:box.bottom,actionsBottom:Math.max(...buttons.map(button=>button.getBoundingClientRect().bottom)),actions:buttons.length};})()`);
+          result.containment.push({platform,...bounds});
+          console.log('CONTAINMENT',JSON.stringify({width,platform,...bounds}));
+          const capture = await send('Page.captureScreenshot',{format:'png',clip:(await evaluate(`(()=>{const box=document.querySelector('#geometry').getBoundingClientRect(); return {x:box.x,y:box.y,width:box.width,height:Math.max(box.height,100),scale:1};})()`))},sessionId);
+          const platformPath=resolve(directory,`controls-${width}-${platform}.png`);
+          await writeFile(platformPath,Buffer.from(capture.data,'base64'));
+          console.log(platformPath);
+        }
+        await evaluate(`document.documentElement.className=''`);
+      }
     }
     await writeFile(resolve(directory,'measurements.json'),JSON.stringify(measurements,null,2));
+    if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
+      for (const result of measurements) assert.equal(result.containment.length, 2, 'Both platform containment cases must execute');
+    }
+    for (const result of measurements) for (const bounds of result.containment) {
+      assert.ok(bounds.actions >= 2, 'Containment must measure actual mounted toolbar actions');
+      assert.ok(bounds.actionsBottom <= bounds.toolbarBottom + 1, `${bounds.platform} toolbar must contain actions at ${result.width}px: ${JSON.stringify(bounds)}`);
+    }
     for(const result of measurements)for(const row of result.rows) {
       assert.ok(row.heights.length >= 2, 'The mounted fixture must contain multiple real controls');
       for(const element of row.heights)assert.equal(element.height,result.width<=600?44:row.size==='compact'?22:36,JSON.stringify({width:result.width,row}));

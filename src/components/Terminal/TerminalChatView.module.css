@@ -13,10 +13,7 @@
   right: 20px;
   z-index: 11;
   display: flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  overflow: hidden;
 }
 
 /* Chat content starts below its controls, even without a LastPromptBar. */
@@ -25,31 +22,6 @@
   align-self: flex-end;
   flex-shrink: 0;
   margin: 6px 20px 4px;
-}
-
-.toggleButton {
-  padding: 2px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--font-xs);
-  cursor: pointer;
-}
-
-.toggleButton:hover:not(:disabled) {
-  background: var(--bg-highlight);
-}
-
-.toggleButton[aria-pressed="true"] {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-}
-
-.toggleButton:disabled {
-  color: var(--fg-muted);
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .fallbackBanner {
