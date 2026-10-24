@@ -1766,7 +1766,7 @@ GET  /fs/read-external?path=/absolute/path/to/file
 POST /fs/write         { "repoPath": "...", "file": "...", "content": "..." }
 POST /fs/write-if-unchanged { "repoPath": "...", "file": "...", "expected": "...", "content": "..." } -> true | false (false: disk text differs from `expected`, nothing written)
 POST /fs/mkdir         { "repoPath": "...", "dir": "..." }
-POST /fs/delete        { "repoPath": "...", "path": "..." }
+POST /fs/delete        { "repoPath": "...", "path": "..." } # removes final symlink itself, even when dangling
 POST /fs/rename        { "repoPath": "...", "from": "...", "to": "..." }
 POST /fs/copy          { "repoPath": "...", "from": "...", "to": "..." }
 POST /fs/gitignore     { "repoPath": "...", "pattern": "..." }

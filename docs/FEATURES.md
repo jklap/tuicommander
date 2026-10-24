@@ -541,7 +541,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.4 File Browser Panel (`Cmd+E`)
 
-- **Symbolic links**: link icon, target path and target kind in tree and list views; outside-target opens show a specific refusal without adding read access.
+- **Symbolic links**: link icon, target path and target kind in tree and list views; outside-target opens show a specific refusal without adding read access. Delete removes only the link, including unavailable links, and failed deletes show an error notification.
 - **Remote file drops**: native OS files dropped onto a connected remote repository are copied through its authenticated daemon connection; sources remain on the Mac. Directory copies require confirmation and existing names are skipped. Each top-level upload is limited to 256 MiB (including archive overhead) and 10,000 entries; symlinks and special files are rejected. Native destination filenames and safe executable permissions are preserved; uploads abort after 30 seconds without data.
 - Directory tree of active repository
 - **Auto-refresh**: directory watcher detects external file changes (create/delete/rename) and refreshes automatically within ~1s, preserving selection
