@@ -518,7 +518,10 @@ async fn guard_secret_inspection(
 ) -> serde_json::Value {
     let inspection = secret_inspection_tool(name, args);
     if inspection && state.secrets.tools_blocked() {
-        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
+        return serde_json::json!({
+            "error": "Agent inspection is disabled while a private secret form is open",
+            "effect": "not_started"
+        });
     }
     call.await
 }

@@ -5925,6 +5925,53 @@ async fn mcp_call_audit_outcome_names_reply_and_error_not_effect() {
     assert_eq!(projection["records"][1]["outcome"], "replied");
 }
 
+// Catches: private-form refusals claim uncertain execution despite never dispatching.
+#[tokio::test]
+async fn mcp_call_audit_secret_form_refusals_are_not_started() {
+    use crate::secrets::{Field, FieldKind, Form};
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = true;
+    state
+        .secrets
+        .open(
+            Form::request(
+                vec![Field {
+                    name: "TOKEN".into(),
+                    kind: FieldKind::Password,
+                    display: None,
+                }],
+                "audit refusal regression".into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    for (name, args) in [
+        ("ui", serde_json::json!({"action":"screenshot"})),
+        ("maccontrol__capture_screen", serde_json::json!({})),
+        (
+            "call_tool",
+            serde_json::json!({"tool_name":"maccontrol__capture_screen","arguments":{}}),
+        ),
+    ] {
+        let response = post_test_tool_call(state.clone(), "audit-refusal", name, args).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("private secret form"),
+            "{response}"
+        );
+    }
+    let projection = runtime_audit_projection(state).await;
+    let rows = projection["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for row in rows {
+        assert_eq!(row["outcome"], "error");
+        assert_eq!(row["effect"], "not_started", "{row}");
+    }
+}
+
 // Catches: successful dispatch replies never classify their effects after handlers return.
 #[cfg(unix)]
 #[tokio::test]

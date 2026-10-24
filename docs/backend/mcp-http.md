@@ -2765,7 +2765,8 @@ resources, images and transport overhead. A native `error:null` is not an
 application error; upstream `isError` is preserved. Error text is not copied.
 Effects classify the handler observation: `read_only` for a recognized read-only action,
 `completed` for a successful handler return, `failed` for an application-error reply,
-and `not_started` for an explicit preflight refusal. Explicit handler effect contracts
+and `not_started` for an explicit preflight refusal, including private-secret-form
+inspection refusals on native, direct-upstream and wrapped-upstream calls. Explicit handler effect contracts
 remain authoritative. `completed` does not mean a submitted command finished, queued
 speech was heard, a remote job finished, or the client received the reply. Native
 handler interruption and upstream failures after dispatch remain `unknown`; the
