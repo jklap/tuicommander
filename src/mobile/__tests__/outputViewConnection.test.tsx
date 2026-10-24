@@ -14,13 +14,14 @@ import { OutputView } from "../components/OutputView";
 let options: SubscribePtyOptions;
 let exit: () => void;
 const stop = vi.fn();
-function Harness() {
+function Harness(props: { sessionExists?: boolean } = {}) {
 	const [error, setError] = createSignal<string | null>(null);
 	let retry: (() => void) | undefined;
 	return (
 		<>
 			<ConnectionBanner offline={error() !== null} authError={false} error={error()} onRetry={() => retry?.()} />
 			<OutputView
+				sessionExists={props.sessionExists}
 				sessionId="test-session"
 				onConnectionError={setError}
 				onRegisterRetry={(value) => {
@@ -57,6 +58,24 @@ afterEach(() => {
 });
 
 describe("terminal stream connection landing", () => {
+	// Catches: a rejected handshake after session removal permanently claims the healthy server is unreachable.
+	it("does not report a server outage when the session ends during its initial handshake", async () => {
+		let rejectHandshake!: (reason: Error) => void;
+		stream.subscribe.mockImplementationOnce(
+			() =>
+				new Promise((_resolve, reject) => {
+					rejectHandshake = reject;
+				}),
+		);
+		const [exists, setExists] = createSignal(true);
+		const view = render(() => <Harness sessionExists={exists()} />);
+		await vi.advanceTimersByTimeAsync(0);
+		setExists(false);
+		rejectHandshake(new Error("WebSocket closed before opening (code 1006): session not found"));
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(view.queryByRole("region", { name: "Connection test" })).toBeNull();
+	});
+
 	// Catches: healthy session API hides a failed WebSocket, leaving an apparently frozen terminal forever.
 	it("shows an outage after five seconds of reconnects and removes it when the stream returns", async () => {
 		const view = render(() => <Harness />);

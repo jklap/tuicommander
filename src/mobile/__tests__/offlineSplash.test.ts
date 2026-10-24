@@ -49,6 +49,17 @@ function splash(fetch: ReturnType<typeof vi.fn>) {
 }
 
 describe("offline splash connection test", () => {
+	// Catches: a healthy version endpoint reloads an unavailable mobile route forever.
+	it("does not reload repeatedly when version is reachable but the app document still fails", async () => {
+		const fetch = vi.fn(async (url: string) =>
+			url === "/api/version" ? { ok: true, json: async () => ({ version: "test" }) } : { ok: false, status: 503 },
+		);
+		const { replace } = splash(fetch);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(replace).not.toHaveBeenCalled();
+		expect(document.getElementById("state")!.textContent).toBe("Server unreachable");
+	});
+
 	// Catches: a returned server needs a manual reload or loses the original session deep link.
 	it("shows the address and error, then automatically opens the original destination", async () => {
 		const fetch = vi
