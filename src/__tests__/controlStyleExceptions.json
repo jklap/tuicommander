@@ -357,66 +357,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/Settings.module.css",
-    "story": "2223-32b2",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".navItem\",[\"padding: 3px 16px 5px\",\"border: none\"]]",
-      "[[],\".navItem.active\",[\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".navItemRepo\",[\"padding-left: 24px\"]]",
-      "[[],\".footerReset\",[\"padding: 6px 14px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".footerDone\",[\"padding: 6px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".group select:not([data-form-control]), .group input[type=\\\"text\\\"]:not([data-form-control]), .group input[type=\\\"url\\\"]:not([data-form-control]), .group input[type=\\\"password\\\"]:not([data-form-control]), .group textarea:not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".group select:not([data-form-control]), .group input[type=\\\"text\\\"]:not([data-form-control]), .group input[type=\\\"url\\\"]:not([data-form-control]), .group input[type=\\\"password\\\"]:not([data-form-control])\",[\"height: 32px\"]]",
-      "[[],\".group textarea:not([data-form-control])\",[\"min-height: 100px\"]]",
-      "[[],\".group select:not([data-form-control]):focus, .group input:not([data-form-control]):focus, .group textarea:not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".testBtn\",[\"padding: 4px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".testBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button\",[\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actions button:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".groupDeleteBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".groupsAddBtn\",[\"padding: 10px\",\"border: 1px dashed var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".groupsAddBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".input:not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".input:not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleBtn\",[\"height: 30px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".saveBtn\",[\"padding: 6px 12px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn\",[\"height: 30px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".textBtn\",[\"height: 30px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".textBtn:hover:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".schedulerAdd .testBtn\",[\"height: 32px\"]]",
-      "[[],\".mcpDisclosure\",[\"border: none\",\"padding: 2px 0\"]]",
-      "[[],\".mcpSnippetCopy\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".searchBox input\",[\"padding: 4px 4px 4px 24px\"]]",
-      "[[],\".searchBox:has(.searchClear) input\",[\"padding-right: 22px\"]]",
-      "[[],\".searchClear\",[\"padding: 0 4px\",\"border: none\"]]",
-      "[[],\".searchResult\",[\"padding: 6px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".navItem, .close, .footerDone, .footerReset, .content button\",[\"min-height: 44px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".compactNav select\",[\"min-height: 44px\",\"padding-inline-end: 32px\"]]",
-      "[[],\".applicationPage .testBtn\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".applicationPage .testBtn\",[\"min-height: 44px\"]]",
-      "[[],\".applicationPage .groupDeleteBtn\",[\"min-height: 36px\"]]",
-      "[[],\".catalogueLabel select\",[\"padding-inline-end: 32px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/SettingsPrimitives.module.css",
-    "story": "2224-6593",
-    "rules": [
-      "[[],\".actions button, .status button, .empty button\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".actions button, .status button, .empty button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/fields/fields.module.css",
-    "story": "2225-ef95",
-    "rules": [
-      "[[],\".button\",[\"min-height: var(--control-height, 36px)\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/AgentsTab.module.css",
     "story": "2226-5941",
     "rules": [
@@ -486,8 +426,7 @@
       "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
       "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]",
       "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".dangerBtn:hover\",[\"border-color: var(--error)\"]]"
+      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {

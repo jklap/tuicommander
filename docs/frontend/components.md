@@ -948,3 +948,13 @@ It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
 target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
 the dashed clear target. Give each target an accessible name. Feature CSS may
 arrange the wrapping picker but must not resize its swatches.
+
+Settings shell and shared Settings actions use `ui/Button`; native navigation
+and search-result rows retain their layout marker and click semantics. Settings
+search lays out the icon, shared Input and clear Button as siblings. Select
+arrow clearance belongs to FormControls, not to Settings selectors.
+`SettingPageHeader`, `SectionCard`, `StatusSummary`, `ListRow`, `EmptyState`
+and `DangerZone` action slots arrange their children only. Pass shared UI
+controls into these slots; the containers do not set descendant button sizes.
+`SettingButton`, account add/retry actions and list add/remove actions also
+use `ui/Button`; field CSS owns their width and row layout only.

@@ -9,6 +9,7 @@ import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { ContextualHelp } from "../../ContextualHelp";
@@ -349,7 +350,7 @@ export const RemoteAccessPanel: Component = () => {
 													onInput={(e) => setRaPassword(e.currentTarget.value)}
 													onChange={() => savePassword(raPassword())}
 												/>
-												<button
+												<Button
 													data-non-setting="Change only visibility of the unsaved password input"
 													class={s.toggleBtn}
 													onClick={() => setRaShowPassword(!raShowPassword())}
@@ -371,7 +372,7 @@ export const RemoteAccessPanel: Component = () => {
 															<path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z" />
 														</svg>
 													)}
-												</button>
+												</Button>
 											</div>
 											<p class={s.hint}>
 												{t("services.hint.passwordLeaveBlank", "Leave blank to keep the current password")}
@@ -392,14 +393,14 @@ export const RemoteAccessPanel: Component = () => {
 														<p role="alert" class={layout.discoveryError}>
 															Local IP discovery failed: {String(localIps.error)}
 														</p>
-														<button
+														<Button
 															type="button"
 															class={s.testBtn}
 															data-non-setting="Retry local network discovery"
 															onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}
 														>
 															Retry
-														</button>
+														</Button>
 													</div>
 												}
 											>
@@ -484,7 +485,7 @@ export const RemoteAccessPanel: Component = () => {
 									<code class={s.urlFull} style={{ "font-size": "10px", "word-break": "break-all" }}>
 										{connectUrl()}
 									</code>
-									<button
+									<Button
 										data-non-setting="Copy the displayed connection URL"
 										class={s.copyBtn}
 										onClick={copyUrl}
@@ -500,7 +501,7 @@ export const RemoteAccessPanel: Component = () => {
 												<path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
 											</svg>
 										)}
-									</button>
+									</Button>
 								</div>
 							</div>
 						</Show>
@@ -551,7 +552,7 @@ export const RemoteAccessPanel: Component = () => {
 									<label>{t("services.label.tailscaleStatus", "Status")}</label>
 									<div class={s.mcpStatusRow}>
 										<span class={s.mcpStatusText}>{statusText}</span>
-										<button
+										<Button
 											data-non-setting="Explicit Tailscale runtime discovery"
 											class={s.testBtn}
 											onClick={async () => {
@@ -565,7 +566,7 @@ export const RemoteAccessPanel: Component = () => {
 											title={t("services.action.recheckTailscale", "Recheck Tailscale status")}
 										>
 											{t("services.action.recheck", "Recheck")}
-										</button>
+										</Button>
 									</div>
 									<Show when={ts.state === "Running" && ts.https_enabled && !status()?.tls_active}>
 										<p class={s.hint}>
@@ -597,7 +598,7 @@ export const RemoteAccessPanel: Component = () => {
 					consequence="Regenerating the token revokes shared token URLs and disconnects active remote sessions."
 				>
 					<ContextualHelp label="Regenerate remote token" />
-					<button
+					<Button
 						data-setting-id="app.services.auth.session_token"
 						class={s.testBtn}
 						disabled={regenerating()}
@@ -606,7 +607,7 @@ export const RemoteAccessPanel: Component = () => {
 						{regenerating()
 							? t("services.btn.regenerating", "Regenerating...")
 							: t("services.btn.regenerateToken", "Regenerate Token")}
-					</button>
+					</Button>
 					<p class={s.hint}>
 						{t("services.hint.regenerateToken", "Generates a new token, disconnecting all active remote sessions")}
 					</p>
@@ -701,7 +702,7 @@ export const RemoteAccessPanel: Component = () => {
 								value={relaySessionId()}
 								readOnly
 							/>
-							<button
+							<Button
 								data-non-setting="Rotate the runtime relay-session identity through its existing owner"
 								class={s.toggleBtn}
 								onClick={() => {
@@ -717,7 +718,7 @@ export const RemoteAccessPanel: Component = () => {
 									<path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z" />
 									<path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466" />
 								</svg>
-							</button>
+							</Button>
 						</div>
 						<p class={s.hint}>
 							{t(

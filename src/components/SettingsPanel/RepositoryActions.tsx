@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { t } from "../../i18n";
+import { Button } from "../ui/Button";
 import s from "./Settings.module.css";
 import { DangerZone, SectionCard } from "./SettingsPrimitives";
 import r from "./tabs/RepositoryTabs.module.css";
@@ -37,13 +38,13 @@ export function RepositoryActions(props: {
 					scope={props.path}
 					consequence="Clear repository overrides, including script overrides, and return to inherited defaults. Repository identity and its Design Mode URL are retained."
 				>
-					<button
+					<Button
 						data-non-setting="Reset this repository owner overrides; retain repository identity"
 						class={s.footerReset}
 						onClick={props.onReset}
 					>
 						{t("settings.resetToDefaults", "Reset to Defaults")}
-					</button>
+					</Button>
 				</DangerZone>
 			</div>
 		</div>
