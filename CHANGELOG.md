@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show the cached mobile connection-test landing when the server is unreachable, even with a cached app shell; show an actionable in-app outage state and recover automatically after a resumed or stalled connection (#2294-078f).
 - Require every `+term` in MCP tool search to match the tool name before limiting results; keep exact `select:<name>` queries free of ranked fallback (#2300-6355).
 - Delete file-browser symbolic links without following their targets, including unavailable links, and show deletion errors (#2301-e76f).
 
