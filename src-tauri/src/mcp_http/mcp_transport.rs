@@ -92,7 +92,6 @@ use super::mcp_transport_catalogue::merged_tool_definitions;
 use super::mcp_transport_catalogue::merged_tool_definitions_for_mode;
 #[cfg(test)]
 use super::mcp_transport_catalogue::meta_tool_definitions;
-pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
@@ -110,6 +109,7 @@ use super::mcp_transport_catalogue::tag_repo_connection;
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 #[cfg(test)]
 use super::mcp_transport_catalogue::{handle_get_tool_schema, handle_search_tools};
+pub(crate) use super::mcp_transport_catalogue::{native_capability_catalog, native_tool_catalog};
 #[cfg(test)]
 pub(super) use super::mcp_transport_peer::CLIENT_PID_HEADER;
 use super::mcp_transport_peer::InitializeKind;

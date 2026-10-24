@@ -2531,6 +2531,14 @@ async fn conditional_remote_tracks_live_connections_and_preserves_explicit_denia
             .iter()
             .any(|name| name == "remote")
     );
+    // Settings must distinguish configured availability from a policy denial.
+    let remote = |state: &AppState| {
+        native_capability_catalog(state)
+            .into_iter()
+            .find(|c| c["domain"] == "remote")
+            .unwrap()
+    };
+    assert_eq!(remote(&state)["available"], true);
     crate::remote_runtime::teardown(&state, "first");
     assert!(
         tool_names(&merged_tool_definitions(&state, None, None))
@@ -2560,8 +2568,10 @@ async fn conditional_remote_tracks_live_connections_and_preserves_explicit_denia
         denied["error"],
         "Tool 'remote' is disabled by configuration"
     );
+    assert_eq!(remote(&state)["available"], true);
     state.config.write().mcp_capabilities.denied.clear();
     crate::remote_runtime::teardown(&state, "second");
+    assert_eq!(remote(&state)["available"], false);
     assert!(
         !tool_names(&merged_tool_definitions(&state, None, None))
             .iter()

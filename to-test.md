@@ -2913,3 +2913,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Mobile Sessions: confirm Working / Idle / Awaiting totals and layout on iPad; Finished rows do not count, and Awaiting still opens the first Input row (#2181-c98f).
 
 - [ ] After a backend rebuild/restart, verify disconnected GitHub Settings shows `repo read:project` before login; the shared scope file is compiled into Rust (#2293-8674).
+
+- [ ] MCP Settings domain grouping (#2297-28c1): after a manual `make dev` restart or release rebuild, check the three visible sections, nested child permissions and conditional configuration text. Rust status metadata does not hot-reload.
