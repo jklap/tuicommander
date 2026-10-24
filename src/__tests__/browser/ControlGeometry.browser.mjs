@@ -35,10 +35,10 @@ it('catches padding-sized Button drifting from Select and SegmentedControl at de
     for(const width of [1400,390]) {
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},sessionId);
       const loaded = new Promise(resolve => {const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
-      await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/controlGeometry.html`},sessionId);
+      await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,height:element.getBoundingClientRect().height}))})),clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,height:element.getBoundingClientRect().height}))})):[{size:'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       measurements.push({width,...result});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
@@ -46,7 +46,10 @@ it('catches padding-sized Button drifting from Select and SegmentedControl at de
       console.log(path);
     }
     await writeFile(resolve(directory,'measurements.json'),JSON.stringify(measurements,null,2));
-    for(const result of measurements)for(const row of result.rows)for(const element of row.heights)assert.equal(element.height,result.width<=600?44:row.size==='compact'?22:36,JSON.stringify({width:result.width,row}));
+    for(const result of measurements)for(const row of result.rows) {
+      assert.ok(row.heights.length >= 2, 'The mounted fixture must contain multiple real controls');
+      for(const element of row.heights)assert.equal(element.height,result.width<=600?44:row.size==='compact'?22:36,JSON.stringify({width:result.width,row}));
+    }
   } finally {
     socket?.close();
     if(chrome && chrome.exitCode === null) {chrome.kill();await new Promise(resolve=>chrome.once('exit',resolve));}

@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { terminalsStore } from "../../stores/terminals";
 import { HttpRpcError } from "../../transport";
+import { Button } from "../ui/Button";
 import s from "./StoriesDialog.module.css";
 import type { EditableStory } from "./StoryEditForm";
 
@@ -94,9 +95,9 @@ export function StoryMetadata(props: { project: string; story: EditableStory & {
 			<section aria-label={t("stories.metadata.history", "Transition history")} aria-busy={loading()}>
 				<div class={s.detailHeader}>
 					<h4>{t("stories.metadata.history", "Transition history")}</h4>
-					<button type="button" class={s.loadMore} disabled={loading()} onClick={() => void refresh()}>
+					<Button type="button" class={s.loadMore} disabled={loading()} onClick={() => void refresh()}>
 						{t("stories.metadata.refresh", "Refresh history")}
-					</button>
+					</Button>
 				</div>
 				<Show when={loading()}>
 					<p class={s.muted} role="status">

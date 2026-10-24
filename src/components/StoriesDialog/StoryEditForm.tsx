@@ -1,6 +1,7 @@
 import { createSignal, For, Index, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { StoryRisk, StoryType } from "../../types/stories.gen";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
@@ -213,23 +214,23 @@ export function StoryEditForm(props: {
 								/>
 							</label>
 							<div class={s.inline}>
-								<button
+								<Button
 									type="button"
 									disabled={index === 0}
 									aria-label={t("stories.edit.moveUp", "Move criterion {number} up", { number: String(index + 1) })}
 									onClick={() => moveCriterion(index, -1)}
 								>
 									{t("stories.edit.up", "Up")}
-								</button>
-								<button
+								</Button>
+								<Button
 									type="button"
 									disabled={index === criteria().length - 1}
 									aria-label={t("stories.edit.moveDown", "Move criterion {number} down", { number: String(index + 1) })}
 									onClick={() => moveCriterion(index, 1)}
 								>
 									{t("stories.edit.down", "Down")}
-								</button>
-								<button
+								</Button>
+								<Button
 									type="button"
 									disabled={criteria().length === 1}
 									aria-label={t("stories.edit.removeCriterion", "Remove criterion {number}", {
@@ -238,14 +239,14 @@ export function StoryEditForm(props: {
 									onClick={() => setCriteria((items) => items.filter((_, position) => position !== index))}
 								>
 									{t("stories.remove", "Remove")}
-								</button>
+								</Button>
 							</div>
 						</div>
 					)}
 				</Index>
-				<button type="button" onClick={() => setCriteria((items) => [...items, ""])}>
+				<Button type="button" onClick={() => setCriteria((items) => [...items, ""])}>
 					{t("stories.edit.addCriterion", "Add criterion")}
-				</button>
+				</Button>
 			</fieldset>
 			<label>
 				{t("stories.edit.scope", "File scope (one path per line)")}
@@ -283,12 +284,12 @@ export function StoryEditForm(props: {
 				</p>
 			</Show>
 			<div class={s.inline}>
-				<button type="submit" disabled={props.busy || !Object.keys(patch()).length}>
+				<Button variant="primary" type="submit" disabled={props.busy || !Object.keys(patch()).length}>
 					{t("stories.edit.save", "Save")}
-				</button>
-				<button type="button" disabled={props.busy} onClick={props.onCancel}>
+				</Button>
+				<Button type="button" disabled={props.busy} onClick={props.onCancel}>
 					{t("stories.edit.cancel", "Cancel")}
-				</button>
+				</Button>
 			</div>
 		</form>
 	);
