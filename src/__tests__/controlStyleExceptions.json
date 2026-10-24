@@ -42,14 +42,6 @@
     ]
   },
   {
-    "file": "src/components/ChangelogModal/ChangelogModal.module.css",
-    "story": "2187-1cca",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".btn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ClaudeUsageDashboard/ClaudeUsageDashboard.module.css",
     "story": "2188-225d",
     "rules": [
