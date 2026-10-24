@@ -681,13 +681,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/ConnectionBanner.module.css",
-    "story": "2272-185c",
-    "rules": [
-      "[[],\".action\",[\"padding: 4px 12px\",\"border: 1px solid currentColor\",\"border-radius: 6px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/HeroMetrics.module.css",
     "rules": [
       "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
