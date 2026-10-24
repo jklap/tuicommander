@@ -1370,6 +1370,9 @@ struct ChunkProcessor {
     /// the snapshot reuses the row `String` allocations instead of allocating
     /// one per visible row on every chunk that moved anything.
     screen_buf: Vec<String>,
+    /// Deterministically interleave foreground retirement after reader sampling.
+    #[cfg(test)]
+    after_identity_sample: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// A terminal that enters the alternate screen this soon after spawn is treated
@@ -1472,6 +1475,8 @@ impl ChunkProcessor {
             codex_approval_question: None,
             codex_approval_canceled: false,
             screen_buf: Vec::new(),
+            #[cfg(test)]
+            after_identity_sample: None,
         }
     }
 
@@ -1680,6 +1685,11 @@ impl ChunkProcessor {
             .session_states
             .get(session_id)
             .and_then(|s| s.agent_type.clone());
+
+        #[cfg(test)]
+        if let Some(after_sample) = self.after_identity_sample.take() {
+            after_sample();
+        }
 
         // The screen snapshot is refilled in place: `screen_rows()` is
         // `prev_rows.clone()`, one allocation per visible row per chunk. Taking
@@ -2972,6 +2982,26 @@ impl ChunkProcessor {
 
             let emit_event = resolved.as_ref().unwrap_or(event);
 
+            // Serialize agent-owned waits against foreground retirement. Parsing
+            // uses a pre-grid identity snapshot; shell return may revoke it while
+            // this chunk is being processed. Enqueue under the same identity lock
+            // as exit withdrawal so neither transport can re-arm a retired agent.
+            let _identity_guard = if agent_type.is_some()
+                && matches!(
+                    emit_event,
+                    ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
+                ) {
+                let Some(session) = state.session_maps.session_states.get(session_id) else {
+                    continue;
+                };
+                if session.agent_type != agent_type {
+                    continue;
+                }
+                Some(session)
+            } else {
+                None
+            };
+
             // Serialize once, reuse for both broadcast and Tauri IPC
             if let Ok(mut json) = serde_json::to_value(emit_event) {
                 if let Some(object) = json.as_object_mut() {
@@ -3894,6 +3924,9 @@ pub(crate) fn spawn_reader_thread(
             if gate.as_ref().is_some_and(|g| g.is_paused()) {
                 stuck_since = None;
                 if !watchers {
+                    // Keep real damage/debt pending for a late receipt. ACKs
+                    // only reopen the gate; they must not manufacture damage.
+                    ticker_dirty.store(true, Ordering::Relaxed);
                     if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
                         && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
                     {
@@ -3956,6 +3989,10 @@ pub(crate) fn spawn_reader_thread(
                     })
                     .unwrap_or(false)
             };
+            // DEFERRED (2026-10-23) — native echo still exceeds one frame when
+            // the rolling input budget is spent. Receipt/repair and retry fixes
+            // preserve the deliberate bulk-protection floors; changing that
+            // budget needs a separate latency/throughput/heartbeat trade-off.
             // Pick the send-rate floor: typing-under-load (~20 fps) wins, else the
             // sustained-animation floor (~30 fps), else full 60 fps for short bursts.
             // A sync-timeout flush is a protocol deadline, not animation — the
@@ -3982,8 +4019,9 @@ pub(crate) fn spawn_reader_thread(
             // The WebView missed frames while its gate was closed and has caught
             // up: those rows went to the WebSocket subscribers and left the shared
             // damage, so a delta now would land on a row map with holes in it.
-            // Pay the debt with a full frame private to this channel — it consumes
-            // no damage, so the delta below still reaches everyone else.
+            // The private repair makes the desktop current for this snapshot.
+            // Publish its delta to browser watchers only: offering it to desktop
+            // again would close on the repair and recreate the same debt.
             let desktop_owed_full_frame = gate
                 .as_ref()
                 .is_some_and(|g| g.is_open() && g.take_missed());
@@ -3992,8 +4030,6 @@ pub(crate) fn spawn_reader_thread(
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid) {
                     apply_scroll_target(&mut g, target);
                 }
-                // Cut before the delta, from the same locked state, so the rows the
-                // delta carries are already in it.
                 let repair = desktop_owed_full_frame.then(|| g.serialize_full_frame());
                 let frame = g.serialize_dirty_rows();
                 drop(g);
@@ -4003,10 +4039,15 @@ pub(crate) fn spawn_reader_thread(
                 }
                 #[cfg(not(feature = "desktop"))]
                 let _ = repair;
-                send_grid_frame(&ticker_state, &ticker_sid, frame);
+                send_grid_frame_to_consumers(
+                    &ticker_state,
+                    &ticker_sid,
+                    frame,
+                    !desktop_owed_full_frame,
+                );
                 last_sent = Some(now);
                 if let Some(request) = priority_request {
-                    ticker_priority.sent(request, now, priority_bypass);
+                    priority_retry = ticker_priority.sent(request, now, priority_bypass);
                 }
             }
         }
@@ -4355,6 +4396,18 @@ pub(crate) fn send_grid_frame(
     session_id: &str,
     frame: crate::grid_gate::GridFrame,
 ) {
+    send_grid_frame_to_consumers(state, session_id, frame, true);
+}
+
+/// A private repair already contains this delta's desktop snapshot. Publishing
+/// that delta must still advance the browser stream, but cannot create a second
+/// desktop delivery or missed-frame debt for content it has just received.
+fn send_grid_frame_to_consumers(
+    state: &AppState,
+    session_id: &str,
+    frame: crate::grid_gate::GridFrame,
+    send_desktop: bool,
+) {
     if frame.is_empty() {
         return;
     }
@@ -4363,7 +4416,7 @@ pub(crate) fn send_grid_frame(
     // no desktop channel, so the watch can take the original; cloning first and
     // then finding nothing to hand the original to was pure copy.
     #[cfg(feature = "desktop")]
-    let desktop_wants_it = desktop_grid_visible(state, session_id);
+    let desktop_wants_it = send_desktop && desktop_grid_visible(state, session_id);
     #[cfg(not(feature = "desktop"))]
     let desktop_wants_it = false;
 
@@ -4391,6 +4444,10 @@ pub(crate) fn send_grid_frame(
         }
         None => bytes,
     };
+
+    if !send_desktop {
+        return;
+    }
 
     #[cfg(feature = "desktop")]
     {
@@ -4427,10 +4484,9 @@ pub(crate) fn send_grid_frame(
 /// Hand `bytes` to the desktop IPC channel and count the frame against the
 /// delivery gate. No-op when the session has no desktop channel.
 ///
-/// Separate from [`send_grid_frame`] because the two callers differ in what the
-/// frame IS: the broadcast path sends the shared delta to every transport, while
-/// the ticker's stall repair sends a full frame to this channel and to nothing
-/// else.
+/// The broadcast path publishes to browser watchers before handing the desktop
+/// copy here. A private recovery frame uses this channel without the browser
+/// stream; its matching delta is then published only to browser watchers.
 #[cfg(feature = "desktop")]
 fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
     let Some(ch) = state.grid.channels.get(session_id) else {

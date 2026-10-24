@@ -466,6 +466,14 @@ Each target uses the format its tool reads:
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
 
+Codex filters the environment of its stdio MCP servers. Its TUIC entry forwards
+`TUIC_SESSION`, `TUIC_SOCKET`, `TUIC_APP_INSTANCE` and `TUIC_CONFIG_DIR` from the
+local process environment. Identity alone is not sufficient: without the endpoint
+selectors, an agent launched by a named instance can connect its bridge to the
+default instance. Installation repairs incomplete allowlists even when the bridge
+command already matches. Existing variables and local-source object entries are
+preserved; Grok does not receive the Codex-only allowlist.
+
 
 **A target is written only when it is installed.** The writer creates every
 missing parent directory, so an unconditional pass used to create `~/.cursor/`,
@@ -930,7 +938,7 @@ The settings owner exposes `/root` as a structured bounded geometry value. Group
 
 The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
-`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions".
+`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions". When mdkb is on PATH or in a known install directory (stat-only check, cached per process, reset by `write_files` and by `install_mdkb`/`uninstall_mdkb`), `launch_instructions::MDKB_RULE` is emitted after the modules and before additions.
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
@@ -1643,6 +1651,8 @@ visible; it does not resume every inactive tab.
 ### MCP work-item writes
 
 `mcp_work_item_writes` in `config.json` defaults to `false`, including when the field is absent in an older file. It permits only the `repo work_item_act` comment and transition operations. Reads need no opt-in. Use the existing configuration save surface to apply it live, or edit the file with the app stopped and restart. Supplying a flag in a work-item request cannot enable writes.
+
+`mcp_call_audit_enabled` in `config.json` gates recording and display of the MCP call audit. Default `true` when built with debug assertions, `false` otherwise, including when the field is absent from an older file. Live: no restart.
 
 ### Background tray and menu-bar icon
 

@@ -251,5 +251,18 @@
       "BREAKING: MCP per-tool switches are now capability groups and old tool aliases are gone, so reconnect clients after updating."
     ],
     "date": "2026-10-22"
+  },
+  "2.0.0-beta.2": {
+    "highlights": [
+      "Stories now have an Edit form, append-only notes, detailed history, and status and type filters with a Kanban view.",
+      "You can edit plans in place with Save and Cancel, and you can detach Plans and Stories into a separate window.",
+      "Stories move to QA by themselves when only manual checks remain, so human checks stay apart from development work.",
+      "Mobile now shows ego question controls, session quota and cost, faster Progress lists, and no gap below the iOS composer.",
+      "Terminal Chat opens faster, stays readable in dark and light themes, and hides agent-mail wake notices.",
+      "Any agent connected through MCP can now send Telegram notifications, and Settings now shows the MCP call audit.",
+      "Orphan cleanup now skips detached and temporary worktrees, and Delete clearly says that the workspace is archived.",
+      "Stopped MCP servers restart automatically, and Tailscale HTTPS status and certificates now work reliably on macOS."
+    ],
+    "date": "2026-10-24"
   }
 }

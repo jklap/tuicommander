@@ -253,6 +253,11 @@ export function OutputView(props: OutputViewProps) {
 	);
 
 	onMount(async () => {
+		// Keyboard and rotation resize the clip without delivering new PTY output.
+		// Reuse the live-output follow path so detached readers and touches stay put.
+		const resizeObserver = new ResizeObserver(() => scrollToBottom());
+		if (containerEl) resizeObserver.observe(containerEl);
+		onCleanup(() => resizeObserver.disconnect());
 		containerEl?.addEventListener("scroll", handleScroll, { passive: true });
 		containerEl?.addEventListener("touchstart", handleTouchStart, { passive: true });
 		containerEl?.addEventListener("touchend", handleTouchEnd, { passive: true });
@@ -427,13 +432,20 @@ export function OutputView(props: OutputViewProps) {
 							{label}
 						</a>
 					) : (
-						<button
-							type="button"
+						<span
+							role="button"
+							tabIndex={0}
 							class={styles.fileLink}
 							onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									event.currentTarget.click();
+								}
+							}}
 						>
 							{label}
-						</button>
+						</span>
 					),
 				);
 				offset = to;

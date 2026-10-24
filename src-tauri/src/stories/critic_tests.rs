@@ -22,6 +22,7 @@ fn plan(store: &StoryStore, title: &str) -> Plan {
 
 fn new_story(plan_id: &str, title: &str) -> NewStory {
     NewStory {
+        story_type: None,
         plan_id: plan_id.into(),
         title: title.into(),
         criteria: vec!["Done".into()],

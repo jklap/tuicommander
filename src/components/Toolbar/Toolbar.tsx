@@ -12,7 +12,6 @@ import type { PrNotification } from "../../stores/prNotifications";
 import { type PrNotificationType, prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
-import { storiesUi } from "../../stores/storiesUi";
 import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { updaterStore } from "../../stores/updater";
@@ -26,6 +25,7 @@ import type { SidebarDensityMode } from "../../utils/sidebarDensity";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
+import { StoriesButton } from "./StoriesButton";
 import s from "./Toolbar.module.css";
 
 function relativeAge(timestamp: number): string {
@@ -481,17 +481,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 
 			<div class={s.right}>
 				<Show when={props.repoPath}>
-					<button
-						type="button"
-						class={s.bell}
-						title={t("stories.title", "Plans and Stories")}
-						aria-label={t("stories.title", "Plans and Stories")}
-						onClick={() => storiesUi.open(props.repoPath)}
-					>
-						<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true">
-							<path d="M2 2h9a2 2 0 0 1 2 2v10H4a2 2 0 0 1-2-2V2Zm2 2v8h7V4H4Zm1 2h5v1H5V6Zm0 3h5v1H5V9Zm8-5h1v10h-1V4Z" />
-						</svg>
-					</button>
+					<StoriesButton repoPath={props.repoPath as string} />
 				</Show>
 				{/* Notification group: smart prompts + last-item pill + bell.
 				    The pill is a preview of the bell's newest notification, so the two

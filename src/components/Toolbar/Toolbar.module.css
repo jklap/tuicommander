@@ -613,3 +613,40 @@
   height: 32px;
   min-height: 32px;
 }
+
+/* Plans and Stories button: widens from the bare 26px square into a pill while plans are active. */
+.bell.storiesPillBtn {
+  width: auto;
+  gap: 6px;
+  padding: 0 7px;
+}
+
+.storiesPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.storiesGlyph {
+  color: var(--accent);
+  margin-right: -1px;
+}
+
+.storiesTrack {
+  width: 24px;
+  height: 3px;
+  margin-left: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.storiesFill {
+  display: block;
+  height: 100%;
+  background: var(--success);
+}

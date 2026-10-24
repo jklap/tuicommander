@@ -10,6 +10,7 @@ import { ContextualHelp } from "../../ContextualHelp";
 import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
+import { McpAuditPanel } from "./McpAuditPanel";
 import layout from "./ServiceRestyle.module.css";
 import { type AppConfig, type McpCapability, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
@@ -31,6 +32,7 @@ export const LocalMcpPanel: Component = () => {
 	const [migrationUnknownTools, setMigrationUnknownTools] = createSignal<string[]>([]);
 	const [settingsEnabled, setSettingsEnabled] = createSignal(false);
 	const [collapseTools, setCollapseTools] = createSignal<boolean>(false);
+	const [callAuditEnabled, setCallAuditEnabled] = createSignal(false);
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
 	const [snippetCopied, setSnippetCopied] = createSignal(false);
@@ -49,6 +51,7 @@ export const LocalMcpPanel: Component = () => {
 				setMigrationUnknownTools(config.mcp_capabilities.migration_unknown_tools);
 				setSettingsEnabled(config.settings_mcp_enabled ?? false);
 				setCollapseTools(config.collapse_tools ?? false);
+				setCallAuditEnabled(config.mcp_call_audit_enabled ?? false);
 				setNativeToolsLoaded(true);
 			},
 		}),
@@ -218,6 +221,37 @@ export const LocalMcpPanel: Component = () => {
 							);
 						}}
 					</For>
+				</Show>
+			</SectionCard>
+			<SectionCard title={t("mcpAudit.title", "Call audit")}>
+				<SettingRow
+					label={t("mcpAudit.toggle", "Record MCP call outcomes")}
+					hint={t(
+						"mcpAudit.toggleHint",
+						"Keeps a body-free log of recent agent tool calls (operation, outcome, size, effect) in memory. Off by default in release builds.",
+					)}
+				>
+					{(id, descriptionId) => (
+						<input
+							data-setting-id="app.mcp_call_audit_enabled"
+							id={id}
+							aria-describedby={descriptionId()}
+							class={s.rowSwitch}
+							type="checkbox"
+							checked={callAuditEnabled()}
+							onChange={async (e) => {
+								const enabled = e.currentTarget.checked;
+								// The view fetches on mount: persist first, or it reads "disabled".
+								await saveConfigField((c) => {
+									c.mcp_call_audit_enabled = enabled;
+								});
+								setCallAuditEnabled(enabled);
+							}}
+						/>
+					)}
+				</SettingRow>
+				<Show when={callAuditEnabled()}>
+					<McpAuditPanel />
 				</Show>
 			</SectionCard>
 		</div>

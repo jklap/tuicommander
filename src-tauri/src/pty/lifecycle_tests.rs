@@ -2278,7 +2278,7 @@ async fn a_resize_reflows_off_the_calling_thread() {
     let caller = std::thread::current().id();
     // The session has no PTY, so this ends in "Session not found" — after the
     // grid reflow, which is precisely the work that must not run here.
-    let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120).await;
+    let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120, "test").await;
 
     assert!(resize_thread(sid).is_some(), "the reflow never ran at all");
     assert_ne!(
@@ -2293,8 +2293,8 @@ fn resize_rejects_zero_dims() {
     let state = crate::state::tests_support::make_test_app_state();
     // rows==0 / cols==0 are rejected before any lock, grid, or PTY work — the
     // (0,0) pair is reserved as the "never applied" sentinel inside the lock.
-    assert!(resize_session_core(&state, "s", 0, 80).is_err());
-    assert!(resize_session_core(&state, "s", 24, 0).is_err());
+    assert!(resize_session_core(&state, "s", 0, 80, "test").is_err());
+    assert!(resize_session_core(&state, "s", 24, 0, "test").is_err());
     // A rejected resize must not even create a resize_locks entry.
     assert!(!state.session_maps.resize_locks.contains_key("s"));
 }
@@ -2310,23 +2310,17 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     // Same dims → no-op returning None WITHOUT touching the (absent) session.
     // Without the guard this would fall through to sessions.get and fail with
     // "Session not found", so Ok(None) proves the guard short-circuited first.
-    assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
+    assert_eq!(resize_session_core(&state, "s", 24, 80, "test"), Ok(None));
 }
 
+/// Catches treating a matching grid as proof of a successful resize with no PTY.
 #[test]
-fn resize_seeds_applied_from_grid_and_noops_at_startup_dims() {
+fn resize_matching_grid_without_pty_reports_missing_session() {
     let state = crate::state::tests_support::make_test_app_state();
-    // Grid exists at the startup dims but resize_locks is empty → the lock
-    // opens at the (0,0) never-applied sentinel.
     seed_vt_grid(&state, "s", 24, 80);
-    // A first resize matching only the startup dims must seed *applied from
-    // the live grid and then no-op — no gratuitous SIGWINCH, no session touch.
-    assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
-    // The seed must have populated resize_locks with the live grid dims.
     assert_eq!(
-        *state.session_maps.resize_locks.get("s").unwrap().lock(),
-        (24, 80),
-        "first resize must seed the last-applied dims from the live grid"
+        resize_session_core(&state, "s", 24, 80, "test"),
+        Err("Session not found: s".to_string())
     );
 }
 
@@ -2369,6 +2363,72 @@ fn spawn_real_pty_session(state: &crate::state::AppState, sid: &str, rows: u16, 
     seed_vt_grid(state, sid, rows, cols);
 }
 
+/// Catches a grid-seeded no-op that leaves the child's kernel winsize unchanged.
+#[cfg(unix)]
+#[test]
+fn resize_first_request_matching_legacy_grid_reaches_child() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let observed = scratch.path().join("child-winsize");
+    let gate = scratch.path().join("resize-gate");
+    let gate_cstr = std::ffi::CString::new(gate.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: the C string is valid and the FIFO is private to this test.
+    assert_eq!(unsafe { libc::mkfifo(gate_cstr.as_ptr(), 0o600) }, 0);
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    // The child queries its own controlling terminal only after the resize.
+    cmd.args([
+        "-c",
+        "read answer < \"$2\"; stty size > \"$1\"",
+        "winsize-probe",
+    ]);
+    cmd.arg(&observed);
+    cmd.arg(&gate);
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    let writer = pair.master.take_writer().unwrap();
+    let sid = "resize-first-legacy-grid";
+    state.session_maps.sessions.insert(
+        sid.to_string(),
+        Mutex::new(PtySession {
+            launch_receipt: None,
+            writer: Arc::new(Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            initial_cwd: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            display_name_from_spawn: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }),
+    );
+    seed_vt_grid(&state, sid, 24, 220);
+
+    let result = resize_session_core(&state, sid, 24, 220, "test");
+    let entry = state.session_maps.sessions.get(sid).unwrap();
+    let mut session = entry.lock();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&gate)
+        .unwrap()
+        .write_all(b"probe\n")
+        .unwrap();
+    assert!(session._child.wait().unwrap().success());
+    assert!(result.is_ok(), "resize failed: {result:?}");
+    let size = std::fs::read_to_string(&observed).unwrap();
+    assert_eq!(size.split_whitespace().collect::<Vec<_>>(), ["24", "220"]);
+}
+
 /// CONC-B invariant: two concurrent resizes with different dims must leave the
 /// grid AND the PTY at the same dimensions — both equal to whichever call
 /// acquired the per-session lock last — never a grid/PTY mismatch. Stress the
@@ -2389,12 +2449,12 @@ fn concurrent_differing_resizes_leave_grid_and_pty_consistent() {
         let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
         let t1 = std::thread::spawn(move || {
             b1.wait();
-            let _ = resize_session_core(&s1, sid, A.0, A.1);
+            let _ = resize_session_core(&s1, sid, A.0, A.1, "test");
         });
         let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
         let t2 = std::thread::spawn(move || {
             b2.wait();
-            let _ = resize_session_core(&s2, sid, B.0, B.1);
+            let _ = resize_session_core(&s2, sid, B.0, B.1, "test");
         });
         t1.join().unwrap();
         t2.join().unwrap();

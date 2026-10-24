@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Index, Show } from "solid-js";
+import { createMemo, createSignal, For, Index, mapArray, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { rpc } from "../../transport";
 import { HeroMetrics } from "../components/HeroMetrics";
@@ -14,6 +14,7 @@ import {
 } from "../utils/recentSessions";
 import { ptysLast } from "../utils/sessionKind";
 import { nestUnderParents, parentLabel } from "../utils/sessionTree";
+import { useDebouncedStatus } from "../utils/useDebouncedStatus";
 import styles from "./SessionsScreen.module.css";
 
 interface SessionsScreenProps {
@@ -28,6 +29,22 @@ interface SessionsScreenProps {
 const PULL_THRESHOLD = 60;
 
 export function SessionsScreen(props: SessionsScreenProps) {
+	// Key by session id: polling replaces session objects, but must not reset the busy hold.
+	const sessionsById = createMemo(() => new Map(props.sessions.map((session) => [session.session_id, session])));
+	const sessionStatuses = mapArray(
+		() => [...sessionsById().keys()],
+		(sessionId) => ({ sessionId, status: useDebouncedStatus(() => sessionsById().get(sessionId)!) }),
+	);
+	const statusById = createMemo(() => new Map(sessionStatuses().map(({ sessionId, status }) => [sessionId, status])));
+	const counts = createMemo(() => {
+		const totals = { busy: 0, idle: 0, question: 0 };
+		for (const { status } of sessionStatuses()) {
+			const value = status();
+			if (value === "sub-tasks") totals.busy++;
+			else if (value === "busy" || value === "idle" || value === "question") totals[value]++;
+		}
+		return totals;
+	});
 	const [pulling, setPulling] = createSignal(false);
 	const [pullY, setPullY] = createSignal(0);
 	const [showNewSession, setShowNewSession] = createSignal(false);
@@ -243,10 +260,11 @@ export function SessionsScreen(props: SessionsScreenProps) {
 
 			<Show when={props.sessions.length > 0}>
 				<HeroMetrics
-					activeCount={props.sessions.length}
-					awaitingCount={props.sessions.filter((s) => s.state?.awaiting_input).length}
+					workingCount={counts().busy}
+					idleCount={counts().idle}
+					awaitingCount={counts().question}
 					onAwaitingClick={() => {
-						const waiting = props.sessions.find((session) => session.state?.awaiting_input);
+						const waiting = props.sessions.find((session) => statusById().get(session.session_id)?.() === "question");
 						if (waiting) props.onSelectSession(waiting.session_id);
 					}}
 				/>
@@ -290,6 +308,7 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				{(row) => (
 					<SessionCard
 						session={row.session}
+						status={statusById().get(row.session.session_id)}
 						depth={row.depth}
 						lastInGroup={row.last}
 						spawnedBy={row.session.parent_session ? parentLabel(rows(), row.session) : undefined}

@@ -1561,7 +1561,11 @@ pub(crate) async fn spawn_agent(
     );
     state.grid.vt_log_buffers.insert(
         session_id.clone(),
-        Mutex::new(state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY)),
+        Mutex::new(state.new_vt_log_buffer(
+            pty_config.rows,
+            pty_config.cols,
+            VT_LOG_BUFFER_CAPACITY,
+        )),
     );
     state
         .session_maps

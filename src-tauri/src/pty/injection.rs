@@ -370,7 +370,7 @@ pub(crate) fn blocked_on_confident_question(state: &AppState, session_id: &str) 
 }
 
 pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
-    submission_ready(state, session_id, false)
+    submission_ready(state, session_id, false, false)
 }
 
 fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
@@ -381,7 +381,12 @@ fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
         .is_some_and(|session| session.awaiting_input)
 }
 
-fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bool {
+fn submission_ready(
+    state: &AppState,
+    session_id: &str,
+    human_reply: bool,
+    queued_user_command: bool,
+) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
     }
@@ -402,12 +407,21 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
         .get(session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
         .unwrap_or(false);
+    // A queued user command answers a progress-tool wait, not a native dialog.
+    // Read the source from ranked evidence, never infer ownership from a screen.
+    let progress_reply = queued_user_command
+        && state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"));
     let blocked_on_question = state
         .session_maps
         .session_states
         .get(session_id)
-        .map(|s| s.question_confident)
-        .unwrap_or(false);
+        .is_some_and(|session| {
+            session.choice_prompt.is_some() || (session.question_confident && !progress_reply)
+        });
     // A native question may keep its shell BUSY. Human answers are not idle
     // work: the awaiting flag itself grants this one explicit input path.
     let answering_question = human_reply && human_reply_waiting(state, session_id);
@@ -450,15 +464,16 @@ pub(super) fn claim_idle_for_injection(
     state: &AppState,
     session_id: &str,
 ) -> Option<InjectionClaim> {
-    claim_idle_for_submission(state, session_id, false)
+    claim_idle_for_submission(state, session_id, false, false)
 }
 
 fn claim_idle_for_submission(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
+    queued_user_command: bool,
 ) -> Option<InjectionClaim> {
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, queued_user_command) {
         return None;
     }
     if human_reply && human_reply_waiting(state, session_id) {
@@ -690,7 +705,7 @@ fn agent_composer_rejection(
     {
         return Some(("awaiting_input", "empty"));
     }
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, false) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -793,7 +808,7 @@ pub(super) fn agent_submission_rejection(
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, false) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -874,7 +889,7 @@ fn write_submission_to_pty(
             pending: summarize_pending_injections(state, session_id),
         };
     }
-    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply) else {
+    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, false) else {
         let (reason, composer_state) = agent_submission_rejection(state, session_id, human_reply)
             .unwrap_or(("claim_lost", "unknown"));
         return AgentSubmissionWrite::Rejected {
@@ -1360,6 +1375,37 @@ fn run_claimed_injection(
 pub(crate) const PEER_MAIL_WAKE: &str =
     "[TUIC] message available — read it with: agent action=inbox";
 
+pub(super) const URGENT_NOTICE_NAME_MAX_CHARS: usize = 40;
+
+/// Label a sender in the urgent notice. Display names are peer-controlled
+/// prompt text, so the name (then the TUIC-generated terminal alias) is shown
+/// only when it is one token of `[A-Za-z0-9._-]` and at most
+/// `URGENT_NOTICE_NAME_MAX_CHARS` long. `@` is excluded: it opens the file
+/// picker in Claude and Codex composers. Anything else falls back to the
+/// validated UUID, or `unknown-peer` when that is not a UUID either.
+pub(super) fn urgent_notice_sender_label(
+    sender_identity: &str,
+    sender_name: &str,
+    sender_alias: Option<&str>,
+) -> String {
+    let single_token = |text: &str| {
+        !text.is_empty()
+            && text.chars().count() <= URGENT_NOTICE_NAME_MAX_CHARS
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if single_token(sender_name) {
+        return sender_name.to_string();
+    }
+    if let Some(alias) = sender_alias.filter(|alias| single_token(alias)) {
+        return alias.to_string();
+    }
+    uuid::Uuid::parse_str(sender_identity)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| "unknown-peer".to_string())
+}
+
 /// Submit an inbox pointer into a busy Claude Code, Codex, or ego composer.
 /// Claude/Codex live probes (2026-09-27) show that Enter queues the line for the
 /// next tool boundary. ego's busy admission durably queues plain Enter and
@@ -1370,6 +1416,7 @@ pub(crate) fn deliver_urgent_mail_notice(
     state: &AppState,
     session_id: &str,
     sender_identity: &str,
+    sender_name: &str,
 ) -> Result<(), &'static str> {
     if !state.session_maps.sessions.contains_key(session_id) {
         return Err("recipient_exited");
@@ -1403,13 +1450,17 @@ pub(crate) fn deliver_urgent_mail_notice(
     } else if !should_inject_now(state, session_id) {
         return Err("recipient_not_ready");
     }
-    // Display names are peer-controlled prompt text. Use only a validated
-    // identity in the notice; the inbox keeps the human-facing sender name.
-    let sender_id = uuid::Uuid::parse_str(sender_identity)
-        .map(|id| id.to_string())
-        .unwrap_or_else(|_| "unknown-peer".to_string());
+    let sender_alias = state.live_pty_for_peer(sender_identity).and_then(|pty| {
+        state
+            .session_maps
+            .term_aliases
+            .get(&pty)
+            .map(|alias| alias.value().clone())
+    });
+    let sender_label =
+        urgent_notice_sender_label(sender_identity, sender_name, sender_alias.as_deref());
     let notice = format!(
-        "URGENT mail from {sender_id}: read agent inbox before your next step (agent action=inbox)"
+        "URGENT mail from {sender_label}: read agent inbox before your next step (agent action=inbox)"
     );
     let Some(claim) = claim_composer_for_human_input(state, session_id) else {
         return Err(if has_partial_user_input(state, session_id) {
@@ -2216,7 +2267,21 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         .as_ref()
         .and_then(|session| session.shell_state.as_deref())
         .unwrap_or("unknown");
-    let claim = match claim_idle_for_injection(state, session_id) {
+    // Bind the permission to this exact FIFO head. A concurrent removal must
+    // not transfer a user reply's permission to a server-authored notice.
+    let Some((head_id, queued_user_command)) =
+        state.pending_injections.get(session_id).and_then(|queue| {
+            queue.front().map(|head| {
+                (
+                    head.id(),
+                    matches!(head, crate::state::PendingInjection::UserCommand { .. }),
+                )
+            })
+        })
+    else {
+        return;
+    };
+    let claim = match claim_idle_for_submission(state, session_id, false, queued_user_command) {
         Some(claim) => claim,
         None => {
             let defer_reason = if !session_is_agent(state, session_id) {
@@ -2250,8 +2315,13 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     let pending = state
         .pending_injections
         .get_mut(session_id)
-        .and_then(|mut queue| queue.pop_front());
+        .and_then(|mut queue| {
+            (queue.front().is_some_and(|head| head.id() == head_id))
+                .then(|| queue.pop_front())
+                .flatten()
+        });
     let Some(injection) = pending else {
+        rollback_injection_claim(state, session_id, claim);
         tracing::info!(
             session_id,
             agent_state,
@@ -2274,6 +2344,14 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         outcome,
         ClaimedInjectionKind::Message,
     );
+    if queued_user_command && matches!(outcome, InjectionOutcome::Submitted) {
+        // Retract only the progress-owned wait. If a native dialog replaced it
+        // during delivery, the accumulator preserves that dialog's evidence.
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({"type": "progress-superseded"}).into(),
+        });
+    }
     let (typed, submitted, enter_separate) = match outcome {
         InjectionOutcome::Submitted => ("yes", true, "sent"),
         InjectionOutcome::NotStarted(_) => ("no", false, "not_sent"),

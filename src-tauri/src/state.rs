@@ -2335,6 +2335,8 @@ pub struct AppState {
     /// Updated by `start_server` after successful bind.
     #[cfg(unix)]
     pub(crate) bound_socket_path: parking_lot::RwLock<std::path::PathBuf>,
+    /// A live TLS serving task owns the strong token; capability detection does not.
+    pub(crate) tls_listener: parking_lot::RwLock<std::sync::Weak<()>>,
     /// Tailscale daemon state (detected at server startup)
     pub(crate) tailscale_state: parking_lot::RwLock<crate::tailscale::TailscaleState>,
     /// Push notification subscription store
@@ -3813,6 +3815,7 @@ impl AppState {
             orchestrator_peers: DashSet::new(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
+            tls_listener: parking_lot::RwLock::new(std::sync::Weak::new()),
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
@@ -4305,13 +4308,13 @@ pub(crate) struct GitCacheState {
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
-    pub(crate) worktree_paths:
-        GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
-    /// Repos that returned null from GitHub GraphQL (not found / no access).
+    pub(crate) worktree_paths: GitCache<crate::worktree::WorktreeInventory>,
+    /// Repos explicitly reported NOT_FOUND by GitHub GraphQL.
     /// Keyed by "owner/name", value is the cooldown expiry time.
-    /// Excluded from batch queries until the cooldown expires (1 hour).
+    /// Excluded from batch queries until the cooldown expires (24 hours).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
     /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
@@ -4333,6 +4336,7 @@ impl GitCacheState {
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
@@ -5128,7 +5132,19 @@ impl AppState {
                         .session_maps
                         .silence_states
                         .get(session_id)
-                        .map(|sl| sl.lock().record_awaiting(rank, source))
+                        .map(|sl| {
+                            let mut silence = sl.lock();
+                            // Progress is a conversational wait, not ownership of
+                            // native dialog controls. A late report must not
+                            // relabel a live approval as a queued-answer target.
+                            if source == "progress-blocked"
+                                && silence.awaiting_rank() == Some(crate::pty::EvidenceRank::Protocol)
+                                && silence.awaiting_source() != Some("progress-blocked")
+                            {
+                                return false;
+                            }
+                            silence.record_awaiting(rank, source)
+                        })
                         .unwrap_or(true)
                 });
                 let push_ready = matches!(event_type, "question" | "choice-prompt") && {
