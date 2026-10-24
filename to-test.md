@@ -2909,3 +2909,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a Rust rebuild, archive and restore a workflow-integrated Done story. Confirm the restored plan stays Done and its dependent stays Ready; a story-root workflow must still allow archival of an unrelated unclaimed sibling.
 
 - [x] Story 2173: claimed story metadata, managed transition history and New story plan-step persistence. _(verified: isolated agent-test-2173 API and DOM evidence in `~/Gits/.tmp/results/tuic-2173-live/`; screenshot unavailable because no agent-test window was found.)_
+
+- [ ] Mobile Sessions: confirm Working / Idle / Awaiting totals and layout on iPad; Finished rows do not count, and Awaiting still opens the first Input row (#2181-c98f).
