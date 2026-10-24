@@ -10,6 +10,7 @@ import type { PlanState, StoryStatus, StoryType, StoryVisibility } from "../../t
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
@@ -1243,6 +1244,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									{(plan) => (
 										<button
 											type="button"
+											class={s.archiveAction}
 											disabled={busy()}
 											onClick={() =>
 												void mutate({
@@ -1421,22 +1423,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<For each={STORY_TYPES}>{(kind) => <option value={kind}>{storyTypeLabel(kind)}</option>}</For>
 									</Select>
 								</label>
-								<div role="group" aria-label={t("stories.view.label", "Story view")}>
-									<button
-										type="button"
-										aria-pressed={storiesUi.view() === "list"}
-										onClick={() => storiesUi.setView("list")}
-									>
-										{t("stories.view.list", "List")}
-									</button>
-									<button
-										type="button"
-										aria-pressed={storiesUi.view() === "kanban"}
-										onClick={() => storiesUi.setView("kanban")}
-									>
-										{t("stories.view.kanban", "Kanban")}
-									</button>
-								</div>
+								<SegmentedControl
+									class={s.viewSwitch}
+									aria-label={t("stories.view.label", "Story view")}
+									value={storiesUi.view()}
+									onChange={storiesUi.setView}
+									options={[
+										{ id: "list", label: t("stories.view.list", "List") },
+										{ id: "kanban", label: t("stories.view.kanban", "Kanban") },
+									]}
+								/>
 							</div>
 							<Show when={newStory() && planId() && !selectedPlan()?.archived}>
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>

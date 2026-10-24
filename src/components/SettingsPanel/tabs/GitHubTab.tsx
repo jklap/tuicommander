@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import oauthScopes from "../../../data/github-oauth-scopes.txt?raw";
 import { t } from "../../../i18n";
 import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
@@ -737,7 +738,7 @@ export const GitHubTab: Component = () => {
 							</button>
 						</div>
 						<div class={g.scopeList} style="margin-top: 16px">
-							Requested permissions: <strong>repo</strong>
+							Requested permissions: <strong>{oauthScopes.trim()}</strong>
 						</div>
 					</div>
 				</Show>
