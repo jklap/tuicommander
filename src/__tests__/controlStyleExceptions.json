@@ -682,15 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/detail/TasksDetail.module.css",
-    "story": "2248-c8f6",
-    "rules": [
-      "[[],\".detail select[multiple]\",[\"min-height: 96px\"]]",
-      "[[],\".detail button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".detail button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/list/tasksList.module.css",
     "story": "2249-154a",
     "rules": [
