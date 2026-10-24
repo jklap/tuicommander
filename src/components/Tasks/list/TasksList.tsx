@@ -8,9 +8,9 @@ import type {
 	WorkItemRef,
 } from "../../../types/work-items.gen";
 import { Button } from "../../ui/Button";
-import { Switch } from "../../ui/Switch";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { Switch } from "../../ui/Switch";
 import { filterOptions, loadFilterChoices } from "./filterChoices";
 import { TaskRows } from "./TaskRows";
 import s from "./tasksList.module.css";

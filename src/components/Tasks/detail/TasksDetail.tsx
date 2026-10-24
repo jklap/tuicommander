@@ -238,6 +238,7 @@ export function TasksDetail(props: TasksDetailProps) {
 												/>
 											</label>
 											<Button
+												variant="primary"
 												type="submit"
 												title={action().disabledReason ?? undefined}
 												disabled={busy() || !action().enabled || !draft().trim()}
