@@ -184,13 +184,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/HistoryTab.module.css",
-    "story": "2200-8e6d",
-    "rules": [
-      "[[],\".loadMoreBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 16px\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/LogTab.module.css",
     "story": "2201-ea50",
     "rules": [
