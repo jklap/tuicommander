@@ -18,7 +18,7 @@ const { rpc, toastAdd, voice } = vi.hoisted(() => {
 
 vi.mock("../../stores/appLogger", async (importOriginal) => {
 	const original = await importOriginal<typeof import("../../stores/appLogger")>();
-	return { ...original, appLogger: { ...original.appLogger, warn: vi.fn() } };
+	return { ...original, appLogger: { ...original.appLogger, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } };
 });
 
 vi.mock("../../transport", async (importOriginal) => ({
