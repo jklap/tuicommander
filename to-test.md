@@ -1,3 +1,7 @@
+## Mobile log after agent exit (2178-24da) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, exit an inline agent normally and with SIGTERM, then run a shell command. Confirm mobile CLI shows its output and prompt without restoring the old agent input. This Rust change does not hot-reload; the peer does not restart the daily app.
+
 ## Native story notes (2172-6dee) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, add a note through MCP and list it through HTTP/CLI; confirm actor, time and subject revision persist and the story revision stays unchanged. Check a same-plan workflow receipt reference and refusal of a receipt from another plan. The peer did not restart or replace the daily app.
