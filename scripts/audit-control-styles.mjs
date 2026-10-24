@@ -10,7 +10,7 @@ const postcss = require("postcss");
 const purgecssRequire = createRequire(createRequire(import.meta.resolve("vite-plugin-purgecss")).resolve("purgecss"));
 const parseSelector = purgecssRequire("postcss-selector-parser");
 const geometry = /^(?:(?:min-|max-)?(?:height|block-size)|padding(?:-.+)?|border(?:-.+)?)$/;
-const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl"]);
+const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl", "Button"]);
 
 export function sourceFiles(root = "src") {
 	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -63,7 +63,12 @@ export function auditCss(file, css, classes = new Set()) {
 		// hide controls, while :has(input) and input + .slider remain containers.
 		function targetsControl(selector, allowNesting = true) {
 			const lastCombinator = selector.nodes.findLastIndex((node) => node.type === "combinator");
-			return selector.nodes.slice(lastCombinator + 1).some((node) => {
+			const target = selector.nodes.slice(lastCombinator + 1);
+			// Only explicitly marked native button rows/cards are layout, not form actions.
+			if (target.some((node) => node.type === "tag" && node.value === "button")
+				&& target.some((node) => node.type === "attribute" && node.attribute === "data-control-layout"
+					&& node.operator === "=" && ["row", "card"].includes(node.value))) return false;
+			return target.some((node) => {
 				if (node.type === "tag") return controls.has(node.value);
 				if (node.type === "class") return classes.has(node.value);
 				if (node.type === "pseudo" && [":is", ":where", ":global", ":local"].includes(node.value)) return node.nodes.some((selector) => targetsControl(selector, allowNesting));

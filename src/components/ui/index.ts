@@ -1,5 +1,6 @@
 // Re-export UI components
 
+export { Button, type ButtonProps } from "./Button";
 export { ChevronIcon } from "./ChevronIcon";
 export type { CiRingProps } from "./CiRing";
 export { CiRing } from "./CiRing";

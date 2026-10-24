@@ -160,7 +160,8 @@ You can exercise features through the **web UI** instead of the Tauri desktop ap
 
 ## Visual
 
-- UI controls use `src/components/ui` primitives (Select, Input, Textarea, SegmentedControl, Dropdown); do not resize controls in feature CSS.
+- UI controls use `src/components/ui` primitives (Button, Select, Input, Textarea, SegmentedControl, Dropdown); do not resize controls in feature CSS.
+- Clickable list rows and cards are layout, not form actions. Keep their native buttons and mark them with `data-control-layout="row"` or `data-control-layout="card"`. Geometry CSS must explicitly target `button[data-control-layout="row"]` or `button[data-control-layout="card"]` (additional classes are allowed). The guard exempts only these target compounds, never an entire file or an unmarked action. Do not use this marker for toolbar, form, view-switch or dialog actions.
 
 - All UI work MUST follow [`docs/frontend/STYLE_GUIDE.md`](docs/frontend/STYLE_GUIDE.md).
 - **Plugin dashboards MUST follow [`docs/plugins-style.md`](docs/plugins-style.md)** — use the shared `.dashboard`/`.dash-*` classes from `PLUGIN_BASE_CSS`, never hand-roll inline layout CSS. The built-in Claude Usage dashboard is the reference.

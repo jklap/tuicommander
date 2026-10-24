@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add a shared Button primitive with standard action variants, compact sizing and touch targets aligned with form controls (#2296-2bf2).
+
 ### Fixed
 
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).

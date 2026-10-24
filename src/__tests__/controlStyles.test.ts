@@ -82,3 +82,32 @@ it("catches feature CSS resizing a class passed to SegmentedControl undetected",
 	);
 	expect(findings.map((row) => row.selector)).toEqual([".viewSwitch"]);
 });
+
+it("catches ordinary actions hidden beside explicitly marked layout buttons", () => {
+	const findings: Finding[] = auditCss(
+		"src/Feature.module.css",
+		`
+		button.item[data-control-layout="row"] { padding: 8px; }
+		button.card[data-control-layout="card"]:hover { border-color: red; }
+		button[data-control-layout="row"], button.action { height: 20px; }
+		button[data-control-layout] { padding: 2px; }
+		input[data-control-layout="row"] { height: 18px; }
+		button[data-control-layout="action"] { padding: 3px; }`,
+	);
+	expect(findings.map((row) => row.selector)).toEqual([
+		'button[data-control-layout="row"], button.action',
+		"button[data-control-layout]",
+		'input[data-control-layout="row"]',
+		'button[data-control-layout="action"]',
+	]);
+});
+
+it("catches feature resizing passed to the shared Button", () => {
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css'; const Feature = () => <Button class={s.action}/>;`,
+	);
+	expect(
+		auditCss("src/Feature.module.css", ".action { height: 18px; }", classes.get("src/Feature.module.css")),
+	).toHaveLength(1);
+});

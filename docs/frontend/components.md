@@ -13,7 +13,9 @@ Application Settings tabs opt into `SettingFields` row presentation. The default
 
 `ui/Select`, `ui/Input` and `ui/Textarea` forward native form attributes and events.
 `ui/SegmentedControl` provides a keyboard-accessible single-choice view switch.
-All four share `ui/FormControls.module.css`; screen CSS owns layout only.
+`ui/Button` provides primary, secondary, ghost and danger actions in default or compact size.
+All five share `ui/FormControls.module.css`; screen CSS owns layout only.
+Native list-row/card buttons use the explicit `data-control-layout` marker described in the style guide.
 The native-select guard in `src/__tests__/nativeSelect.test.ts` rejects new raw
 selects outside `ui/` and requires the explicit pending-migration list to shrink.
 

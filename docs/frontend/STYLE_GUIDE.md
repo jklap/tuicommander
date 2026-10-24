@@ -428,7 +428,7 @@ All follow the same structure:
 
 ### Form Controls
 
-Use `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
+Use `Button`, `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
 They forward native attributes, refs, options and events. `Input` is for text,
 numeric and date fields; toggles, ranges, colour and file pickers keep their
 specialised controls. `FormControls.module.css` owns their presentation:
@@ -437,6 +437,15 @@ specialised controls. `FormControls.module.css` owns their presentation:
 control height, padding, borders or colours. Textareas resize vertically;
 multiple selects keep native listbox behavior. At widths up to 600px,
 controls have a 44px minimum height and 16px text to prevent iOS zoom.
+
+`Button` forwards native button attributes and defaults to `type="button"` (set
+`type="submit"` for form submission). Variants are `primary`, `secondary` (default),
+`ghost` and `danger`; sizes are `default` (36px) and `compact` (22px), both with a
+44px touch minimum. It shares FormControls height and padding tokens with fields.
+Clickable list rows/cards retain native buttons with `data-control-layout="row"`
+or `data-control-layout="card"`. Their geometry selectors must include both the
+`button` tag and the exact marker. This exception is for content layout, never
+form, toolbar or dialog actions.
 
 `SegmentedControl` is the shared view switch. It uses a named tablist, one
 keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an

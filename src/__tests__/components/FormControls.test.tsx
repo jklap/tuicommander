@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
@@ -151,4 +152,38 @@ describe("shared form controls", () => {
 		fireEvent.click(roadmap);
 		expect(roadmap).toHaveAttribute("aria-selected", "true");
 	});
+});
+
+it("catches Button losing native submit, reactive disabled state or caller events", () => {
+	const [disabled, setDisabled] = createSignal(false);
+	const clicked = vi.fn();
+	let native: HTMLButtonElement | undefined;
+	render(() => (
+		<>
+			<Button
+				ref={(node) => {
+					native = node;
+				}}
+				class="caller"
+				variant="danger"
+				size="compact"
+				disabled={disabled()}
+				onClick={clicked}
+			>
+				Delete
+			</Button>
+			<Button type="submit">Save</Button>
+		</>
+	));
+	const action = screen.getByRole("button", { name: "Delete" });
+	expect(native).toBe(action);
+	expect(action).toHaveAttribute("type", "button");
+	expect(action).toHaveClass("caller", "compact", "danger");
+	expect(action).not.toHaveAttribute("variant");
+	expect(action).not.toHaveAttribute("size");
+	fireEvent.click(action);
+	expect(clicked).toHaveBeenCalledOnce();
+	setDisabled(true);
+	expect(action).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("type", "submit");
 });
