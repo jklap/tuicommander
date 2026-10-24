@@ -238,19 +238,6 @@
     ]
   },
   {
-    "file": "src/components/PrDetailPopover/PrDetailPopover.module.css",
-    "story": "2212-493d",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".aiReviewBtn, .postReviewBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 4px 8px\"]]",
-      "[[],\".viewDiffBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".viewDiffBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".mergeBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--success)\"]]",
-      "[[],\".autoHealToggle input\",[\"height: 0\"]]",
-      "[[],\".requestForm textarea\",[\"min-height: 64px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 6px\"]]"
-    ]
-  },
-  {
     "file": "src/components/PrDiffTab/PrDiffTab.module.css",
     "story": "2213-dd22",
     "rules": [
