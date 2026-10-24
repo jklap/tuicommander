@@ -457,6 +457,7 @@ pub(super) async fn get_notes() -> impl IntoResponse {
 }
 
 pub(super) async fn put_notes(
+    State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
@@ -465,7 +466,10 @@ pub(super) async fn put_notes(
         return resp;
     }
     match crate::config::save_notes(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            state.notify_ideas_changed();
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),

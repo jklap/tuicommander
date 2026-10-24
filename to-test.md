@@ -2913,3 +2913,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Mobile Sessions: confirm Working / Idle / Awaiting totals and layout on iPad; Finished rows do not count, and Awaiting still opens the first Input row (#2181-c98f).
 
 - [ ] After a backend rebuild/restart, verify disconnected GitHub Settings shows `repo read:project` before login; the shared scope file is compiled into Rust (#2293-8674).
+
+## Planner Ideas (#2295-abd3)
+
+- [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.

@@ -2958,6 +2958,7 @@ where
     }
 
     /// Keep invalid existing JSON available for recovery instead of defaulting it.
+    #[cfg(feature = "dictation")]
     pub(crate) fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String> {
         self.save_delta_with(base, desired, true)
     }
@@ -4638,7 +4639,10 @@ pub(crate) fn save_prompt_library(
     file.save_delta(&base, &config)
 }
 
-// Notes (opaque JSON — schema owned by frontend)
+mod ideas;
+pub(crate) use ideas::{add_idea, list_ideas, update_idea};
+
+// Notes (opaque JSON with backend-owned keyed mutations)
 //
 // Unlike every other config this one FAILS instead of defaulting: the frontend refuses to
 // persist until a load succeeds, so an unreadable notes.json can no longer be silently
@@ -4648,10 +4652,8 @@ pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
     load_json_config_strict(NOTES_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notes(base: serde_json::Value, config: serde_json::Value) -> Result<(), String> {
-    let file: ConfigFile<serde_json::Value> = ConfigFile::new(NOTES_FILE);
-    file.save_delta_strict(&base, &config)
+    ideas::save_notes(base, config)
 }
 
 // Activity center (opaque JSON — schema owned by frontend)
@@ -9779,7 +9781,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn notes_array_replaces_whole_while_unrelated_object_key_survives() {
+    fn notes_delta_replaces_known_ids_while_unrelated_object_key_survives() {
         let dir = TempDir::new().unwrap();
         let _guard = set_config_dir_override(dir.path().to_path_buf());
         let base = serde_json::json!({"notes": [{"id": "old"}], "meta": "initial"});

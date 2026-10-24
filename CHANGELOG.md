@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add, list and update Ideas through the planner API, CLI and workflow MCP tool, with source tracking and race-safe panel synchronization (#2295-abd3).
+
 ### Fixed
 
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
