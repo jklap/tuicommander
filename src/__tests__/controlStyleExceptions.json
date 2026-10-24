@@ -184,14 +184,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/SyncRow.module.css",
-    "story": "2203-f9ff",
-    "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".btnRunning\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
     "story": "2204-4f62",
     "rules": [
