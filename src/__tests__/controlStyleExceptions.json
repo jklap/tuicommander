@@ -750,14 +750,6 @@
     ]
   },
   {
-    "file": "src/components/ToastContainer/ToastContainer.module.css",
-    "story": "2256-dd37",
-    "rules": [
-      "[[],\".action\",[\"padding: 2px 8px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".repoAction\",[\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
     "file": "src/components/Toolbar/Toolbar.module.css",
     "story": "2257-ebf1",
     "rules": [
