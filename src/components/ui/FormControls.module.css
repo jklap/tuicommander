@@ -30,7 +30,7 @@
 	cursor: not-allowed;
 }
 .control::placeholder { color: var(--fg-muted); }
-.select { cursor: pointer; }
+.select { cursor: pointer; padding-inline-end: 32px; }
 .select[multiple], .select[size]:not([size="1"]) { height: auto; min-height: var(--control-height, 36px); padding-block: 8px; }
 .textarea { height: auto; min-height: calc(var(--control-height, 36px) * 3); padding-block: 8px; resize: vertical; }
 .segmented {
@@ -178,3 +178,37 @@
  .colorSwatch { width: max(44px, var(--control-height, 36px)); height: max(44px, var(--control-height, 36px)); }
 }
 @media (prefers-reduced-motion: reduce) { .colorSwatch { transition: none; } }
+
+/* Edge actions fill their container without inheriting feature-owned geometry. */
+.stretchButton {
+ height: auto;
+ align-self: stretch;
+ min-height: var(--control-height, 36px);
+ min-width: var(--control-height, 36px);
+ border-radius: 0;
+}
+.stretchButton.compact { --control-height: 36px; }
+@media (max-width: 600px) {
+ .stretchButton { min-height: max(44px, var(--control-height, 36px)); min-width: max(44px, var(--control-height, 36px)); }
+}
+
+.buttonGroup { display: inline-flex; align-items: stretch; max-width: 100%; }
+.buttonGroup > .button { border-radius: 0; }
+.buttonGroup > .button:first-child { border-start-start-radius: var(--radius-lg); border-end-start-radius: var(--radius-lg); }
+.buttonGroup > .button:last-child { border-start-end-radius: var(--radius-lg); border-end-end-radius: var(--radius-lg); }
+.buttonGroup > .button.compact:first-child { border-start-start-radius: var(--radius-sm); border-end-start-radius: var(--radius-sm); }
+.buttonGroup > .button.compact:last-child { border-start-end-radius: var(--radius-sm); border-end-end-radius: var(--radius-sm); }
+.buttonGroup > .button:not(:last-child) { border-inline-end: 0; }
+.buttonGroup > .button:not(:first-child) { border-inline-start: 1px solid var(--border); }
+.buttonGroup > .button:focus-visible { position: relative; z-index: 1; }
+
+.textareaAutoGrow {
+ min-height: var(--control-height, 36px);
+ max-height: calc(var(--control-height, 36px) * 3);
+ padding-block: calc(var(--control-padding-x, 8px) / 2);
+ resize: none;
+ overflow-y: auto;
+}
+@media (max-width: 600px) {
+ .textareaAutoGrow { min-height: max(44px, var(--control-height, 36px)); max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
+}
