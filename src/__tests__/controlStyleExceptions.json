@@ -613,13 +613,6 @@
     ]
   },
   {
-    "file": "src/components/StatusBar/ProviderRecoveryStatus.module.css",
-    "story": "2237-10c9",
-    "rules": [
-      "[[],\".retry\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 2px 6px\"]]"
-    ]
-  },
-  {
     "file": "src/components/StatusBar/StatusBar.module.css",
     "story": "2238-ac3b",
     "rules": [
