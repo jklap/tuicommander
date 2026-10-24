@@ -3,6 +3,17 @@
 Date: 2026-10-08. Plan: `docs/design/design-mode-v2.md` (§4, §5, §9, §13 S0, §14).
 Native macOS evidence only; Windows/Linux and branded Google Chrome were not tested.
 
+**Current S0 acceptance update (2026-10-24):** the owned-CFT acceptance scope
+for story 1672 AC1 is now verified. Round 16's fixed-build continuation below
+proves native-folder installation and enabled persistence after a no-load-flag
+restart. Round 12 proves real side-panel tab return, trusted top/frame picking,
+one-shot/Escape/Stop chronology and a nonempty top PNG crop through the real
+native-host installation. The crop uses the explicitly granted all-sites capture
+permission, not a newly proved temporary activeTab grant. The original Edge,
+echo-host and initial blocked findings below are historical evidence, not a
+claim that these later CFT checks are still blocked. Windows/Linux, branded
+Chrome and a fresh Edge-only replay remain untested.
+
 **Gate recommendation: retain X-A with native messaging, provisionally.** Edge
 loaded the extension, resolved the custom-profile host, and kept the worker's
 native port alive. There is no measured channel failure justifying the HTTP
@@ -788,3 +799,189 @@ The owned Chrome was closed through its own browser connection and its exact
 recorded PID was absent afterward. No backend, fixture server or owner session
 was started in this round. Evidence: `~/Gits/.tmp/design-web/s0-native/`
 (`argv.json`, `pid.json`, `refusal.json`, `cleanup.json`).
+
+## Round 14: native input reached; MacControl upstream stopped (2026-10-23)
+
+The Screen Recording refusal from Round 13 was not reproduced. MacControl
+`list_windows` succeeded, and a **window-only** screenshot of the owned CFT149
+Extensions window succeeded. Native focus and a click on **Load unpacked** also
+returned success. No current Accessibility or Screen Recording denial was
+reported. The console was unlocked before both input phases.
+
+The browser was Chrome for Testing **149.0.7827.54**, PID **35188**, using only
+`~/Gits/.tmp/design-web/profile`, with no `--load-extension` flag. Its native
+window ID was **13734**; another Chrome window, **12608**, was not touched.
+Browser DOM/window geometry identified the Load unpacked button before the
+native click. The screenshot was scoped to window 13734, never the full screen.
+
+The next MacControl batch requested Cmd+Shift+G, a 400 ms wait, path typing and
+Enter. It failed with exactly:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+No completed-action list was returned, so the folder chooser state and the
+number of executed actions are unknown. The requested path was also incorrect:
+`~/Gits/.tmp/design-web/extension` does not exist; the recorded browser argv
+identifies the actual installed directory as
+`~/Gits/.tmp/design-web/profile/tuic-design-extension`. This harness mistake is
+retained, not counted as an installation result. No successful folder selection
+or extension installation is claimed.
+
+A subsequent MacControl `list_windows` call returned:
+
+> Upstream 'maccontrol' process is not running
+
+This is a new upstream availability blocker, **not** a permission refusal or a
+browser capability failure. No alternate native-input transport or upstream
+restart was attempted. Restore the MacControl upstream, then repeat the owned
+chooser flow with the actual installed directory and verify a no-load-flag
+restart. AC1 remains unchecked; Round 12's tab-return, crop and cancellation
+results are unchanged.
+
+Raw evidence and the bounded browser inspection/cleanup harnesses are under
+`~/Gits/.tmp/design-web/s0-native-round14/`: `argv.json`, `pid.json`,
+`observations.json`, `browser-version.json`, and `cleanup.json`. The owned
+browser was closed through its own browser connection; PID 35188 was absent
+afterward. No backend, fixture server or owner session was started. No Boss
+window, daily TUIC endpoint, permission setting or product source was changed.
+This round changes documentation only; no application build or test suite ran.
+
+
+## Round 15: single-key MacControl call timed out (2026-10-23)
+
+After the coordinator reported the upstream reconnected, the retry used one
+native action per call and no wait actions. Owned CFT149 PID **87700**, scratch
+profile unchanged, opened Extensions without a load flag. MacControl identified
+its window as **13901**; window 12608 remained untouched. The actual extension
+folder `~/Gits/.tmp/design-web/profile/tuic-design-extension` was verified before
+input. The console was unlocked.
+
+The first Load unpacked click stopped with `user_active` and no completed
+actions. A later separate click succeeded. The very next input call was exactly:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":13901,"key":"cmd+shift+g"}]}
+```
+
+That single-key call returned:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+Host timestamps bound the call at approximately **14 seconds**, from 14:24:53
+to 14:25:07 CEST; this is not a separately instrumented duration. A subsequent
+`list_windows({app:"Google Chrome for Testing"})` returned the same IPC timeout
+at 14:25:22, approximately 15 seconds later. No path was typed, no Select action
+was sent, and no further native-input retry was made. This does not establish
+that the upstream process exited, but it establishes that even a single key
+without an explicit wait failed to return. No new permission denial was seen.
+
+AC1 remains unchecked. Browser-native folder selection and no-load restart
+persistence remain unproved. Raw observations, argv/PID, browser version and
+cleanup are in `~/Gits/.tmp/design-web/s0-native-round15/`. The owned browser
+closed through its own connection and PID 87700 was absent afterward. No backend,
+fixture, owner session, daily TUIC endpoint or alternate OS input was used.
+Documentation only; no application build or test suite ran.
+
+
+## Round 16: chooser opens, both key targets time out (2026-10-24)
+
+The coordinator reported the fixed MacControl build installed and its Screen
+Recording/Accessibility grants renewed. This attempt still found a native-key
+transport blocker; it did not report a permission denial. The console was
+unlocked. Only the same owned CFT149 scratch profile was launched, without a
+load flag (PID **52530**). No backend or fixture was needed.
+
+MacControl listed owned Extensions window **14990**, and the native Load
+unpacked click succeeded. The next call contained only this action, no wait:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":14990,"key":"cmd+shift+g"}]}
+```
+
+It returned exactly:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+Host timestamps bound the call at approximately 15 seconds (09:50:18–09:50:33
+CEST), not a separately instrumented duration. Unlike Round 15, the subsequent
+`list_windows` **succeeded**, identifying the browser-native **Open** chooser as
+window **15013**. Therefore this timeout is not evidence that the upstream died.
+A separate single-key call explicitly targeted that chooser rather than its
+parent window:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":15013,"key":"cmd+shift+g"}]}
+```
+
+That call returned the same IPC timeout, approximately 18 seconds later
+(09:50:48–09:51:06 CEST, host timestamps). No path was typed and no Select action
+was sent. Native input stopped after these two distinct window targets; no
+alternative OS-input transport or permission change was attempted. The other
+CFT window **14155**, Device Activation, was not touched or captured.
+
+AC1 remains unchecked: native chooser selection and the following no-load-flag
+persistence check are unproved. Round 12's side-panel tab return, trusted picks,
+actual top crop and cancellation chronology remain valid and were not rerun.
+Raw argv/PID, exact action lists, timing bounds and cleanup are under
+`~/Gits/.tmp/design-web/s0-native-round16/`. `owned-chooser.png` is a **window-only**
+capture of 15013 retained for diagnosing the blocker, not an installation pass.
+The owned browser closed through its own connection; PID 52530 was absent
+subsequently. No daily TUIC endpoint, Boss window, backend, owner session or
+fixture server was used. Documentation only; no application build or suite ran.
+
+
+### Round 16 fixed-build continuation: persistent native install PASS (2026-10-24)
+
+After the coordinator confirmed the old MacControl upstream was stopped, this
+continuation completed the previously blocked folder selection. The console was
+unlocked; only the existing owned CFT149 profile was launched (PID **89686**).
+No TUIC backend, fixture or owner session was started.
+
+The first native click did not establish an Open chooser. The browser harness
+then clicked the **actual Load unpacked button** in `chrome://extensions` and
+MacControl listed the resulting native **Open** window **15454**. This is the
+browser's normal `developerPrivate.loadUnpacked` UI, not
+`Extensions.loadUnpacked`, a flag load, or a fabricated install-state write.
+
+Direct key targeting of chooser 15454 returned `failed to focus window: focus:
+selected window is no longer available (it moved, resized or closed)`, even
+after a fresh scoped screenshot. Targeting its owning Extensions window
+**15418** succeeded: Cmd+Shift+G, paste the actual absolute directory
+`~/Gits/.tmp/design-web/profile/tuic-design-extension`, Enter to accept the path,
+then a **separate Enter** to select the directory. Each call contained one
+action and no explicit wait. Several calls reported `user_active` **after**
+reporting the named action completed; an earlier typing attempt stopped after
+one character and was superseded by the complete paste. No incomplete typing
+is counted as installation evidence. The successful result below independently
+confirms the selected directory.
+
+Before closing the browser, its read-only extension inventory reported:
+
+- ID `eefbgjmmpaimpeaflioojmdipmfchefo`;
+- name **TUICommander Design Mode**, version **2.0.0**;
+- actual path `~/Gits/.tmp/design-web/profile/tuic-design-extension`;
+- **enabled: true**.
+
+The browser closed gracefully through its own connection and PID 89686 was
+verified absent. A new process, PID **1540**, started with the same profile and
+**no `--load-extension` flag**. The same read-only inventory again returned the
+same ID, name, version, path and **enabled: true**. No loading/install API or
+profile preferences were used between launch and observation. This proves the
+missing native-install/no-load-restart persistence requirement, in contrast to
+the empty inventory after the earlier flag/test-API installs.
+
+The decisive argv, before/after inventories and PID cleanup are committed in
+[round16-persistence.json](../../spike/design-mode-v2-s0/evidence/round16-persistence.json).
+Raw harnesses and responses remain under
+`~/Gits/.tmp/design-web/s0-native-round16-fixed/`; `chooser.png`, `installed.png`
+and `after-restart.png` capture only the owned chooser/Extensions windows. The
+unrelated CFT window **14155**, TUICommander Mobile, was never targeted or
+captured. Restarted browser 1540 also closed gracefully and was verified absent.
+No task-created runtime process remains.
+
+**AC1 result:** (a) native installation/persistence now PASS; (b), (e), and (f)
+retain Round 12's actual side-panel/tab-return, trusted pick/cancellation and
+nonempty-crop evidence. Those checks were not rerun for this documentation-only
+continuation. The PNG uses the real all-sites capture grant; no new activeTab
+claim, cross-platform claim, Edge-only replay or application-suite pass is made.
+No product code, browser permissions, Boss window or daily TUIC endpoint changed.

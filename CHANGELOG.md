@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).
 
+- Identify Activity Dashboard sessions by repository name and linked-worktree branch, including detached dashboards; keep folder names for sessions outside repositories (#2180-5105).
 - Replace the mobile Sessions Active total with Working, Idle and Awaiting counts that share each row badge state, including the Working hold across poll updates. Agents running sub-tasks count as Working. Finished sessions are not counted (#2181-c98f).
 
 - Keep mobile CLI output at the bottom when the keyboard or viewport resizes, without moving a reader who scrolled up (#2179-e598).

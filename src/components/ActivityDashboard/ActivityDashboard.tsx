@@ -8,8 +8,8 @@ import { terminalsStore } from "../../stores/terminals";
 import {
 	effectiveActivityState,
 	isActivityWorking,
-	projectName,
 	reconcileActivityOrder,
+	terminalProjectName,
 	terminalStatusLabel,
 } from "../../utils/activitySnapshot";
 import { displayTask } from "../../utils/displayTask";
@@ -176,7 +176,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 		return {
 			id,
 			name: term.name,
-			project: projectName(term.cwd),
+			project: terminalProjectName(id, term.cwd),
 			projectColor: repoPath ? getRepoColor(repoPath) : undefined,
 			agent: term.agentType || "shell",
 			status,
@@ -251,7 +251,11 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 										{(parent) => <SubAgentIcon parent={parent()} class={s.subAgentTag} />}
 									</Show>
 									<Show when={term.project}>
-										<span class={s.project} style={term.projectColor ? { color: term.projectColor } : undefined}>
+										<span
+											class={s.project}
+											title={term.project ?? undefined}
+											style={term.projectColor ? { color: term.projectColor } : undefined}
+										>
 											{term.project}
 										</span>
 									</Show>
