@@ -569,7 +569,7 @@ are unaffected (they build `NSAlert`) and stay as they are.
 | `write_file` | `path, content` | `()` | Write file |
 | `write_file_if_unchanged` | `repo_path, file, expected, content` | `bool` | Write only when the file still equals `expected`; `false` = changed on disk, nothing written (mobile Markdown review) |
 | `create_directory` | `path` | `()` | Create directory |
-| `delete_path` | `path` | `()` | Delete file or directory |
+| `delete_path` | `path` | `()` | Delete file, directory, or symbolic link; links are removed without following their targets |
 | `rename_path` | `src, dest` | `()` | Rename/move path |
 | `copy_path` | `src, dest` | `()` | Copy file or directory |
 | `copy_path_abs` | `from, to` | `()` | Copy a file by absolute paths (cross-repo paste). Rejects directories. |

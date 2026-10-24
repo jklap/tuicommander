@@ -1672,13 +1672,25 @@ pub async fn delete_path(repo_path: String, path: String) -> Result<(), String> 
 }
 
 fn delete_path_impl(repo_path: String, path: String) -> Result<(), String> {
-    let (_canonical_repo, canonical_target) = validate_path(&repo_path, &path)?;
+    // Resolve the parent, not the selected entry: canonicalizing the final link
+    // rejects dangling links and turns deletion into deletion of their targets.
+    let (_canonical_repo, target) = validate_path_for_creation(&repo_path, &path)?;
+    let metadata =
+        std::fs::symlink_metadata(&target).map_err(|e| format!("Failed to inspect path: {e}"))?;
 
-    if canonical_target.is_dir() {
-        std::fs::remove_dir_all(&canonical_target)
-            .map_err(|e| format!("Failed to delete directory: {e}"))
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if metadata.file_type().is_symlink_dir() {
+            return std::fs::remove_dir(&target)
+                .map_err(|e| format!("Failed to delete directory link: {e}"));
+        }
+    }
+
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(&target).map_err(|e| format!("Failed to delete directory: {e}"))
     } else {
-        std::fs::remove_file(&canonical_target).map_err(|e| format!("Failed to delete file: {e}"))
+        std::fs::remove_file(&target).map_err(|e| format!("Failed to delete file: {e}"))
     }
 }
 
@@ -5257,6 +5269,84 @@ mod tests {
             .unwrap();
 
         assert!(dir.path().join("a/b/c").is_dir());
+    }
+
+    // Catches final-component canonicalization rejecting a dangling link.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_path_dangling_symlink_removes_link_not_missing_target() {
+        let dir = setup_test_repo();
+        let target = dir.path().join("missing-target");
+        let link = dir.path().join("dangling-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        delete_path(
+            dir.path().to_string_lossy().into_owned(),
+            "dangling-link".into(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link).is_err(),
+            "link must be removed"
+        );
+        assert!(
+            std::fs::symlink_metadata(&target).is_err(),
+            "target must stay absent"
+        );
+    }
+
+    // Catches deleting the resolved file/directory instead of the selected link.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_path_existing_symlinks_preserve_targets_and_contents() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for root in [dir.path(), outside.path()] {
+            let file = root.join("kept-file");
+            let folder = root.join("kept-dir");
+            std::fs::write(&file, "keep file bytes").unwrap();
+            std::fs::create_dir(&folder).unwrap();
+            std::fs::write(folder.join("child"), "keep child bytes").unwrap();
+            for (name, target) in [("file-link", &file), ("dir-link", &folder)] {
+                let link = dir.path().join(name);
+                std::os::unix::fs::symlink(target, &link).unwrap();
+                delete_path(dir.path().to_string_lossy().into_owned(), name.into())
+                    .await
+                    .unwrap();
+                assert!(
+                    std::fs::symlink_metadata(&link).is_err(),
+                    "{name} must be removed"
+                );
+                assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep file bytes");
+                assert_eq!(
+                    std::fs::read_to_string(folder.join("child")).unwrap(),
+                    "keep child bytes"
+                );
+            }
+        }
+    }
+
+    // Catches parent-only validation accidentally allowing a symlinked parent escape.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_path_rejects_external_parent_and_missing_entry() {
+        let dir = setup_test_repo();
+        let outside = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(outside.path().join("kept"), "keep bytes").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("outside")).unwrap();
+        let repo = dir.path().to_string_lossy().into_owned();
+        assert!(
+            delete_path(repo.clone(), "outside/kept".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("kept")).unwrap(),
+            "keep bytes"
+        );
+        assert!(delete_path(repo, "missing".into()).await.is_err());
     }
 
     #[tokio::test]
