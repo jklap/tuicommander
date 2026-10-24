@@ -1,6 +1,6 @@
 ## Mobile unreachable landing (2294-078f)
 
-- [ ] Complete the isolated `agent-test-2294` browser check at a mobile viewport: stop its server, reload and resume, capture only `[data-connection-landing]`, restore the server and confirm automatic return. <!-- DEFERRED (2026-10-24) — the native instance unexpectedly selected ~/.tuicommander-dev/instances/agent-test-2294/credentials.json outside the managed write allowlist; stopped it and requested narrow authority before further live work. No landing screenshot or live recovery pass is claimed. -->
+- [x] Isolated `agent-test-2294` on port 19894, browser viewport 390×844: stopped only its server; dispatched resume events and observed the in-app connection-test region; reloaded offline and observed the cached splash; captured only `[data-connection-landing]`. After restart, a `pageshow` resume event automatically restored Sessions without a retry click or manual reload. Evidence: `~/Gits/.tmp/tuic-2294-live/` (`in-app-landing.png`, `offline-landing.png`, `transcript.md`). The locked screen kept the tab hidden, so this verifies resume-driven recovery, not visible-tab retry timing or a physical installed-PWA resume. The isolated app and named browser session were stopped.
 
 ## Mobile log after agent exit (2178-24da) — Rust restart required
 
