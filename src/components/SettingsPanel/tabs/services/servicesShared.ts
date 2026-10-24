@@ -65,7 +65,11 @@ export interface McpCapability {
 	name: string;
 	title: string;
 	description: string;
-	optional: boolean;
+	domain: string;
+	parent: string | null;
+	section: "always" | "rare" | "conditional";
+	available?: boolean;
+	availability?: string;
 }
 
 export interface McpStatus {

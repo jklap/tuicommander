@@ -727,7 +727,7 @@ pub(crate) struct Health {
 }
 
 /// Inspect the complete cause chain without exposing URLs or credentials.
-fn request_failure_kinds(error: &reqwest::Error) -> (bool, bool, bool) {
+fn request_failure_kinds(error: &(dyn std::error::Error + 'static)) -> (bool, bool, bool) {
     use std::error::Error;
     {
         let mut cause: Option<&(dyn Error + 'static)> = Some(error);
@@ -771,12 +771,20 @@ fn request_failure_kinds(error: &reqwest::Error) -> (bool, bool, bool) {
 
 /// reqwest's outer message hides the resolver, TCP and TLS cause.
 async fn request_error(error: reqwest::Error, base_url: &str) -> String {
+    request_error_message(&error, error.is_timeout(), base_url)
+}
+
+fn request_error_message(
+    error: &(dyn std::error::Error + 'static),
+    is_timeout: bool,
+    base_url: &str,
+) -> String {
     let host = reqwest::Url::parse(base_url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_else(|| "remote host".into());
-    let (dns, refused, tls) = request_failure_kinds(&error);
-    let message = if error.is_timeout() {
+    let (dns, refused, tls) = request_failure_kinds(error);
+    let message = if is_timeout {
         format!("Connection to {host} timed out")
     } else if dns {
         let advice = if !host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
@@ -3194,7 +3202,7 @@ mod tests {
 
     // Catches: DNS fallback loops or retries dotted names and TCP failures.
     #[tokio::test]
-    async fn direct_recovery_excludes_fqdns_and_refusals_and_bounds_missing_peers() {
+    async fn direct_recovery_excludes_fqdns_and_resets_and_bounds_missing_peers() {
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let error = read_direct_health_with_lookup(
             &client,
@@ -3207,9 +3215,8 @@ mod tests {
             error.contains("Cannot resolve no-such-host.invalid"),
             "{error}"
         );
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        let socket = crate::test_support::resetting_tcp_peer();
+        let address = socket.local_addr().unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
             .resolve("short-peer", address)
@@ -3218,11 +3225,11 @@ mod tests {
         let error = read_direct_health_with_lookup(
             &client,
             &format!("http://short-peer:{}", address.port()),
-            |_| async { panic!("refused connection must not trigger Tailscale lookup") },
+            |_| async { panic!("reset connection must not trigger Tailscale lookup") },
         )
         .await
         .unwrap_err();
-        assert!(error.contains("Connection refused"), "{error}");
+        assert!(error.contains("Cannot connect to short-peer"), "{error}");
         let error = read_direct_health_with_lookup(
             &test_client(),
             "http://unknown-short-peer:9877",
@@ -3249,12 +3256,20 @@ mod tests {
 
     #[tokio::test]
     async fn health_connection_refused_names_the_host_and_cause() {
-        // Catches: reqwest's top-level "error sending request" hiding TCP refusal.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
-        let error = read_health(&test_client(), &base).await.unwrap_err();
-        assert!(error.contains("Connection refused by 127.0.0.1"), "{error}");
+        // Catches: nested I/O payloads hiding the refusal cause from the message.
+        // This checks classification/formatting, NOT whether an OS port refuses.
+        // reqwest errors have no public constructor; live reset probes below
+        // cover its transport wrapper, while this uses real nested I/O errors.
+        let refusal = std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "http://username:SECRET@127.0.0.1/health?token=SECRET",
+        );
+        let outer = std::io::Error::other(std::io::Error::other(refusal));
+        let error = request_error_message(&outer, false, "http://127.0.0.1:9877");
+        assert_eq!(
+            error,
+            "Unreachable: Connection refused by 127.0.0.1 — check the daemon and port"
+        );
     }
 
     #[tokio::test]
@@ -3427,16 +3442,18 @@ mod tests {
 
     // Catches: reqwest query-token URLs leaking into logs, UI errors, and SSE status pushes.
     #[tokio::test]
-    async fn closed_port_probe_redacts_token_before_logs_and_status_publication() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("address"));
-        drop(listener);
+    async fn dead_peer_probe_redacts_token_before_logs_and_status_publication() {
+        let socket = crate::test_support::resetting_tcp_peer();
+        let base = format!("http://{}", socket.local_addr().expect("address"));
         let secret = "PAIRING_SECRET_1457";
         let Probe::Failed(error) = probe_authenticated(&test_client(), &base, Some(secret)).await
         else {
-            panic!("closed port must fail");
+            panic!("resetting peer must fail");
         };
-        assert!(error.contains("Unreachable"), "{error}");
+        assert_eq!(
+            error,
+            "Unreachable: Cannot connect to 127.0.0.1 — check the address and network"
+        );
         assert!(!error.contains(secret), "credential in error: {error}");
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let mut bus = state.event_bus.subscribe();

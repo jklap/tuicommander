@@ -335,7 +335,7 @@ needs an app restart is what that costs.
 | `attachment_retention_days` | `u32` | `7` | Obsolete for uploads: attachment lifetime is now the session. This stored value has no effect on attachment cleanup. |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
-| `mcp_capabilities` | `object` | `{denied:["settings","diagnostics"],migration_unknown_tools:[]}` | Native capability denials. Old `disabled_native_tools` migrates once; unknown names remain visible. Parent denials cover grouped actions; member denials remain scoped. See MCP capability cutover documentation. |
+| `mcp_capabilities` | `object` | `{denied:["settings","diagnostics"],migration_unknown_tools:[]}` | Native capability denials. Old `disabled_native_tools` migrates once; unknown names remain visible. Parent denials cover grouped actions; member denials remain scoped. Settings groups these keys by backend-owned domain, section and parent metadata; conditional availability is independent of denials. See MCP capability cutover documentation. |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
@@ -916,9 +916,9 @@ struct PromptEntry {
 
 ### Notes (`notes.json`)
 
-**Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
+**Type:** `serde_json::Value` with backend-owned keyed mutations. The legacy `notes` array and extra document fields remain compatible.
 
-**Commands:** `load_notes()`, `save_notes(base, config)`
+**Commands:** `load_notes()`, `save_notes(base, config)`. Planner `add_idea`, `list_ideas`, and `update_idea` use the same `ConfigFile` strict locked writer. UI saves remove only ids present in their baseline and merge only changed fields of existing records; concurrent additions survive and deleted records are not resurrected. Other top-level fields retain merge-patch semantics. Invalid JSON fails rather than becoming an empty snapshot. Planner additions retain a `source` string and the envelope project's `repoPath`. Successful mutation routes dual-emit `ideas-changed`; frontend reloads wait for queued local writes and never save a reload.
 
 ### Keybindings (`keybindings.json`)
 

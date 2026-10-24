@@ -28,6 +28,8 @@ import { useDebouncedStatus } from "../utils/useDebouncedStatus";
 import styles from "./SessionDetailScreen.module.css";
 
 interface SessionDetailScreenProps {
+	onConnectionError?: (error: string | null) => void;
+	onRegisterRetry?: (retry: (() => void) | undefined) => void;
 	session: SessionInfo;
 	subscribeChatWake: ChatViewWake;
 	sessionExists: boolean;
@@ -561,6 +563,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			<div class={styles.outputArea}>
 				<chat.View />
 				<OutputView
+					sessionExists={props.sessionExists}
+					onConnectionError={props.onConnectionError}
+					onRegisterRetry={props.onRegisterRetry}
 					visible={!chat.active()}
 					onAtBottomChange={setCliAtBottom}
 					onRegisterScrollToBottom={(fn) => {

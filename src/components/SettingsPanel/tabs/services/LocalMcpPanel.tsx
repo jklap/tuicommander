@@ -58,6 +58,39 @@ export const LocalMcpPanel: Component = () => {
 		}),
 	);
 
+	const capabilityRow = (capability: McpCapability) => {
+		const disabled = () =>
+			deniedCapabilities().includes(capability.name) || (capability.name === "settings" && !settingsEnabled());
+		return (
+			<SettingRow label={capability.title} hint={capability.description}>
+				{(id, descriptionId) => (
+					<Switch
+						role="checkbox"
+						data-setting-id="app.mcp_capabilities.denied"
+						id={id}
+						aria-describedby={descriptionId()}
+						aria-label={capability.title}
+						checked={!disabled()}
+						onChange={(event) => {
+							const enabled = event.currentTarget.checked;
+							const updated = enabled
+								? deniedCapabilities().filter((name) => name !== capability.name)
+								: [...deniedCapabilities(), capability.name];
+							setDeniedCapabilities(updated);
+							saveConfigField((config) => {
+								config.mcp_capabilities.denied = updated;
+								if (capability.name === "settings") {
+									config.settings_mcp_enabled = enabled;
+									setSettingsEnabled(enabled);
+								}
+							});
+						}}
+					/>
+				)}
+			</SettingRow>
+		);
+	};
+
 	return (
 		<div class={`${s.section} ${layout.page}`}>
 			<SettingPageHeader title="MCP" scope="This machine" breadcrumb="Integrations / MCP" />
@@ -166,59 +199,43 @@ export const LocalMcpPanel: Component = () => {
 							not discarded.
 						</p>
 					</Show>
-					<For each={[true, false]}>
-						{(optional) => {
-							const rows = () => capabilities.filter((capability) => capability.optional === optional);
-							const controls = () => (
-								<For each={rows()}>
-									{(capability) => {
-										const disabled = () =>
-											deniedCapabilities().includes(capability.name) ||
-											(capability.name === "settings" && !settingsEnabled());
-										return (
-											<SettingRow label={capability.title} hint={capability.description}>
-												{(id, descriptionId) => (
-													<Switch
-														role="checkbox"
-														data-setting-id="app.mcp_capabilities.denied"
-														id={id}
-														aria-describedby={descriptionId()}
-														aria-label={capability.title}
-														checked={!disabled()}
-														onChange={(event) => {
-															const enabled = event.currentTarget.checked;
-															const updated = enabled
-																? deniedCapabilities().filter((name) => name !== capability.name)
-																: [...deniedCapabilities(), capability.name];
-															setDeniedCapabilities(updated);
-															saveConfigField((config) => {
-																config.mcp_capabilities.denied = updated;
-																if (capability.name === "settings") {
-																	config.settings_mcp_enabled = enabled;
-																	setSettingsEnabled(enabled);
-																}
-															});
-														}}
-													/>
-												)}
-											</SettingRow>
-										);
-									}}
-								</For>
-							);
-							return (
-								<Show when={rows().length}>
-									{optional ? (
-										controls()
-									) : (
-										<details class={s.group}>
-											<summary>Additional restrictions</summary>
-											{controls()}
-										</details>
+					<For
+						each={[
+							{ name: "always", title: "Always listed" },
+							{ name: "rare", title: "Rarely needed" },
+							{ name: "conditional", title: "Conditional" },
+						]}
+					>
+						{(section) => (
+							<section class={layout.nativeToolGroup} aria-label={section.title}>
+								<h4>{section.title}</h4>
+								<For
+									each={capabilities.filter(
+										(capability) => capability.section === section.name && capability.parent === null,
 									)}
-								</Show>
-							);
-						}}
+								>
+									{(parent) => (
+										<div role="group" aria-label={parent.title}>
+											{capabilityRow(parent)}
+											<Show when={parent.availability}>
+												<p class={s.hint} role="status">
+													{parent.availability}
+												</p>
+											</Show>
+											<div class={layout.nativeToolChildren}>
+												<For
+													each={capabilities.filter(
+														(capability) => capability.domain === parent.domain && capability.name !== parent.name,
+													)}
+												>
+													{capabilityRow}
+												</For>
+											</div>
+										</div>
+									)}
+								</For>
+							</section>
+						)}
 					</For>
 				</Show>
 			</SectionCard>

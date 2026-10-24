@@ -13,8 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Promote Settings switches, range sliders and custom colour inputs into shared UI primitives with consistent row-height and touch targets (#2302-35d9).
 
 - Add a shared Button primitive with standard action variants, compact sizing and touch targets aligned with form controls (#2296-2bf2).
+### Added
+
+- Add, list and update Ideas through the planner API, CLI and workflow MCP tool, with source tracking and race-safe panel synchronization (#2295-abd3).
 
 ### Fixed
+
+- Read Android shared files from the active service worker cache so they reach the mobile chat draft after a cache version update (#2304-48f8).
+
+- Show the cached mobile connection-test landing when the server is unreachable, even with a cached app shell; show an actionable in-app outage state and recover automatically after a resumed or stalled connection (#2294-078f).
+- Require every `+term` in MCP tool search to match the tool name before limiting results; keep exact `select:<name>` queries free of ranked fallback (#2300-6355).
+- Delete file-browser symbolic links without following their targets, including unavailable links, and show deletion errors (#2301-e76f).
 
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).

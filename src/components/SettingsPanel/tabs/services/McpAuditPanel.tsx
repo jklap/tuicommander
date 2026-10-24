@@ -12,6 +12,7 @@ interface AuditRow {
 	call_id: string;
 	operation: string;
 	target_digest: string | null;
+	target?: { kind: string; id: string; name: string | null } | null;
 	started_ms: number;
 	response_text_bytes: number | null;
 	effect: string;
@@ -31,10 +32,43 @@ const OUTCOMES: Record<string, { label: () => string; variant?: BadgeVariant }> 
 };
 
 // "Unknown" is never styled as success: the server did not observe the effect.
-const EFFECTS: Record<string, { label: () => string; variant?: BadgeVariant }> = {
-	completed: { label: () => t("mcpAudit.effect.completed", "Completed"), variant: "success" },
-	not_started: { label: () => t("mcpAudit.effect.notStarted", "Not started") },
-	unknown: { label: () => t("mcpAudit.effect.unknown", "Unknown"), variant: "warning" },
+const EFFECTS: Record<string, { label: () => string; hint: () => string; variant?: BadgeVariant }> = {
+	completed: {
+		label: () => t("mcpAudit.effect.completed", "Completed"),
+		variant: "success",
+		hint: () =>
+			t(
+				"mcpAudit.effect.completedHint",
+				"The handler returned successfully. Queued work may still run; client delivery is not confirmed.",
+			),
+	},
+	read_only: {
+		label: () => t("mcpAudit.effect.readOnly", "Read-only"),
+		hint: () =>
+			t("mcpAudit.effect.readOnlyHint", "The read-only handler returned successfully without a mutating operation."),
+	},
+	failed: {
+		label: () => t("mcpAudit.effect.failed", "Failed"),
+		variant: "error",
+		hint: () =>
+			t(
+				"mcpAudit.effect.failedHint",
+				"The handler returned an application error. This does not prove rollback of partial changes.",
+			),
+	},
+	not_started: {
+		label: () => t("mcpAudit.effect.notStarted", "Not started"),
+		hint: () => t("mcpAudit.effect.notStartedHint", "The request was refused before the operation started."),
+	},
+	unknown: {
+		label: () => t("mcpAudit.effect.unknown", "Unknown"),
+		variant: "warning",
+		hint: () =>
+			t(
+				"mcpAudit.effect.unknownHint",
+				"Completion is uncertain: the call was cancelled, the handler was interrupted, or an upstream reply was lost. Partial effects may still have occurred.",
+			),
+	},
 };
 
 const DIGEST_CHARS = 8;
@@ -120,6 +154,14 @@ export const McpAuditPanel: Component = () => {
 										const effect = () => EFFECTS[row.effect] ?? EFFECTS.unknown;
 										const time = () => new Date(row.started_ms).toLocaleTimeString(locale(), { hour12: false });
 										const outcomeLabel = () => outcome()?.label() ?? row.outcome;
+										const targetLabel = () =>
+											row.target
+												? `${row.target.name ? row.target.name + " · " : ""}${row.target.id.slice(0, DIGEST_CHARS)}`
+												: (row.target_digest?.slice(0, DIGEST_CHARS) ?? "—");
+										const targetTitle = () =>
+											row.target
+												? `${row.target.name ? row.target.name + " · " : ""}${row.target.id}`
+												: t("mcpAudit.targetTitle", "SHA-256 digest of the target; not the target");
 										const bytes = () => String(row.response_text_bytes ?? "—");
 										return (
 											<tr>
@@ -129,11 +171,8 @@ export const McpAuditPanel: Component = () => {
 												<td class={`${css.mono} ${css.clip}`} title={row.operation}>
 													{row.operation}
 												</td>
-												<td
-													class={`${css.mono} ${css.clip}`}
-													title={t("mcpAudit.targetTitle", "SHA-256 digest of the target; not the target")}
-												>
-													{row.target_digest ? row.target_digest.slice(0, DIGEST_CHARS) : "—"}
+												<td class={`${css.mono} ${css.clip}`} title={targetTitle()}>
+													{targetLabel()}
 												</td>
 												<td title={outcomeLabel()}>
 													<StatusBadge label={outcomeLabel()} variant={outcome()?.variant} />
@@ -141,7 +180,7 @@ export const McpAuditPanel: Component = () => {
 												<td class={`${css.mono} ${css.num}`} title={bytes()}>
 													{bytes()}
 												</td>
-												<td title={effect().label()}>
+												<td title={effect().hint()}>
 													<StatusBadge label={effect().label()} variant={effect().variant} />
 												</td>
 											</tr>

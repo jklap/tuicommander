@@ -91,6 +91,8 @@ export default function MobileApp() {
 		});
 	});
 
+	const [streamError, setStreamError] = createSignal<string | null>(null);
+	let retryOutput: (() => void) | undefined;
 	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
 	const [chatFileLink, setChatFileLink] = createSignal<{ candidate: string; cwd: string } | null>(null);
 	const [recoveryRevision, setRecoveryRevision] = createSignal(0);
@@ -184,7 +186,16 @@ export default function MobileApp() {
 
 	return (
 		<div class={styles.shell} data-mobile-shell>
-			<ConnectionBanner offline={error() !== null} authError={authError()} onRetry={refresh} />
+			<ConnectionBanner
+				offline={error() !== null || streamError() !== null}
+				authError={authError()}
+				onRetry={() => {
+					refresh();
+					retryOutput?.();
+				}}
+				error={error() ?? streamError()}
+				testing={refreshing()}
+			/>
 			<Show
 				when={showDetail()}
 				fallback={
@@ -262,6 +273,10 @@ export default function MobileApp() {
 			>
 				<div class={styles.sessionPane} classList={{ [styles.sessionPaneHidden]: sessionFilesOpen() }}>
 					<SessionDetailScreen
+						onConnectionError={setStreamError}
+						onRegisterRetry={(retry) => {
+							retryOutput = retry;
+						}}
 						subscribeChatWake={subscribeChatWake}
 						session={lastKnownSession()!}
 						sessionExists={sessionExists()}

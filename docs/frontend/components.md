@@ -925,7 +925,7 @@ branch or worktree. The Add Terminal button also offers agents on a long press.
 
 Detached worktree inventory is rendered by `RepoSection` as informational rows, outside the selectable branch-workspace list. The header retains a detached count while folded; no branch or terminal actions are attached to detached rows.
 
-FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
+FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Delete refreshes the listing after success and shows a persistent error notification after failure. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
 
 ### Mobile SessionUsageBlock
 
