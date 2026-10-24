@@ -167,23 +167,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/ChangesTab.module.css",
-    "story": "2198-3154",
-    "rules": [
-      "[[],\".commitTextarea\",[\"min-height: 38px\",\"max-height: 114px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 6px 8px\"]]",
-      "[[],\".commitTextarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".commitBtn\",[\"border: none\",\"border-radius: var(--radius-md)\",\"padding: 4px 12px\"]]",
-      "[[],\".generateBtn\",[\"height: 28px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".generateBtn:hover:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".generateBtnBusy\",[\"border-color: var(--accent)\"]]",
-      "[[],\".filterInput\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 24px 4px 8px\"]]",
-      "[[],\".filterInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".filterClear\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".sectionAction\",[\"border: none\",\"padding: 1px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
     "story": "2204-4f62",
     "rules": [
