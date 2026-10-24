@@ -9802,6 +9802,31 @@ mod tests {
         );
     }
 
+    /// Catches: a stale frontend snapshot replacing the array over an agent-added idea.
+    #[test]
+    #[serial_test::serial]
+    fn notes_stale_panel_save_preserves_agent_addition() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().into());
+        let base = serde_json::json!({"notes":[{"id":"existing","text":"Keep","usedAt":null}]});
+        save_notes(serde_json::json!({}), base.clone()).unwrap();
+        let mut agent = base.clone();
+        agent["notes"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, serde_json::json!({"id":"agent","text":"New"}));
+        save_notes(base.clone(), agent).unwrap();
+        let mut stale_panel = base.clone();
+        stale_panel["notes"][0]["usedAt"] = 42.into();
+        save_notes(base, stale_panel).unwrap();
+        assert_eq!(
+            load_notes().unwrap()["notes"],
+            serde_json::json!([
+                {"id":"agent","text":"New"}, {"id":"existing","text":"Keep","usedAt":42}
+            ])
+        );
+    }
+
     #[test]
     #[serial_test::serial]
     fn notes_delta_removes_deleted_key_without_erasing_another_edit() {
