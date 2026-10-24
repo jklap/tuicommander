@@ -167,17 +167,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/BranchesTab.module.css",
-    "story": "2197-5ffd",
-    "rules": [
-      "[[],\".createConfirmBtn, .createCancelBtn\",[\"padding: 3px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".popoverActions button\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".secondaryBtn\",[\"border: 1px solid var(--border) !important\"]]",
-      "[[],\".foldToggle\",[\"height: 26px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".foldToggleActive\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/ChangesTab.module.css",
     "story": "2198-3154",
     "rules": [

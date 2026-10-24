@@ -13,6 +13,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import s from "./BranchesTab.module.css";
@@ -1075,19 +1076,18 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 						}
 					}}
 				/>
-				<button class={s.foldToggle} title="New branch" onClick={() => startCreate()}>
+				<Button title="New branch" onClick={() => startCreate()}>
 					<PlusIcon />
-				</button>
-				<button
-					class={cx(s.foldToggle, foldingEnabled() && s.foldToggleActive)}
+				</Button>
+				<Button
+					aria-pressed={foldingEnabled()}
 					title={foldingEnabled() ? "Disable prefix grouping" : "Enable prefix grouping"}
 					onClick={() => setFoldingEnabled((v) => !v)}
 				>
 					<FolderIcon />
-				</button>
+				</Button>
 				<Show when={mergedBranches().length > 0}>
-					<button
-						class={s.foldToggle}
+					<Button
 						style={{ position: "relative" }}
 						title={`Delete ${mergedBranches().length} merged branch${mergedBranches().length === 1 ? "" : "es"}`}
 						onClick={() => startDeleteMerged()}
@@ -1103,7 +1103,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 							/>
 						</svg>
 						<span class={s.mergedBadge}>{mergedBranches().length}</span>
-					</button>
+					</Button>
 				</Show>
 			</div>
 
@@ -1153,12 +1153,12 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 						/>
 						Checkout
 					</label>
-					<button class={s.createConfirmBtn} onClick={doCreateBranch}>
+					<Button variant="primary" size="compact" onClick={doCreateBranch}>
 						Create
-					</button>
-					<button class={s.createCancelBtn} onClick={cancelCreate}>
+					</Button>
+					<Button variant="secondary" size="compact" onClick={cancelCreate}>
 						Cancel
-					</button>
+					</Button>
 				</div>
 			</Show>
 
@@ -1238,15 +1238,15 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 							</p>
 						</div>
 						<div class={s.popoverActions}>
-							<button class={s.cancelBtn} onClick={() => setDirtyCheckout(null)}>
+							<Button variant="secondary" onClick={() => setDirtyCheckout(null)}>
 								Cancel
-							</button>
-							<button class={s.secondaryBtn} onClick={handleDirtyCheckoutForce}>
+							</Button>
+							<Button variant="secondary" onClick={handleDirtyCheckoutForce}>
 								Force Switch
-							</button>
-							<button class={s.primaryBtn} onClick={handleDirtyCheckoutStash}>
+							</Button>
+							<Button variant="primary" onClick={handleDirtyCheckoutStash}>
 								Stash and Switch
-							</button>
+							</Button>
 						</div>
 					</div>
 				</div>
@@ -1263,17 +1263,17 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 							<p class={s.confirmInfo}>{dialogData()?.message}</p>
 						</div>
 						<div class={s.popoverActions}>
-							<button class={s.cancelBtn} onClick={() => setDialog(null)}>
+							<Button variant="secondary" onClick={() => setDialog(null)}>
 								Cancel
-							</button>
+							</Button>
 							<Show when={!dialogData()?.branch.is_merged}>
-								<button class={s.dangerBtn} onClick={() => doDeleteBranch(true)}>
+								<Button variant="danger" onClick={() => doDeleteBranch(true)}>
 									Force Delete
-								</button>
+								</Button>
 							</Show>
-							<button class={s.primaryBtn} onClick={() => doDeleteBranch(false)}>
+							<Button variant="primary" onClick={() => doDeleteBranch(false)}>
 								Delete
-							</button>
+							</Button>
 						</div>
 					</div>
 				</div>
