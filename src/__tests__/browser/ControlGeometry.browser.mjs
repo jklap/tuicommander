@@ -49,7 +49,22 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(control.radius, '0px', 'Stretch actions must have square edges');
         }
       }
-      measurements.push({width,...result,stretch});
+      const joined = await evaluate(`[...document.querySelectorAll('[data-joined-case]')].map(group=>({size:group.dataset.joinedCase,overflow:getComputedStyle(group).overflow,controls:[...group.querySelectorAll('button')].map(button=>{const r=button.getBoundingClientRect(),s=getComputedStyle(button);return {left:r.left,right:r.right,height:r.height,start:s.borderStartStartRadius,end:s.borderStartEndRadius,startBorder:s.borderInlineStartWidth,endBorder:s.borderInlineEndWidth};})}))`);
+      for (const group of joined) {
+        assert.notEqual(group.overflow,'hidden','Group must not clip focus or dropdown');
+        assert.ok(group.controls.length > 0, 'Joined group must mount real buttons');
+        for (const [index,control] of group.controls.entries()) {
+          assert.equal(control.height, width<=600?44:group.size==='compact'?22:36);
+          if(index>0) {
+            assert.equal(control.left,group.controls[index-1].right,'Connected edges must meet');
+            assert.equal(control.start,'0px');
+            assert.equal(control.startBorder,'1px','Join must have exactly one divider');
+          } else assert.notEqual(control.start,'0px','First action retains outer radius');
+          if(index<group.controls.length-1) {assert.equal(control.end,'0px');assert.equal(control.endBorder,'0px');}
+          else assert.notEqual(control.end,'0px','Last action retains outer radius');
+        }
+      }
+      measurements.push({width,...result,stretch,joined});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

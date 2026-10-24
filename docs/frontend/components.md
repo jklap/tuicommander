@@ -962,3 +962,8 @@ use `ui/Button`; field CSS owns their width and row layout only.
 `Button geometry="stretch"` fills a flex/grid cross-axis container with square
 edges and at least 36px desktop or 44px touch targets. Use it for edge actions
 such as swipe actions and tab scroll arrows; the container owns placement.
+
+`ButtonGroup` joins direct `Button` children with connected edges and one
+divider. Each action retains its native events, disabled state and size. Label
+the group with `aria-label` or `aria-labelledby`. Keep dropdown content outside
+the direct action children; the group does not clip focus rings or popovers.

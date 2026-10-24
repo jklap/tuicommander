@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { Button } from "../../components/ui/Button";
+import { ButtonGroup } from "../../components/ui/ButtonGroup";
 import { ColorInput } from "../../components/ui/ColorInput";
 import { ColorSwatch } from "../../components/ui/ColorSwatch";
 import { Input } from "../../components/ui/Input";
@@ -303,4 +304,35 @@ it("keeps stretch actions native and consumes the geometry prop", () => {
 	button.focus();
 	expect(button).toHaveFocus();
 	expect(button).toHaveAttribute("type", "button");
+});
+
+// Catches: grouping actions replacing native buttons or merging independent disabled/click state.
+it("keeps joined actions independently focusable and reactive", () => {
+	const [disabled, setDisabled] = createSignal(false);
+	const main = vi.fn(),
+		menu = vi.fn();
+	render(() => (
+		<ButtonGroup aria-label="Prompt actions">
+			<Button onClick={main} disabled={disabled()}>
+				Run
+			</Button>
+			<Button onClick={menu} aria-expanded="false">
+				Choose
+			</Button>
+		</ButtonGroup>
+	));
+	const group = screen.getByRole("group", { name: "Prompt actions" });
+	const run = screen.getByRole("button", { name: "Run" });
+	const choose = screen.getByRole("button", { name: "Choose" });
+	expect(group).toContainElement(run);
+	fireEvent.click(run);
+	fireEvent.click(choose);
+	expect(main).toHaveBeenCalledOnce();
+	expect(menu).toHaveBeenCalledOnce();
+	setDisabled(true);
+	expect(run).toBeDisabled();
+	expect(choose).not.toBeDisabled();
+	choose.focus();
+	expect(choose).toHaveFocus();
+	expect(choose).toHaveAttribute("aria-expanded", "false");
 });
