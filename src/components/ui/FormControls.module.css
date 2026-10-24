@@ -70,13 +70,39 @@
 	cursor: pointer;
 	user-select: none;
 }
+/* Keep the native icon hit region square; only the decorative surface is circular. */
+.iconButton {
+ --control-height: 36px;
+ width: var(--control-height);
+ min-width: var(--control-height);
+ max-width: none;
+ height: var(--control-height);
+ padding: 0;
+ border-radius: 0;
+}
+.circleButton, .circleButton:focus-visible, .button.circleButton[aria-pressed="true"] {
+ background: transparent;
+ border-color: transparent;
+}
+.circleSurface {
+ box-sizing: border-box;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ width: 100%;
+ height: 100%;
+ border: 1px solid var(--border);
+ border-radius: 50%;
+}
+@media (max-width: 600px) { .iconButton { --control-height: 44px; } }
+
 .secondary { background: var(--bg-tertiary); color: var(--fg-primary); }
 .primary { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
 .ghost { background: transparent; border-color: transparent; color: var(--fg-secondary); }
 .danger { background: var(--error); border-color: var(--error); color: var(--text-on-error); }
-.secondary:hover:enabled, .ghost:hover:enabled { background: var(--bg-highlight); }
-.primary:hover:enabled, .danger:hover:enabled { filter: brightness(1.1); }
-.button[aria-pressed="true"] { border-color: var(--accent); }
+.secondary:hover:enabled, .ghost:hover:enabled, .circleButton:hover:enabled > :is(.secondary, .ghost) { background: var(--bg-highlight); }
+.primary:hover:enabled, .danger:hover:enabled, .circleButton:hover:enabled > :is(.primary, .danger) { filter: brightness(1.1); }
+.button[aria-pressed="true"], .circleButton[aria-pressed="true"] > .circleSurface { border-color: var(--accent); }
 
 /* Promoted from Settings: Expert's 36x20 track is the shared switch look. */
 .switchControl, .colorInput {
@@ -216,9 +242,9 @@
 /* Validation changes the border, not the keyboard focus ring. */
 :is(input, select, textarea).control[aria-invalid="true"] { border-color: var(--error); }
 .removalToggle { background: var(--bg-tertiary); color: var(--fg-primary); }
-.removalToggle:hover:enabled { background: var(--bg-highlight); }
-.button.removalToggle[aria-pressed="true"] { border-color: var(--success); color: var(--success); }
-.button.removalToggle[aria-pressed="true"]:hover:enabled {
+.removalToggle:hover:enabled, .circleButton:hover:enabled > .removalToggle { background: var(--bg-highlight); }
+.button.removalToggle[aria-pressed="true"], .circleButton[aria-pressed="true"] > .removalToggle { border-color: var(--success); color: var(--success); }
+.button.removalToggle[aria-pressed="true"]:hover:enabled, .circleButton[aria-pressed="true"]:hover:enabled > .removalToggle {
  border-color: var(--error);
  color: var(--error);
  background: color-mix(in srgb, var(--error) 10%, transparent);

@@ -707,3 +707,13 @@ arrange the wrapping picker but must not resize its swatches.
   `aria-pressed` from owner state. Pressed uses the success border; enabled
   pressed hover uses the danger tone. Disabled actions keep their state tone.
   Ordinary selection buttons retain their existing accent styling.
+
+### Icon-only actions
+
+Use `Button shape="icon" aria-label="Describe the action"` for an icon-only action.
+Use `circular` when the action needs a circular visual. The native hit region stays
+square at 36 × 36px on desktop and 44 × 44px at touch widths; only the inner
+surface is circular. `size="compact"` does not shrink an icon target. Icon mode
+cannot combine with stretch geometry. Supply one icon or glyph and a nonempty,
+descriptive `aria-label` (required by the TypeScript API); a tooltip alone is not
+an accessible name. Do not add feature-level sizing or rounding rules.
