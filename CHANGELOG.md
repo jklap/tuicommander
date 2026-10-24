@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Delete file-browser symbolic links without following their targets, including unavailable links, and show deletion errors (#2301-e76f).
+
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).
 

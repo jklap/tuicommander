@@ -521,6 +521,42 @@ describe("FileBrowserPanel active-file highlight", () => {
 	});
 });
 
+describe("FileBrowserPanel delete errors", () => {
+	it("shows the backend error after confirmed Delete — catches log-only deletion failures", async () => {
+		const { ToastContainer } = await import("../../../components/ToastContainer/ToastContainer");
+		const { toastsStore } = await import("../../../stores/toasts");
+		const { activityStore } = await import("../../../stores/activityStore");
+		await activityStore.hydrate();
+		const { appLogger } = await import("../../../stores/appLogger");
+		const logged = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		listings.set("/repo|.", [file("locked.txt")]);
+		mockInvoke.mockImplementation((cmd, args) =>
+			cmd === "delete_path" ? Promise.reject("Permission denied: locked.txt") : defaultInvoke(cmd, args),
+		);
+		const { container, getByText, queryByText } = render(() => (
+			<>
+				<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+				<ToastContainer />
+			</>
+		));
+		try {
+			await waitFor(() => expect(queryByText("locked.txt")).not.toBeNull());
+			fireEvent.contextMenu(container.querySelector(".entryName")!.parentElement!);
+			fireEvent.click(getByText("Delete"));
+			const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Delete");
+			fireEvent.click(confirm!);
+			await waitFor(() => expect(queryByText("Permission denied: locked.txt")).not.toBeNull());
+			expect(queryByText("Delete failed")).not.toBeNull();
+			expect(queryByText("locked.txt")).not.toBeNull();
+			expect(mockInvoke).toHaveBeenCalledWith("delete_path", { repoPath: "/repo", path: "locked.txt" });
+			expect(logged).toHaveBeenCalledWith("app", "Failed to delete", "Permission denied: locked.txt");
+		} finally {
+			for (const toast of toastsStore.toasts) toastsStore.remove(toast.id);
+			logged.mockRestore();
+		}
+	});
+});
+
 describe("FileBrowserPanel create file", () => {
 	/** Right-click a row and pick a context-menu item by label. */
 	const openContextMenuOn = (container: HTMLElement, name: string) => {
