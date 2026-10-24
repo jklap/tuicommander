@@ -406,29 +406,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/AgentsTab.module.css",
-    "story": "2226-5941",
-    "rules": [
-      "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn.danger:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".menuItem\",[\"padding: 5px 10px\",\"border: none\"]]",
-      "[[],\".formInput.inputError\",[\"border-color: var(--error)\"]]",
-      "[[],\".actionBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actionBtn.installed\",[\"border-color: var(--success)\"]]",
-      "[[],\".actionBtn.installed:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]\",[\"width: 16px\",\"height: 16px\",\"min-width: 16px\",\"min-height: 16px\",\"border: 1px solid var(--border)\",\"border-radius: 3px\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]:checked\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]:checked::after\",[\"width: 4px\",\"height: 8px\",\"border: solid white\",\"border-width: 0 2px 2px 0\"]]",
-      "[[],\".smallBtn, .actionBtn\",[\"min-height: 32px\",\"padding: 5px 10px\"]]",
-      "[[],\".agentExpanded textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 8px\"]]",
-      "[[],\".page textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 8px\"]]",
-      "[[],\".rowSwitch\",[\"height: 18px\",\"border: 1px solid var(--border)\",\"border-radius: 999px\"]]",
-      "[[],\".rowSwitch::after\",[\"height: 12px\",\"border-radius: 50%\"]]",
-      "[[],\".rowSwitch:checked\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/GitHubTab.module.css",
     "story": "2227-3dcb",
     "rules": [
