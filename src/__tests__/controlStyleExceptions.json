@@ -238,14 +238,6 @@
     ]
   },
   {
-    "file": "src/components/PrDiffTab/ReviewThreads.module.css",
-    "story": "2214-430b",
-    "rules": [
-      "[[],\".composer textarea\",[\"min-height: 64px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[],\".action, .primary\",[\"min-height: var(--control-height, 36px)\",\"padding: 4px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ProcessManagerModal/ProcessManagerModal.module.css",
     "story": "2215-be65",
     "rules": [
