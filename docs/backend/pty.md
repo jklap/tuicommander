@@ -823,6 +823,16 @@ peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 
+A queued user command at the FIFO head can answer an idle session's
+`progress-blocked` wait. The gate reads the ranked awaiting source; native
+questions and approval dialogs still block delivery. The accumulator does not
+let a late blocked progress report replace a native dialog's awaiting source.
+Server-authored notices
+and initial prompts cannot use this exception or be overtaken. Confirmed idle,
+foreground ownership, an empty composer and certain delivery remain required.
+Successful submission emits `progress-superseded`, which retracts only a
+progress-owned wait, not a native dialog that replaced it.
+
 Queue requests may include `idempotencyKey`. A per-PTY bounded recent-key set
 reserves acceptance atomically with FIFO append, before the blocking flush. The
 last 128 keys survive drain and cancellation and are removed with the PTY;
