@@ -11,6 +11,7 @@ import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { Switch } from "../../ui/Switch";
 import { Textarea } from "../../ui/Textarea";
 import s from "../Settings.module.css";
 import { DangerZone, ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";
@@ -446,13 +447,11 @@ const PromptEditor: Component<{
 							{(id, descriptionId) => (
 								<div>
 									<label class={sp.autoExecLabel}>
-										<input
+										<Switch
 											data-setting-id="prompts.prompts.{id}.text"
 											id={id}
 											aria-describedby={descriptionId()}
-											class={s.rowSwitch}
 											role="switch"
-											type="checkbox"
 											checked={props.prompt.autoExecute ?? false}
 											onChange={handleAutoExecuteToggle}
 										/>
@@ -654,10 +653,8 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 						>
 							Edit
 						</button>
-						<input
+						<Switch
 							data-setting-id="prompts.prompts.{id}.text"
-							class={s.rowSwitch}
-							type="checkbox"
 							role="switch"
 							aria-label={`Enable ${props.prompt.name}`}
 							checked={isEnabled()}

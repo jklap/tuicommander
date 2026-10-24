@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Promote Settings switches, range sliders and custom colour inputs into shared UI primitives with consistent row-height and touch targets (#2302-35d9).
+
 - Add a shared Button primitive with standard action variants, compact sizing and touch targets aligned with form controls (#2296-2bf2).
 
 ### Fixed

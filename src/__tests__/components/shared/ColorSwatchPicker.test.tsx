@@ -34,7 +34,7 @@ describe("ColorSwatchPicker", () => {
 		const { container } = render(() => (
 			<ColorSwatchPicker color="" presets={DEFAULT_COLOR_PRESETS} onChange={onChange} />
 		));
-		const swatches = container.querySelectorAll(".colorSwatch");
+		const swatches = container.querySelectorAll('.colorSwatch, [data-form-control="color"]');
 		// 8 presets + 1 custom (label) + 1 clear
 		expect(swatches.length).toBe(10);
 	});
@@ -77,8 +77,8 @@ describe("ColorSwatchPicker", () => {
 		const { container } = render(() => (
 			<ColorSwatchPicker color="#123456" presets={DEFAULT_COLOR_PRESETS} onChange={onChange} />
 		));
-		const customSwatch = container.querySelector(".colorSwatchCustom")!;
-		expect(customSwatch.classList.contains("active")).toBe(true);
+		const customSwatch = container.querySelector('[data-form-control="color"]')!;
+		expect(customSwatch).toHaveAttribute("data-selected");
 	});
 
 	it("custom color input fires onChange with picked value", () => {

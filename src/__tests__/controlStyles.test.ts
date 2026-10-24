@@ -102,6 +102,23 @@ it("catches ordinary actions hidden beside explicitly marked layout buttons", ()
 	]);
 });
 
+it("catches hand-rolled checkbox, range and color widths and shared specialized control sizing", () => {
+	const css = ["checkbox", "range", "color"].map((type) => `input[type="${type}"] { width: 20px; }`).join("\n");
+	expect(auditCss("src/Feature.module.css", css)).toHaveLength(3);
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css';
+		const Feature = () => <><Switch class={s.toggle}/><Slider class={s.range}/><ColorInput class={s.color}/></>;`,
+	);
+	expect(
+		auditCss(
+			"src/Feature.module.css",
+			".toggle, .range, .color { height: 18px; }",
+			classes.get("src/Feature.module.css"),
+		),
+	).toHaveLength(1);
+});
+
 it("catches feature resizing passed to the shared Button", () => {
 	const classes = controlClasses(
 		["src/Feature.tsx"],

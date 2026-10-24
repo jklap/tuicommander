@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import type { SettingId } from "../../services/settingsCatalogue";
 import { cx } from "../../utils";
 import s from "../SettingsPanel/Settings.module.css";
+import { ColorInput } from "../ui/ColorInput";
 import type { ColorPreset } from "./colorPresets";
 
 export interface ColorSwatchPickerProps {
@@ -28,23 +29,18 @@ export const ColorSwatchPicker: Component<ColorSwatchPickerProps> = (props) => {
 					/>
 				)}
 			</For>
-			<label
-				class={cx(s.colorSwatch, s.colorSwatchCustom, isCustomColor() && s.active)}
-				style={{
-					background: isCustomColor() ? props.color : "var(--bg-tertiary)",
-				}}
+			<ColorInput
+				selected={!!isCustomColor()}
+				data-setting-id={props.settingId}
+				aria-label={t("groups.btn.customColor", "Custom color")}
 				title={t("groups.btn.customColor", "Custom color")}
+				value={props.color || "#999999"}
+				onInput={(e) => props.onChange(e.currentTarget.value)}
 			>
-				<input
-					data-setting-id={props.settingId}
-					type="color"
-					value={props.color || "#999999"}
-					onInput={(e) => props.onChange(e.currentTarget.value)}
-				/>
 				<Show when={!isCustomColor()}>
 					<span class={s.colorSwatchLabel}>&#x22EF;</span>
 				</Show>
-			</label>
+			</ColorInput>
 			<button
 				data-setting-id={props.settingId}
 				class={cx(s.colorSwatch, s.colorSwatchClear, !props.color && s.active)}

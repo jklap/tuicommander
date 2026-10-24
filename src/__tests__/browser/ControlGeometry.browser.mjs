@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import solid from 'vite-plugin-solid';
 
 // Real browser layout, not happy-dom's zero-size boxes. Screenshots clip only the fixture element.
-it('catches padding-sized Button drifting from Select and SegmentedControl at desktop and touch widths', {timeout: 60000}, async () => {
+it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async () => {
   const directory = resolve(process.env.TUIC_GEOMETRY_EVIDENCE ?? '.tmp/control-geometry');
   await mkdir(directory, {recursive: true});
   const server = await createServer({configFile:false, plugins:[solid()], cacheDir:resolve('.tmp/control-geometry-vite'), logLevel:'error', server:{host:'127.0.0.1',port:0}});
@@ -25,8 +25,9 @@ it('catches padding-sized Button drifting from Select and SegmentedControl at de
     await new Promise((ok, fail) => {socket.addEventListener('open',ok,{once:true});socket.addEventListener('error',fail,{once:true});});
     let sequence=0;
     const pending = new Map();
-    socket.addEventListener('message', event => {const message=JSON.parse(event.data);const request=pending.get(message.id);if(request){pending.delete(message.id);message.error ? request.reject(new Error(JSON.stringify(message.error))) : request.resolve(message.result);}});
-    const send = (method, params={}, sessionId) => new Promise((resolve,reject) => {const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params,sessionId}));});
+    socket.addEventListener('close',()=>{for(const request of pending.values()){clearTimeout(request.timer);request.reject(new Error('Browser disconnected'));}pending.clear();});
+    socket.addEventListener('message', event => {const message=JSON.parse(event.data);const request=pending.get(message.id);if(request){clearTimeout(request.timer);pending.delete(message.id);message.error ? request.reject(new Error(JSON.stringify(message.error))) : request.resolve(message.result);}});
+    const send = (method, params={}, sessionId) => new Promise((resolve,reject) => {const id=++sequence;const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`CDP ${method} did not respond`));},20000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params,sessionId}));});
     const {targetId} = await send('Target.createTarget',{url:'about:blank'});
     const {sessionId} = await send('Target.attachToTarget',{targetId,flatten:true});
     const evaluate = async expression => {const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},sessionId);if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
@@ -34,7 +35,7 @@ it('catches padding-sized Button drifting from Select and SegmentedControl at de
     const measurements=[];
     for(const width of [1400,390]) {
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},sessionId);
-      const loaded = new Promise(resolve => {const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
+      const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);

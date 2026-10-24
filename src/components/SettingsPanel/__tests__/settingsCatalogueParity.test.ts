@@ -120,3 +120,14 @@ describe("settings catalogue/control identity boundary", () => {
 		expect(missingCatalogueControls(["app.shell", "app.theme"], result, { "app.theme": "" })).toEqual(["app.theme"]);
 	});
 });
+
+// Catches: shared switches disappearing from the identity audit, or Solid control flow creating false inputs.
+it("resolves shared Switch imports without confusing Solid Switch control flow", () => {
+	const source = `import { Switch } from 'solid-js';
+ import { Switch as Toggle } from '../../ui/Switch';
+ const Page = () => <Switch><Toggle data-setting-id="app.osc52_clipboard" /><Toggle /></Switch>;`;
+	const result = extractSettingControls("fixture.tsx", source);
+	expect(result.map((control) => control.tag)).toEqual(["Toggle", "Toggle"]);
+	expect(missingControlIdentities(result)).toHaveLength(1);
+	expect(result[0].settingId).toBe("app.osc52_clipboard");
+});

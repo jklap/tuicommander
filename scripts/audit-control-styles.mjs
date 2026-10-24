@@ -10,7 +10,7 @@ const postcss = require("postcss");
 const purgecssRequire = createRequire(createRequire(import.meta.resolve("vite-plugin-purgecss")).resolve("purgecss"));
 const parseSelector = purgecssRequire("postcss-selector-parser");
 const geometry = /^(?:(?:min-|max-)?(?:height|block-size)|padding(?:-.+)?|border(?:-.+)?)$/;
-const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl", "Button"]);
+const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl", "Button", "Switch", "Slider", "ColorInput"]);
 
 export function sourceFiles(root = "src") {
 	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -83,7 +83,8 @@ export function auditCss(file, css, classes = new Set()) {
 		}
 		const matches = parseSelector().astSync(rule.selector).nodes.some((selector) => targetsControl(selector));
 		if (!matches) return;
-		const declarations = rule.nodes.filter((node) => node.type === "decl" && geometry.test(node.prop.toLowerCase())).map((node) => `${node.prop.toLowerCase()}: ${node.value}${node.important ? " !important" : ""}`);
+		const specialized = /input\s*\[type\s*=\s*["']?(?:checkbox|range|color)["']?\s*\]/i.test(rule.selector);
+		const declarations = rule.nodes.filter((node) => node.type === "decl" && (geometry.test(node.prop.toLowerCase()) || (specialized && /^(?:min-|max-)?(?:width|inline-size)$/.test(node.prop.toLowerCase())))).map((node) => `${node.prop.toLowerCase()}: ${node.value}${node.important ? " !important" : ""}`);
 		if (!declarations.length) return;
 		const context = [];
 		for (let parent = rule.parent; parent?.type === "atrule"; parent = parent.parent) context.unshift(`@${parent.name} ${parent.params}`);
