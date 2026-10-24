@@ -10606,6 +10606,13 @@ branch refs/heads/feat
     #[test]
     fn monitoring_one_commit_reads_only_changed_ref_and_history() {
         let (_temp, repo, _) = workspace_fixture();
+        // Recent Git versions can pack refs during commit's auto-maintenance.
+        // This case measures one loose-ref update; packed-ref invalidation is
+        // covered by monitoring_shared_snapshot_keeps_integration_dependencies_current.
+        git_cmd(&repo)
+            .args(["config", "maintenance.auto", "false"])
+            .run()
+            .expect("disable unrelated automatic ref packing");
         let branches: Vec<_> = (0..16).map(|i| format!("incremental-{i}")).collect();
         for branch in &branches {
             add_worktree(&repo, branch);
