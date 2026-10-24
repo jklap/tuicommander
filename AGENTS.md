@@ -160,6 +160,8 @@ You can exercise features through the **web UI** instead of the Tauri desktop ap
 
 ## Visual
 
+- UI controls use `src/components/ui` primitives (Select, Input, Textarea, SegmentedControl, Dropdown); do not resize controls in feature CSS.
+
 - All UI work MUST follow [`docs/frontend/STYLE_GUIDE.md`](docs/frontend/STYLE_GUIDE.md).
 - **Plugin dashboards MUST follow [`docs/plugins-style.md`](docs/plugins-style.md)** — use the shared `.dashboard`/`.dash-*` classes from `PLUGIN_BASE_CSS`, never hand-roll inline layout CSS. The built-in Claude Usage dashboard is the reference.
 - Icons: monochrome inline SVGs with `fill="currentColor"` — never emoji.

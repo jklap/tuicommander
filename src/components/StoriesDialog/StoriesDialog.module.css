@@ -101,10 +101,9 @@
 .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .filters label { display: flex; flex-direction: column; flex: 1; min-width: 100px; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .filters select { width: 100%; }
-.filters [role="group"] { display: flex; gap: 4px; align-items: flex-end; }
-.filters button { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; background: var(--bg-tertiary); color: var(--fg-secondary); font: inherit; font-size: var(--font-xs); cursor: pointer; }
-.filters button[aria-pressed="true"] { border-color: var(--accent); color: var(--fg-primary); }
-.filters button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.viewSwitch { align-self: flex-end; }
+.archiveAction { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; background: var(--bg-tertiary); color: var(--fg-secondary); font: inherit; font-size: var(--font-xs); cursor: pointer; }
+.archiveAction:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kanbanContent { grid-template-columns: minmax(170px, 18%) minmax(0, 1fr); grid-template-rows: minmax(280px, 1fr) minmax(180px, 38%); }
 .kanbanContent .detail { grid-column: 1 / -1; min-height: 240px; border-top: 1px solid var(--border); }
 .kanbanContent .storyColumn { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -134,7 +133,7 @@
 .editCriterion { display: flex; flex-direction: column; gap: 4px; }
 .filters .archiveToggle { flex-direction: row; align-items: center; flex-basis: 100%; }
 .archiveToggle input { accent-color: var(--accent); }
-.filters button:disabled { opacity: .5; cursor: default; }
+.archiveAction:disabled { opacity: .5; cursor: default; }
 
 .metadata { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; font-size: var(--font-sm); }
 .metadata dt { color: var(--fg-secondary); }

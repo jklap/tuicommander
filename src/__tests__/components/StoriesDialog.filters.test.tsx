@@ -92,7 +92,7 @@ it("catches ignoring the Rust projection or resetting combined filters when swit
 			},
 		}),
 	);
-	fireEvent.click(first.getByRole("button", { name: /^Kanban$/ }));
+	fireEvent.click(first.getByRole("tab", { name: /^Kanban$/ }));
 	const board = within(first.getByRole("region", { name: "Kanban" }));
 	expect(board.getAllByRole("region")).toHaveLength(8);
 	expect(board.queryByRole("button", { name: /Closed task/ })).toBeNull();
@@ -102,7 +102,7 @@ it("catches ignoring the Rust projection or resetting combined filters when swit
 	const reopened = render(() => <StoriesDialog project="/filter-test" onClose={() => {}} />);
 	expect((reopened.getByLabelText("Status") as HTMLSelectElement).value).toBe("open");
 	expect((reopened.getByLabelText("Story type") as HTMLSelectElement).value).toBe("feature");
-	expect(reopened.getByRole("button", { name: /^Kanban$/ }).getAttribute("aria-pressed")).toBe("true");
+	expect(reopened.getByRole("tab", { name: /^Kanban$/ }).getAttribute("aria-selected")).toBe("true");
 	await waitFor(() =>
 		expect(
 			within(reopened.getByRole("region", { name: "Kanban" })).getByRole("button", { name: /Open feature/ }),
@@ -115,7 +115,7 @@ it("catches ignoring the Rust projection or resetting combined filters when swit
 			within(reopened.getByRole("region", { name: "Kanban" })).getByRole("button", { name: /Closed task/ }),
 		).toBeTruthy(),
 	);
-	fireEvent.click(reopened.getByRole("button", { name: /^List$/ }));
+	fireEvent.click(reopened.getByRole("tab", { name: /^List$/ }));
 	expect(
 		within(reopened.getByRole("region", { name: "Stories" })).queryByRole("button", { name: /Open feature/ }),
 	).toBeNull();
@@ -170,4 +170,19 @@ it("catches dropping an explicitly selected story type from the create request",
 		}),
 	);
 	await waitFor(() => expect(ui.queryByRole("button", { name: "Create story" })).toBeNull());
+});
+
+it("catches a hand-rolled view switch bypassing the shared form controls", async () => {
+	const ui = render(() => <StoriesDialog project="/filter-test" onClose={() => {}} />);
+	await ui.findByRole("button", { name: /Open feature/ });
+	const tabs = within(ui.getByRole("tablist", { name: "Story view" }));
+	const list = tabs.getByRole("tab", { name: "List" });
+	const kanban = tabs.getByRole("tab", { name: "Kanban" });
+	expect(list).toHaveClass("segment");
+	expect(kanban).toHaveClass("segment");
+	expect(list).toHaveAttribute("aria-selected", "true");
+	fireEvent.keyDown(list, { key: "ArrowRight" });
+	expect(kanban).toHaveAttribute("aria-selected", "true");
+	expect(storiesUi.view()).toBe("kanban");
+	expect(tabs.queryByRole("button")).toBeNull();
 });
