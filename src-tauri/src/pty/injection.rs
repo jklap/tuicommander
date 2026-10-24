@@ -370,7 +370,7 @@ pub(crate) fn blocked_on_confident_question(state: &AppState, session_id: &str) 
 }
 
 pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
-    submission_ready(state, session_id, false)
+    submission_ready(state, session_id, false, false)
 }
 
 fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
@@ -381,7 +381,12 @@ fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
         .is_some_and(|session| session.awaiting_input)
 }
 
-fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bool {
+fn submission_ready(
+    state: &AppState,
+    session_id: &str,
+    human_reply: bool,
+    queued_user_command: bool,
+) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
     }
@@ -402,12 +407,21 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
         .get(session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
         .unwrap_or(false);
+    // A queued user command answers a progress-tool wait, not a native dialog.
+    // Read the source from ranked evidence, never infer ownership from a screen.
+    let progress_reply = queued_user_command
+        && state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"));
     let blocked_on_question = state
         .session_maps
         .session_states
         .get(session_id)
-        .map(|s| s.question_confident)
-        .unwrap_or(false);
+        .is_some_and(|session| {
+            session.choice_prompt.is_some() || (session.question_confident && !progress_reply)
+        });
     // A native question may keep its shell BUSY. Human answers are not idle
     // work: the awaiting flag itself grants this one explicit input path.
     let answering_question = human_reply && human_reply_waiting(state, session_id);
@@ -450,15 +464,16 @@ pub(super) fn claim_idle_for_injection(
     state: &AppState,
     session_id: &str,
 ) -> Option<InjectionClaim> {
-    claim_idle_for_submission(state, session_id, false)
+    claim_idle_for_submission(state, session_id, false, false)
 }
 
 fn claim_idle_for_submission(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
+    queued_user_command: bool,
 ) -> Option<InjectionClaim> {
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, queued_user_command) {
         return None;
     }
     if human_reply && human_reply_waiting(state, session_id) {
@@ -690,7 +705,7 @@ fn agent_composer_rejection(
     {
         return Some(("awaiting_input", "empty"));
     }
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, false) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -793,7 +808,7 @@ pub(super) fn agent_submission_rejection(
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
-    if !submission_ready(state, session_id, human_reply) {
+    if !submission_ready(state, session_id, human_reply, false) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -874,7 +889,7 @@ fn write_submission_to_pty(
             pending: summarize_pending_injections(state, session_id),
         };
     }
-    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply) else {
+    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, false) else {
         let (reason, composer_state) = agent_submission_rejection(state, session_id, human_reply)
             .unwrap_or(("claim_lost", "unknown"));
         return AgentSubmissionWrite::Rejected {
@@ -2252,7 +2267,21 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         .as_ref()
         .and_then(|session| session.shell_state.as_deref())
         .unwrap_or("unknown");
-    let claim = match claim_idle_for_injection(state, session_id) {
+    // Bind the permission to this exact FIFO head. A concurrent removal must
+    // not transfer a user reply's permission to a server-authored notice.
+    let Some((head_id, queued_user_command)) =
+        state.pending_injections.get(session_id).and_then(|queue| {
+            queue.front().map(|head| {
+                (
+                    head.id(),
+                    matches!(head, crate::state::PendingInjection::UserCommand { .. }),
+                )
+            })
+        })
+    else {
+        return;
+    };
+    let claim = match claim_idle_for_submission(state, session_id, false, queued_user_command) {
         Some(claim) => claim,
         None => {
             let defer_reason = if !session_is_agent(state, session_id) {
@@ -2286,8 +2315,13 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     let pending = state
         .pending_injections
         .get_mut(session_id)
-        .and_then(|mut queue| queue.pop_front());
+        .and_then(|mut queue| {
+            (queue.front().is_some_and(|head| head.id() == head_id))
+                .then(|| queue.pop_front())
+                .flatten()
+        });
     let Some(injection) = pending else {
+        rollback_injection_claim(state, session_id, claim);
         tracing::info!(
             session_id,
             agent_state,
@@ -2310,6 +2344,14 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         outcome,
         ClaimedInjectionKind::Message,
     );
+    if queued_user_command && matches!(outcome, InjectionOutcome::Submitted) {
+        // Retract only the progress-owned wait. If a native dialog replaced it
+        // during delivery, the accumulator preserves that dialog's evidence.
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({"type": "progress-superseded"}).into(),
+        });
+    }
     let (typed, submitted, enter_separate) = match outcome {
         InjectionOutcome::Submitted => ("yes", true, "sent"),
         InjectionOutcome::NotStarted(_) => ("no", false, "not_sent"),

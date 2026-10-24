@@ -370,6 +370,9 @@ The Compose panel can leave work for an agent without steering its current turn:
   already idle; otherwise it waits for the next idle window.
 - Queued user commands and peer messages share one FIFO and are delivered one
   item per idle window in acceptance order.
+- If an idle agent reports blocked progress, your queued command answers that
+  wait. Native questions and permission dialogs still require an explicit answer
+  before queued work can be delivered.
 - The `N queued` badge counts only Compose commands. Clicking it discards those
   commands but never clears peer or orchestrator messages waiting in the same
   delivery queue.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Deliver queued user commands when an idle agent is waiting on a blocked progress report, without bypassing native questions or permission dialogs (#2177-053d).
+
 ## [2.0.0-beta.2] - 2026-10-24
 
 - Show append-only notes and workflow receipt references in native story detail, with an add field, retained drafts on failure, and an explicit refresh for agent-added notes (#2172-6dee).
