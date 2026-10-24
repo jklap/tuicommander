@@ -1,6 +1,6 @@
-import { Button } from "../ui/Button";
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import s from "./Settings.module.css";
 import type { SettingsShellTab } from "./SettingsShell";

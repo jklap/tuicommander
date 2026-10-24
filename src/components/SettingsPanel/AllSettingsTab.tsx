@@ -1,10 +1,10 @@
-import { Button } from "../ui/Button";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { invoke } from "../../invoke";
 import { hasCatalogueEditor, type SettingId, settingHint, settingLabel } from "../../services/settingsCatalogue";
 import { settingsRefresh } from "../../services/settingsRefresh";
 import { repositoriesStore } from "../../stores/repositories";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { SettingList } from "./fields/SettingList";

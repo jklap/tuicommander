@@ -1,5 +1,3 @@
-import { Textarea } from "../../../ui/Textarea";
-import { Button } from "../../../ui/Button";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { settingOptions } from "../../../../services/settingsCatalogue";
 import { appLogger } from "../../../../stores/appLogger";
@@ -14,9 +12,11 @@ import {
 	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
+import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { Switch } from "../../../ui/Switch";
+import { Textarea } from "../../../ui/Textarea";
 import { ContextualHelp } from "../../ContextualHelp";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingRow } from "../../SettingsPrimitives";

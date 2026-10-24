@@ -1,8 +1,8 @@
-import { Button } from "../../../ui/Button";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { locale, t } from "../../../../i18n";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
+import { Button } from "../../../ui/Button";
 import { Select } from "../../../ui/Select";
 import { type BadgeVariant, StatusBadge } from "../../../ui/StatusBadge";
 import s from "../../Settings.module.css";

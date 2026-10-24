@@ -1,6 +1,6 @@
-import { Button } from "../ui/Button";
 import { Show } from "solid-js";
 import { t } from "../../i18n";
+import { Button } from "../ui/Button";
 import s from "./Settings.module.css";
 import { DangerZone, SectionCard } from "./SettingsPrimitives";
 import r from "./tabs/RepositoryTabs.module.css";

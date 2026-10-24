@@ -1,4 +1,3 @@
-import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
@@ -7,6 +6,7 @@ import { tasksNotifications } from "../../../services/tasksNotifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
+import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Select";
 import { Switch } from "../../ui/Switch";
 import { ContextualHelp } from "../ContextualHelp";

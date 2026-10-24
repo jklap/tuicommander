@@ -1,4 +1,3 @@
-import { Button } from "../ui/Button";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { t } from "../../i18n";
@@ -15,6 +14,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
+import { Button } from "../ui/Button";
 import { AllSettingsTab } from "./AllSettingsTab";
 import { SettingsHelpScope } from "./ContextualHelp";
 import { DictationSettings } from "./DictationSettings";

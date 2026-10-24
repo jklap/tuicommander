@@ -1,4 +1,3 @@
-import { Button } from "../../ui/Button";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { invoke } from "../../../invoke";
@@ -16,6 +15,7 @@ import { openDialog as open } from "../../../utils/nativeDialog";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
+import { Button } from "../../ui/Button";
 import { SegmentedControl } from "../../ui/SegmentedControl";
 import { Switch } from "../../ui/Switch";
 import { ContextualHelp } from "../ContextualHelp";

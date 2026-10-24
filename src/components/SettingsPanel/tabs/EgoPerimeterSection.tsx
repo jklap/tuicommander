@@ -1,4 +1,3 @@
-import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
@@ -7,6 +6,7 @@ import { reportSettingsConflicts, settingsRefresh } from "../../../services/sett
 import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
 import { mergeSettingsSnapshot } from "../../../utils/mergeSettingsSnapshot";
+import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";

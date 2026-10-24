@@ -1,6 +1,6 @@
-import { Button } from "../ui/Button";
 import { type Component, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
+import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
 import s from "./Settings.module.css";
 

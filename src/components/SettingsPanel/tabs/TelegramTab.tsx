@@ -1,9 +1,9 @@
-import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { settingsRefresh } from "../../../services/settingsRefresh";
 import { HttpRpcError } from "../../../transport";
+import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { SettingStatus, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";

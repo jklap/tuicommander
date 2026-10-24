@@ -1,4 +1,3 @@
-import { Button } from "../../../ui/Button";
 import { type Component, createEffect, createSignal, For, Index, on, onCleanup, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { settingOptions } from "../../../../services/settingsCatalogue";
@@ -14,6 +13,7 @@ import {
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { Switch } from "../../../ui/Switch";

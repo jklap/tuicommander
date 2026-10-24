@@ -1,5 +1,5 @@
-import { Button } from "../../ui/Button";
 import { type Component, For, Show } from "solid-js";
+import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import s from "./fields.module.css";
 import { SettingField, type SettingFieldProps } from "./SettingField";

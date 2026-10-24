@@ -1,4 +1,3 @@
-import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
@@ -8,6 +7,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { asEgoCliError } from "../../../types/ego";
+import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Select";
 import s from "../Settings.module.css";
 import { ListRow, SectionCard, SettingPageHeader, SettingRow } from "../SettingsPrimitives";

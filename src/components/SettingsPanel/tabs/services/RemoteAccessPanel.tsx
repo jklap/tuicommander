@@ -1,4 +1,3 @@
-import { Button } from "../../../ui/Button";
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
@@ -10,6 +9,7 @@ import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { ContextualHelp } from "../../ContextualHelp";

@@ -1,9 +1,9 @@
-import { Button } from "../../ui/Button";
 /** Isolated presentation fixture: no app bootstrap, transport or persisted settings. */
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import commander from "../../../../src-tauri/src/themes/commander.json";
 import paper from "../../../../src-tauri/src/themes/vscode-light.json";
+import { Button } from "../../ui/Button";
 import "../../../global.css";
 import { createMemo } from "solid-js";
 import { Input } from "../../ui/Input";

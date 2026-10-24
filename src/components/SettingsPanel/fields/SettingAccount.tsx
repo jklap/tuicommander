@@ -1,6 +1,6 @@
-import { Button } from "../../ui/Button";
 import { type Component, createResource, createSignal, For, Show } from "solid-js";
 import { invoke } from "../../../invoke";
+import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Select";
 import s from "./fields.module.css";
 import { SettingField, type SettingFieldProps } from "./SettingField";
