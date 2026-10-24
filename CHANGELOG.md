@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add a shared compact auto-grow textarea with bounded growth and native scrolling.
+
 - Add shared connected button groups for split actions with one divider.
 
 - Add shared square-edged stretch button geometry for container-height edge actions.

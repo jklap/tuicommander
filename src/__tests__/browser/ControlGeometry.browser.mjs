@@ -64,7 +64,17 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           else assert.notEqual(control.end,'0px','Last action retains outer radius');
         }
       }
-      measurements.push({width,...result,stretch,joined});
+      const textarea = await evaluate('window.textareaGeometry ? window.textareaGeometry() : null');
+      if(textarea) {
+        const minimum=width<=600?44:36, maximum=width<=600?132:108;
+        assert.equal(textarea.cleared.height,minimum,'Cleared auto-grow must shrink to shared target');
+        assert.equal(textarea.long.height,maximum,'Long content must respect shared cap');
+        assert.ok(textarea.long.scroll>textarea.long.client,'Long content must remain scrollable');
+        assert.equal(textarea.long.overflow,'auto');
+        assert.ok(textarea.narrow.height>textarea.wide.height,'Width-only wrapping must resize without input');
+        for(const name of ['initial','replaced'])assert.ok(textarea[name].height>minimum && textarea[name].height<maximum,JSON.stringify({name,textarea}));
+      }
+      measurements.push({width,...result,stretch,joined,textarea});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

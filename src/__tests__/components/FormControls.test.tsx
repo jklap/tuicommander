@@ -336,3 +336,36 @@ it("keeps joined actions independently focusable and reactive", () => {
 	expect(choose).toHaveFocus();
 	expect(choose).toHaveAttribute("aria-expanded", "false");
 });
+
+// Catches: auto-grow swallowing native refs, bound input handlers or controlled value updates.
+it("keeps auto-grow textarea edits and owner refs at the native boundary", () => {
+	const [value, setValue] = createSignal("draft");
+	let native: HTMLTextAreaElement | undefined;
+	const input = vi.fn();
+	render(() => (
+		<Textarea
+			autoGrow
+			aria-label="Commit"
+			ref={(node) => {
+				native = node;
+			}}
+			value={value()}
+			onInput={[
+				(_data, event) => {
+					input(event.currentTarget.value);
+					setValue(event.currentTarget.value);
+				},
+				"owner",
+			]}
+		/>
+	));
+	const field = screen.getByRole("textbox", { name: "Commit" });
+	expect(native).toBe(field);
+	expect(field).not.toHaveAttribute("autoGrow");
+	fireEvent.input(field, { target: { value: "edited" } });
+	expect(input).toHaveBeenCalledExactlyOnceWith("edited");
+	setValue("replaced");
+	expect(field).toHaveValue("replaced");
+	field.focus();
+	expect(field).toHaveFocus();
+});

@@ -685,3 +685,14 @@ It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
 target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
 the dashed clear target. Give each target an accessible name. Feature CSS may
 arrange the wrapping picker but must not resize its swatches.
+
+### Shared edge actions and content-sized editors
+
+- Use `Button geometry="stretch"` for square-edged container-height actions.
+  Keep placement in the consumer; do not restore feature-owned control sizes.
+- Use `ButtonGroup` with direct shared `Button` children for connected split
+  actions. Buttons retain their own size and behavior; the shared group owns
+  corners and the single divider. Do not clip focus rings or dropdown content.
+- Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
+  is 36px desktop or 44px touch, and the maximum is three control heights.
+  Remove consumer auto-resize callbacks and height caps when adopting it.

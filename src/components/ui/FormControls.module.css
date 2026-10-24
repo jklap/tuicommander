@@ -201,3 +201,14 @@
 .buttonGroup > .button:not(:last-child) { border-inline-end: 0; }
 .buttonGroup > .button:not(:first-child) { border-inline-start: 1px solid var(--border); }
 .buttonGroup > .button:focus-visible { position: relative; z-index: 1; }
+
+.textareaAutoGrow {
+ min-height: var(--control-height, 36px);
+ max-height: calc(var(--control-height, 36px) * 3);
+ padding-block: calc(var(--control-padding-x, 8px) / 2);
+ resize: none;
+ overflow-y: auto;
+}
+@media (max-width: 600px) {
+ .textareaAutoGrow { min-height: max(44px, var(--control-height, 36px)); max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
+}
