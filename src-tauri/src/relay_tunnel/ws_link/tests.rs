@@ -107,8 +107,8 @@ async fn oversized_message_ends_the_link() {
 
 #[tokio::test]
 async fn unreachable_relay_is_a_connect_error_without_the_bearer() {
-    let (url, listener) = server().await;
-    drop(listener);
+    let socket = crate::test_support::refused_tcp_socket();
+    let url = url::Url::parse(&format!("ws://{}", socket.local_addr().unwrap())).unwrap();
     let err = connect(&url, "room-1", &bearer()).await.err().unwrap();
     assert!(matches!(err, LinkError::Connect(_)));
     assert!(!err.to_string().contains("relay-secret-R"));

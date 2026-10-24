@@ -1519,9 +1519,8 @@ mod tests {
     // Catches: reqwest URL credentials reaching mirror errors from seed or SSE requests.
     #[tokio::test]
     async fn closed_port_mirror_errors_never_contain_query_credentials() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("address"));
-        drop(listener);
+        let socket = crate::test_support::refused_tcp_socket();
+        let base = format!("http://{}", socket.local_addr().expect("address"));
         let client = reqwest::Client::new();
         let state = Arc::new(make_test_app_state());
         let secret = "MIRROR_SECRET_1457";

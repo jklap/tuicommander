@@ -17,6 +17,29 @@ pub(crate) use tuic_test_support::{
     print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
+/// Reserve a loopback port without listening. Connections are refused while the
+/// returned socket stays alive, and parallel tests cannot take over the port.
+pub(crate) fn refused_tcp_socket() -> tokio::net::TcpSocket {
+    let socket = tokio::net::TcpSocket::new_v4().expect("TCP socket");
+    socket
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("reserve refused TCP port");
+    socket
+}
+
+// Catches: a refusal fixture releasing its port or accidentally listening on it.
+#[tokio::test]
+async fn refused_tcp_socket_reserves_its_port_without_accepting_connections() {
+    let socket = refused_tcp_socket();
+    let address = socket.local_addr().unwrap();
+    assert!(
+        std::net::TcpListener::bind(address).is_err(),
+        "a parallel listener must not take the refused port"
+    );
+    let error = tokio::net::TcpStream::connect(address).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+}
+
 /// Scratch dir short enough to bind a Unix socket whatever the checkout path.
 #[cfg(unix)]
 pub(crate) fn short_socket_tempdir() -> tempfile::TempDir {

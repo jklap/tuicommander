@@ -219,9 +219,8 @@ async fn newest_attachment_replaces_the_previous_session() {
 
 #[tokio::test]
 async fn unreachable_upstream_refuses_the_stream() {
-    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = dead.local_addr().unwrap();
-    drop(dead);
+    let socket = crate::test_support::refused_tcp_socket();
+    let upstream = socket.local_addr().unwrap();
     let bundle = bundle();
     let relay = start_daemon(bundle.clone(), upstream);
     let desktop = relay.attach(&bundle, &bundle.secret).await.expect("attach");

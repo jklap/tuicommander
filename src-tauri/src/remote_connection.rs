@@ -748,9 +748,8 @@ mod tests {
     // Catches: explicitly echoed base URLs or reqwest URLs leaking URL userinfo in token-request errors.
     #[tokio::test]
     async fn token_request_error_redacts_url_credentials() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let address = listener.local_addr().expect("address");
-        drop(listener);
+        let socket = crate::test_support::refused_tcp_socket();
+        let address = socket.local_addr().expect("address");
         let base = format!("http://username:URL_SECRET_1457@{address}");
         let error = request_session_token(&base, "user", "password")
             .await

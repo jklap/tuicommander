@@ -3207,9 +3207,8 @@ mod tests {
             error.contains("Cannot resolve no-such-host.invalid"),
             "{error}"
         );
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        let socket = crate::test_support::refused_tcp_socket();
+        let address = socket.local_addr().unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
             .resolve("short-peer", address)
@@ -3250,9 +3249,8 @@ mod tests {
     #[tokio::test]
     async fn health_connection_refused_names_the_host_and_cause() {
         // Catches: reqwest's top-level "error sending request" hiding TCP refusal.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        let socket = crate::test_support::refused_tcp_socket();
+        let base = format!("http://{}", socket.local_addr().unwrap());
         let error = read_health(&test_client(), &base).await.unwrap_err();
         assert!(error.contains("Connection refused by 127.0.0.1"), "{error}");
     }
@@ -3428,9 +3426,8 @@ mod tests {
     // Catches: reqwest query-token URLs leaking into logs, UI errors, and SSE status pushes.
     #[tokio::test]
     async fn closed_port_probe_redacts_token_before_logs_and_status_publication() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("address"));
-        drop(listener);
+        let socket = crate::test_support::refused_tcp_socket();
+        let base = format!("http://{}", socket.local_addr().expect("address"));
         let secret = "PAIRING_SECRET_1457";
         let Probe::Failed(error) = probe_authenticated(&test_client(), &base, Some(secret)).await
         else {
