@@ -31,17 +31,6 @@
     ]
   },
   {
-    "file": "src/components/AutofixDialog/AutofixDialog.module.css",
-    "story": "2185-74aa",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".textarea\",[\"min-height: 220px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 10px\"]]",
-      "[[],\".textarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".btnPrimary\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/AutomationsDialog/AutomationsDialog.module.css",
     "story": "2186-3abf",
     "rules": [
