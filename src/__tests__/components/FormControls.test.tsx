@@ -369,3 +369,36 @@ it("keeps auto-grow textarea edits and owner refs at the native boundary", () =>
 	field.focus();
 	expect(field).toHaveFocus();
 });
+
+// Catches: state promotion freezing native validity/descriptions or losing toggle callbacks.
+it("forwards reactive invalid fields and removable toggle state", () => {
+	const [invalid, setInvalid] = createSignal(true),
+		[pressed, setPressed] = createSignal(false);
+	render(() => (
+		<>
+			<Input aria-label="Invalid input" aria-invalid={invalid()} aria-describedby="error" />
+			<Select aria-label="Invalid select" aria-invalid={invalid()} aria-describedby="error">
+				<option>One</option>
+			</Select>
+			<Textarea aria-label="Invalid textarea" aria-invalid={invalid()} aria-describedby="error" />
+			<p id="error">Existing validation error</p>
+			<Button variant="removalToggle" aria-pressed={pressed()} onClick={() => setPressed(!pressed())}>
+				Integration
+			</Button>
+		</>
+	));
+	for (const name of ["Invalid input", "Invalid select", "Invalid textarea"]) {
+		const control = screen.getByLabelText(name);
+		expect(control).toHaveAttribute("aria-invalid", "true");
+		expect(control).toHaveAccessibleDescription("Existing validation error");
+	}
+	setInvalid(false);
+	for (const name of ["Invalid input", "Invalid select", "Invalid textarea"])
+		expect(screen.getByLabelText(name)).toHaveAttribute("aria-invalid", "false");
+	const button = screen.getByRole("button", { name: "Integration" });
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	fireEvent.click(button);
+	expect(button).toHaveAttribute("aria-pressed", "true");
+	fireEvent.click(button);
+	expect(button).toHaveAttribute("aria-pressed", "false");
+});

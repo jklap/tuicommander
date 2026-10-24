@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Share native invalid-field borders and installed/removal toggle states across UI controls.
+
 - Add a shared compact auto-grow textarea with bounded growth and native scrolling.
 
 - Add shared connected button groups for split actions with one divider.
