@@ -158,6 +158,7 @@ impl Fixture {
 // precheck record, or inserting stdout/template expansion into the literal prompt.
 #[tokio::test]
 async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() {
+    // DEFERRED (2026-10-25) — Windows precheck exits zero without file output; capture actual cmd argv, cwd and stderr before attributing it to fixture grammar or shell execution.
     assert!(std::env::var_os("TUIC_TEST_TMP_ROOT").is_some());
     let clean = if cfg!(windows) {
         "if defined TUIC_TEST_TMP_ROOT exit /b 9 & "

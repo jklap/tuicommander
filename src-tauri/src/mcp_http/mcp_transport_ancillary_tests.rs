@@ -584,6 +584,7 @@ async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
 /// worktrees on the listing path; fresh dirt and fingerprints must still move.
 #[tokio::test]
 async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
+    // DEFERRED (2026-10-25) — Windows repeat listing takes 13.621s with the fork budget satisfied; profile per-checkout reads there, not a larger response deadline.
     let (_temp, repo, _) = branch_delete_fixture();
     crate::git_cli::git_cmd(&repo)
         .args(["checkout", "main"])

@@ -222,15 +222,24 @@ fn compose_launch_command(
 }
 
 fn is_tuic_attachment_grant(directory: &str) -> bool {
-    let path = std::path::Path::new(directory);
-    path.parent().is_some_and(|parent| {
-        parent
-            == std::fs::canonicalize(crate::config::config_dir())
-                .unwrap_or_else(|_| crate::config::config_dir())
-                .join("attachments")
-    }) && path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().starts_with("pty-"))
+    let path = Path::new(directory);
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "attachments"))
+    else {
+        return false;
+    };
+    // The session directory (and even attachments/) may already be gone. Resolve
+    // the existing config root on both sides, not the expired child itself.
+    let Some(root) = parent.parent() else {
+        return false;
+    };
+    let config = crate::config::config_dir();
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+        == std::fs::canonicalize(&config).unwrap_or(config)
+        && path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("pty-"))
 }
 
 /// First line of the brief Start Work passes as a launch argument (`SEED_BRIEF_OPEN`
@@ -2643,6 +2652,7 @@ mod tests {
     // Catches re-statting every historical rollout on each idle/busy discovery.
     #[test]
     fn codex_warm_discovery_does_not_restat_historical_rollouts() {
+        // DEFERRED (2026-10-25) — Windows CI restats 130 rollouts; record watcher availability/events before attributing the two rescans or weakening the zero-stat contract.
         let root = TempDir::new().unwrap();
         let sessions = root.path().join("sessions");
         let day = codex_recent_day_dirs_for_test(&sessions);
@@ -3205,7 +3215,13 @@ mod tests {
             &argv(&["claude", "--", "fix this"]),
             HashMap::new(),
         );
-        assert_eq!(cmd.as_deref(), Some("claude -- 'fix this'"));
+        assert_eq!(
+            cmd,
+            Some(format!(
+                "claude -- {}",
+                crate::prompt::shell_quote("fix this")
+            ))
+        );
     }
 
     #[test]
@@ -3288,6 +3304,27 @@ mod attachment_resume_tests {
             "--read-only-dir=/tuic/attachments/pty-old".into(),
         ];
         assert!(super::compose_launch_command("ego", &argv, Default::default()).is_none());
+    }
+
+    // Catches: canonicalizing only the configured root retains an expired grant via its alias.
+    #[cfg(unix)]
+    #[test]
+    fn attachment_resume_drops_expired_grants_through_config_alias() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let actual = root.path().join("actual");
+        std::fs::create_dir_all(actual.join("attachments")).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        let _guard = crate::config::set_config_dir_override(alias.clone());
+        let argv = vec![
+            "claude".into(),
+            format!("--add-dir={}", alias.join("attachments/pty-old").display()),
+            "--add-dir=/user/docs".into(),
+        ];
+        assert_eq!(
+            super::compose_launch_command("claude", &argv, Default::default()).unwrap(),
+            "claude --add-dir=/user/docs"
+        );
     }
 
     // Catches: resume reuses a removed TUIC directory or discards a user's directory grant.

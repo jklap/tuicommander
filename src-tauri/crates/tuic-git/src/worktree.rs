@@ -245,7 +245,9 @@ pub fn create_worktree_internal(
 
     // Build git worktree add command
     let base_repo_path = PathBuf::from(&config.base_repo);
-    let wt_path_str = worktree_path.to_string_lossy().to_string();
+    // Git rewrites separators internally; a verbatim Windows prefix would
+    // become //?/ and be rejected as an invalid destination.
+    let wt_path_str = tuic_core::path_spelling::portable_spelling(&worktree_path.to_string_lossy());
     // --quiet suppresses git's own checkout progress lines ("Updating files: X% (N/M)")
     // that would otherwise appear in the controlling terminal. Hooks still run normally.
     let mut args: Vec<String> = vec!["worktree".into(), "add".into(), "--quiet".into()];
@@ -260,7 +262,7 @@ pub fn create_worktree_internal(
     // End-of-options guard: the branch/start-point below is attacker-influenced
     // (e.g. a PR head_ref), so `--` forces git to treat it as a ref, not an option.
     args.push("--".into());
-    args.push(wt_path_str);
+    args.push(wt_path_str.clone());
 
     if let Some(ref branch) = config.branch
         && !config.create_branch
@@ -298,7 +300,7 @@ pub fn create_worktree_internal(
                         "add",
                         "--quiet",
                         "--",
-                        &worktree_path.to_string_lossy(),
+                        &wt_path_str,
                         branch.as_str(),
                     ];
                     if let Err(e) = git_cmd(&base_repo_path).args(retry_args).run() {
@@ -4885,7 +4887,7 @@ mod tests {
         );
         assert_eq!(
             get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
-            first.path.to_string_lossy()
+            tuic_core::path_spelling::portable_spelling(&first.path.to_string_lossy())
         );
         assert!(!directory.path().join("second").exists());
         assert_eq!(
@@ -4954,7 +4956,7 @@ mod tests {
         assert!(path.join(".git").exists());
         assert_eq!(
             get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
-            path.to_string_lossy()
+            tuic_core::path_spelling::portable_spelling(&path.to_string_lossy())
         );
     }
 
@@ -5122,7 +5124,7 @@ mod tests {
         );
         assert_eq!(
             get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap()["first"].path,
-            first.path.to_string_lossy()
+            tuic_core::path_spelling::portable_spelling(&first.path.to_string_lossy())
         );
         assert_eq!(
             std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
@@ -5294,7 +5296,10 @@ mod tests {
             |_| true,
         )
         .unwrap();
-        assert_eq!(reused.unwrap().path, archived);
+        assert_eq!(
+            reused.unwrap().path,
+            tuic_core::path_spelling::portable_spelling(&archived)
+        );
         assert!(!first.path.exists());
         assert!(!Path::new(&archived).exists());
         assert_eq!(
@@ -5303,7 +5308,10 @@ mod tests {
         );
         let paths = get_worktree_paths_raw(&repo.path().to_string_lossy()).unwrap();
         assert!(!paths.contains_key("first"));
-        assert_eq!(paths["second"].path, second.path.to_string_lossy());
+        assert_eq!(
+            paths["second"].path,
+            tuic_core::path_spelling::portable_spelling(&second.path.to_string_lossy())
+        );
         assert_eq!(
             rev_at(&second.path, "HEAD").unwrap(),
             rev_at(repo.path(), "HEAD").unwrap()
@@ -12521,7 +12529,11 @@ branch refs/heads/feat
                 .run()
                 .unwrap();
             assert!(
-                listed.stdout.contains(&path.to_string_lossy().to_string()),
+                listed
+                    .stdout
+                    .contains(&tuic_core::path_spelling::portable_spelling(
+                        &path.to_string_lossy()
+                    )),
                 "{state}: registration must remain"
             );
         }
@@ -12993,6 +13005,7 @@ branch refs/heads/feat
     // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
     #[test]
     fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
+        // DEFERRED (2026-10-25) — Windows CI retains the tracking ref; inspect the cleanup outcome/stderr before attributing this to shell execution or Git pruning.
         let (_temp, repo, _) = workspace_fixture();
         let origin = add_origin(&repo);
         let worktree = add_worktree(&repo, "pruned-proof");
@@ -13673,18 +13686,11 @@ branch refs/heads/feat
         fs::remove_dir_all(&path).unwrap();
 
         let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
-        assert!(
-            !assessments
-                .iter()
-                .any(|entry| entry.path == path.to_string_lossy())
-        );
+        assert!(!assessments.iter().any(|entry| entry.path
+            == tuic_core::path_spelling::portable_spelling(&path.to_string_lossy())));
         let inventory = get_worktree_inventory_raw(&repo.to_string_lossy(), None).unwrap();
-        assert!(
-            inventory
-                .worktree_diagnostics
-                .iter()
-                .any(|entry| entry.path == path.to_string_lossy())
-        );
+        assert!(inventory.worktree_diagnostics.iter().any(|entry| entry.path
+            == tuic_core::path_spelling::portable_spelling(&path.to_string_lossy())));
     }
 
     // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"

@@ -1975,6 +1975,8 @@ mod tests {
     }
 
     async fn wait_for_usage_event(state: &crate::AppState, path: &Path) {
+        // Production watches the canonical projects root, so event paths use it too.
+        let path = path.canonicalize().unwrap();
         // Setup only: the next assertion is about incremental parsing, not the
         // operating system's watcher delivery latency under machine load.
         tokio::time::timeout(Duration::from_secs(60), async {
@@ -1982,7 +1984,7 @@ mod tests {
                 let ready = {
                     let scan = state.claude_usage_scan.lock();
                     let changes = scan.events.lock();
-                    changes.rescan || changes.paths.contains(path)
+                    changes.rescan || changes.paths.contains(&path)
                 };
                 if ready {
                     break;
@@ -2052,6 +2054,7 @@ mod tests {
     /// before its already-populated parse cache can reject unchanged files.
     #[tokio::test]
     async fn session_stats_warm_refresh_does_not_stat_unchanged_history() {
+        // DEFERRED (2026-10-25) — Windows CI observes a second metadata read; capture watcher availability/events before changing invalidation or this exact counter.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
@@ -2086,6 +2089,7 @@ mod tests {
     /// or a missed watcher event never being repaired by reconciliation.
     #[tokio::test]
     async fn session_stats_only_stats_the_changed_transcript_then_reconciles() {
+        // DEFERRED (2026-10-25) — Windows CI restats both transcripts; watcher rescan versus pending-path cause needs native event evidence.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
