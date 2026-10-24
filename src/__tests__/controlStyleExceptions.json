@@ -682,13 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/StartWorkMenu.module.css",
-    "story": "2244-d329",
-    "rules": [
-      "[[],\".trigger, .popup button, .error button\",[\"min-height: 28px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/TasksShell.module.css",
     "story": "2245-8da3",
     "rules": [
