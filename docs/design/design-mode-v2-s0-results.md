@@ -3,6 +3,17 @@
 Date: 2026-10-08. Plan: `docs/design/design-mode-v2.md` (§4, §5, §9, §13 S0, §14).
 Native macOS evidence only; Windows/Linux and branded Google Chrome were not tested.
 
+**Current S0 acceptance update (2026-10-24):** the owned-CFT acceptance scope
+for story 1672 AC1 is now verified. Round 16's fixed-build continuation below
+proves native-folder installation and enabled persistence after a no-load-flag
+restart. Round 12 proves real side-panel tab return, trusted top/frame picking,
+one-shot/Escape/Stop chronology and a nonempty top PNG crop through the real
+native-host installation. The crop uses the explicitly granted all-sites capture
+permission, not a newly proved temporary activeTab grant. The original Edge,
+echo-host and initial blocked findings below are historical evidence, not a
+claim that these later CFT checks are still blocked. Windows/Linux, branded
+Chrome and a fresh Edge-only replay remain untested.
+
 **Gate recommendation: retain X-A with native messaging, provisionally.** Edge
 loaded the extension, resolved the custom-profile host, and kept the worker's
 native port alive. There is no measured channel failure justifying the HTTP
@@ -917,3 +928,60 @@ capture of 15013 retained for diagnosing the blocker, not an installation pass.
 The owned browser closed through its own connection; PID 52530 was absent
 subsequently. No daily TUIC endpoint, Boss window, backend, owner session or
 fixture server was used. Documentation only; no application build or suite ran.
+
+
+### Round 16 fixed-build continuation: persistent native install PASS (2026-10-24)
+
+After the coordinator confirmed the old MacControl upstream was stopped, this
+continuation completed the previously blocked folder selection. The console was
+unlocked; only the existing owned CFT149 profile was launched (PID **89686**).
+No TUIC backend, fixture or owner session was started.
+
+The first native click did not establish an Open chooser. The browser harness
+then clicked the **actual Load unpacked button** in `chrome://extensions` and
+MacControl listed the resulting native **Open** window **15454**. This is the
+browser's normal `developerPrivate.loadUnpacked` UI, not
+`Extensions.loadUnpacked`, a flag load, or a fabricated install-state write.
+
+Direct key targeting of chooser 15454 returned `failed to focus window: focus:
+selected window is no longer available (it moved, resized or closed)`, even
+after a fresh scoped screenshot. Targeting its owning Extensions window
+**15418** succeeded: Cmd+Shift+G, paste the actual absolute directory
+`~/Gits/.tmp/design-web/profile/tuic-design-extension`, Enter to accept the path,
+then a **separate Enter** to select the directory. Each call contained one
+action and no explicit wait. Several calls reported `user_active` **after**
+reporting the named action completed; an earlier typing attempt stopped after
+one character and was superseded by the complete paste. No incomplete typing
+is counted as installation evidence. The successful result below independently
+confirms the selected directory.
+
+Before closing the browser, its read-only extension inventory reported:
+
+- ID `eefbgjmmpaimpeaflioojmdipmfchefo`;
+- name **TUICommander Design Mode**, version **2.0.0**;
+- actual path `~/Gits/.tmp/design-web/profile/tuic-design-extension`;
+- **enabled: true**.
+
+The browser closed gracefully through its own connection and PID 89686 was
+verified absent. A new process, PID **1540**, started with the same profile and
+**no `--load-extension` flag**. The same read-only inventory again returned the
+same ID, name, version, path and **enabled: true**. No loading/install API or
+profile preferences were used between launch and observation. This proves the
+missing native-install/no-load-restart persistence requirement, in contrast to
+the empty inventory after the earlier flag/test-API installs.
+
+The decisive argv, before/after inventories and PID cleanup are committed in
+[round16-persistence.json](../../spike/design-mode-v2-s0/evidence/round16-persistence.json).
+Raw harnesses and responses remain under
+`~/Gits/.tmp/design-web/s0-native-round16-fixed/`; `chooser.png`, `installed.png`
+and `after-restart.png` capture only the owned chooser/Extensions windows. The
+unrelated CFT window **14155**, TUICommander Mobile, was never targeted or
+captured. Restarted browser 1540 also closed gracefully and was verified absent.
+No task-created runtime process remains.
+
+**AC1 result:** (a) native installation/persistence now PASS; (b), (e), and (f)
+retain Round 12's actual side-panel/tab-return, trusted pick/cancellation and
+nonempty-crop evidence. Those checks were not rerun for this documentation-only
+continuation. The PNG uses the real all-sites capture grant; no new activeTab
+claim, cross-platform claim, Edge-only replay or application-suite pass is made.
+No product code, browser permissions, Boss window or daily TUIC endpoint changed.
