@@ -313,15 +313,6 @@
   border-color: var(--accent);
 }
 
-.dangerBtn {
-  composes: smallBtn;
-}
-
-.dangerBtn:hover {
-  background: rgba(248, 81, 73, 0.1);
-  color: var(--error);
-  border-color: var(--error);
-}
 
 /* Footer add button */
 

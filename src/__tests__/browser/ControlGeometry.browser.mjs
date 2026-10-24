@@ -39,9 +39,58 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
+      for (const row of stretch) {
+        assert.ok(row.controls.length >= 2, 'Stretch cases must exercise multiple button sizes');
+        for (const control of row.controls) {
+          assert.equal(control.height, Math.max(Number(row.container), width <= 600 ? 44 : 36), JSON.stringify({width,row}));
+          assert.ok(control.width >= (width <= 600 ? 44 : 36), JSON.stringify({width,row}));
+          assert.equal(control.radius, '0px', 'Stretch actions must have square edges');
+        }
+      }
+      const joined = await evaluate(`[...document.querySelectorAll('[data-joined-case]')].map(group=>({size:group.dataset.joinedCase,overflow:getComputedStyle(group).overflow,controls:[...group.querySelectorAll('button')].map(button=>{const r=button.getBoundingClientRect(),s=getComputedStyle(button);return {left:r.left,right:r.right,height:r.height,start:s.borderStartStartRadius,end:s.borderStartEndRadius,startBorder:s.borderInlineStartWidth,endBorder:s.borderInlineEndWidth};})}))`);
+      for (const group of joined) {
+        assert.notEqual(group.overflow,'hidden','Group must not clip focus or dropdown');
+        assert.ok(group.controls.length > 0, 'Joined group must mount real buttons');
+        for (const [index,control] of group.controls.entries()) {
+          assert.equal(control.height, width<=600?44:group.size==='compact'?22:36);
+          if(index>0) {
+            assert.equal(control.left,group.controls[index-1].right,'Connected edges must meet');
+            assert.equal(control.start,'0px');
+            assert.equal(control.startBorder,'1px','Join must have exactly one divider');
+          } else assert.notEqual(control.start,'0px','First action retains outer radius');
+          if(index<group.controls.length-1) {assert.equal(control.end,'0px');assert.equal(control.endBorder,'0px');}
+          else assert.notEqual(control.end,'0px','Last action retains outer radius');
+        }
+      }
+      const textarea = await evaluate('window.textareaGeometry ? window.textareaGeometry() : null');
+      if(textarea) {
+        const minimum=width<=600?44:36, maximum=width<=600?132:108;
+        assert.equal(textarea.cleared.height,minimum,'Cleared auto-grow must shrink to shared target');
+        assert.equal(textarea.long.height,maximum,'Long content must respect shared cap');
+        assert.ok(textarea.long.scroll>textarea.long.client,'Long content must remain scrollable');
+        assert.equal(textarea.long.overflow,'auto');
+        assert.ok(textarea.narrow.height>textarea.wide.height,'Width-only wrapping must resize without input');
+        for(const name of ['initial','replaced'])assert.ok(textarea[name].height>minimum && textarea[name].height<maximum,JSON.stringify({name,textarea}));
+      }
+      await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:0,y:0},sessionId);
+      const states = await evaluate('window.controlStateGeometry ? window.controlStateGeometry() : null');
+      if(states) {
+        for(const control of states.invalid)assert.equal(control.border,'rgb(200, 10, 20)','Native invalid field must use error token');
+        for(const control of states.focused) {assert.equal(control.border,'rgb(200, 10, 20)');assert.equal(control.outline,'rgb(10, 20, 200)');assert.equal(control.outlineStyle,'solid');}
+        for(const control of states.valid)assert.equal(control.border,'rgb(80, 80, 80)','False invalid state must reset border');
+        assert.equal(states.off.border,'rgb(80, 80, 80)');assert.equal(states.on.border,'rgb(10, 200, 20)');
+        assert.equal(states.disabled.border,'rgb(10, 200, 20)');assert.equal(states.selection.border,'rgb(10, 20, 200)','Ordinary selected actions retain accent');
+        for(const [selector,expected] of [['[data-remove-toggle]','rgb(200, 10, 20)'],['[data-disabled-toggle]','rgb(10, 200, 20)']]) {
+          const box=await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+          await send('Input.dispatchMouseEvent',{type:'mouseMoved',...box},sessionId);
+          const color=await evaluate(`getComputedStyle(document.querySelector('${selector}')).borderColor`);
+          assert.equal(color,expected,'Enabled removal hover only must use danger token');
+        }
+      }
       result.containment = [];
-      measurements.push({width,...result});
+      measurements.push({width,...result,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

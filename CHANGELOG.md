@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Share native invalid-field borders and installed/removal toggle states across UI controls.
+
+- Add a shared compact auto-grow textarea with bounded growth and native scrolling.
+
+- Add shared connected button groups for split actions with one divider.
+
+- Add shared square-edged stretch button geometry for container-height edge actions.
+
+- Align Settings actions, including Remote Access Recheck, presentation action slots and account/list field actions, with shared 36px desktop and 44px touch controls; keep navigation and search results as layout rows.
+
 - Share preset and clear color-swatch targets through the UI design system, with native button selection and 44px touch targets.
 
 ### Added
