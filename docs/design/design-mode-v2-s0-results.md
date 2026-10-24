@@ -870,3 +870,50 @@ cleanup are in `~/Gits/.tmp/design-web/s0-native-round15/`. The owned browser
 closed through its own connection and PID 87700 was absent afterward. No backend,
 fixture, owner session, daily TUIC endpoint or alternate OS input was used.
 Documentation only; no application build or test suite ran.
+
+
+## Round 16: chooser opens, both key targets time out (2026-10-24)
+
+The coordinator reported the fixed MacControl build installed and its Screen
+Recording/Accessibility grants renewed. This attempt still found a native-key
+transport blocker; it did not report a permission denial. The console was
+unlocked. Only the same owned CFT149 scratch profile was launched, without a
+load flag (PID **52530**). No backend or fixture was needed.
+
+MacControl listed owned Extensions window **14990**, and the native Load
+unpacked click succeeded. The next call contained only this action, no wait:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":14990,"key":"cmd+shift+g"}]}
+```
+
+It returned exactly:
+
+> MCP execution failed: Mcp error: -32000: TUICommander IPC request failed: read: response timed out
+
+Host timestamps bound the call at approximately 15 seconds (09:50:18–09:50:33
+CEST), not a separately instrumented duration. Unlike Round 15, the subsequent
+`list_windows` **succeeded**, identifying the browser-native **Open** chooser as
+window **15013**. Therefore this timeout is not evidence that the upstream died.
+A separate single-key call explicitly targeted that chooser rather than its
+parent window:
+
+```json
+{"actions":[{"type":"key","app":"Google Chrome for Testing","window_id":15013,"key":"cmd+shift+g"}]}
+```
+
+That call returned the same IPC timeout, approximately 18 seconds later
+(09:50:48–09:51:06 CEST, host timestamps). No path was typed and no Select action
+was sent. Native input stopped after these two distinct window targets; no
+alternative OS-input transport or permission change was attempted. The other
+CFT window **14155**, Device Activation, was not touched or captured.
+
+AC1 remains unchecked: native chooser selection and the following no-load-flag
+persistence check are unproved. Round 12's side-panel tab return, trusted picks,
+actual top crop and cancellation chronology remain valid and were not rerun.
+Raw argv/PID, exact action lists, timing bounds and cleanup are under
+`~/Gits/.tmp/design-web/s0-native-round16/`. `owned-chooser.png` is a **window-only**
+capture of 15013 retained for diagnosing the blocker, not an installation pass.
+The owned browser closed through its own connection; PID 52530 was absent
+subsequently. No daily TUIC endpoint, Boss window, backend, owner session or
+fixture server was used. Documentation only; no application build or suite ran.
