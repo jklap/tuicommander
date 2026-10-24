@@ -31,13 +31,6 @@
     ]
   },
   {
-    "file": "src/components/ActivityDashboard/ActivityDashboard.module.css",
-    "story": "2184-646e",
-    "rules": [
-      "[[],\".promoteBtn\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/AutofixDialog/AutofixDialog.module.css",
     "story": "2185-74aa",
     "rules": [

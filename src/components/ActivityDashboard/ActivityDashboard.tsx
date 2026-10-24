@@ -17,6 +17,7 @@ import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";
 import { GlobeIcon } from "../GlobeIcon";
+import { Button } from "../ui/Button";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { SubAgentIcon } from "../ui/SubAgentIcon";
 import s from "./ActivityDashboard.module.css";
@@ -263,7 +264,8 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 								<span class={s.agent}>{term.agent}</span>
 								<span class={`${s.status} ${term.status.className}`}>{term.status.label}</span>
 								<span class={s.lastActivity}>{term.isWorking ? "" : formatRelativeTime(term.idleSince)}</span>
-								<button
+								<Button
+									variant="ghost"
 									class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
 									title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
 									onClick={(e) => {
@@ -276,7 +278,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 									}}
 								>
 									<GlobeIcon />
-								</button>
+								</Button>
 							</div>
 							<Show when={term.currentTask}>
 								{(task) => (
