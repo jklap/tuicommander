@@ -167,17 +167,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/BranchesTab.module.css",
-    "story": "2197-5ffd",
-    "rules": [
-      "[[],\".createConfirmBtn, .createCancelBtn\",[\"padding: 3px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".popoverActions button\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".secondaryBtn\",[\"border: 1px solid var(--border) !important\"]]",
-      "[[],\".foldToggle\",[\"height: 26px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".foldToggleActive\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/ChangesTab.module.css",
     "story": "2198-3154",
     "rules": [
@@ -192,44 +181,6 @@
       "[[],\".filterClear\",[\"border: none\",\"padding: 0 4px\"]]",
       "[[],\".sectionAction\",[\"border: none\",\"padding: 1px 6px\",\"border-radius: var(--radius-sm)\"]]",
       "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/GitPanel.module.css",
-    "story": "2199-6efd",
-    "rules": [
-      "[[],\".tab\",[\"border: none\",\"border-bottom: 2px solid transparent\",\"padding: 6px 8px\"]]",
-      "[[],\".tabActive\",[\"border-bottom-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/HistoryTab.module.css",
-    "story": "2200-8e6d",
-    "rules": [
-      "[[],\".loadMoreBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 16px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/LogTab.module.css",
-    "story": "2201-ea50",
-    "rules": [
-      "[[],\".loadMoreBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 16px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/StashesTab.module.css",
-    "story": "2202-dff2",
-    "rules": [
-      "[[],\".actionBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".diffToggle\",[\"border: none\",\"padding: 2px 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/SyncRow.module.css",
-    "story": "2203-f9ff",
-    "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".btnRunning\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
@@ -552,53 +503,6 @@
     ]
   },
   {
-    "file": "src/components/SmartPromptsDropdown/SmartPromptsDropdown.module.css",
-    "story": "2235-1392",
-    "rules": [
-      "[[],\".trigger\",[\"height: 26px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".triggerActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchInput\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".manageLink\",[\"border: none\",\"padding: 2px 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SmartPromptsDropdown/VariableInputDialog.module.css",
-    "story": "2236-5c5b",
-    "rules": [
-      "[[],\".fieldInput\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".fieldInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".cancelBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".submitBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/StatusBar/ProviderRecoveryStatus.module.css",
-    "story": "2237-10c9",
-    "rules": [
-      "[[],\".retry\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 2px 6px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/StatusBar/StatusBar.module.css",
-    "story": "2238-ac3b",
-    "rules": [
-      "[[],\".tickerPopoverClose\",[\"border: none\",\"padding: 0 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".toggleBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".toggleBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".micRecording\",[\"border-color: var(--accent) !important\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SuggestOverlay/SuggestOverlay.module.css",
-    "story": "2241-2c67",
-    "rules": [
-      "[[],\".chip\",[\"padding: 8px 16px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".chip:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".closeBtn\",[\"height: 24px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/TabBar/TabBar.module.css",
     "story": "2242-bc80",
     "rules": [
@@ -618,74 +522,6 @@
       "[[],\".clearBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".closeBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".itemCancel\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/StartWorkMenu.module.css",
-    "story": "2244-d329",
-    "rules": [
-      "[[],\".trigger, .popup button, .error button\",[\"min-height: 28px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/TasksShell.module.css",
-    "story": "2245-8da3",
-    "rules": [
-      "[[],\".header > button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]",
-      "[[],\".side > .back\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/board/board.module.css",
-    "story": "2246-eaa0",
-    "rules": [
-      "[[],\".key\",[\"padding: 0\",\"border: 0\"]]",
-      "[[],\".moveTrigger, .more, .moveMenu button\",[\"min-height: 28px\",\"padding: 4px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/create/TasksCreate.module.css",
-    "story": "2247-4444",
-    "rules": [
-      "[[],\".create button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".create .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".create button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/detail/TasksDetail.module.css",
-    "story": "2248-c8f6",
-    "rules": [
-      "[[],\".detail select[multiple]\",[\"min-height: 96px\"]]",
-      "[[],\".detail button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".detail button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/list/tasksList.module.css",
-    "story": "2249-154a",
-    "rules": [
-      "[[],\".list button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 8px\"]]",
-      "[[],\".list .item\",[\"height: 100%\",\"border: none\",\"border-bottom: 1px solid var(--border)\",\"border-radius: 0\"]]",
-      "[[\"@container (max-width: 600px)\"],\".list button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/roadmap/roadmap.module.css",
-    "story": "2250-79c9",
-    "rules": [
-      "[[],\".roadmap button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 0 12px\"]]",
-      "[[],\".roadmap .task\",[\"height: 100%\",\"padding: 0\",\"border: 0\",\"border-bottom: 1px solid var(--border)\",\"border-radius: 0\"]]",
-      "[[\"@container (max-width: 700px)\"],\".roadmap button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/setup/TasksSetup.module.css",
-    "story": "2251-f625",
-    "rules": [
-      "[[],\".setup button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".setup .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".setup button\",[\"min-height: 44px\"]]"
     ]
   },
   {
