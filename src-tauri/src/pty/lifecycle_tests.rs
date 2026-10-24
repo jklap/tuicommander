@@ -3713,7 +3713,7 @@ while True:
         let _cleanup = SessionCleanup(state.clone(), sid.clone());
         if early_resize {
             // Apply the pane size before waiting for the child to install its trap.
-            resize_session_core(&state, &sid, 40, 200).unwrap();
+            resize_session_core(&state, &sid, 40, 200, "width-diagnostic").unwrap();
         }
         await_size(
             &[dir.path().join("initial"), dir.path().join("winch")],
@@ -3729,9 +3729,11 @@ while True:
             if signal_file.exists() {
                 std::fs::remove_file(&signal_file).unwrap();
             }
-            resize_session_core(&state, &sid, rows, cols).unwrap_or_else(|error| {
-                panic!("direct={direct}, early={early_resize}, target={rows}x{cols}: {error}")
-            });
+            resize_session_core(&state, &sid, rows, cols, "width-diagnostic").unwrap_or_else(
+                |error| {
+                    panic!("direct={direct}, early={early_resize}, target={rows}x{cols}: {error}")
+                },
+            );
             await_size(&[signal_file], expected, SIGNAL);
             let vt = state.grid.vt_log_buffers.get(&sid).unwrap();
             let vt = vt.lock();
