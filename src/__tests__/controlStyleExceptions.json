@@ -613,16 +613,6 @@
     ]
   },
   {
-    "file": "src/components/SmartPromptsDropdown/VariableInputDialog.module.css",
-    "story": "2236-5c5b",
-    "rules": [
-      "[[],\".fieldInput\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".fieldInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".cancelBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".submitBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/StatusBar/ProviderRecoveryStatus.module.css",
     "story": "2237-10c9",
     "rules": [
