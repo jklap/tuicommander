@@ -212,3 +212,14 @@
 @media (max-width: 600px) {
  .textareaAutoGrow { min-height: max(44px, var(--control-height, 36px)); max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
 }
+
+/* Validation changes the border, not the keyboard focus ring. */
+:is(input, select, textarea).control[aria-invalid="true"] { border-color: var(--error); }
+.removalToggle { background: var(--bg-tertiary); color: var(--fg-primary); }
+.removalToggle:hover:enabled { background: var(--bg-highlight); }
+.button.removalToggle[aria-pressed="true"] { border-color: var(--success); color: var(--success); }
+.button.removalToggle[aria-pressed="true"]:hover:enabled {
+ border-color: var(--error);
+ color: var(--error);
+ background: color-mix(in srgb, var(--error) 10%, transparent);
+}

@@ -3,7 +3,7 @@ import { cx } from "../../utils";
 import s from "./FormControls.module.css";
 
 export type ButtonProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
-	variant?: "primary" | "secondary" | "ghost" | "danger";
+	variant?: "primary" | "secondary" | "ghost" | "danger" | "removalToggle";
 	size?: "default" | "compact";
 	geometry?: "default" | "stretch";
 };
