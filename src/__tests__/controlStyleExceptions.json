@@ -681,15 +681,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/CommandWidget.module.css",
-    "story": "2271-d8f6",
-    "rules": [
-      "[[],\".chip\",[\"padding: 6px 14px\",\"border-radius: var(--radius-pill)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".modelChip\",[\"border-color: var(--accent)\"]]",
-      "[[],\".permissionChip\",[\"border-color: var(--warning)\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/ConnectionBanner.module.css",
     "story": "2272-185c",
     "rules": [
