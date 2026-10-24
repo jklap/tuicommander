@@ -682,14 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/TasksShell.module.css",
-    "story": "2245-8da3",
-    "rules": [
-      "[[],\".header > button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]",
-      "[[],\".side > .back\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/board/board.module.css",
     "story": "2246-eaa0",
     "rules": [
