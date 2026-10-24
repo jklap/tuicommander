@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep mobile CLI output at the bottom when the keyboard or viewport resizes, without moving a reader who scrolled up (#2179-e598).
+
 - Deliver queued user commands when an idle agent is waiting on a blocked progress report, without bypassing native questions or permission dialogs (#2177-053d).
 
 ## [2.0.0-beta.2] - 2026-10-24

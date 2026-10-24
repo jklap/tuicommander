@@ -12,9 +12,23 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi
 
 let frames: FrameRequestCallback[];
 let stream: SubscribePtyOptions;
+let resizeCallbacks: Map<Element, ResizeObserverCallback>;
 
 beforeEach(() => {
 	frames = [];
+	resizeCallbacks = new Map();
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			constructor(private callback: ResizeObserverCallback) {}
+			observe(target: Element) {
+				resizeCallbacks.set(target, this.callback);
+			}
+			disconnect() {
+				resizeCallbacks.clear();
+			}
+		},
+	);
 	subscribePty.mockClear();
 	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
 		frames.push(callback);
@@ -47,14 +61,15 @@ async function mountOutput() {
 	const view = render(() => <OutputView sessionId="scroll-session" />);
 	const viewport = view.container.firstElementChild as HTMLDivElement;
 	let height = 2000;
+	let clientHeight = 400;
 	let top = 0;
 	Object.defineProperties(viewport, {
-		clientHeight: { get: () => 400 },
+		clientHeight: { get: () => clientHeight },
 		scrollHeight: { get: () => height },
 		scrollTop: {
 			get: () => top,
 			set: (value: number) => {
-				top = Math.max(0, Math.min(value, height - 400));
+				top = Math.max(0, Math.min(value, height - clientHeight));
 			},
 		},
 	});
@@ -63,6 +78,12 @@ async function mountOutput() {
 	fireEvent.scroll(viewport);
 	return {
 		viewport,
+		resize(nextHeight: number, contentHeight = height) {
+			clientHeight = nextHeight;
+			height = contentHeight;
+			viewport.scrollTop = Math.min(top, height - clientHeight); // browser clamps on expansion
+			resizeCallbacks.get(viewport)?.([], {} as ResizeObserver);
+		},
 		chunk() {
 			height += 20;
 			stream.onLogLines?.([{ spans: [{ text: "next line" }] }]);
@@ -117,6 +138,42 @@ describe("mobile output file links", () => {
 });
 
 describe("mobile output follow", () => {
+	it("keeps newest output visible after viewport resize while following", async () => {
+		const { viewport, resize } = await mountOutput();
+		paint(); // Drain the initial font-effect frame before testing resize alone.
+		// Catches: keyboard shrink leaves the newest 200px below the clip.
+		resize(200);
+		paint();
+		expect(viewport.scrollTop).toBe(1800);
+		resize(400);
+		fireEvent.scroll(viewport);
+		paint();
+		expect(viewport.scrollTop).toBe(1600);
+		// Catches: rotation rewrap grows content without a new output frame.
+		resize(400, 2400);
+		paint();
+		expect(viewport.scrollTop).toBe(2000);
+	});
+
+	it("does not pull a detached reader to bottom on viewport resize", async () => {
+		const { viewport, resize } = await mountOutput();
+		dragUp(viewport, 240);
+		resize(200);
+		paint();
+		expect(viewport.scrollTop).toBe(1360);
+		resize(400);
+		paint();
+		expect(viewport.scrollTop).toBe(1360);
+	});
+
+	it("does not let queued resize follow overwrite a later upward gesture", async () => {
+		const { viewport, resize } = await mountOutput();
+		resize(200);
+		dragUp(viewport, 240);
+		paint();
+		expect(viewport.scrollTop).toBe(1360);
+	});
+
 	it("keeps the line being read when streaming crosses the tail cap instead of evicting detached content", async () => {
 		const { viewport, append, visibleLine } = await mountCappedOutput();
 		dragUp(viewport, 240);

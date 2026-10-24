@@ -23,7 +23,7 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
-In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
+In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom. While following, opening the keyboard or resizing the viewport keeps the newest output visible. A reader who has scrolled up keeps their position through a viewport resize.
 
 When the viewed agent exits, the mobile session returns to the shell: question
 controls close, Chat returns to CLI, and the composer sends shell input. The CLI
