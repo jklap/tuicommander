@@ -10,7 +10,7 @@ const postcss = require("postcss");
 const purgecssRequire = createRequire(createRequire(import.meta.resolve("vite-plugin-purgecss")).resolve("purgecss"));
 const parseSelector = purgecssRequire("postcss-selector-parser");
 const geometry = /^(?:(?:min-|max-)?(?:height|block-size)|padding(?:-.+)?|border(?:-.+)?)$/;
-const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea"]);
+const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl"]);
 
 export function sourceFiles(root = "src") {
 	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {

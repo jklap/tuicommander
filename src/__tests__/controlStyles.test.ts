@@ -11,19 +11,26 @@ interface Finding {
 }
 
 // DEFERRED (2026-10-24) — existing geometry stays exact-match grandfathered,
-// one migration story per module in controlStyleExceptions.json; never allow a whole file.
+// one migration story per module or a documented intentional specialized control;
+// never allow a whole file.
 describe("shared control geometry guard", () => {
 	it("catches new or changed feature control sizing and forces removed exceptions to shrink", () => {
 		const actual: Finding[] = auditControls();
 		const remaining = actual.map((row) => `${row.file}\0${row.signature}`);
 		for (const entry of exceptions) {
-			expect(entry.story).toMatch(/^\d+-[\da-f]{4}$/);
+			if ("reason" in entry) {
+				expect(entry.reason).toMatch(/\S/);
+				expect(entry).not.toHaveProperty("story");
+			} else {
+				expect(entry.story).toMatch(/^\d+-[\da-f]{4}$/);
+			}
 			for (const signature of entry.rules) {
 				const key = `${entry.file}\0${signature}`;
 				const index = remaining.indexOf(key);
-				expect(index, `Remove stale exception for ${entry.file} (${entry.story}): ${signature}`).toBeGreaterThanOrEqual(
-					0,
-				);
+				expect(
+					index,
+					`Remove stale exception for ${entry.file} (${"story" in entry ? entry.story : entry.reason}): ${signature}`,
+				).toBeGreaterThanOrEqual(0);
 				if (index >= 0) remaining.splice(index, 1);
 			}
 		}
@@ -60,4 +67,18 @@ describe("shared control geometry guard", () => {
 		const changed = auditCss("src/Feature.module.css", ".row button { padding: 4px; height: 20px; }")[0];
 		expect(changed.signature).not.toBe(old.signature);
 	});
+});
+
+it("catches feature CSS resizing a class passed to SegmentedControl undetected", () => {
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css';
+			const Feature = () => <SegmentedControl class={s.viewSwitch}/>;`,
+	);
+	const findings: Finding[] = auditCss(
+		"src/Feature.module.css",
+		".viewSwitch { height: 20px; padding: 0; border: 0; }",
+		classes.get("src/Feature.module.css"),
+	);
+	expect(findings.map((row) => row.selector)).toEqual([".viewSwitch"]);
 });

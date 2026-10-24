@@ -360,11 +360,11 @@
   },
   {
     "file": "src/components/ProgressDialog/ProgressFlow.module.css",
-    "story": "2217-fc77",
     "rules": [
       "[[],\".label\",[\"padding: 0 6px\",\"border: 0\"]]",
       "[[],\".expandable\",[\"border-radius: var(--radius-sm)\"]]"
-    ]
+    ],
+    "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
     "file": "src/components/PromptDrawer/PromptDrawer.module.css",
@@ -1002,10 +1002,10 @@
   },
   {
     "file": "src/mobile/components/HeroMetrics.module.css",
-    "story": "2273-03df",
     "rules": [
       "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
-    ]
+    ],
+    "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
   },
   {
     "file": "src/mobile/components/IdeasOverlay.module.css",
