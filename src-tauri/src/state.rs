@@ -392,6 +392,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "ideas-changed")]
+    IdeasChanged,
     #[serde(rename = "settings-changed")]
     SettingsChanged(crate::settings::changes::SettingsChanged),
     #[serde(rename = "open-markdown-tabs-changed")]
@@ -4594,6 +4596,15 @@ impl AppState {
         }
     }
 
+    /// Ideas are persisted before either transport is told to reload.
+    pub(crate) fn notify_ideas_changed(&self) {
+        let _ = self.event_bus.send(AppEvent::IdeasChanged);
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *self.app_handle.read() {
+            let _ = app.emit("ideas-changed", serde_json::json!({}));
+        }
+    }
+
     /// Dual-emit the same value-free payload; there is no bus-to-window forwarder.
     pub(crate) fn publish_settings_changed(
         &self,
@@ -5548,6 +5559,7 @@ impl AppState {
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::SettingsChanged(_)
+            | AppEvent::IdeasChanged
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }

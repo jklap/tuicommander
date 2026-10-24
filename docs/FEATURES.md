@@ -592,6 +592,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.6 Ideas Panel (`Cmd+Alt+N`)
 - Quick notes / idea capture with send-to-terminal
+- Agents use planner `add_idea`, `list_ideas`, and `update_idea` through `workflow action=story`, `tuic story`, IPC, or HTTP. Ideas keep their agent/session source and project scope in `notes.json`. Backend changes reload open panels through `ideas-changed`; stale panel saves merge by idea id and changed field, so they do not erase agent additions.
 - `Enter` submits idea, `Shift+Enter` inserts newline
 - Per-idea actions: Edit (copies back to input), Queue (agent tabs only), Send to Terminal (sends + return), Delete
 - Queue leaves the idea in the agent's Compose FIFO for its next idle window instead of typing it

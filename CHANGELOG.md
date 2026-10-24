@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add, list and update Ideas through the planner API, CLI and workflow MCP tool, with source tracking and race-safe panel synchronization (#2295-abd3).
+
 ### Fixed
 
 - Delete file-browser symbolic links without following their targets, including unavailable links, and show deletion errors (#2301-e76f).

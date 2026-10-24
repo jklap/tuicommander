@@ -2914,4 +2914,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a backend rebuild/restart, verify disconnected GitHub Settings shows `repo read:project` before login; the shared scope file is compiled into Rust (#2293-8674).
 
+## Planner Ideas (#2295-abd3)
+
+- [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.

@@ -738,6 +738,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Prompt library with variables
 - [x] Keyboard redirect to terminal
 - [x] Ideas panel (formerly Notes) with send-to-terminal and delete actions
+- [x] Planner `add_idea`, `list_ideas`, and `update_idea` share the locked notes writer across IPC, HTTP, CLI and MCP. Source/project provenance persists; desktop/SSE notices reload panels and keyed UI deltas preserve concurrent agent additions.
 - [x] Terminal session persistence across app restarts
 - [x] GitHub GraphQL API (replaces gh CLI for PR/CI data)
 - [x] Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server (PAT), per-repo account bindings with ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker (see FEATURES.md 8.14)
