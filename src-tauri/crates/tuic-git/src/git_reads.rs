@@ -983,9 +983,6 @@ impl GitReads for GixGitReads {
         let grepo = self.repo(repo)?;
         let mut entries = Vec::new();
         let mut add = |base: &Path| {
-            if !base.exists() {
-                return;
-            }
             let path = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
             let head = crate::git::resolve_git_dir(&path)
                 .and_then(|dir| std::fs::read_to_string(dir.join("HEAD")).ok())
@@ -1008,7 +1005,10 @@ impl GitReads for GixGitReads {
             add(main);
         }
         for proxy in grepo.worktrees().map_err(|e| e.to_string())? {
-            let Ok(base) = proxy.base() else { continue };
+            let base = proxy.base().map_err(|error| format!(
+                "Cannot read worktree registration {}: {error}. Inspect git worktree list --porcelain and run git worktree repair from the checkout.",
+                proxy.git_dir().display()
+            ))?;
             add(&base);
         }
         Ok(crate::worktree::checkout_inventory(entries, archive_pool))
@@ -1607,6 +1607,222 @@ mod tests {
             .to_string();
         let cli_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         assert_eq!(gix_head, cli_head);
+    }
+
+    /// Catches branch-keyed insertion silently overwriting a forced duplicate checkout.
+    #[test]
+    fn discovery_2157_duplicate_branch_preserves_every_path() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let duplicate = linked.path().join("duplicate-main");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                duplicate.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let third = linked.path().join("another-main");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                third.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let expected = [repo.clone(), duplicate, third];
+        let mut failures = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let actual = reads.worktree_inventory(&repo, None).unwrap();
+            let legacy = crate::worktree::get_worktree_paths_raw(repo.to_str().unwrap()).unwrap();
+            assert_eq!(
+                actual.worktree_paths["main"].path, legacy["main"].path,
+                "discovery and lifecycle must address the same duplicate checkout"
+            );
+            let inventory = serde_json::to_value(actual).unwrap();
+            for path in &expected {
+                let path = git_spelling(&std::fs::canonicalize(path).unwrap().to_string_lossy());
+                let selectable = inventory["worktree_paths"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .any(|w| w["path"] == path);
+                let diagnostic = inventory["worktree_diagnostics"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter()
+                            .any(|w| w["path"] == path && w["state"] == "duplicate_branch")
+                    });
+                if !selectable && !diagnostic {
+                    failures.push(format!("{name}: {path}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "duplicate checkouts lost: {failures:?}"
+        );
+    }
+
+    /// Catches moved/deleted registrations disappearing without non-selectable repair guidance.
+    #[test]
+    fn discovery_2157_missing_registrations_have_repair_diagnostics() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let mut expected = Vec::new();
+        for branch in ["deleted-registration", "moved-registration"] {
+            let path = linked.path().join(branch);
+            run_git(
+                &repo,
+                &["worktree", "add", "-b", branch, path.to_str().unwrap()],
+            );
+            expected.push(git_spelling(
+                &std::fs::canonicalize(&path).unwrap().to_string_lossy(),
+            ));
+            if branch.starts_with("deleted") {
+                std::fs::remove_dir_all(path).unwrap();
+            } else {
+                std::fs::rename(&path, linked.path().join("new-location")).unwrap();
+            }
+        }
+        let before = run_git(&repo, &["worktree", "list", "--porcelain", "-z"]);
+        let mut failures = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory =
+                serde_json::to_value(reads.worktree_inventory(&repo, None).unwrap()).unwrap();
+            for path in &expected {
+                if !inventory["worktree_diagnostics"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter().any(|w| {
+                            w["path"] == *path
+                                && w["state"] == "missing"
+                                && w["guidance"]
+                                    .as_str()
+                                    .is_some_and(|s| s.contains("git worktree repair"))
+                        })
+                    })
+                {
+                    failures.push(format!("{name}: {path}"));
+                }
+                assert!(
+                    !inventory["worktree_paths"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .any(|w| w["path"] == *path)
+                );
+            }
+        }
+        assert_eq!(
+            run_git(&repo, &["worktree", "list", "--porcelain", "-z"]),
+            before,
+            "discovery must not prune registrations"
+        );
+        assert!(
+            failures.is_empty(),
+            "missing repair diagnostics: {failures:?}"
+        );
+    }
+
+    /// Catches bisect detachment losing the original branch despite Git's BISECT_START.
+    #[test]
+    fn discovery_2157_bisect_recovers_original_branch() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let path = linked.path().join("bisect");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "bisect-work",
+                path.to_str().unwrap(),
+            ],
+        );
+        run_git(&path, &["bisect", "start", "HEAD", "HEAD~2"]);
+        assert_eq!(
+            run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "HEAD"
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, None).unwrap();
+            if !inventory
+                .worktree_paths
+                .values()
+                .any(|w| w.branch == "bisect-work")
+            {
+                missing.push(name);
+            }
+        }
+        run_git(&path, &["bisect", "reset"]);
+        assert!(missing.is_empty(), "bisect branch lost in {missing:?}");
+    }
+
+    /// Catches interpreting a relative gitdir against the process cwd during rebase recovery.
+    #[test]
+    fn discovery_2157_relative_gitdir_rebase_recovers_branch() {
+        let (_guard, repo) = fixture_repo();
+        let path = repo.join("relative-checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "rebase-work",
+                path.to_str().unwrap(),
+                "feature",
+            ],
+        );
+        let relative = run_git(&path, &["rev-parse", "--path-format=relative", "--git-dir"]);
+        std::fs::write(path.join(".git"), format!("gitdir: {}\n", relative.trim())).unwrap();
+        assert!(
+            crate::git_cli::git_cmd(&path)
+                .args(["rebase", "--exec", "exit 1", "main"])
+                .run()
+                .is_err()
+        );
+        assert_eq!(
+            run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "HEAD"
+        );
+        let mut missing = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            let inventory = reads.worktree_inventory(&repo, None).unwrap();
+            if !inventory
+                .worktree_paths
+                .values()
+                .any(|w| w.branch == "rebase-work")
+            {
+                missing.push(name);
+            }
+        }
+        run_git(&path, &["rebase", "--abort"]);
+        assert!(
+            missing.is_empty(),
+            "relative-gitdir rebase branch lost in {missing:?}"
+        );
     }
 
     /// Catches detached HEAD checkouts disappearing instead of reaching the sidebar inventory.

@@ -546,7 +546,10 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
     let input = &definition["inputSchema"]["properties"]["input"];
     assert!(
         input.to_string().contains("create_story")
-            && input.to_string().contains("remove_dependency"),
+            && input.to_string().contains("remove_dependency")
+            && input.to_string().contains("set_criterion_manual")
+            && input.to_string().contains("submit_qa")
+            && input.to_string().contains("reject_qa"),
         "the StoryAction variants must be published: {input}"
     );
     let description = definition["description"].as_str().unwrap_or_default();

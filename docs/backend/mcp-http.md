@@ -1,5 +1,7 @@
 # MCP & HTTP Server
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 The compact `ui` description includes `design_start`, `design_stop`, `design_status`,
 `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and
 `design_eval`. `ui action=help` retains their full usage guidance together with
@@ -59,7 +61,20 @@ verify the selected check against that PR head.
 
 ## Native stories
 
-The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Its `remove_dependency` action is refused for bound agent sessions: only a human may remove a direct WontFix prerequisite from a Backlog story. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
+Native stories expose `qa` for work that waits on manual checks. A criterion starts with `[MANUAL]`, or is marked through `set_criterion_manual {index,manual}`. Active work automatically enters QA when all unchecked criteria are manual; `submit_qa` explicitly requests that state. `reject_qa` returns QA to In progress; `approve` requires every criterion checked. QA keeps plans Active and dependencies blocked. All transitions retain expected-revision checks. See the [native stories guide](../user-guide/native-stories.md#manual-qa).
+
+### Reversible native record archival
+
+All native story transports share `archive_story`, `unarchive_story`, `archive_plan`, and `unarchive_plan`. Story actions take `story_id`; plan actions take `plan_id`. Each requires `expected_revision` and returns the updated record with its incremented `revision` and `archived` flag. Stale revisions fail without a write. Archival preserves status, criteria, dependencies, and child archive flags; it never deletes records or cascades to children.
+
+`list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
+
+Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+
+The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Any trusted caller may remove a direct WontFix prerequisite from a Backlog story with its current revision. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
 
@@ -76,6 +91,12 @@ The catalogue cutover removes the old `story` and `workflow_*` tool names withou
 For `workflow action=report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
 
 `workflow action=proposal_create` takes `{input:{runId,proposalKey,story}}` from the active bound plan coordinator. The story belongs to the run's plan and uses a `plan_step` origin. A proposal key is durable across retries: the same payload returns the same story, while a changed payload is rejected. The run records a bounded CreateStory effect before the story transaction and its outcome afterward.
+
+`list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
+
+`filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
+
+`update_story` takes `story_id`, `expected_revision`, and a camel-case `patch`. Omitted fields stay unchanged. The patch accepts `title`, `priority` (1–3), `fileScope`, `origin` (including a plan step), nullable `storyType` (`feature`, `fix`, `refactor`, `chore`, `task`), optional `problem` and `risk` (`low`, `medium`, `high`), ordered `criteria`, and the final `dependencies` set. Null clears `storyType`, `problem` or `risk`; old story records default both to absent. Unknown fields, invalid values, cross-plan dependencies, duplicates, cycles and stale revisions are rejected without partial story writes. Only unclaimed Backlog/Ready stories without active or paused workflow ownership can be amended. Unique byte-identical criteria retain their checks after reorder; changed, new or ambiguous duplicate criteria become unchecked. A priority-only patch preserves all checks. Dependency changes recompute readiness. Planning and execution fingerprints include the amended requirements/revision, so existing evidence cannot certify changed work.
 
 ## Project Progress reporting
 
@@ -2913,3 +2934,20 @@ The owner check precedes all local process/cache/provider reads. Connected
 remote PTYs forward to the owning daemon; an absent/failed route returns
 `remote session` unavailability. No local-account fallback is allowed. The
 frontend transport table also supports the normal session-owner routing.
+
+### TLS readiness
+
+`get_mcp_status` and `GET /mcp/status` expose `tls_active`. The loaded dual-protocol
+serving task owns a strong lifetime token; AppState holds only a weak token.
+Provisioning failure, no TCP listener, task completion, and cancellation do not
+leave HTTPS active. Replacing the token prevents an old task's exit from clearing
+a replacement listener. Tailscale detection retains its separate capability
+state for provisioning and Host trust. Settings and connect URLs use live TLS
+readiness, not that capability. The CLI provisioning fallback reads each PEM
+stream from stdout, because the sandboxed macOS app CLI cannot write into the
+caller's temporary directory.
+
+
+### Append-only story notes
+
+`add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](../api/http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.

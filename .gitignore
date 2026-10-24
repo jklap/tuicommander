@@ -70,6 +70,7 @@ scripts/fixtures/*
 !scripts/fixtures/mobile-jump-layout.html
 !scripts/generate-story-types.py
 !scripts/stall-workload/
+!scripts/chat-simulator/
 !scripts/agent_capture/
 !scripts/replay-oracle.sh
 !scripts/build-stall-replay.mjs

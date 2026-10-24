@@ -1,5 +1,7 @@
 # Components
 
+The selected plan has an **Edit plan** control in the Plans column. It edits title and document/link with Save and Cancel. Save sends only changed fields using the revision captured when editing started. A conflict keeps the draft and requires Cancel and reopening Edit plan to load the latest version; an active-coordinator refusal keeps the source draft and displays the backend remedy. Successful saves refresh the plan list.
+
 Repository Settings uses scoped cards and responsive labelled rows. The existing repository update callbacks and export command remain authoritative. Reset is presented with its repository scope and consequences rather than as an unscoped footer action.
 
 Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.
@@ -235,7 +237,7 @@ The backend preserves the full Claude `/resume` modal in both the initial HTTP
 screen and log-WebSocket frames, including session rows and no-match results;
 the mobile view does not reconstruct the picker from transcript text.
 
-Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
+Terminal ego selectors open the existing `ChoicePromptOverlay` when a new native question arrives or a waiting session is opened. The header question action can close and reopen it; equivalent polling snapshots and highlight changes preserve a manual close. Full titles and option labels, including descriptions, wrap within its scrollable overlay. A `selection_required` composer refusal reopens the current question without sending the refused draft. Free-text cards still open explicitly; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
@@ -608,6 +610,12 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
+Archive and restore controls send the selected record revision to the shared native service. Independent Archived plans and Archived stories toggles select archived records; Rust projects list ids and Kanban columns. Archived details stay readable, but work actions and new-story creation under archived plans are unavailable until restoration. Ownership refusals use the existing error banner.
+
+QA stories have a separate status label, QA-only filter and Kanban column. Criteria remain editable in QA. QA passed sends approval; QA failed returns development work to In progress. These controls use the shared revision-checked story service.
+
+Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
+
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
 The Plans and Stories toolbar button (`StoriesButton.tsx`) widens into a pill while the project has an active plan: active plans, stories in progress and a done/total bar, with the breakdown in its tooltip and `aria-label`. Counts come from the Rust `summary` story action. Nothing signals story changes, so it re-reads on repo change, window focus or visibility, dialog close, and every 60 s while the window is visible; a failed call leaves the plain icon.
@@ -916,3 +924,9 @@ FileBrowserPanel and TreeNode render the backend link target and target kind wit
 `get_session_usage` on mount/session change, invalidates pending responses on
 cleanup, and renders backend-owned lines without usage computation. It has
 explicit loading, unavailable, unknown-model and stale presentation.
+
+Sidebar worktree diagnostics render recorded paths and repair guidance without buttons, tab focus or branch-selection handlers. The repository header retains a diagnostic count while folded. These transient inventory rows are separate from branch workspaces and are not saved in repository configuration.
+
+### StoryNotes (native story detail)
+
+`StoryNotes` renders the selected story's append-only notes and workflow receipt references. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.

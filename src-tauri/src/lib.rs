@@ -1152,6 +1152,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
         "mcp_clients": mcp_protocol_sessions,
         "max_sessions": MAX_CONCURRENT_SESSIONS,
         "reachable": reachable,
+        "tls_active": state.tls_listener.read().strong_count() > 0,
     }))
 }
 
@@ -1226,6 +1227,7 @@ fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
         ref fqdn,
         https_enabled: true,
     } = ts
+        && state.tls_listener.read().strong_count() > 0
         && crate::mcp_http::auth::is_tailscale_ip(&ip)
     {
         return build_connect_url("https", fqdn, port, &token);
@@ -1279,6 +1281,7 @@ fn restart_server(state: &Arc<AppState>, reason: &'static str) {
         remote_enabled = state.config.read().services.server.enabled,
         "HTTP server reconfiguration requested; local MCP IPC remains active"
     );
+    *state.tls_listener.write() = std::sync::Weak::new();
     // Shutdown existing server
     if let Some(tx) = state.server_shutdown.lock().take()
         && tx.send(()).is_err()
@@ -1351,7 +1354,9 @@ fn apply_tailscale_status(
 
     // Restart server if HTTPS availability changed (HTTP→HTTPS or HTTPS→HTTP)
     #[cfg(feature = "desktop")]
-    if old_https != new_https && state.config.read().services.server.enabled {
+    if (old_https != new_https || (new_https && state.tls_listener.read().strong_count() == 0))
+        && state.config.read().services.server.enabled
+    {
         tracing::info!(
             source = "tailscale",
             old_https,

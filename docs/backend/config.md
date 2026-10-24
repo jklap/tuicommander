@@ -466,6 +466,14 @@ Each target uses the format its tool reads:
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
 
+Codex filters the environment of its stdio MCP servers. Its TUIC entry forwards
+`TUIC_SESSION`, `TUIC_SOCKET`, `TUIC_APP_INSTANCE` and `TUIC_CONFIG_DIR` from the
+local process environment. Identity alone is not sufficient: without the endpoint
+selectors, an agent launched by a named instance can connect its bridge to the
+default instance. Installation repairs incomplete allowlists even when the bridge
+command already matches. Existing variables and local-source object entries are
+preserved; Grok does not receive the Codex-only allowlist.
+
 
 **A target is written only when it is installed.** The writer creates every
 missing parent directory, so an unconditional pass used to create `~/.cursor/`,

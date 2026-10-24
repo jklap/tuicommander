@@ -13,6 +13,24 @@ Access TUICommander from a browser on another device on your network.
 
 Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
+On macOS, TUICommander can use the installed Tailscale app when no `tailscale`
+CLI is on its PATH, including launches from Finder. Status detection, peer lookup
+and certificate requests run the app executable with `TAILSCALE_BE_CLI=1`.
+You do not need to set this variable globally. A standalone CLI on PATH keeps
+its existing environment.
+
+The **Tailscale HTTPS** status reports **HTTPS active** only while the server
+has loaded a certificate and its TLS listener is running. Tailscale's HTTPS
+capability alone is not enough. If it says **Running (HTTPS unavailable)**,
+enable Remote Access and select **Recheck**. If it remains unavailable, inspect
+the Tailscale certificate errors in the app logs. Connect URLs use HTTPS only
+while that listener is active.
+
+The macOS app's CLI runs in a filesystem sandbox. TUICommander reads certificate
+and key PEM from its stdout instead of asking it to write into the caller's
+temporary directory; this avoids `operation not permitted` on certificate writes.
+
+
 ## Connecting from Another Device
 
 1. Open a browser on any device on the same network
@@ -98,7 +116,9 @@ In **Sessions → New session**, the Agent picker lists installed CLI agents fro
 
 ### Add to Home Screen
 
-The terminal composer keeps the bottom safe-area inset inside its background so its controls stay above the Home Indicator. Shell height and position still follow `visualViewport.height` and `visualViewport.offsetTop` when the keyboard opens. This padding change does not establish the cause of a separate empty band below the shell; capture a full-screen device screenshot before reloading if that band occurs.
+The iOS PWA uses a non-overlay status bar. On the tested iPhone simulator, the previous translucent setting left a 62pt band outside the drawable content area; adding that height to the CSS shell only clipped the composer. The non-overlay setting removes the band while shell height and position continue to follow `visualViewport.height` and `visualViewport.offsetTop`. The CLI composer retains its compact 4px bottom padding; no extra safe-area gutter is added.
+
+**Existing iPhone Home Screen installs:** remove the installed PWA and add it from Safari again after this update. iOS reads the status-bar setting at installation; a normal page reload does not update that installed setting. Physical iPhone confirmation is still pending. If the band remains after reinstallation, capture the device screen, iOS version, orientation and keyboard state before reloading.
 
 The mobile UI supports PWA (Progressive Web App) installation:
 
@@ -107,7 +127,7 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
-**The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+**Historical title-fade report, before the non-overlay status-bar change.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
 
 Long file paths in mobile **CLI** output wrap inline with the surrounding text and keep the line's hanging indent. Tap a path to open it, or focus it and press Enter or Space.
 
@@ -220,7 +240,7 @@ Hold Send with a finger or mouse, then select **Queue** to hold your current age
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
-- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available.
+- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available. Native ego selectors open automatically; use the header question action to hide or reopen them. If a typed reply requires an option selection, the question controls reopen and the draft stays editable. Free-text cards still open on request.
 - **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
 - **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons

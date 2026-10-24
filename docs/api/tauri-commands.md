@@ -1,5 +1,7 @@
 # Tauri Commands Reference
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 ## Scoped plugin settings
 
 `plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
@@ -20,10 +22,27 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 ## Native stories
 
+Native stories expose `qa` for work that waits on manual checks. A criterion starts with `[MANUAL]`, or is marked through `set_criterion_manual {index,manual}`. Active work automatically enters QA when all unchecked criteria are manual; `submit_qa` explicitly requests that state. `reject_qa` returns QA to In progress; `approve` requires every criterion checked. QA keeps plans Active and dependencies blocked. All transitions retain expected-revision checks. See the [native stories guide](../user-guide/native-stories.md#manual-qa).
+
+### Reversible native record archival
+
+All native story transports share `archive_story`, `unarchive_story`, `archive_plan`, and `unarchive_plan`. Story actions take `story_id`; plan actions take `plan_id`. Each requires `expected_revision` and returns the updated record with its incremented `revision` and `archived` flag. Stale revisions fail without a write. Archival preserves status, criteria, dependencies, and child archive flags; it never deletes records or cascades to children.
+
+`list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
+
+Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
+| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, amends, claims, transitions, or removes a cancelled dependency from native stories. `update_story` takes a revision-checked typed patch for unclaimed Backlog/Ready stories without run ownership; metadata, criteria and dependencies commit atomically. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
+
+`list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
+
+`filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
 
 ## Project Progress
 
@@ -683,7 +702,7 @@ empty result.
 | `hash_password` | `password` | `String` | Bcrypt hash |
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
-| `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `get_mcp_status` | -- | `JSON` | MCP server status including live `tls_active` (not Tailscale capability), plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
 | `get_mcp_audit` | -- | `JSON` | Body-free MCP tools/call outcome audit (same body as `GET /mcp/audit`); `{enabled:false,records:[]}` while `mcp_call_audit_enabled` is off |
 | `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
@@ -1082,3 +1101,12 @@ clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 This async command runs outside the macOS main thread. Rust selects the owner,
 profile and exact ego ledger row. Missing usage is an explicit unavailable
 snapshot, not a zero quota or cost. No messages-generation fallback is used.
+
+`get_repo_structure` and `get_repo_summary` also return `worktree_diagnostics: Array<{path, branch: string | null, state: "missing" | "duplicate_branch", guidance}>`, identical to HTTP. Diagnostics are read-only and have no workspace ID. Discovery does not prune unavailable registrations.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+
+### Append-only story notes
+
+`add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.

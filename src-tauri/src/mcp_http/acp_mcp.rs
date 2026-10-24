@@ -421,9 +421,11 @@ fn workspace_snapshot(state: &AppState, data: &Value) -> Value {
             let inside = |cwd: &str| {
                 let cwd = std::path::Path::new(cwd);
                 cwd.starts_with(path)
-                    || worktrees
-                        .values()
-                        .any(|worktree| cwd.starts_with(&worktree.path))
+                    || worktrees.as_ref().is_ok_and(|paths| {
+                        paths
+                            .values()
+                            .any(|worktree| cwd.starts_with(&worktree.path))
+                    })
             };
             let mut live: Vec<Value> = agents
                 .iter()
@@ -436,6 +438,7 @@ fn workspace_snapshot(state: &AppState, data: &Value) -> Value {
                 "path": path,
                 "branch": (!info.branch.is_empty()).then_some(&info.branch),
                 "liveAgents": live,
+                "worktreeError": worktrees.as_ref().err(),
             })
         })
         .collect();

@@ -1,6 +1,54 @@
+## Mobile log after agent exit (2178-24da) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, exit an inline agent normally and with SIGTERM, then run a shell command. Confirm mobile CLI shows its output and prompt without restoring the old agent input. This Rust change does not hot-reload; the peer does not restart the daily app.
+## Queued replies to blocked progress (2177-053d) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, queue three follow-ups while an agent reports blocked progress. Confirm one reaches the idle agent per turn, in order, and the progress-owned wait clears. Native questions and permission dialogs must still hold the queue. The peer did not restart the daily app; critic/GREEN validation is pending.
+
+## Native story notes (2172-6dee) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, add a note through MCP and list it through HTTP/CLI; confirm actor, time and subject revision persist and the story revision stays unchanged. Check a same-plan workflow receipt reference and refusal of a receipt from another plan. The peer did not restart or replace the daily app.
+- [ ] In the isolated notes UI build, verify an MCP-added note appears in story detail after Refresh notes and capture the owned window. Check append, retained drafts after rejection, and changing stories while an append is pending. The UI controls are implemented; live verification remains pending.
+
+## Native story list filters and pagination (2174-6b3f) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, call `list_stories` with combined state/priority/type filters and `limit:1`, follow `next_cursor` with the same plan/filters, and check the legacy no-limit response stays a full array. This peer did not restart or replace the daily app.
+
+## Stories filters and native Kanban (2167-eedb) — Rust restart required
+
+- [x] Isolated native instance: twelve DOM/geometry samples cover all/open/closed, feature/fix/refactor/chore/task/untyped, combined open+untyped, and Kanban all/open+feature. Card selection shows the matching criteria; closing and reopening retains open+feature and Kanban. Recorded real API fixture and results: `~/Gits/.tmp/results/tuic-2167-evidence/`. The instance was stopped.
+- [ ] In the rebuilt isolated instance, detach with Open + Feature + Kanban, change to Closed + Untyped + List, and bring back; confirm all controls survive both WebView boundaries.
+- [ ] Capture and inspect each filter and List/Kanban after the screen is unlocked. All twelve owned-window screenshot attempts failed with `could not create image from window` while `loginwindow` was frontmost; no screenshot or visual pass is claimed.
+- [ ] After Boss chooses to rebuild/restart the daily backend, inspect these controls in the daily app. Rust filtering and optional story types require that restart; this peer did not restart or replace the daily app.
+
+## Plans and Stories size and detachment (2166-11aa)
+
+- [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.
+- [ ] Capture and inspect the detached window after the screen is unlocked. Its native window was created at 1120×800, but `screencapture -l` failed while `loginwindow` was frontmost. The shared bring-back button is covered by the component test; the live reattach check invoked its shared event/close path rather than clicking inside the locked detached window.
+## Native story amendments (2169-bf61) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, open an unclaimed Backlog/Ready story, use Edit to change P1 to P3, Save and reopen to read P3; confirm dispatch uses the new priority. Amend from another client while the form is open: Save must retain the draft and show a revision conflict; Cancel/reopen loads the new revision. Cancel must not save. Edit a second criterion while the first contains multiple indented lines; the first must remain byte-identical after Save. Exercise Add, Remove, Up and Down without merging criterion boundaries. QA must not offer Edit. The peer does not restart the daily app; Rust changes do not hot-reload. _(verified in native agent-test-2169: MCP/CLI/dialog P1→P3 persistence, first-dispatch P2 before amended P3, multiline preservation and retained conflict drafts; evidence: ~/Gits/.tmp/results/tuic-2169-live/. Daily backend still needs Boss's chosen restart.)_
+
+- [ ] Inspect the native story amendment form on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window capture failed with "could not create image from window" while loginwindow was frontmost; native API/DOM evidence is retained at ~/Gits/.tmp/results/tuic-2169-live/. -->
+
+## Tailscale HTTPS readiness (2165-b4de) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, confirm Remote Access reports HTTPS active only with a loaded TLS listener. Recheck retries unavailable TLS; certificate provisioning through the macOS app no longer writes into the caller's temp directory. The peer does not restart the daily app; Rust changes do not hot-reload.
+
+## Tailscale app CLI mode (2164-4935) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, launch without a standalone `tailscale` on PATH and select Recheck in Remote Access. Confirm Running and the Tailscale FQDN. This Rust change does not hot-reload; the peer did not restart the daily app. The isolated pre-fix instance already detected Running on this machine, so the reported local failure was not reproduced here.
+
+## Codex MCP instance forwarding (2012-72ff) — Rust restart required
+
+- [ ] After Boss chooses to rebuild and restart the daily backend, verify the Codex MCP entry forwards `TUIC_SESSION`, `TUIC_SOCKET`, `TUIC_APP_INSTANCE` and `TUIC_CONFIG_DIR`. Existing identity-only entries must be repaired without losing user variables or settings. Named test instances do not edit the global agent config; this peer did not restart the daily app.
+
 ## Stdio MCP automatic recovery (2162-bf4a) — Rust restart required
 
 - [ ] After Boss chooses to rebuild and restart the daily backend, confirm an exited stdio upstream recovers automatically on a health tick and a reply timeout does not kill a healthy upstream. A timed-out action may still complete; do not retry side-effecting actions without checking their outcome. The peer did not restart the daily app or edit its upstream configuration.
+## Temporary orphan exclusion (2160-4dcb) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the daily backend, confirm an agent scratch detached checkout under `~/Gits/.tmp` does not appear in the orphan dialog or Worktree Manager orphan list, even as its files change. Its read-only detached sidebar row may remain visible. This Rust change does not hot-reload; this peer did not restart the daily app.
 
 ## Confident question lifetime after agent exit (1985-45bd) — Rust restart required
 
@@ -389,7 +437,7 @@
 - [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
 # To Test
 
-- [ ] [HUMAN] Mobile composer safe area (#2116-0213): in the next guided iPhone session, check the installed PWA with keyboard closed/open/reopened. Controls must stay above the Home Indicator and the composer background must reach the bottom. If the separate shell-height band remains, capture a full-screen screenshot, device/iOS, orientation and keyboard state before reloading. The bottom-inset change is not proof that this band is fixed.
+- [ ] [HUMAN] Mobile PWA bottom band (#2116-0213): remove the old iPhone Home Screen install and add it again from updated Safari content to load the non-overlay status-bar metadata. Check keyboard closed/open/reopened, composer taps, Home Indicator interaction and background reaching the screen bottom. Keep the approved CLI bottom padding at 4px. iPhone 17 Pro / iOS 26.4 simulator screenshots and XCUITest confirm the band is removed and the composer accepts taps/draft text, including after keyboard dismissal through session navigation. Physical-phone ergonomics remain unverified. If a band remains, capture the device screen, device/iOS, orientation and keyboard state before reloading.
 
 ## Work-item page total (1845-66f6) — Rust restart required
 
@@ -412,11 +460,11 @@
 ## Mobile keyboard, tab bar and session cards (1795-a710)
 
 - [ ] [HUMAN] On the iPhone home-screen PWA, focus the command input of a session: it must sit directly above the keyboard without a manual scroll, and the view must not bounce. The iOS keyboard cannot be emulated; Vitest covers the shell variables from a fake visualViewport. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-- [ ] [VISUAL] Sessions list: the tab bar is 56 px tall and the + button sits above it; cards end about 16 px sooner and the close button still answers a tap on its 44 px area. A band of about 62 px under the tabs remains on the standalone PWA: it is the 1746 band, present before and after cc21c0945 (Boss's screenshots 5 and 6, 2026-10-12), and it needs device measurement before a fix. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs the installed iPhone PWA to measure its reported bottom band.)_
+- [ ] [VISUAL] Sessions list: the tab bar is 56 px tall and the + button sits above it; cards end about 16 px sooner and the close button still answers a tap on its 44 px area. The historical 62px standalone band (Boss's screenshots 5 and 6, 2026-10-12) was reproduced and removed in the iOS simulator by the non-overlay status-bar metadata in 2116-0213; reinstall the physical iPhone PWA before checking it. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs the installed iPhone PWA to measure its reported bottom band.)_
 ## Mobile title and compact AI Chat composer (1746-aa9e)
 
 - [ ] [VISUAL] After the TUIC restart, reload the iPhone PWA. Park/Restore/Swap and Stop should share the input row with Attach and Send; the bottom tabs should meet the screen edge _(NOTE: refuted on the device on 2026-10-12; see 1795-a710)_. Headless Chromium geometry and screenshots cover 360/390px with 62/34px safe-area overrides; the actual iPhone remains unverified. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app opts into a translucent iOS status bar in `mobile.html`. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
+- [ ] [VISUAL] Inspect the title on the iPhone with the menu closed and open. The reported screenshot has progressive blur over the title and connection dot, with a crisp subtitle. TopBar, shell and mobile global CSS contain no title/ancestor blur, mask, text-shadow or opacity; the app used a translucent iOS status bar before 2116-0213 changed `mobile.html` to non-overlay. Recheck after PWA reinstallation. The likely cause is WebKit's native scroll-edge effect, which is outside page CSS ([WebKit scroll view](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKScrollView.mm) and [native edge wrapper](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKUIScrollEdgeEffect.mm)). This is an inference, not a confirmed device diagnosis. Do not add guessed spacing or filter overrides until device inspection identifies the native layer. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
 ## Design Mode dev-server list collapsed (1727-0338)
 
 - [ ] [VISUAL] In Boss's Edge profile, reload the Design Mode extension and open the side panel with many dev servers. The list is collapsed under "Dev servers (N)" and a new pick card shows without scrolling. Vitest and a real side panel in Chrome for Testing with a stub native host (DOM evidence, no screenshot) cover it. _(audit 2026-10-13: HUMAN — Boss's Edge profile.)_ _(triage 2026-10-14: WAITS — Needs the installed extension/profile operated by Boss; no profile reload performed.)_
@@ -2841,3 +2889,23 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   during active sessions for this check. Rust changes do not hot reload.
 
 - [x] Capture the isolated 390×844 session-usage browser fixture. _(verified 2026-10-23: available, unavailable and stale viewport PNGs captured with the authorized browser wrapper; accessibility text and DOM bounds checked. Fixture-only, not live provider evidence. Evidence: `~/Gits/personal/orchestrator/reports/tuicommander/img/2026-10-23-2150/README.md`.)_
+
+## Worktree discovery diagnostics (#2157-eb64)
+
+- [ ] After the next deliberate Rust rebuild/restart, check forced duplicate-branch and moved-checkout fixtures: read-only diagnostics retain paths and repair guidance; bisect and relative-gitdir rebase keep their branch rows. The currently running backend does not hot-reload this change.
+
+- [ ] After rebuilding, move a detached checkout manually: its old registration stays visible as a repair diagnostic and survives Ask/On automatic cleanup; explicit user removal can discard it.
+
+- [x] Native story QA (#2168-7fbc): the isolated native `agent-test-2168` instance verified QA-only filtering, the QA Kanban card, enabled manual checks, QA failed → In progress, Submit for QA → QA, and QA passed → Done. CLI/API and DOM evidence: `~/Gits/.tmp/results/tuic-2168-live/`. The daily Rust process still needs a manual restart to load this change.
+- [ ] Native all-manual workflow start (#2168-7fbc): after a backend restart, start a Ready story with only manual checks and verify the run pauses for QA without an implementer session or worktree. <!-- DEFERRED (2026-10-23) — critic F1 changes Rust dispatch; prior native live evidence covers story controls, not this new workflow pause. -->
+- [ ] Native story QA screenshot (#2168-7fbc): inspect the QA column and detail controls on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window screencapture failed with "could not create image from window" while loginwindow was frontmost; API and native DOM verification passed. --> EVIDENCE: `~/Gits/.tmp/results/tuic-2168-live/main-screenshot-error.txt`.
+
+- [ ] After a backend rebuild/restart, use Edit plan in Plans and Stories to rename a native plan and change its source. Confirm the saved revision survives restart, stale edits fail without writes, and a closed workflow reopens planning after a source correction. With a running plan coordinator, source changes must fail without writes while title-only edits succeed; cancel the coordinator and retry the source edit (#2170-d828).
+- [ ] After a backend rebuild/restart, use `update_plan` to rename a native plan and change its source. Confirm the saved revision survives restart, stale edits fail without writes, and a closed workflow reopens planning after a source correction. With a running plan coordinator, source changes must fail without writes while title-only edits succeed; cancel the coordinator and retry the source edit (#2170-d828).
+## Native record archive (#2171-9b65)
+
+- [ ] After rebuilding the Rust backend, use an isolated agent-test instance to archive a throwaway native story at its current revision, confirm that the default list omits it and `archived: true` selects it, then restore it and inspect archive history. Do not use daily-instance data. Also check the independent Archived plans/Archived stories toggles and revision-checked Restore controls in StoriesDialog.
+
+- [ ] After a Rust rebuild, archive and restore a workflow-integrated Done story. Confirm the restored plan stays Done and its dependent stays Ready; a story-root workflow must still allow archival of an unrelated unclaimed sibling.
+
+- [x] Story 2173: claimed story metadata, managed transition history and New story plan-step persistence. _(verified: isolated agent-test-2173 API and DOM evidence in `~/Gits/.tmp/results/tuic-2173-live/`; screenshot unavailable because no agent-test window was found.)_

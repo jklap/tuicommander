@@ -37,6 +37,7 @@ pub(super) fn accepted_flow(legacy: bool) -> (Flow, impl Drop) {
         .expect("plan");
     let story = stories
         .create_story(NewStory {
+            story_type: None,
             plan_id: plan.id.clone(),
             title: "Work".into(),
             criteria: vec!["Done".into()],

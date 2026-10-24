@@ -91,6 +91,8 @@ bundle, signing operation or installed executable is involved. Embedded frontend
 assets use `tauri/custom-protocol` even though this is a debug build.
 
 Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
+The isolated window starts at 1400 × 900 logical pixels so Tasks and other
+virtualized panels have a usable viewport. Its minimum size remains 640 × 420.
 Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
 AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
 Agents must connect through the instance's Unix socket, printed as `socket` and

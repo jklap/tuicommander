@@ -471,6 +471,18 @@ describe("transport", () => {
 				body: { action: remove },
 			});
 		});
+		it("catches dropping nested native story filters on the browser transport", () => {
+			const action = {
+				action: "filtered_plan_view",
+				plan_id: "plan",
+				filter: { visibility: "open", storyType: null, untypedOnly: true },
+			};
+			expect(mapCommandToHttp("story_action_command", { project: "/repo", action })).toEqual({
+				method: "POST",
+				path: "/stories/action?path=%2Frepo",
+				body: { action },
+			});
+		});
 		it("routes versioned workflow definitions to their owning project", () => {
 			const action = { action: "get_published", id: "flow-1", revision: 2 };
 			expect(mapCommandToHttp("workflow_definition_action", { project: "/repo a", action })).toEqual({

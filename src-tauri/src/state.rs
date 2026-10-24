@@ -2335,6 +2335,8 @@ pub struct AppState {
     /// Updated by `start_server` after successful bind.
     #[cfg(unix)]
     pub(crate) bound_socket_path: parking_lot::RwLock<std::path::PathBuf>,
+    /// A live TLS serving task owns the strong token; capability detection does not.
+    pub(crate) tls_listener: parking_lot::RwLock<std::sync::Weak<()>>,
     /// Tailscale daemon state (detected at server startup)
     pub(crate) tailscale_state: parking_lot::RwLock<crate::tailscale::TailscaleState>,
     /// Push notification subscription store
@@ -3813,6 +3815,7 @@ impl AppState {
             orchestrator_peers: DashSet::new(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
+            tls_listener: parking_lot::RwLock::new(std::sync::Weak::new()),
             tailscale_state: parking_lot::RwLock::new(
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
@@ -5129,7 +5132,19 @@ impl AppState {
                         .session_maps
                         .silence_states
                         .get(session_id)
-                        .map(|sl| sl.lock().record_awaiting(rank, source))
+                        .map(|sl| {
+                            let mut silence = sl.lock();
+                            // Progress is a conversational wait, not ownership of
+                            // native dialog controls. A late report must not
+                            // relabel a live approval as a queued-answer target.
+                            if source == "progress-blocked"
+                                && silence.awaiting_rank() == Some(crate::pty::EvidenceRank::Protocol)
+                                && silence.awaiting_source() != Some("progress-blocked")
+                            {
+                                return false;
+                            }
+                            silence.record_awaiting(rank, source)
+                        })
                         .unwrap_or(true)
                 });
                 let push_ready = matches!(event_type, "question" | "choice-prompt") && {

@@ -1,41 +1,42 @@
-import { type Component, createEffect, createSignal, For, on, onMount, Show, untrack } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onMount, Show, untrack } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
+import { storiesUi } from "../../stores/storiesUi";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
-import type { PlanState, StoryStatus } from "../../types/stories.gen";
+import type { PlanState, StoryStatus, StoryType, StoryVisibility } from "../../types/stories.gen";
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
+import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
+import { type EditablePlan, PlanEditForm, type PlanEditPatch } from "./PlanEditForm";
 import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
+import { type EditableStory, StoryEditForm, type StoryEditPatch } from "./StoryEditForm";
+import { StoryMetadata } from "./StoryMetadata";
+import { StoryNotes } from "./StoryNotes";
 
-interface Plan {
-	id: string;
+interface Plan extends EditablePlan {
+	archived: boolean;
 	project: string;
-	title: string;
-	source: string;
 }
 interface PlanSource {
 	title: string;
 	source: string;
 }
-interface Story {
-	id: string;
-	planId: string;
-	title: string;
-	criteria: string[];
-	checked: boolean[];
-	dependencies: string[];
-	priority: number;
-	origin: unknown;
-	fileScope: string[];
+interface StoryColumn {
 	status: StoryStatus;
-	revision: number;
+	storyIds: string[];
+}
+interface Story extends EditableStory {
+	archived: boolean;
+	planId: string;
+	checked: boolean[];
+	status: StoryStatus;
 	claimSession: string | null;
 	abandoned: boolean;
 }
@@ -46,7 +47,14 @@ type Reply =
 	| { type: "plan_state"; value: PlanState }
 	| {
 			type: "plan_view";
-			value: { stories: Story[]; state: PlanState; wontFixCount: number; allCancelled: boolean };
+			value: {
+				stories: Story[];
+				state: PlanState;
+				wontFixCount: number;
+				allCancelled: boolean;
+				visibleStoryIds?: string[];
+				columns?: StoryColumn[];
+			};
 	  }
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
@@ -126,6 +134,8 @@ const statusLabel = (status: StoryStatus): string => {
 			return t("stories.status.inProgress", "In progress");
 		case "review":
 			return t("stories.status.review", "Review");
+		case "qa":
+			return t("stories.status.qa", "QA");
 		case "done":
 			return t("stories.status.done", "Done");
 		case "blocked":
@@ -134,6 +144,24 @@ const statusLabel = (status: StoryStatus): string => {
 			return t("stories.status.wontFix", "Won't fix");
 	}
 };
+
+const storyTypeLabel = (kind: StoryType | null | undefined): string => {
+	switch (kind) {
+		case "feature":
+			return t("stories.type.feature", "Feature");
+		case "fix":
+			return t("stories.type.fix", "Fix");
+		case "refactor":
+			return t("stories.type.refactor", "Refactor");
+		case "chore":
+			return t("stories.type.chore", "Chore");
+		case "task":
+			return t("stories.type.task", "Task");
+		default:
+			return t("stories.type.untyped", "Untyped");
+	}
+};
+const STORY_TYPES: StoryType[] = ["feature", "fix", "refactor", "chore", "task"];
 
 const planStateLabel = (state: string): string => {
 	switch (state) {
@@ -151,15 +179,49 @@ const planStateLabel = (state: string): string => {
 export interface StoriesDialogProps {
 	project: string;
 	onClose: () => void;
+	mode?: "inline" | "detached";
 }
 
 export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
-	registerModal(props.onClose);
+	const mode = () => props.mode ?? "inline";
+	if (mode() === "inline") registerModal(props.onClose);
 	const [plans, setPlans] = createSignal<Plan[]>([]);
 	const [planSources, setPlanSources] = createSignal<PlanSource[]>([]);
 	const [stories, setStories] = createSignal<Story[]>([]);
+	const [visibleIds, setVisibleIds] = createSignal<string[] | undefined>();
+	const [columns, setColumns] = createSignal<StoryColumn[]>([]);
+	const [archivedPlans, setArchivedPlans] = createSignal(false);
+	const [archivedStories, setArchivedStories] = createSignal(false);
+	const [newStoryType, setNewStoryType] = createSignal<StoryType | "untyped">("untyped");
+	const filter = () => ({
+		visibility: storiesUi.visibility(),
+		storyType: storiesUi.storyType() === "all" || storiesUi.storyType() === "untyped" ? null : storiesUi.storyType(),
+		untypedOnly: storiesUi.storyType() === "untyped",
+		...(archivedStories() ? { archived: true } : {}),
+	});
+	const storiesById = createMemo(() => new Map(stories().map((story) => [story.id, story])));
+	const listedStories = () =>
+		visibleIds()
+			?.map((id) => storiesById().get(id))
+			.filter((story): story is Story => !!story) ?? stories();
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
+	const [editingPlan, setEditingPlan] = createSignal<Plan | null>(null);
+	const [planEditError, setPlanEditError] = createSignal("");
+	createEffect(
+		on(planId, () => {
+			setEditingPlan(null);
+			setPlanEditError("");
+		}),
+	);
+	const [editing, setEditing] = createSignal<Story | null>(null);
+	const [editError, setEditError] = createSignal("");
+	createEffect(
+		on(storyId, () => {
+			setEditing(null);
+			setEditError("");
+		}),
+	);
 	const [planState, setPlanState] = createSignal<string>("draft");
 	const [wontFixCount, setWontFixCount] = createSignal(0);
 	const [allCancelled, setAllCancelled] = createSignal(false);
@@ -175,6 +237,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [criteriaText, setCriteriaText] = createSignal("");
 	const [scopeText, setScopeText] = createSignal("");
 	const [priority, setPriority] = createSignal(2);
+	const [originType, setOriginType] = createSignal<"native" | "plan_step">("native");
+	const [planStep, setPlanStep] = createSignal("");
 	const [dependencyId, setDependencyId] = createSignal("");
 	const [showRuns, setShowRuns] = createSignal(false);
 	const [showDesigner, setShowDesigner] = createSignal(false);
@@ -224,6 +288,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	let capabilitiesReady = false;
 	// A dependency choice belongs to the story it was made for.
 	createEffect(on(storyId, () => setDependencyId("")));
+
+	function changeFilters(): void {
+		void refresh();
+	}
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
@@ -467,10 +535,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setError("");
 		try {
 			await ensureCapabilities();
-			const list = await call({ action: "list_plans" });
+			const list = await call({ action: "list_plans", ...(archivedPlans() ? { archived: true } : {}) });
 			if (list.type !== "plans") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			let available: PlanSource[] | undefined;
-			if (list.value.length === 0) {
+			if (list.value.length === 0 && !archivedPlans()) {
 				const sources = await call({ action: "list_plan_sources" });
 				if (sources.type !== "plan_sources") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 				available = sources.value;
@@ -480,10 +548,24 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			let nextState = "draft";
 			let nextWontFixCount = 0;
 			let nextAllCancelled = false;
+			let nextVisibleIds: string[] | undefined;
+			let nextColumns: StoryColumn[] = [];
 			if (nextPlan) {
-				const view = await call({ action: "plan_view", plan_id: nextPlan });
+				const selectedFilter = untrack(filter);
+				const filtering =
+					selectedFilter.visibility !== "all" ||
+					selectedFilter.storyType !== null ||
+					selectedFilter.untypedOnly ||
+					selectedFilter.archived;
+				const view = await call(
+					filtering
+						? { action: "filtered_plan_view", plan_id: nextPlan, filter: selectedFilter }
+						: { action: "plan_view", plan_id: nextPlan },
+				);
 				if (view.type !== "plan_view") throw new Error(t("stories.error.invalidStory", "Invalid story response"));
 				nextStories = view.value.stories;
+				nextVisibleIds = view.value.visibleStoryIds;
+				nextColumns = view.value.columns ?? [];
 				nextState = view.value.state;
 				nextWontFixCount = view.value.wontFixCount;
 				nextAllCancelled = view.value.allCancelled;
@@ -496,10 +578,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setPlans(list.value);
 			setPlanId(nextPlan);
 			setStories(nextStories);
+			setVisibleIds(nextVisibleIds);
+			setColumns(nextColumns);
 			setPlanState(nextState);
 			setWontFixCount(nextWontFixCount);
 			setAllCancelled(nextAllCancelled);
-			setStoryId(nextStories.find((story) => story.id === preferredStory)?.id ?? nextStories[0]?.id ?? null);
+			const selectableIds = nextVisibleIds ?? nextStories.map((story) => story.id);
+			setStoryId(
+				preferredStory && selectableIds.includes(preferredStory) ? preferredStory : (selectableIds[0] ?? null),
+			);
 		} catch (cause) {
 			if (current === request) fail(cause);
 		} finally {
@@ -524,6 +611,84 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	async function savePlan(patch: PlanEditPatch): Promise<void> {
+		const snapshot = editingPlan();
+		if (!snapshot) return;
+		setBusy(true);
+		setPlanEditError("");
+		try {
+			const reply = await call({
+				action: "update_plan",
+				plan_id: snapshot.id,
+				expected_revision: snapshot.revision,
+				patch,
+			});
+			if (reply.type !== "plan") throw new Error("Invalid plan update response");
+			if (editingPlan() === snapshot) setEditingPlan(null);
+			await refresh();
+		} catch (cause) {
+			appLogger.warn("store", "Stories: plan update failed", { error: String(cause) });
+			const message =
+				cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : String(cause);
+			if (editingPlan() === snapshot)
+				setPlanEditError(
+					message.includes("stale plan revision")
+						? t(
+								"stories.planEdit.conflict",
+								"This plan changed after editing started. Your draft is kept. Cancel and reopen Edit plan to load the latest revision.",
+							)
+						: message,
+				);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function cancelPlanEdit(): void {
+		setEditingPlan(null);
+		setPlanEditError("");
+		void refresh();
+	}
+
+	async function saveStory(patch: StoryEditPatch): Promise<void> {
+		const snapshot = editing();
+		if (!snapshot) return;
+		setBusy(true);
+		setEditError("");
+		try {
+			const reply = await call({
+				action: "update_story",
+				story_id: snapshot.id,
+				expected_revision: snapshot.revision,
+				patch,
+			});
+			if (reply.type !== "story") throw new Error("Invalid story update response");
+			if (editing() === snapshot) setEditing(null);
+			await refresh();
+		} catch (cause) {
+			appLogger.warn("store", "Stories: amendment failed", { error: String(cause) });
+			const message =
+				cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : String(cause);
+			if (editing() === snapshot)
+				setEditError(
+					message.includes("stale story revision")
+						? t(
+								"stories.edit.conflict",
+								"This story changed after editing started. Your draft is kept. Cancel and reopen Edit to load the latest revision.",
+							)
+						: message,
+				);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function cancelEdit(): void {
+		setEditing(null);
+		setEditError("");
+		void refresh();
 	}
 
 	async function createPlan(event: Event): Promise<void> {
@@ -597,7 +762,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					title: storyTitle().trim(),
 					criteria,
 					priority: priority(),
-					origin: { type: "native" },
+					...(newStoryType() === "untyped" ? {} : { storyType: newStoryType() }),
+					origin: originType() === "plan_step" ? { type: "plan_step", step: planStep().trim() } : { type: "native" },
 					fileScope,
 				},
 			});
@@ -607,6 +773,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setStoryTitle("");
 			setCriteriaText("");
 			setScopeText("");
+			setNewStoryType("untyped");
+			setOriginType("native");
+			setPlanStep("");
 		} catch (cause) {
 			fail(cause);
 		} finally {
@@ -650,11 +819,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	});
 
 	return (
-		<div class={d.overlay} onClick={props.onClose}>
+		<div
+			class={mode() === "detached" ? s.detachedHost : d.overlay}
+			onClick={() => mode() === "inline" && props.onClose()}
+		>
 			<div
 				class={s.dialog}
+				classList={{ [s.detached]: mode() === "detached" }}
 				role="dialog"
-				aria-modal="true"
+				aria-modal={mode() === "inline" ? "true" : undefined}
 				aria-label={t("stories.title", "Plans and Stories")}
 				onClick={(event) => event.stopPropagation()}
 			>
@@ -678,7 +851,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</button>
 						<button
 							type="button"
-							disabled={busy() || selectedStory()?.status !== "ready" || !!selectedStory()?.claimSession}
+							disabled={
+								busy() ||
+								selectedPlan()?.archived ||
+								selectedStory()?.archived ||
+								selectedStory()?.status !== "ready" ||
+								!!selectedStory()?.claimSession
+							}
 							onClick={() => void openStart()}
 						>
 							Start story workflow
@@ -706,25 +885,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							Designer
 						</button>
 					</div>
-					<button
-						ref={closeButton}
-						type="button"
-						class={s.iconButton}
-						aria-label={t("stories.close", "Close Plans and Stories")}
-						onClick={props.onClose}
-					>
-						<svg
-							viewBox="0 0 16 16"
-							width="15"
-							height="15"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							aria-hidden="true"
-						>
-							<path d="M3 3l10 10M13 3 3 13" />
-						</svg>
-					</button>
+					<div class={s.windowControls}>
+						<PanelWindowControls
+							panelId="stories"
+							mode={mode()}
+							onInlineClose={props.onClose}
+							closeLabel={t("stories.close", "Close Plans and Stories")}
+							closeButtonRef={(button) => {
+								closeButton = button;
+							}}
+						/>
+					</div>
 				</header>
 				<Show when={error()}>
 					<div class={s.error} role="alert">
@@ -1040,7 +1211,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					</div>
 				</Show>
 				<Show when={!showRuns() && !showDesigner()}>
-					<div class={s.content}>
+					<div class={s.content} classList={{ [s.kanbanContent]: storiesUi.view() === "kanban" }}>
 						<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.plans", "Plans")}</h3>
@@ -1054,7 +1225,72 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									{t("stories.newPlan", "New plan")}
 								</button>
 							</div>
+							<div class={s.filters}>
+								<label class={s.archiveToggle}>
+									<input
+										type="checkbox"
+										checked={archivedPlans()}
+										disabled={busy()}
+										onChange={(event) => {
+											setArchivedPlans(event.currentTarget.checked);
+											setNewPlan(false);
+											void refresh(null, null);
+										}}
+									/>
+									{t("stories.archive.plans", "Archived plans")}
+								</label>
+								<Show when={selectedPlan()}>
+									{(plan) => (
+										<button
+											type="button"
+											disabled={busy()}
+											onClick={() =>
+												void mutate({
+													action: plan().archived ? "unarchive_plan" : "archive_plan",
+													plan_id: plan().id,
+													expected_revision: plan().revision,
+												})
+											}
+										>
+											{plan().archived
+												? t("stories.archive.restorePlan", "Restore plan")
+												: t("stories.archive.archivePlan", "Archive plan")}
+										</button>
+									)}
+								</Show>
+							</div>
 							<Show when={selectedPlan()}>
+								<Show
+									when={editingPlan()}
+									keyed
+									fallback={
+										<div class={s.form}>
+											<button
+												type="button"
+												disabled={busy()}
+												onClick={() => {
+													const plan = selectedPlan();
+													if (plan) {
+														setEditingPlan({ ...plan });
+														setPlanEditError("");
+													}
+												}}
+											>
+												{t("stories.planEdit.open", "Edit plan")}
+											</button>
+										</div>
+									}
+								>
+									{(plan) => (
+										<PlanEditForm
+											plan={plan}
+											busy={busy()}
+											error={planEditError()}
+											onSave={savePlan}
+											onCancel={cancelPlanEdit}
+										/>
+									)}
+								</Show>
 								<p class={s.planNotice}>
 									{t("stories.state", "State")}: {planStateLabel(planState())}
 								</p>
@@ -1135,11 +1371,74 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<section class={s.storyColumn} aria-label={t("stories.stories", "Stories")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.stories", "Stories")}</h3>
-								<button type="button" disabled={!planId()} onClick={() => setNewStory(!newStory())}>
+								<button
+									type="button"
+									disabled={!planId() || selectedPlan()?.archived}
+									onClick={() => setNewStory(!newStory())}
+								>
 									{t("stories.newStory", "New story")}
 								</button>
 							</div>
-							<Show when={newStory() && planId()}>
+							<div class={s.filters}>
+								<label class={s.archiveToggle}>
+									<input
+										type="checkbox"
+										checked={archivedStories()}
+										disabled={busy()}
+										onChange={(event) => {
+											setArchivedStories(event.currentTarget.checked);
+											void refresh(planId(), null);
+										}}
+									/>
+									{t("stories.archive.stories", "Archived stories")}
+								</label>
+								<label>
+									{t("stories.filter.status", "Status")}
+									<Select
+										value={storiesUi.visibility()}
+										onChange={(event) => {
+											storiesUi.setVisibility(event.currentTarget.value as StoryVisibility);
+											changeFilters();
+										}}
+									>
+										<option value="all">{t("stories.filter.allStatuses", "All statuses")}</option>
+										<option value="open">{t("stories.filter.open", "Open only")}</option>
+										<option value="closed">{t("stories.filter.closed", "Closed only")}</option>
+										<option value="qa">{t("stories.filter.qa", "QA only")}</option>
+									</Select>
+								</label>
+								<label>
+									{t("stories.typeLabel", "Story type")}
+									<Select
+										value={storiesUi.storyType()}
+										onChange={(event) => {
+											storiesUi.setStoryType(event.currentTarget.value as StoryType | "all" | "untyped");
+											changeFilters();
+										}}
+									>
+										<option value="all">{t("stories.filter.allTypes", "All types")}</option>
+										<option value="untyped">{storyTypeLabel(undefined)}</option>
+										<For each={STORY_TYPES}>{(kind) => <option value={kind}>{storyTypeLabel(kind)}</option>}</For>
+									</Select>
+								</label>
+								<div role="group" aria-label={t("stories.view.label", "Story view")}>
+									<button
+										type="button"
+										aria-pressed={storiesUi.view() === "list"}
+										onClick={() => storiesUi.setView("list")}
+									>
+										{t("stories.view.list", "List")}
+									</button>
+									<button
+										type="button"
+										aria-pressed={storiesUi.view() === "kanban"}
+										onClick={() => storiesUi.setView("kanban")}
+									>
+										{t("stories.view.kanban", "Kanban")}
+									</button>
+								</div>
+							</div>
+							<Show when={newStory() && planId() && !selectedPlan()?.archived}>
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>
 									<label>
 										{t("stories.titleLabel", "Title")}
@@ -1158,10 +1457,44 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											onInput={(event) => setCriteriaText(event.currentTarget.value)}
 										/>
 									</label>
+									<p class={s.muted}>
+										{t("stories.manualHint", "Prefix human checks with [MANUAL] to track them in QA.")}
+									</p>
 									<label>
 										{t("stories.scopeInput", "File scope, one relative path per line")}
 										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
 									</label>
+									<label>
+										{t("stories.typeLabel", "Story type")}
+										<Select
+											value={newStoryType()}
+											onChange={(event) => setNewStoryType(event.currentTarget.value as StoryType | "untyped")}
+										>
+											<option value="untyped">{storyTypeLabel(undefined)}</option>
+											<For each={STORY_TYPES}>{(kind) => <option value={kind}>{storyTypeLabel(kind)}</option>}</For>
+										</Select>
+									</label>
+									<label>
+										{t("stories.metadata.origin", "Origin")}
+										<Select
+											value={originType()}
+											onChange={(event) => setOriginType(event.currentTarget.value as "native" | "plan_step")}
+										>
+											<option value="native">{t("stories.metadata.native", "Native")}</option>
+											<option value="plan_step">{t("stories.metadata.planStep", "Plan step")}</option>
+										</Select>
+									</label>
+									<Show when={originType() === "plan_step"}>
+										<label>
+											{t("stories.metadata.planStep", "Plan step")}
+											<Input
+												required
+												maxlength="200"
+												value={planStep()}
+												onInput={(event) => setPlanStep(event.currentTarget.value)}
+											/>
+										</label>
+									</Show>
 									<label>
 										{t("stories.priority", "Priority")}
 										<Select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
@@ -1175,24 +1508,77 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</button>
 								</form>
 							</Show>
-							<Show when={!loading() && planId() && stories().length === 0}>
-								<p class={s.empty}>{t("stories.emptyStories", "This plan has no stories.")}</p>
+							<Show when={!loading() && planId() && listedStories().length === 0}>
+								<p class={s.empty}>
+									{stories().length
+										? t("stories.filter.empty", "No stories match these filters.")
+										: t("stories.emptyStories", "This plan has no stories.")}
+								</p>
 							</Show>
-							<nav class={s.items}>
-								<For each={stories()}>
-									{(story) => (
-										<button
-											type="button"
-											class={s.item}
-											aria-current={storyId() === story.id ? "true" : undefined}
-											onClick={() => setStoryId(story.id)}
-										>
-											<span>{story.title}</span>
-											<small>{statusLabel(story.status)}</small>
-										</button>
-									)}
-								</For>
-							</nav>
+							{/* DEFERRED (2026-10-23) — core and the independently released Wiz plugin keep
+                                separate boards; extract a shared package when a third consumer needs one. */}
+							<Show
+								when={storiesUi.view() === "kanban"}
+								fallback={
+									<nav class={s.items}>
+										<For each={listedStories()}>
+											{(story) => (
+												<button
+													type="button"
+													class={s.item}
+													aria-current={storyId() === story.id ? "true" : undefined}
+													onClick={() => setStoryId(story.id)}
+												>
+													<span>{story.title}</span>
+													<small>
+														{statusLabel(story.status)} · {storyTypeLabel(story.storyType)}
+													</small>
+												</button>
+											)}
+										</For>
+									</nav>
+								}
+							>
+								<div class={s.board} role="region" aria-label={t("stories.view.kanban", "Kanban")}>
+									<For each={columns()}>
+										{(column) => (
+											<section class={s.boardColumn} aria-label={statusLabel(column.status)}>
+												<header class={s.boardColumnHeader} data-status={column.status}>
+													<span>{statusLabel(column.status)}</span>
+													<span>{column.storyIds.length}</span>
+												</header>
+												<div class={s.boardCards}>
+													<Show
+														when={column.storyIds.length}
+														fallback={<p class={s.boardEmpty}>{t("stories.board.empty", "No stories")}</p>}
+													>
+														<For each={column.storyIds}>
+															{(id) => (
+																<Show when={storiesById().get(id)}>
+																	{(story) => (
+																		<button
+																			type="button"
+																			class={s.boardCard}
+																			aria-current={storyId() === id ? "true" : undefined}
+																			onClick={() => setStoryId(id)}
+																		>
+																			<small class={s.boardCardId}>{story().id}</small>
+																			<span>{story().title}</span>
+																			<small>
+																				{storyTypeLabel(story().storyType)} · P{story().priority}
+																			</small>
+																		</button>
+																	)}
+																</Show>
+															)}
+														</For>
+													</Show>
+												</div>
+											</section>
+										)}
+									</For>
+								</div>
+							</Show>
 						</section>
 						<section class={s.detail} aria-label={t("stories.details", "Story details")}>
 							<Show
@@ -1221,7 +1607,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<div class={s.detailHeader}>
 											<div>
 												<span class={s.eyebrow}>
-													{t("stories.story", "Story")} · P{story().priority}
+													{t("stories.story", "Story")} · P{story().priority} · {storyTypeLabel(story().storyType)}
 												</span>
 												<h3>{story().title}</h3>
 											</div>
@@ -1229,134 +1615,238 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												{statusLabel(story().status)}
 											</span>
 										</div>
-										<section>
-											<h4>{t("stories.criteria", "Acceptance criteria")}</h4>
-											<ul class={s.criteria}>
-												<For each={story().criteria}>
-													{(criterion, index) => (
-														<li>
-															<label>
-																<input
-																	type="checkbox"
-																	checked={story().checked[index()]}
-																	disabled={story().status !== "in_progress" || busy()}
-																	onChange={() =>
-																		transition({
-																			[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
-																		})
-																	}
-																/>
-																<span>{criterion}</span>
-															</label>
-														</li>
-													)}
-												</For>
-											</ul>
-										</section>
-										<section>
-											<h4>{t("stories.dependencies", "Dependencies")}</h4>
-											<Show
-												when={story().dependencies.length}
-												fallback={<p class={s.muted}>{t("stories.none", "None")}</p>}
-											>
-												<ul>
-													<For each={story().dependencies}>
-														{(id) => {
-															const dependency = stories().find((item) => item.id === id);
-															return (
-																<li class={s.dependencyRow}>
-																	<span>
-																		{dependency?.title ?? id} ·{" "}
-																		{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
-																		{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
-																	</span>
-																	<Show when={story().status === "backlog" && dependency?.status === "wont_fix"}>
-																		<button
-																			type="button"
-																			disabled={busy()}
-																			aria-label={t("stories.removeNamedDependency", "Remove {title}", {
-																				title: dependency?.title ?? id,
-																			})}
-																			onClick={() => removeDependency(id)}
-																		>
-																			{t("stories.remove", "Remove")}
-																		</button>
-																	</Show>
-																</li>
-															);
-														}}
+										<StoryMetadata project={props.project} story={story()} />
+										<Show
+											when={editing()}
+											keyed
+											fallback={
+												<Show
+													when={
+														!story().archived &&
+														!selectedPlan()?.archived &&
+														["backlog", "ready"].includes(story().status) &&
+														!story().claimSession
+													}
+												>
+													<div class={s.actions}>
+														<button
+															type="button"
+															disabled={busy()}
+															onClick={() => {
+																setEditing(structuredClone(story()));
+																setEditError("");
+															}}
+														>
+															{t("stories.edit.open", "Edit")}
+														</button>
+													</div>
+												</Show>
+											}
+										>
+											{(snapshot) => (
+												<StoryEditForm
+													story={snapshot}
+													candidates={stories().filter((candidate) => candidate.id !== snapshot.id)}
+													busy={busy()}
+													error={editError()}
+													onSave={saveStory}
+													onCancel={cancelEdit}
+												/>
+											)}
+										</Show>
+										<Show when={!editing()}>
+											<section>
+												<h4>{t("stories.criteria", "Acceptance criteria")}</h4>
+												<ul class={s.criteria}>
+													<For each={story().criteria}>
+														{(criterion, index) => (
+															<li>
+																<label>
+																	<input
+																		type="checkbox"
+																		checked={story().checked[index()]}
+																		disabled={
+																			story().archived ||
+																			selectedPlan()?.archived ||
+																			!["in_progress", "qa"].includes(story().status) ||
+																			busy()
+																		}
+																		onChange={() =>
+																			transition({
+																				[story().checked[index()] ? "uncheck_criterion" : "check_criterion"]: index(),
+																			})
+																		}
+																	/>
+																	<span>{criterion}</span>
+																</label>
+															</li>
+														)}
 													</For>
 												</ul>
-											</Show>
-											<Show when={story().status === "ready" || story().status === "backlog"}>
-												<div class={s.inline}>
-													<Select
-														aria-label={t("stories.addDependency", "Add dependency")}
-														value={dependencyId()}
-														onChange={(event) => setDependencyId(event.currentTarget.value)}
-													>
-														<option value="">{t("stories.selectStory", "Select story")}</option>
-														<For
-															each={stories().filter(
-																(candidate) =>
-																	candidate.id !== story().id && !story().dependencies.includes(candidate.id),
-															)}
-														>
-															{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
+											</section>
+											<section>
+												<h4>{t("stories.dependencies", "Dependencies")}</h4>
+												<Show
+													when={story().dependencies.length}
+													fallback={<p class={s.muted}>{t("stories.none", "None")}</p>}
+												>
+													<ul>
+														<For each={story().dependencies}>
+															{(id) => {
+																const dependency = stories().find((item) => item.id === id);
+																return (
+																	<li class={s.dependencyRow}>
+																		<span>
+																			{dependency?.title ?? id} ·{" "}
+																			{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
+																			{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
+																		</span>
+																		<Show
+																			when={
+																				!story().archived &&
+																				!selectedPlan()?.archived &&
+																				story().status === "backlog" &&
+																				dependency?.status === "wont_fix"
+																			}
+																		>
+																			<button
+																				type="button"
+																				disabled={busy()}
+																				aria-label={t("stories.removeNamedDependency", "Remove {title}", {
+																					title: dependency?.title ?? id,
+																				})}
+																				onClick={() => removeDependency(id)}
+																			>
+																				{t("stories.remove", "Remove")}
+																			</button>
+																		</Show>
+																	</li>
+																);
+															}}
 														</For>
-													</Select>
-													<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
-														{t("stories.addDependency", "Add dependency")}
-													</button>
-												</div>
-											</Show>
-										</section>
-										<section>
-											<h4>{t("stories.fileScope", "File scope")}</h4>
-											<Show
-												when={story().fileScope.length}
-												fallback={<p class={s.muted}>{t("stories.unspecified", "Unspecified")}</p>}
-											>
-												<ul>
-													<For each={story().fileScope}>{(path) => <li class={s.path}>{path}</li>}</For>
-												</ul>
-											</Show>
-										</section>
-										<div class={s.actions}>
-											<Show when={story().status === "ready"}>
-												<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
-													{t("stories.startWork", "Start work")}
+													</ul>
+												</Show>
+												<Show
+													when={
+														!story().archived &&
+														!selectedPlan()?.archived &&
+														(story().status === "ready" || story().status === "backlog")
+													}
+												>
+													<div class={s.inline}>
+														<Select
+															aria-label={t("stories.addDependency", "Add dependency")}
+															value={dependencyId()}
+															onChange={(event) => setDependencyId(event.currentTarget.value)}
+														>
+															<option value="">{t("stories.selectStory", "Select story")}</option>
+															<For
+																each={stories().filter(
+																	(candidate) =>
+																		candidate.id !== story().id && !story().dependencies.includes(candidate.id),
+																)}
+															>
+																{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
+															</For>
+														</Select>
+														<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
+															{t("stories.addDependency", "Add dependency")}
+														</button>
+													</div>
+												</Show>
+											</section>
+											<section>
+												<h4>{t("stories.fileScope", "File scope")}</h4>
+												<Show
+													when={story().fileScope.length}
+													fallback={<p class={s.muted}>{t("stories.unspecified", "Unspecified")}</p>}
+												>
+													<ul>
+														<For each={story().fileScope}>{(path) => <li class={s.path}>{path}</li>}</For>
+													</ul>
+												</Show>
+											</section>
+											<div class={s.actions}>
+												<Show when={!story().archived && !selectedPlan()?.archived}>
+													<Show when={story().status === "ready"}>
+														<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
+															{t("stories.startWork", "Start work")}
+														</button>
+													</Show>
+													<Show when={story().status === "in_progress"}>
+														<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
+															{t("stories.submitReview", "Submit for review")}
+														</button>
+													</Show>
+													<Show when={story().status === "review"}>
+														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+															{t("stories.approve", "Approve")}
+														</button>
+														<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
+															{t("stories.requestChanges", "Request changes")}
+														</button>
+													</Show>
+													<Show when={["in_progress", "review"].includes(story().status)}>
+														<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
+															{t("stories.submitQa", "Submit for QA")}
+														</button>
+													</Show>
+													<Show when={story().status === "qa"}>
+														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+															{t("stories.qaPassed", "QA passed")}
+														</button>
+														<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
+															{t("stories.qaFailed", "QA failed")}
+														</button>
+													</Show>
+													<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
+														<button type="button" disabled={busy()} onClick={() => transition("block")}>
+															{t("stories.block", "Block")}
+														</button>
+													</Show>
+													<Show when={story().status === "blocked"}>
+														<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
+															{t("stories.unblock", "Unblock")}
+														</button>
+													</Show>
+													<Show when={story().status !== "done" && story().status !== "wont_fix"}>
+														<button
+															type="button"
+															class={s.danger}
+															disabled={busy()}
+															onClick={() => transition("wont_fix")}
+														>
+															{t("stories.status.wontFix", "Won't fix")}
+														</button>
+													</Show>
+												</Show>
+												<button
+													type="button"
+													disabled={busy() || !!story().claimSession}
+													onClick={() =>
+														void mutate({
+															action: story().archived ? "unarchive_story" : "archive_story",
+															story_id: story().id,
+															expected_revision: story().revision,
+														})
+													}
+												>
+													{story().archived
+														? t("stories.archive.restoreStory", "Restore story")
+														: t("stories.archive.archiveStory", "Archive story")}
 												</button>
-											</Show>
-											<Show when={story().status === "in_progress"}>
-												<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
-													{t("stories.submitReview", "Submit for review")}
-												</button>
-											</Show>
-											<Show when={story().status === "review"}>
-												<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-													{t("stories.approve", "Approve")}
-												</button>
-												<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
-													{t("stories.requestChanges", "Request changes")}
-												</button>
-											</Show>
-											<Show when={["ready", "in_progress", "review"].includes(story().status)}>
-												<button type="button" disabled={busy()} onClick={() => transition("block")}>
-													{t("stories.block", "Block")}
-												</button>
-											</Show>
-											<Show when={story().status === "blocked"}>
-												<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
-													{t("stories.unblock", "Unblock")}
-												</button>
-											</Show>
-											<Show when={story().status !== "done" && story().status !== "wont_fix"}>
-												<button type="button" class={s.danger} disabled={busy()} onClick={() => transition("wont_fix")}>
-													{t("stories.status.wontFix", "Won't fix")}
-												</button>
-											</Show>
-										</div>
+											</div>
+										</Show>
+										<Show when={`${props.project}:${story().id}`} keyed>
+											{(_storyKey) => (
+												<StoryNotes
+													project={props.project}
+													storyId={story().id}
+													revision={story().revision}
+													busy={busy()}
+												/>
+											)}
+										</Show>
 									</>
 								)}
 							</Show>

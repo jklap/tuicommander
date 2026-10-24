@@ -10,6 +10,30 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Native story notes",
+		description:
+			"Select a story to read Notes and evidence or append a permanent note. Refresh notes loads entries added by agents or other windows without changing the story revision.",
+		shortcut: null,
+	},
+	{
+		feature: "Story origin and history",
+		description:
+			"Select a native story to inspect its origin, claiming session and recorded transitions. New story can link the work to a plan step.",
+		shortcut: null,
+	},
+	{
+		feature: "Edit native stories",
+		description:
+			"Select an unclaimed Backlog or Ready story and choose Edit to change metadata, requirements and dependencies together. Save checks the original revision; Cancel discards the draft. QA and active work cannot be amended.",
+		shortcut: null,
+	},
+	{
+		feature: "Native story QA",
+		description:
+			"Prefix human checks with [MANUAL]. When development checks pass, the story enters QA; use the QA filter or Kanban column to find checks that wait for a person.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile session usage",
 		description:
 			"Open More session actions on mobile to read the session profile's account quota or ego session tokens and cost. Unknown and stale usage are labelled explicitly.",
@@ -317,7 +341,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Plans and Stories",
-		description: "Open Plans and Stories from the project toolbar to create plans, track criteria, and review work.",
+		description:
+			"Open Plans and Stories from the project toolbar. On desktop, use its header to detach it into a resizable window.",
 		shortcut: null,
 	},
 	{

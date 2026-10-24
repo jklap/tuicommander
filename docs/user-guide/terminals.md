@@ -23,10 +23,12 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
-In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
+In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom. While following, opening the keyboard or resizing the viewport keeps the newest output visible. A reader who has scrolled up keeps their position through a viewport resize.
 
 When the viewed agent exits, the mobile session returns to the shell: question
-controls close, Chat returns to CLI, and the composer sends shell input. Fresh
+controls close, Chat returns to CLI, and the composer sends shell input. The CLI
+view shows new shell output even when the terminal retains the old agent screen;
+the old agent input is not restored into the composer. Fresh
 session polling also clears stale agent controls if the output socket pauses or
 reconnects. If the PTY ends, **Session ended** offers **Back** to the session list.
 
@@ -87,7 +89,7 @@ Local agents started through `tuic agent spawn` or HTTP remain eligible for Chat
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent has no supported transcript adapter, or a required frontend binding is missing. Claude and ego check their transcript binding in the backend when Chat opens, so a missing saved session ID does not disable their switch. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 
-Chat follows new transcript entries while the agent writes. When you scroll up and more content arrives, **New text below** appears above Compose. Select it to return to the bottom and resume following. Reaching the bottom by hand also clears it. Search jumps show no indicator until later content arrives. Turn the indicator off in **Settings → Appearance → Chat**; this preference is saved on the current client. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
+Chat applies each transcript snapshot as one update on desktop and mobile. Opening Chat or switching back from CLI keeps the full history without rendering each partial replay. Chat follows new transcript entries while the agent writes. When you scroll up and more content arrives, **New text below** appears above Compose. Select it to return to the bottom and resume following. Reaching the bottom by hand also clears it. Search jumps show no indicator until later content arrives. Turn the indicator off in **Settings → Appearance → Chat**; this preference is saved on the current client. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
 
 Older recorded prompts with a prompt ID also appear when Claude did not record a human-origin field. Command echoes, tool results and sidechain conversations stay out of user bubbles. Image and PDF tool outputs show `[image]` and `[document]` markers; a model fallback shows a **Model changed** card.
 
@@ -370,6 +372,9 @@ The Compose panel can leave work for an agent without steering its current turn:
   already idle; otherwise it waits for the next idle window.
 - Queued user commands and peer messages share one FIFO and are delivered one
   item per idle window in acceptance order.
+- If an idle agent reports blocked progress, your queued command answers that
+  wait. Native questions and permission dialogs still require an explicit answer
+  before queued work can be delivered.
 - The `N queued` badge counts only Compose commands. Clicking it discards those
   commands but never clears peer or orchestrator messages waiting in the same
   delivery queue.

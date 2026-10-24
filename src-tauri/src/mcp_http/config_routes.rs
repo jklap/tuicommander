@@ -630,6 +630,7 @@ pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> i
         "active_sessions": state.session_maps.sessions.len(),
         "mcp_clients": state.mcp.sessions.len(),
         "max_sessions": MAX_CONCURRENT_SESSIONS,
+        "tls_active": state.tls_listener.read().strong_count() > 0,
     }))
 }
 

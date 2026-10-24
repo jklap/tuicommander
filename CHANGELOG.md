@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep mobile CLI output at the bottom when the keyboard or viewport resizes, without moving a reader who scrolled up (#2179-e598).
+
+- Deliver queued user commands when an idle agent is waiting on a blocked progress report, without bypassing native questions or permission dialogs (#2177-053d).
+
+## [2.0.0-beta.2] - 2026-10-24
+
+- Show append-only notes and workflow receipt references in native story detail, with an add field, retained drafts on failure, and an explicit refresh for agent-added notes (#2172-6dee).
+- Show native story origin, plan step, revision, claiming session and transition history in story details; allow plan-step origins during creation (#2173-84e0).
+
+- Add append-only native story notes with backend actor/time/revision provenance and validated workflow receipt references through the shared story service (#2172-6dee).
+- Add a Plans-column editor with Save/Cancel and retained drafts on conflicts, backed by atomic revision-checked native plan title/source updates through the shared MCP, HTTP, IPC, and CLI service; include corrected metadata in workflow planning and verification subjects, and refuse source replacement while a plan coordinator is active (#2170-d828).
+
+- Add server-side native story state/priority/type filters and optional bounded keyset pages without changing legacy full-list reads or workflow dispatch order (#2174-6b3f).
+- Show native ego selector controls on mobile when a question arrives or a waiting session opens. Reopen the question after a `selection_required` reply refusal without losing or sending the draft (#2176-03d3).
+
+- Filter native stories by open/closed status and optional type, including untyped records, and switch between list and a native Kanban view; retain these controls across detach and reattach (#2167-eedb).
+
+- Plans and Stories now keeps a stable dialog size and supports the shared detach and bring-back window controls (#2166-11aa).
+- Add one atomic, revision-checked `update_story` action for native story metadata, optional problem/risk, ordered criteria and dependencies; preserve checks only for unchanged requirements and refuse active ownership (#2169-bf61). StoriesDialog now exposes the amendment as one Edit form with Save/Cancel and revision-conflict handling; QA remains non-editable. Criteria use separate ordered entries so multiline requirement text is preserved during edits.
+
+- Report HTTPS active only while the TLS listener is running, and read Tailscale certificates from stdout to avoid macOS app sandbox write failures (#2165-b4de).
+- Native stories enter QA when only manual criteria remain. MCP, CLI, project summaries and run incidents distinguish human checks from development work; revision checks and existing story documents are retained (#2168-7fbc).
+
+- Use the non-overlay iOS status bar for newly installed mobile PWAs. An iPhone simulator check confirms this removes the 62pt bottom band without changing the CLI composer's 4px padding or keyboard viewport sizing. Existing Home Screen installs need removal and reinstallation to load the status-bar setting (#2116-0213).
+- Preserve duplicate-branch checkouts as read-only diagnostics, show missing registrations with repair guidance, propagate discovery errors without caching empty results, and retain bisect/relative-gitdir rebase identity (#2157-eb64). Missing detached registrations also stay out of automatic orphan cleanup, including Ask countdowns; explicit removal remains available.
+
 - Terminal Chat now limits its green answer bar to the CLI answer region instead of the whole assistant message on desktop and mobile (#2158-4b3d).
 
 - Identify symbolic links and their target kind/path in Files; explain outside-repository link refusals without adding read access (#2155-5da6).
@@ -26,9 +52,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed
+- Show post-agent shell output in mobile CLI and log snapshots instead of trimming at retained agent chrome; stop restoring the old agent selection as input (#2178-24da).
+- Run the macOS Tailscale app fallback in explicit CLI mode for status, certificate requests and peer lookup, without changing standalone CLI environments (#2164-4935).
+- Publish each terminal Chat snapshot once instead of rendering every partial history during replay, reducing first-open and CLI-to-Chat latency without truncating the desktop or mobile transcript (#2163-a1db).
 - Automatically respawn dead stdio MCP upstreams during health recovery; preserve healthy processes after reply timeouts and discard late replies by request id (#2162-bf4a).
 - Restore empty or older pane layouts safely during settings refresh, and publish restored tree, groups and focus together (#2161-dc0d).
 - Show detached checkouts as informational sidebar rows without inventing branch workspaces; retain the main checkout for linked-input discovery, preserve newline paths, and exclude only the configured TUIC archive pool (#2156-2723).
+- Keep temporary detached worktrees out of orphan prompts and removal, including stale requests and missing scratch checkouts (#2160-4dcb).
 - Keep intermediate Chat prose readable in dark and light themes on desktop and mobile, and retain the list marker gutter inside green answer bars (#2159-857f).
 - Withdraw confident agent questions when foreground detection confirms return to the shell, without waiting for another input (#1985-45bd).
 - Preserve root profile argument order for Codex usage reads and use the terminal ego executable without requiring AI Chat configuration (#2150-4e0c).

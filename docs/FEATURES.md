@@ -1,5 +1,9 @@
 # TUICommander — Complete Feature Reference
 
+The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
+
+Native story API and CLI lists support combined state, priority and type filters, with optional cursor pages of 1–100 records; existing full-list reads and dispatch order are unchanged (#2174-6b3f).
+
 - Desktop frame receipts no longer keep silent terminals redrawing; missed-frame recovery avoids offering the same desktop snapshot twice without recreating its own delivery debt (#2040-16b2).
 
 - Native MCP tools with long guidance expose compact action contracts and return the full guide through `action=help`; existing owner gates and Settings copy remain unchanged (#2069-7347).
@@ -45,6 +49,10 @@ Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pi
 
 
 AI Chat image paste discovers capabilities on first use and shares clipboard precedence with Ideas, terminal Compose, and terminal input: Finder image filenames allow attachments, while substantive text takes priority. An empty text clipboard flavor does not suppress an available image.
+
+Mobile CLI and log snapshots use the active session identity when hiding agent
+chrome. Shell output remains visible after agent exit, and retained agent input
+does not become the shell composer draft (#2178-24da).
 
 ## Desktop close and quit
 
@@ -122,9 +130,15 @@ The component is available for Tasks shell integration; it does not add a tab by
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
 
+Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
+
+Plans and Stories combines open/closed and optional story-type filters, including untyped historical stories, with a session-retained List/Kanban switch that also survives detach and reattach. Rust supplies the shared display projection; the native read-only board follows the Wiz Kanban layout without importing plugin code.
+
+Native stories support one revision-checked `update_story` patch through MCP, CLI, IPC and HTTP. It amends metadata including nullable story type, optional problem/risk, ordered criteria and dependencies on unclaimed Backlog/Ready stories without active run ownership. Changed requirements lose checks; priority-only edits keep them, and workflow evidence follows existing fingerprints. StoriesDialog provides one revision-checked Edit form with Save/Cancel, retained conflict drafts, and metadata, criteria and dependency fields. QA and other started work are not editable. Criteria use separate ordered entries so multiline requirement text is preserved during edits.
+
  Native plans and stories are available through `tuic story`, the `workflow action=story` MCP entry, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. WontFix closes cancelled scope but never satisfies a prerequisite; a human can remove a cancelled dependency from a Backlog story. In manual plans, approving a prerequisite immediately releases eligible dependents. Plans with a workflow run require current integration receipts before release. Story import/export is outside this release.
 
-The Plans and Stories dialog provides a manual project view on desktop and in the browser: choose a top-level Markdown plan from the project, add a path or link when needed, create stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, approve, and block outcomes. It renders the service's cancellation count, all-cancelled flag, and plan state, including while a story is selected. A coordinator or independent reviewer may approve after checking the acceptance criteria; the session that claimed a story cannot approve it. Approval records the acting session or local API provenance.
+Plans and Stories keeps a stable, viewport-bounded size while tabs and selections change; long content scrolls inside. On desktop, its header can detach it into a resizable window and bring it back through the shared panel controls. The Plans and Stories dialog provides a manual project view on desktop and in the browser: choose a top-level Markdown plan from the project, add a path or link when needed, create stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, approve, and block outcomes. It renders the service's cancellation count, all-cancelled flag, and plan state, including while a story is selected. A coordinator or independent reviewer may approve after checking the acceptance criteria; the session that claimed a story cannot approve it. Approval records the acting session or local API provenance.
 
 Versioned workflow definitions are available through IPC and HTTP. The Plans and Stories Designer tab can select a seeded draft, add nodes by dragging or clicking, connect outcomes, edit node settings, save, and publish. Published revisions are immutable and validated before use. The two built-in templates are `Story delivery` and `Resolve plan`; automatic graph execution is still under development.
 
@@ -363,6 +377,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting. Hands-free speech does not use this queue at all — see 9.9
+- **Progress replies** — a queued user command can resume an idle agent waiting on a blocked progress report. Native questions and approval dialogs still block queued delivery; server notices cannot use this exception or be overtaken
 - **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
 - **Pin** — the pin button docks the panel under the terminal instead of over it: the terminal shrinks and the PTY resizes, so no output hides behind the panel. A pinned panel stays open after a send or a queue and removes the sent text, so it can replace the agent's own input box. Text typed while the send runs is kept, and a second send before the first finishes is ignored. When the terminal has no session or the send fails, a toast shows the error and the text stays. `Esc` and `Cmd+I` move the caret between the panel and the terminal instead of closing it. Per tab, not persisted
 - **Close button** — the ✕ in the status bar closes the panel and releases the pin; `Esc` closes an unpinned panel
@@ -740,7 +755,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Toggle again to restore the previous layout
 
 ### 3.17 Detachable Panels
-- Any panel (AI Chat, Activity Dashboard, Git Panel) can be detached into a separate OS window
+- Any panel (AI Chat, Activity Dashboard, Git Panel, Plans and Stories) can be detached into a separate OS window
 - Generic system via `open_panel_window` / `close_panel_window` Rust commands with per-panel adapters
 - Two-tier sync: self-sufficient panels (Git Panel) call Rust directly; projection panels (Activity Dashboard) receive state snapshots via `emitTo` at 1 Hz
 - Shared `PanelWindowControls` component provides consistent detach/reattach/close buttons across all panels
@@ -1165,6 +1180,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
+- Orphan cleanup ignores detached checkouts under OS/environment temporary roots and `~/Gits/.tmp`, including symlink aliases and missing checkout registrations. Detached sidebar rows remain visible; stale removal requests are refused.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
@@ -2158,7 +2174,7 @@ path and opens the existing mobile Markdown viewer. Desktop opens and closes
 update the list through SSE; worktree files retain their original checkout.
 
 
-Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Tap the question icon in the session header to open or close the full question and its wrapping options. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Native choice dialogs hide suggested actions while their answer controls are open. Other waiting reports show their current suggested actions instead of generic Yes/No confirmations.
+Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Native selectors open automatically when a new question arrives or a waiting session opens. Tap the question icon in the session header to hide or reopen the full question and its wrapping options. A `selection_required` reply refusal reopens the controls and preserves the draft without sending an answer. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Native choice dialogs hide suggested actions while their answer controls are open. Other waiting reports show their current suggested actions instead of generic Yes/No confirmations.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
@@ -2344,6 +2360,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. “Dictation failed” also remains beside the composer mic above the keyboard until the next take starts. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
+- Mobile CLI output follows the bottom through keyboard and viewport resizes while following; a reader who scrolled up keeps their position.
 - Mobile CLI and Chat output show a floating down-arrow at the bottom-right of the output area while scrolled back, at least 8px above the key bar and outside the composer. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Appearance offers independent Terminal and Chat font controls (10–24 px), each saved on this device. Existing defaults remain 14 px for CLI and Chat body text. Chat changes affect Session Chat and AI Chat transcripts only; composers and UI chrome do not change. CLI output rewraps locally and preserves the visible row without resizing the shared PTY.
 - Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
@@ -2930,6 +2947,21 @@ The AI Chat conversation picker groups fork and compaction descendants beneath t
 Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
 
 Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+Native stories expose `qa` for work that waits on manual checks. A criterion starts with `[MANUAL]`, or is marked through `set_criterion_manual {index,manual}`. Active work automatically enters QA when all unchecked criteria are manual; `submit_qa` explicitly requests that state. `reject_qa` returns QA to In progress; `approve` requires every criterion checked. QA keeps plans Active and dependencies blocked. All transitions retain expected-revision checks. See the [native stories guide](user-guide/native-stories.md#manual-qa).
+
+### Reversible native record archival
+
+In Plans and Stories, **Archive plan** and **Archive story** move the selected record out of the default list. Use **Archived plans** or **Archived stories** to select archived records, then choose **Restore plan** or **Restore story**. The toggles are independent, so archived stories remain reachable inside active plans. Archived detail stays readable; restore before starting work. Backend refusal messages remain visible when a claim or active run owns the record.
+
+All native story transports share `archive_story`, `unarchive_story`, `archive_plan`, and `unarchive_plan`. Story actions take `story_id`; plan actions take `plan_id`. Each requires `expected_revision` and returns the updated record with its incremented `revision` and `archived` flag. Stale revisions fail without a write. Archival preserves status, criteria, dependencies, and child archive flags; it never deletes records or cascades to children.
+
+`list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
+
+Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+
 Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Slice F supplies public story graph starts and history controls; D/E add independent approval and plan dispatch; graph completion alone never closes a native story.
 
 
@@ -3351,3 +3383,9 @@ show shared account quota for the live process profile. ego shows only the exact
 PID-bound session row from its v3 usage report, including separate API-equivalent
 estimates and unknown cost reasons. Unknown model, usage and stale data are
 labelled explicitly. Remote sessions use their owning daemon, never a local account.
+
+Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. Story detail lists notes with author/time/revision provenance and receipt IDs, provides an append-only add field, and has an explicit Refresh notes control for external additions. Drafts and pending replies stay scoped to the selected story.

@@ -251,6 +251,7 @@ pub(crate) struct RepoStructure {
     /// share one (#726-5ac7).
     worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
     detached_worktrees: Vec<crate::worktree::DetachedWorktree>,
+    worktree_diagnostics: Vec<crate::worktree::WorktreeDiagnostic>,
     merged_branches: Vec<String>,
 }
 
@@ -274,6 +275,7 @@ pub(crate) struct RepoSummary {
     /// share one (#726-5ac7).
     worktree_paths: HashMap<String, crate::worktree::WorkspaceWorktree>,
     detached_worktrees: Vec<crate::worktree::DetachedWorktree>,
+    worktree_diagnostics: Vec<crate::worktree::WorktreeDiagnostic>,
     merged_branches: Vec<String>,
     /// Per-worktree diff stats, keyed by worktree path (matches the `path` field
     /// of worktree_paths values).
@@ -319,6 +321,7 @@ pub(crate) async fn get_repo_summary_impl(
     Ok(RepoSummary {
         worktree_paths: structure.worktree_paths,
         detached_worktrees: structure.detached_worktrees,
+        worktree_diagnostics: structure.worktree_diagnostics,
         merged_branches: structure.merged_branches,
         diff_stats: stats.diff_stats,
         last_commit_ts: stats.last_commit_ts,
@@ -358,6 +361,7 @@ pub(crate) async fn get_repo_structure_impl(
     Ok(RepoStructure {
         worktree_paths: inventory.worktree_paths,
         detached_worktrees: inventory.detached_worktrees,
+        worktree_diagnostics: inventory.worktree_diagnostics,
         merged_branches: merged_branches?,
     })
 }
@@ -1053,6 +1057,86 @@ mod tests {
         );
     }
 
+    /// Catches a Gix discovery failure poisoning the shared inventory cache with an empty success.
+    #[test]
+    fn discovery_2157_error_does_not_cache_empty_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir
+            .path()
+            .join("not-a-repository")
+            .to_string_lossy()
+            .into_owned();
+        let state = crate::state::tests_support::make_test_app_state();
+        let error = crate::worktree::get_worktree_paths_cached(&state, &repo).unwrap_err();
+        assert!(error.contains("Worktree discovery failed"), "{error}");
+        assert!(
+            state.git_cache.worktree_paths.get(&repo).is_none(),
+            "discovery error was cached as an empty success"
+        );
+        std::fs::create_dir_all(&repo).unwrap();
+        git_cmd(Path::new(&repo))
+            .args(["init", "-b", "recovered"])
+            .run()
+            .unwrap();
+        let recovered = crate::worktree::get_worktree_paths_cached(&state, &repo).unwrap();
+        assert!(
+            recovered.contains_key("recovered"),
+            "retry after repository repair must not reuse an empty inventory"
+        );
+    }
+
+    /// Catches cache/DTO boundaries discarding duplicate and missing-registration diagnostics.
+    #[tokio::test]
+    async fn discovery_2157_structure_and_summary_keep_diagnostics() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let linked = tempfile::tempdir().unwrap();
+        let branch = git_cmd(&path)
+            .args(["branch", "--show-current"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        let duplicate = linked.path().join("duplicate");
+        git_cmd(&path)
+            .args([
+                "worktree",
+                "add",
+                "--force",
+                duplicate.to_str().unwrap(),
+                &branch,
+            ])
+            .run()
+            .unwrap();
+        let missing = linked.path().join("missing");
+        git_cmd(&path)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "missing-work",
+                missing.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::remove_dir_all(&missing).unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo = path.to_string_lossy().into_owned();
+        let structure = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
+        assert_eq!(structure.worktree_diagnostics.len(), 2);
+        assert!(structure.worktree_diagnostics.iter().any(|row| row.state
+            == crate::worktree::WorktreeDiagnosticState::Missing
+            && Path::new(&row.path) == missing));
+        assert!(
+            structure
+                .worktree_diagnostics
+                .iter()
+                .any(|row| row.state == crate::worktree::WorktreeDiagnosticState::DuplicateBranch)
+        );
+        let summary = get_repo_summary_impl(&state, repo).await.unwrap();
+        assert_eq!(summary.worktree_diagnostics, structure.worktree_diagnostics);
+    }
+
     /// Catches dropping detached inventory at the cached structure/summary boundary.
     #[tokio::test]
     async fn discovery_2156_structure_and_summary_keep_detached_metadata() {
@@ -1124,6 +1208,7 @@ mod tests {
                     },
                 )]),
                 detached_worktrees: Vec::new(),
+                worktree_diagnostics: Vec::new(),
             }),
         );
 
