@@ -1,3 +1,4 @@
+import { Button } from "../../../ui/Button";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
@@ -119,7 +120,8 @@ export const LocalMcpPanel: Component = () => {
 			</SectionCard>
 			<SectionCard title="TUIC Tools">
 				<div class={s.group}>
-					<button
+					<Button
+						variant="ghost"
 						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}
 						onClick={() => {
@@ -134,7 +136,7 @@ export const LocalMcpPanel: Component = () => {
 					>
 						<span class={s.mcpDisclosureArrow}>{bridgeInfoOpen() ? "▼" : "▶"}</span>
 						Manual MCP configuration
-					</button>
+					</Button>
 					<Show when={bridgeInfoOpen() && bridgeInfo()}>
 						<div class={s.mcpDisclosureBody}>
 							<p class={s.hint} style={{ margin: "0 0 4px" }}>
@@ -146,7 +148,7 @@ export const LocalMcpPanel: Component = () => {
 							</p>
 							<div class={s.mcpSnippetWrap}>
 								<pre class={s.mcpSnippetPre}>{bridgeInfo()!.config_snippet}</pre>
-								<button
+								<Button
 									data-non-setting="Copy the existing MCP bridge integration snippet"
 									class={s.mcpSnippetCopy}
 									onClick={() => {
@@ -161,7 +163,7 @@ export const LocalMcpPanel: Component = () => {
 									}}
 								>
 									{snippetCopied() ? "Copied" : "Copy"}
-								</button>
+								</Button>
 							</div>
 						</div>
 					</Show>

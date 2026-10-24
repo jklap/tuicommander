@@ -1,3 +1,4 @@
+import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
@@ -207,14 +208,14 @@ export const AiChatTab: Component<{
 												)}
 											</For>
 										</Select>
-										<button
+										<Button
 											data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
 											class={s.testBtn}
 											disabled={busy()}
 											onClick={() => void attempt(() => client().providers(true))}
 										>
 											{t("providers.refresh", "Refresh from providers")}
-										</button>
+										</Button>
 									</div>
 								)}
 							</SettingRow>
@@ -225,14 +226,14 @@ export const AiChatTab: Component<{
 				<Show when={!!error() || !data() || empty()}>
 					<SettingRow label="Provider catalogue">
 						{() => (
-							<button
+							<Button
 								data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
 								class={s.testBtn}
 								disabled={busy()}
 								onClick={() => void attempt(() => client().providers(true))}
 							>
 								{t("providers.refresh", "Refresh from providers")}
-							</button>
+							</Button>
 						)}
 					</SettingRow>
 				</Show>
@@ -247,14 +248,14 @@ export const AiChatTab: Component<{
 										name={provider.name}
 										badges={<CredentialBadge credential={provider.credential} />}
 										actions={
-											<button
+											<Button
 												data-non-setting="Open the configured Ego interactive login; the human handles authentication"
 												class={s.testBtn}
 												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
 												onClick={() => login(provider.name)}
 											>
 												{t("providers.login", "Login")}
-											</button>
+											</Button>
 										}
 									/>
 									<p class={s.availabilityDetail}>

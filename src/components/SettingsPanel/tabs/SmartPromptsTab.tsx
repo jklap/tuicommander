@@ -1,3 +1,4 @@
+import { Button } from "../../ui/Button";
 import { type Accessor, type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
@@ -643,7 +644,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 				}
 				actions={
 					<>
-						<button
+						<Button
 							data-non-setting="Open or close a structured Smart Prompt editor"
 							class={s.testBtn}
 							aria-label={`Edit ${props.prompt.name}`}
@@ -652,7 +653,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 							onClick={() => props.onEdit(props.prompt.id)}
 						>
 							Edit
-						</button>
+						</Button>
 						<Switch
 							data-setting-id="prompts.prompts.{id}.text"
 							role="switch"
@@ -801,13 +802,13 @@ export const SmartPromptsTab: Component = () => {
 			<SectionCard
 				title="Prompt library"
 				actions={
-					<button
+					<Button
 						data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
 						class={s.testBtn}
 						onClick={handleNewPrompt}
 					>
 						+ New Smart Prompt
-					</button>
+					</Button>
 				}
 			>
 				<div class={sp.promptList}>

@@ -1,3 +1,5 @@
+import { Textarea } from "../../../ui/Textarea";
+import { Button } from "../../../ui/Button";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { settingOptions } from "../../../../services/settingsCatalogue";
 import { appLogger } from "../../../../stores/appLogger";
@@ -440,7 +442,7 @@ export const RemoteMachinesPanel: Component = () => {
 								{(host) => <option value={host.host} label={`${host.host} — ${host.auth.replaceAll("_", " ")}`} />}
 							</For>
 						</datalist>
-						<button
+						<Button
 							data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
 							class={s.textBtn}
 							style={{ "margin-top": "12px", "margin-bottom": "12px" }}
@@ -452,7 +454,7 @@ export const RemoteMachinesPanel: Component = () => {
 								<path d="M7.5 1a6.5 6.5 0 1 0 4.05 11.58l2.44 2.43 1.02-1.02-2.43-2.44A6.5 6.5 0 0 0 7.5 1m0 1.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10" />
 							</svg>
 							{props.probingHosts ? " Probing..." : " Probe SSH hosts"}
-						</button>
+						</Button>
 
 						<SettingRow label="Port">
 							{(id, descriptionId) => (
@@ -541,7 +543,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<Show when={props.formData.transportType === "Relay"}>
 						<SettingRow label="Pairing bundle">
 							{(id, descriptionId) => (
-								<textarea
+								<Textarea
 									data-non-setting="Transient pairing-bundle import draft; Save sends it to the credential vault, not connection configuration"
 									id={id}
 									aria-describedby={descriptionId()}
@@ -668,7 +670,7 @@ export const RemoteMachinesPanel: Component = () => {
 		<div>
 			<div class={s.group}>
 				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "flex-end" }}>
-					<button
+					<Button
 						data-non-setting="Open, prefill, cancel or close the connection editor"
 						class={s.copyBtn}
 						onClick={() => {
@@ -679,7 +681,7 @@ export const RemoteMachinesPanel: Component = () => {
 						style={{ "font-size": "18px", "line-height": 1 }}
 					>
 						{showAdd() ? "−" : "+"}
-					</button>
+					</Button>
 				</div>
 			</div>
 
@@ -704,7 +706,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<span style={{ "font-weight": 500, "font-size": "13px" }}>
 						Discovered SSH hosts ({discovered().hosts.length})
 					</span>
-					<button
+					<Button
 						data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
 						class={s.textBtn}
 						type="button"
@@ -712,7 +714,7 @@ export const RemoteMachinesPanel: Component = () => {
 						disabled={probingHosts()}
 					>
 						{probingHosts() ? "Probing..." : "Probe config hosts"}
-					</button>
+					</Button>
 				</div>
 				<Show when={discovered().hashed_count > 0}>
 					<p class={s.hint} style={{ margin: "4px 0 0" }}>
@@ -725,7 +727,7 @@ export const RemoteMachinesPanel: Component = () => {
 							const auth = () => discoveredHostAuth(host, sshHosts());
 							return (
 								<div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
-									<button
+									<Button
 										data-non-setting="Open, prefill, cancel or close the connection editor"
 										type="button"
 										class={s.textBtn}
@@ -745,8 +747,8 @@ export const RemoteMachinesPanel: Component = () => {
 										<span style={{ "font-size": "11px", color: "var(--text-dimmed)" }}>
 											{auth() ? auth()?.replaceAll("_", " ") : host.source === "config" ? "ssh config" : "known_hosts"}
 										</span>
-									</button>
-									<button
+									</Button>
+									<Button
 										data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
 										type="button"
 										class={s.textBtn}
@@ -754,7 +756,7 @@ export const RemoteMachinesPanel: Component = () => {
 										onClick={() => probeOneHost(host)}
 									>
 										Probe
-									</button>
+									</Button>
 								</div>
 							);
 						}}
@@ -778,15 +780,15 @@ export const RemoteMachinesPanel: Component = () => {
 							onProbeHosts={probeHosts}
 						/>
 						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-							<button
+							<Button
 								data-non-setting="Create, update or remove a stable connection through the existing owner"
 								class={s.textBtn}
 								onClick={addConnection}
 								disabled={saving()}
 							>
 								{saving() ? "Saving..." : "Save"}
-							</button>
-							<button
+							</Button>
+							<Button
 								data-non-setting="Open, prefill, cancel or close the connection editor"
 								class={s.textBtn}
 								onClick={() => {
@@ -796,7 +798,7 @@ export const RemoteMachinesPanel: Component = () => {
 								}}
 							>
 								Cancel
-							</button>
+							</Button>
 						</div>
 						<Show when={error()}>
 							<p class={s.hint} style={{ color: "var(--error, #e06c75)" }}>
@@ -892,14 +894,14 @@ export const RemoteMachinesPanel: Component = () => {
 									>
 										<div class={s.hint}>
 											Connected through {connState.baseUrl}
-											<button
+											<Button
 												data-non-setting="Create, update or remove a stable connection through the existing owner"
 												class={s.textBtn}
 												disabled={saving()}
 												onClick={() => saveResolvedAddress(connState)}
 											>
 												Save resolved address
-											</button>
+											</Button>
 										</div>
 									</Show>
 									<Show
@@ -932,16 +934,16 @@ export const RemoteMachinesPanel: Component = () => {
 								</div>
 								{/* Connect / Disconnect */}
 								<Show when={connState.status === "connected"}>
-									<button
+									<Button
 										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id || connState.updateInProgress}
 										onClick={() => updateRemote(connState)}
 									>
 										{serviceBusyId() === conn().id ? "Updating..." : "Update & restart remote"}
-									</button>
+									</Button>
 								</Show>
-								<button
+								<Button
 									data-non-setting="Connect or disconnect the current runtime without changing its configuration"
 									class={s.textBtn}
 									onClick={() => {
@@ -955,9 +957,9 @@ export const RemoteMachinesPanel: Component = () => {
 									}}
 								>
 									{connState.status === "disconnected" || connState.status === "error" ? "Connect" : "Disconnect"}
-								</button>
+								</Button>
 								<Show when={conn().transport.type === "Ssh"}>
-									<button
+									<Button
 										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id}
@@ -972,10 +974,10 @@ export const RemoteMachinesPanel: Component = () => {
 											: conn().deploy === "installed"
 												? " Uninstall"
 												: " Install"}
-									</button>
+									</Button>
 								</Show>
 								{/* Edit */}
-								<button
+								<Button
 									data-non-setting="Open, prefill, cancel or close the connection editor"
 									class={s.copyBtn}
 									style={{ "flex-shrink": 0 }}
@@ -985,9 +987,9 @@ export const RemoteMachinesPanel: Component = () => {
 									<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 										<path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293z" />
 									</svg>
-								</button>
+								</Button>
 								{/* Delete */}
-								<button
+								<Button
 									data-non-setting="Create, update or remove a stable connection through the existing owner"
 									class={s.copyBtn}
 									title="Remove"
@@ -998,7 +1000,7 @@ export const RemoteMachinesPanel: Component = () => {
 										<path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
 										<path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
 									</svg>
-								</button>
+								</Button>
 							</div>
 							{/* Edit inline panel */}
 							<Show when={isEditing()}>
@@ -1021,15 +1023,15 @@ export const RemoteMachinesPanel: Component = () => {
 											onProbeHosts={probeHosts}
 										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button
+											<Button
 												data-non-setting="Create, update or remove a stable connection through the existing owner"
 												class={s.textBtn}
 												onClick={() => saveEdit(connState)}
 												disabled={saving()}
 											>
 												{saving() ? "Saving..." : "Save"}
-											</button>
-											<button
+											</Button>
+											<Button
 												data-non-setting="Open, prefill, cancel or close the connection editor"
 												class={s.textBtn}
 												onClick={() => {
@@ -1038,7 +1040,7 @@ export const RemoteMachinesPanel: Component = () => {
 												}}
 											>
 												Cancel
-											</button>
+											</Button>
 										</div>
 										<Show when={error()}>
 											<p class={s.hint} style={{ color: "var(--error, #e06c75)", margin: "4px 0 0" }}>

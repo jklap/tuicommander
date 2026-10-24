@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import { type Component, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
 import { Select } from "../ui/Select";
@@ -91,13 +92,14 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 						</Show>
 						<div class={s.headerActions}>
 							{props.headerActions}
-							<button
+							<Button
+								variant="ghost"
 								data-non-setting="Navigate or close Settings without editing configuration"
 								class={s.close}
 								onClick={props.onClose}
 							>
 								&times;
-							</button>
+							</Button>
 						</div>
 					</div>
 
@@ -134,6 +136,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 										</div>
 									) : (
 										<button
+											data-control-layout="row"
 											data-non-setting="Navigate or close Settings without editing configuration"
 											class={cx(
 												s.navItem,

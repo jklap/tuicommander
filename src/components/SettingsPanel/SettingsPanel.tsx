@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { t } from "../../i18n";
@@ -310,13 +311,14 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		return (
 			<div class={s.footer}>
 				<span />
-				<button
+				<Button
+					variant="primary"
 					data-non-setting="Navigate or close Settings without editing configuration"
 					class={s.footerDone}
 					onClick={props.onClose}
 				>
 					{t("settings.done", "Done")}
-				</button>
+				</Button>
 			</div>
 		);
 	};

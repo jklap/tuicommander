@@ -435,7 +435,7 @@ checkbox switches, ranges and colour pickers; file pickers keep their specialise
 `--control-height` (36px), `--control-padding-x` (8px), theme colours,
 `--radius-lg` and `--font-md`. Containers own width and alignment, never
 control height, padding, borders or colours. Textareas resize vertically;
-multiple selects keep native listbox behavior. At widths up to 600px,
+multiple selects keep native listbox behavior. Shared Select reserves 32px at the inline end for its native arrow; consumers must not add feature padding for this. At widths up to 600px,
 controls have a 44px minimum height and 16px text to prevent iOS zoom.
 
 `Button` forwards native button attributes and defaults to `type="button"` (set

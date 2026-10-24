@@ -1,3 +1,4 @@
+import { Button } from "../../ui/Button";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
@@ -181,7 +182,7 @@ export const NotificationsTab: Component = () => {
 																t("notifications.option.systemDefault", "System Default"),
 														})}
 													</p>
-													<button
+													<Button
 														data-non-setting="Explicit output-device discovery; does not select a device"
 														id={id}
 														aria-label={t("notifications.btn.chooseDevice", "Choose output device…")}
@@ -193,7 +194,7 @@ export const NotificationsTab: Component = () => {
 														{loadingDevices()
 															? t("notifications.btn.loadingDevices", "Loading…")
 															: t("notifications.btn.chooseDevice", "Choose output device…")}
-													</button>
+													</Button>
 												</>
 											}
 										>
@@ -219,7 +220,7 @@ export const NotificationsTab: Component = () => {
 													)}
 												</For>
 											</Select>
-											<button
+											<Button
 												data-non-setting="Explicit output-device discovery; does not select a device"
 												class={s.testBtn}
 												style={{ "margin-top": "6px" }}
@@ -227,7 +228,7 @@ export const NotificationsTab: Component = () => {
 												onClick={loadDevices}
 											>
 												{t("notifications.btn.refreshDevices", "Refresh")}
-											</button>
+											</Button>
 										</Show>
 									</div>
 								)}
@@ -255,14 +256,14 @@ export const NotificationsTab: Component = () => {
 											<span class={s.soundPattern}>
 												<SoundPatternSvg sound={sound.key} />
 											</span>
-											<button
+											<Button
 												data-non-setting="Preview the sound without changing its configuration"
 												class={s.testBtn}
 												aria-label={`Preview ${sound.label}`}
 												onClick={() => notificationsStore.testSound(sound.key)}
 											>
 												{t("notifications.btn.test", "Test")}
-											</button>
+											</Button>
 										</div>
 									)}
 								</SettingRow>
@@ -291,12 +292,12 @@ export const NotificationsTab: Component = () => {
 					</div>
 
 					<div class={s.actions}>
-						<button
+						<Button
 							data-non-setting="Reset the notification owner document to its defaults"
 							onClick={() => notificationsStore.reset()}
 						>
 							{t("notifications.btn.resetDefaults", "Reset Defaults")}
-						</button>
+						</Button>
 					</div>
 				</Show>
 			</SectionCard>

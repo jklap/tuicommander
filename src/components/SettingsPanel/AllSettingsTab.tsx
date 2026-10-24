@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { invoke } from "../../invoke";
@@ -239,51 +240,51 @@ export const CatalogueFieldEditor: Component<{ field: Field; path: string; repos
 			<div class={s.catalogueActions} role="group" aria-label="Setting actions">
 				<Show when={revision()}>
 					<Show when={field().nullable && !options()}>
-						<button
+						<Button
 							data-setting-id={field().id as SettingId}
 							class={s.testBtn}
 							disabled={busy()}
 							onClick={() => edit(null)}
 						>
 							Use null / inherit
-						</button>
+						</Button>
 					</Show>
-					<button
+					<Button
 						data-setting-id={field().id as SettingId}
 						class={s.testBtn}
 						disabled={busy() || !dirty()}
 						onClick={() => void save()}
 					>
 						Save setting
-					</button>
+					</Button>
 					<Show when={(field().operations as readonly string[]).includes("reset")}>
-						<button
+						<Button
 							data-setting-id={field().id as SettingId}
 							class={s.testBtn}
 							disabled={busy()}
 							onClick={() => void save(true)}
 						>
 							Reset to owner default
-						</button>
+						</Button>
 					</Show>
 				</Show>
-				<button
+				<Button
 					data-non-setting="Read the owner snapshot; optionally discard this editor draft"
 					class={s.testBtn}
 					disabled={busy()}
 					onClick={() => void reload()}
 				>
 					{dirty() ? "Discard draft and reload" : "Reload owner"}
-				</button>
+				</Button>
 				<Show when={proposal()}>
-					<button
+					<Button
 						data-setting-id={field().id as SettingId}
 						class={s.testBtn}
 						disabled={busy()}
 						onClick={() => void save(false, true)}
 					>
 						Ask for confirmation
-					</button>
+					</Button>
 				</Show>
 			</div>
 			<p class={s.hint} role="status">

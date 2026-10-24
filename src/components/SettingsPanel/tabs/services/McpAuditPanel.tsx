@@ -1,3 +1,4 @@
+import { Button } from "../../../ui/Button";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { locale, t } from "../../../../i18n";
 import { appLogger } from "../../../../stores/appLogger";
@@ -108,14 +109,14 @@ export const McpAuditPanel: Component = () => {
 					<For each={Object.entries(OUTCOMES)}>{([value, o]) => <option value={value}>{o.label()}</option>}</For>
 				</Select>
 				<span class={css.spacer} />
-				<button
+				<Button
 					type="button"
 					class={s.testBtn}
 					data-non-setting="Reload the audit rows; not a preference"
 					onClick={refresh}
 				>
 					{t("mcpAudit.refresh", "Refresh")}
-				</button>
+				</Button>
 			</div>
 			<Show when={failed()}>
 				<p class={css.empty} role="alert">

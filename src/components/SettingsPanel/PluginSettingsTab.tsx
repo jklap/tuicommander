@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import {
 	type Component,
 	createEffect,
@@ -137,7 +138,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 															JSON.stringify(current().values[field.path]?.effective) !== JSON.stringify(field.default))
 												}
 											>
-												<button
+												<Button
 													data-setting-id={field.id}
 													class={s.testBtn}
 													aria-label={`Reset ${pluginFieldLabel(field)}`}
@@ -146,7 +147,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 													onClick={() => void write(field, undefined, true)}
 												>
 													Reset
-												</button>
+												</Button>
 											</Show>
 										}
 									/>

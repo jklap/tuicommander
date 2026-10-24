@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Align Settings actions, including Remote Access Recheck, with shared 36px desktop and 44px touch controls; keep navigation and search results as layout rows.
+
 - Share preset and clear color-swatch targets through the UI design system, with native button selection and 44px touch targets.
 
 ### Added
