@@ -669,13 +669,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/ActivityItem.module.css",
-    "story": "2267-9367",
-    "rules": [
-      "[[],\".item\",[\"padding: 10px 16px\",\"border: none\",\"border-bottom: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/BottomTabs.module.css",
     "story": "2268-d1df",
     "rules": [
