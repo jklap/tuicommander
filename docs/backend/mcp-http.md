@@ -749,6 +749,8 @@ When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
+Search grammar is server-owned. Plain words rank names and descriptions with BM25. Each `+term` is a required, case-insensitive substring of the tool name (including any upstream or server alias prefix); several required terms use AND. Remaining plain words rank the matching names but do not exclude them. Filtering happens before the result limit, and a required term with no name match returns no results. `select:<name>` selects one exact catalogue name without ranked fallback.
+
 Rationale, measured 2026-09-13 on the running desktop instance with 190 tools connected (see [Measuring the surfaces](#measuring-the-surfaces) for the method): the full list is 154,117 bytes / 35,104 tokens in every agent turn, against 2,810 bytes / 615 tokens for the collapsed surface — which does not grow with the upstream count, because the upstream tools are no longer in the list. The agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
 TUIC also selects this three-tool surface automatically for two clients

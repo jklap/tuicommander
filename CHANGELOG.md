@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require every `+term` in MCP tool search to match the tool name before limiting results; keep exact `select:<name>` queries free of ranked fallback (#2300-6355).
 - Delete file-browser symbolic links without following their targets, including unavailable links, and show deletion errors (#2301-e76f).
 
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
