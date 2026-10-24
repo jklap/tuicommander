@@ -979,3 +979,8 @@ Shared fields style native `aria-invalid="true"` with the error border token
 without replacing the focus outline. `Button variant="removalToggle"` supports
 installed/removal toggles via native `aria-pressed`; see the Style Guide for
 state and hover semantics. Consumers retain validation messages and callbacks.
+
+Agent settings use shared Button, Switch and Textarea controls, including launch
+module and launch-addition editors. Validation fields expose native invalid and
+error descriptions; the installed MCP action uses the shared removal toggle.
+Agent feature CSS retains only layout, width and text presentation.
