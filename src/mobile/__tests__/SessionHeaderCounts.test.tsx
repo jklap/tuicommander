@@ -90,6 +90,8 @@ it("keeps Working for the hold window when reconcileSessions replaces the sessio
 	const mk = (shell: "busy" | "idle"): SessionInfo => ({
 		session_id: "s1",
 		cwd: "/w",
+		worktree_path: null,
+		worktree_branch: null,
 		display_name: "S1",
 		state: {
 			awaiting_input: false,
