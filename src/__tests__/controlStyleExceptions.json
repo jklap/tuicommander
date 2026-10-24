@@ -682,15 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/create/TasksCreate.module.css",
-    "story": "2247-4444",
-    "rules": [
-      "[[],\".create button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".create .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".create button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/detail/TasksDetail.module.css",
     "story": "2248-c8f6",
     "rules": [
