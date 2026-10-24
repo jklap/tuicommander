@@ -50,7 +50,9 @@ describe("shared control geometry guard", () => {
 			:is(button, select) { height: 22px; }
 			.row input { padding-inline: 4px; } .row textarea { block-size: 80px; }
 			.row { padding: 10px; } .row select { width: 100%; }
-			input:checked + .slider { border: 0; }`;
+			input:checked + .slider { border: 0; }
+			input[type="range"] + .track { width: 100%; }
+			.row:has(input[type="checkbox"]) select { width: 100%; }`;
 		const findings: Finding[] = auditCss("src/Feature.module.css", css, classes.get("src/Feature.module.css"));
 		expect(findings.map((row) => row.selector)).toEqual([
 			".row button, .row select",
@@ -118,6 +120,13 @@ it("catches hand-rolled checkbox, range and color widths and shared specialized 
 		),
 	).toHaveLength(1);
 });
+
+it.each(['input.toggle[type="checkbox"]', 'input[type="range" i]'])(
+	"catches specialized width hidden by selector refinement: %s",
+	(selector) => {
+		expect(auditCss("src/Feature.module.css", `${selector} { width: 20px; }`)).toHaveLength(1);
+	},
+);
 
 it("catches feature resizing passed to the shared Button", () => {
 	const classes = controlClasses(
