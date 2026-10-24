@@ -42,20 +42,6 @@
     ]
   },
   {
-    "file": "src/components/ComposePanel/ComposePanel.module.css",
-    "story": "2189-4dca",
-    "rules": [
-      "[[],\".queueBadge\",[\"height: 20px\",\"padding: 0 6px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".queueBadge:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".queueBadgeOpen\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".queueClearAll\",[\"border: none\",\"padding: 0\"]]",
-      "[[],\".queueItemRemove\",[\"height: 16px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".queueButton\",[\"height: 20px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".queueButton:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".closeButton\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/ContextMenu/ContextMenu.module.css",
     "story": "2190-41dd",
     "rules": [

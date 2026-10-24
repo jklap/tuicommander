@@ -95,10 +95,6 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-xs);
@@ -108,12 +104,10 @@
 
 .queueBadge:hover {
   color: var(--fg-primary);
-  border-color: var(--fg-muted);
 }
 
 .queueBadgeOpen {
   color: var(--fg-primary);
-  border-color: var(--fg-muted);
 }
 
 .queueChevron {
@@ -145,14 +139,11 @@
   user-select: none;
 }
 
-.queueClearAll {
-  border: none;
-  background: transparent;
+.queueClearAll {  background: transparent;
   color: var(--fg-muted);
   font-family: var(--font-ui);
   font-size: var(--font-xs);
   cursor: pointer;
-  padding: 0;
 }
 
 .queueClearAll:hover {
@@ -184,14 +175,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
-  padding: 0;
   flex-shrink: 0;
 }
 
@@ -203,34 +189,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
-  padding: 0;
   flex-shrink: 0;
 }
 
 .queueButton:hover {
   color: var(--fg-primary);
-  border-color: var(--fg-muted);
 }
 
 .closeButton {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
-  padding: 0;
   flex-shrink: 0;
 }
 
