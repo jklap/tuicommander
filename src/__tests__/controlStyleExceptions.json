@@ -669,13 +669,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/BottomTabs.module.css",
-    "story": "2268-d1df",
-    "rules": [
-      "[[],\".tab\",[\"min-height: 44px\",\"border: none\",\"padding: 0\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/ChoicePromptOverlay.module.css",
     "story": "2269-922b",
     "rules": [
