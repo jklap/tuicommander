@@ -42,13 +42,6 @@
     ]
   },
   {
-    "file": "src/components/ClaudeUsageDashboard/ClaudeUsageDashboard.module.css",
-    "story": "2188-225d",
-    "rules": [
-      "[[],\".retryButton\",[\"padding: 3px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ComposePanel/ComposePanel.module.css",
     "story": "2189-4dca",
     "rules": [
