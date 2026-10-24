@@ -34,6 +34,7 @@
 .select[multiple], .select[size]:not([size="1"]) { height: auto; min-height: var(--control-height, 36px); padding-block: 8px; }
 .textarea { height: auto; min-height: calc(var(--control-height, 36px) * 3); padding-block: 8px; resize: vertical; }
 .segmented {
+	box-sizing: border-box;
 	display: inline-flex;
 	align-items: stretch;
 	max-width: 100%;
