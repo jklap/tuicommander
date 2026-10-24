@@ -40,7 +40,7 @@ use super::mcp_transport_ancillary::handle_voice;
 use super::mcp_transport_ancillary::handle_workflow_launch;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_report;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::mcp_transport_ancillary::handle_workflow_run;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_story_create;

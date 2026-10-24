@@ -1,3 +1,7 @@
+## Windows Clippy platform gates (2306-0b3b)
+
+- [x] rb Windows GNU cross-target Clippy with default desktop features and all targets passes with warnings denied; rb Linux Clippy with dictation and all targets also passes. Unix-only items follow their consumers; standby grace remains available to Windows unit tests. Full Windows dictation CI remains unverified because the rb MinGW headers cannot compile whisper.cpp thread power throttling types. These compile-only Rust changes do not hot-reload into the daily backend; Boss can rebuild/restart when ready, but no runtime behavior change is expected.
+
 ## Mobile unreachable landing (2294-078f)
 
 - [x] Isolated `agent-test-2294` on port 19894, browser viewport 390×844: stopped only its server; dispatched resume events and observed the in-app connection-test region; reloaded offline and observed the cached splash; captured only `[data-connection-landing]`. After restart, a `pageshow` resume event automatically restored Sessions without a retry click or manual reload. Evidence: `~/Gits/.tmp/tuic-2294-live/` (`in-app-landing.png`, `offline-landing.png`, `transcript.md`). The locked screen kept the tab hidden, so this verifies resume-driven recovery, not visible-tab retry timing or a physical installed-PWA resume. The isolated app and named browser session were stopped.
