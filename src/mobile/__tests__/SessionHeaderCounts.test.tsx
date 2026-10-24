@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionsScreen } from "../screens/SessionsScreen";
-import type { SessionInfo, SessionState } from "../useSessions";
+import { reconcileSessions, type SessionInfo, type SessionState } from "../useSessions";
 
 afterEach(() => {
 	cleanup();
@@ -82,4 +82,38 @@ it("shares the row's Working hold and immediate question override", () => {
 	setItem("state", "agent_state", "working");
 	setItem("state", "agent_state", "awaiting_input");
 	expect(header(view)).toEqual(["0Working", "0Idle", "1Awaiting"]);
+});
+
+// catches: the busy hold dies when the poll hands the screen a brand-new object for the changed session
+it("keeps Working for the hold window when reconcileSessions replaces the session object", () => {
+	vi.useFakeTimers();
+	const mk = (shell: "busy" | "idle"): SessionInfo => ({
+		session_id: "s1",
+		cwd: "/w",
+		display_name: "S1",
+		state: {
+			awaiting_input: false,
+			rate_limited: false,
+			last_activity_ms: 0,
+			agent_type: "claude",
+			shell_state: shell,
+		},
+	});
+	const [list, setList] = createSignal<SessionInfo[]>([mk("busy")]);
+	const view = render(() => (
+		<SessionsScreen
+			sessions={list()}
+			loading={false}
+			refreshing={false}
+			error={null}
+			onRefresh={() => {}}
+			onSelectSession={() => {}}
+		/>
+	));
+	setList((prev) => reconcileSessions(prev, [mk("idle")]));
+	vi.advanceTimersByTime(500);
+	const numbers = view.getAllByTestId("metric-number").map((n) => n.textContent);
+	expect(numbers.slice(0, 2)).toEqual(["1", "0"]);
+	vi.useRealTimers();
+	view.unmount();
 });
