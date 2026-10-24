@@ -757,8 +757,15 @@ mod tests {
 
     #[tokio::test]
     async fn local_forward_stays_starting_until_its_port_accepts_connections() {
-        let first = crate::test_support::refused_tcp_socket();
-        let second = crate::test_support::refused_tcp_socket();
+        // This test needs sockets that can transition to listening, not an
+        // immediate refusal: a bound-only socket may time out on macOS.
+        let reserve = || {
+            let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
+            socket
+        };
+        let first = reserve();
+        let second = reserve();
         let port = first.local_addr().unwrap().port();
         let second_port = second.local_addr().unwrap().port();
         let mut profile = test_profile();

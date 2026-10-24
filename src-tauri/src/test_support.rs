@@ -17,27 +17,69 @@ pub(crate) use tuic_test_support::{
     print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
-/// Reserve a loopback port without listening. Connections are refused while the
-/// returned socket stays alive, and parallel tests cannot take over the port.
-pub(crate) fn refused_tcp_socket() -> tokio::net::TcpSocket {
-    let socket = tokio::net::TcpSocket::new_v4().expect("TCP socket");
-    socket
-        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-        .expect("reserve refused TCP port");
-    socket
+/// A listening owner that resets every connection instead of serving a protocol.
+pub(crate) struct ResettingTcpPeer {
+    listener: std::sync::Arc<tokio::net::TcpListener>,
+    task: tokio::task::JoinHandle<()>,
 }
 
-// Catches: a refusal fixture releasing its port or accidentally listening on it.
+impl ResettingTcpPeer {
+    pub(crate) fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+}
+
+impl Drop for ResettingTcpPeer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Hold the listening port throughout each probe, including on macOS, where a
+/// bound-only TCP socket times out rather than refusing. This fixture produces
+/// ConnectionReset, NOT ConnectionRefused, after the TCP handshake succeeds.
+/// Tokio's zero linger sets SO_LINGER to {on: 1, seconds: 0}; close sends RST on
+/// macOS/Linux and Winsock (WSAECONNRESET). std/Mio do not set SO_REUSEADDR on
+/// Windows, so ordinary parallel listeners cannot hijack this listening port.
+pub(crate) fn resetting_tcp_peer() -> ResettingTcpPeer {
+    let socket = tokio::net::TcpSocket::new_v4().expect("TCP socket");
+    socket
+        .bind(([127, 0, 0, 1], 0).into())
+        .expect("reserve resetting TCP port");
+    let listener = std::sync::Arc::new(socket.listen(128).expect("listen on resetting TCP port"));
+    let acceptor = listener.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let (stream, _) = acceptor
+                .accept()
+                .await
+                .expect("accept resetting connection");
+            stream.set_zero_linger().expect("abortive TCP close");
+            drop(stream);
+        }
+    });
+    ResettingTcpPeer { listener, task }
+}
+
+// Catches: a dead-peer fixture releasing its port or serving a live connection.
 #[tokio::test]
-async fn refused_tcp_socket_reserves_its_port_without_accepting_connections() {
-    let socket = refused_tcp_socket();
-    let address = socket.local_addr().unwrap();
-    assert!(
-        std::net::TcpListener::bind(address).is_err(),
-        "a parallel listener must not take the refused port"
-    );
-    let error = tokio::net::TcpStream::connect(address).await.unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+async fn resetting_tcp_peer_reserves_its_port_and_resets_connections() {
+    use tokio::io::AsyncReadExt;
+
+    let peer = resetting_tcp_peer();
+    let address = peer.local_addr().unwrap();
+    // Separate probes protect consumers that reuse the fixture (seed then SSE).
+    for _ in 0..2 {
+        assert!(
+            std::net::TcpListener::bind(address).is_err(),
+            "a parallel listener must not take the resetting port"
+        );
+        let error = match tokio::net::TcpStream::connect(address).await {
+            Ok(mut stream) => stream.read(&mut [0]).await.unwrap_err(),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+    }
 }
 
 /// Scratch dir short enough to bind a Unix socket whatever the checkout path.

@@ -748,12 +748,12 @@ mod tests {
     // Catches: explicitly echoed base URLs or reqwest URLs leaking URL userinfo in token-request errors.
     #[tokio::test]
     async fn token_request_error_redacts_url_credentials() {
-        let socket = crate::test_support::refused_tcp_socket();
+        let socket = crate::test_support::resetting_tcp_peer();
         let address = socket.local_addr().expect("address");
         let base = format!("http://username:URL_SECRET_1457@{address}");
         let error = request_session_token(&base, "user", "password")
             .await
-            .expect_err("closed port");
+            .expect_err("resetting peer");
         assert!(error.contains("failed"), "{error}");
         assert!(
             !error.contains("URL_SECRET_1457"),

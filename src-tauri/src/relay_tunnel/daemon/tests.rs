@@ -219,8 +219,12 @@ async fn newest_attachment_replaces_the_previous_session() {
 
 #[tokio::test]
 async fn unreachable_upstream_refuses_the_stream() {
-    let socket = crate::test_support::refused_tcp_socket();
-    let upstream = socket.local_addr().unwrap();
+    // Catches: a failed upstream connect being acknowledged as an open stream.
+    // Port 0 cannot name a listener: bind(0) allocates a nonzero service port.
+    // Winsock reports WSAEADDRNOTAVAIL for a zero destination port:
+    // https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2
+    // Assert the mux failure, not the platform-specific connect errno.
+    let upstream = ([127, 0, 0, 1], 0).into();
     let bundle = bundle();
     let relay = start_daemon(bundle.clone(), upstream);
     let desktop = relay.attach(&bundle, &bundle.secret).await.expect("attach");

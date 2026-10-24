@@ -1936,7 +1936,7 @@ mod tests {
         #[tokio::test]
         async fn failed_handshake_error_does_not_contain_the_token() {
             let state = test_state();
-            let socket = crate::test_support::refused_tcp_socket();
+            let socket = crate::test_support::resetting_tcp_peer();
             let url = format!("http://{}", socket.local_addr().unwrap());
             state
                 .remote
