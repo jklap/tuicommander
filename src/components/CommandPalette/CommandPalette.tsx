@@ -14,6 +14,7 @@ import { openFileAction } from "../../utils/filePreview";
 import { pathBasename } from "../../utils/pathUtils";
 import { FileIcon } from "../FileBrowserPanel/FileIcon";
 import shared from "../shared/dialog.module.css";
+import { Input } from "../ui/Input";
 import s from "./CommandPalette.module.css";
 
 export interface CommandPaletteProps {
@@ -394,7 +395,7 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 					onClick={(e) => e.stopPropagation()}
 				>
 					<div class={s.search}>
-						<input
+						<Input
 							ref={inputRef}
 							type="text"
 							aria-label="Command palette search"
