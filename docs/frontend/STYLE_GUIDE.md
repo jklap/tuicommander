@@ -678,3 +678,10 @@ Commander retains its urgent/attention foregrounds and pulse.
 - Dialog footer hints wrap as complete groups, with gaps between groups and actions. Action labels do not wrap letter by letter.
 - Task field labels align at the top when neighboring controls have different heights. Roadmap state labels use ellipsis inside short bars.
 - Native controls use the light color scheme on the Paper theme. Mobile bottom tabs and diff gutters use the existing application surface tokens.
+
+`ui/ColorSwatch` is the shared native button for immediate preset/clear color selection.
+It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
+`type="button"`, forwards native refs/events/disabled, and uses a 36px circular
+target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
+the dashed clear target. Give each target an accessible name. Feature CSS may
+arrange the wrapping picker but must not resize its swatches.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Share preset and clear color-swatch targets through the UI design system, with native button selection and 44px touch targets.
+
 ### Added
 
 - Promote Settings switches, range sliders and custom colour inputs into shared UI primitives with consistent row-height and touch targets (#2302-35d9).

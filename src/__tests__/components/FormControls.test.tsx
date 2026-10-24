@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { Button } from "../../components/ui/Button";
 import { ColorInput } from "../../components/ui/ColorInput";
+import { ColorSwatch } from "../../components/ui/ColorSwatch";
 import { Input } from "../../components/ui/Input";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
@@ -254,4 +255,38 @@ it("keeps specialized controls reactive and forwards native refs and input/chang
 	expect(nativeColor).toHaveValue("#654321");
 	setDisabled(true);
 	for (const control of [input, range, nativeColor]) expect(control).toBeDisabled();
+});
+
+// Catches: swatch promotion submits its enclosing form or freezes native owner state/ref/events.
+it("keeps preset and clear swatches native, reactive and non-submitting", () => {
+	const [selected, setSelected] = createSignal(false);
+	const [disabled, setDisabled] = createSignal(false);
+	let native: HTMLButtonElement | undefined;
+	const clicked = vi.fn();
+	render(() => (
+		<ColorSwatch
+			aria-label="Blue"
+			swatchColor="#123456"
+			selected={selected()}
+			disabled={disabled()}
+			ref={(node) => {
+				native = node;
+			}}
+			onClick={(event) => {
+				clicked(event.currentTarget);
+				setSelected(true);
+			}}
+		/>
+	));
+	const button = screen.getByRole("button", { name: "Blue" });
+	expect(native).toBe(button);
+	expect(button).toHaveAttribute("type", "button");
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	fireEvent.click(button);
+	expect(clicked).toHaveBeenCalledExactlyOnceWith(button);
+	expect(button).toHaveAttribute("aria-pressed", "true");
+	setSelected(false);
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	setDisabled(true);
+	expect(button).toBeDisabled();
 });

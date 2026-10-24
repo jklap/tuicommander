@@ -525,42 +525,12 @@
   margin-top: 8px;
 }
 
-.colorSwatch {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: transform 0.1s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--font-xs);
-  color: var(--fg-secondary);
-  padding: 0;
-}
-
-.colorSwatch:hover {
-  transform: scale(1.15);
-}
-
-.colorSwatch.active {
-  border-color: var(--fg-primary);
-  box-shadow: 0 0 0 2px var(--bg-primary);
-}
-
 .colorSwatchLabel {
   font-size: var(--font-xl);
   line-height: 1;
   pointer-events: none;
   color: var(--fg-muted);
   transform: translateY(1.5px);
-}
-
-.colorSwatchClear {
-  background: var(--bg-secondary);
-  border: 1px dashed var(--border);
 }
 
 .groupsEmpty {
@@ -1315,7 +1285,7 @@
   color: var(--fg-muted);
 }
 
-.group [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]), .input[data-form-control] { width: 100%; }
+.group [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]), .input[data-form-control] { width: 100%; }
 
 /* Shared row layout; existing field layout is retained unless opted in. */
 .settingRow { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -1325,9 +1295,9 @@
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
 .settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .settingRowControl > div:not(.settingRowValue) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
-.settingRowControl > div > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]) { width: 100%; }
+.settingRowControl > div > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .settingRowControl > div > .hint { margin: 0; text-align: right; }
-.settingRowControl > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]) { width: 100%; }
+.settingRowControl > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .fieldError { margin: 4px 0 0; color: var(--error); font-size: 12px; line-height: 1.5; }
 @media (max-width: 800px) {
   .content { padding: 20px; }
@@ -1340,7 +1310,6 @@
   .nav { width: 100% !important; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
   .navItem, .close, .footerDone, .footerReset, .content button { min-height: 44px; }
   .content { padding: 16px; }
-  .colorSwatch { width: 44px; height: 44px; }
 }
 
 .compactNav { display: none; }

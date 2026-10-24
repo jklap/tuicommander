@@ -128,6 +128,16 @@ it.each(['input.toggle[type="checkbox"]', 'input[type="range" i]'])(
 	},
 );
 
+it("catches feature resizing passed to the shared ColorSwatch", () => {
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css'; const Feature = () => <ColorSwatch class={s.swatch}/>;`,
+	);
+	expect(
+		auditCss("src/Feature.module.css", ".swatch { height: 18px; }", classes.get("src/Feature.module.css")),
+	).toHaveLength(1);
+});
+
 it("catches feature resizing passed to the shared Button", () => {
 	const classes = controlClasses(
 		["src/Feature.tsx"],

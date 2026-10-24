@@ -5,6 +5,7 @@ export { ChevronIcon } from "./ChevronIcon";
 export type { CiRingProps } from "./CiRing";
 export { CiRing } from "./CiRing";
 export { ColorInput, type ColorInputProps } from "./ColorInput";
+export { ColorSwatch, type ColorSwatchProps } from "./ColorSwatch";
 export type { ContentRendererProps } from "./ContentRenderer";
 export { ContentRenderer } from "./ContentRenderer";
 export type { CountBadgeProps, CountBadgeTone } from "./CountBadge";

@@ -1,9 +1,9 @@
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { SettingId } from "../../services/settingsCatalogue";
-import { cx } from "../../utils";
 import s from "../SettingsPanel/Settings.module.css";
 import { ColorInput } from "../ui/ColorInput";
+import { ColorSwatch } from "../ui/ColorSwatch";
 import type { ColorPreset } from "./colorPresets";
 
 export interface ColorSwatchPickerProps {
@@ -20,10 +20,11 @@ export const ColorSwatchPicker: Component<ColorSwatchPickerProps> = (props) => {
 		<div class={s.groupColorPicker}>
 			<For each={props.presets}>
 				{(preset) => (
-					<button
+					<ColorSwatch
 						data-setting-id={props.settingId}
-						class={cx(s.colorSwatch, props.color === preset.hex && s.active)}
-						style={{ background: preset.hex }}
+						selected={props.color === preset.hex}
+						swatchColor={preset.hex}
+						aria-label={preset.name}
 						onClick={() => props.onChange(preset.hex)}
 						title={preset.name}
 					/>
@@ -41,14 +42,15 @@ export const ColorSwatchPicker: Component<ColorSwatchPickerProps> = (props) => {
 					<span class={s.colorSwatchLabel}>&#x22EF;</span>
 				</Show>
 			</ColorInput>
-			<button
+			<ColorSwatch
 				data-setting-id={props.settingId}
-				class={cx(s.colorSwatch, s.colorSwatchClear, !props.color && s.active)}
+				selected={!props.color}
+				aria-label={t("groups.btn.noColor", "No color")}
 				onClick={() => props.onChange("")}
 				title={t("groups.btn.noColor", "No color")}
 			>
 				&times;
-			</button>
+			</ColorSwatch>
 		</div>
 	);
 };

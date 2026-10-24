@@ -149,3 +149,32 @@
 @media (prefers-reduced-motion: reduce) { .switchTrack, .switchTrack::before { transition: none; } }
 
 .colorInput[data-selected] { border-color: var(--fg-primary); border-style: solid; }
+
+/* Preset and clear targets promoted from Settings; match the native color picker. */
+.colorSwatch {
+ box-sizing: border-box;
+ position: relative;
+ flex-shrink: 0;
+ width: var(--control-height, 36px);
+ height: var(--control-height, 36px);
+ border-radius: var(--radius-full);
+ border: 2px solid transparent;
+ padding: 0;
+ overflow: hidden;
+ cursor: pointer;
+ transition: transform 0.1s ease;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ font-size: var(--font-xs);
+ color: var(--fg-secondary);
+}
+.colorSwatch:hover:enabled { transform: scale(1.15); }
+.colorSwatch[data-clear] { background: var(--bg-secondary); border: 1px dashed var(--border); }
+.colorSwatch[aria-pressed="true"] { border-color: var(--fg-primary); box-shadow: 0 0 0 2px var(--bg-primary); }
+.colorSwatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.colorSwatch:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 600px) {
+ .colorSwatch { width: max(44px, var(--control-height, 36px)); height: max(44px, var(--control-height, 36px)); }
+}
+@media (prefers-reduced-motion: reduce) { .colorSwatch { transition: none; } }

@@ -1,7 +1,6 @@
-// DEFERRED (2026-10-24) — screenshot/geometry verification is BLOCKED-LOCKED; rerun after the Mac is unlocked.
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
-import { Switch, Slider, Select, ColorInput } from '../../components/ui';
+import { Switch, Slider, Select, ColorInput, ColorSwatch } from '../../components/ui';
 import { SettingToggle, SettingSlider } from '../../components/SettingsPanel/SettingFields';
 import { SettingRow } from '../../components/SettingsPanel/SettingsPrimitives';
 import '../../global.css';
@@ -15,6 +14,8 @@ render(() => <section id="geometry" style="padding:16px;background:var(--bg-seco
    <Slider aria-label="Level" min={0} max={10} value={value()} onInput={e => setValue(e.currentTarget.valueAsNumber)} />
    <Select aria-label="Mode"><option>Default</option></Select>
    <ColorInput aria-label="Color" value="#59a8dd" />
+   <ColorSwatch aria-label="Blue preset" swatchColor="#59a8dd" selected />
+   <ColorSwatch aria-label="Clear">×</ColorSwatch>
   </div>}
  </SettingRow>
  <SettingToggle row label="Settings switch" checked={checked()} onChange={setChecked}/>

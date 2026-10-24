@@ -941,3 +941,10 @@ Sidebar worktree diagnostics render recorded paths and repair guidance without b
 `StoryNotes` renders the selected story's append-only notes and workflow receipt references. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.
 
 Stories dialog actions use the shared Button geometry. Plan, story and run list rows and Kanban cards retain native layout buttons with explicit row/card markers.
+
+`ui/ColorSwatch` is the shared native button for immediate preset/clear color selection.
+It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
+`type="button"`, forwards native refs/events/disabled, and uses a 36px circular
+target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
+the dashed clear target. Give each target an accessible name. Feature CSS may
+arrange the wrapping picker but must not resize its swatches.
