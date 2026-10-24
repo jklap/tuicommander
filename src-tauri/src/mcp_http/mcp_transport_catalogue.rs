@@ -911,6 +911,10 @@ pub(super) fn native_action_unavailability(
     if !state.config.read().mcp_capabilities.allows(name, action) {
         return Some(format!("Tool '{name}' is disabled by configuration"));
     }
+    native_configuration_unavailability(state, name)
+}
+
+fn native_configuration_unavailability(state: &AppState, name: &str) -> Option<String> {
     let reason = match name {
         "remote" if !state.remote.has_connected_server() => "no connected remote server",
         "voice" if !voice_configured() => "voice is not configured",
@@ -918,6 +922,29 @@ pub(super) fn native_action_unavailability(
         _ => return None,
     };
     Some(format!("Tool '{name}' is unavailable: {reason}"))
+}
+
+/// Settings keeps unavailable domains visible and reports configuration independently of denials.
+pub(crate) fn native_capability_catalog(state: &AppState) -> Vec<serde_json::Value> {
+    crate::mcp_capabilities::catalog()
+        .into_iter()
+        .map(|mut capability| {
+            if capability["section"] == "conditional" {
+                let domain = capability["domain"].as_str().unwrap_or_default();
+                let reason = native_configuration_unavailability(state, domain);
+                let available = reason.is_none();
+                let availability = reason.unwrap_or_else(|| match domain {
+                    "remote" => "Remote server connected".into(),
+                    "voice" => "Voice configured".into(),
+                    "telegram" => "Telegram configured".into(),
+                    _ => unreachable!(),
+                });
+                capability["available"] = serde_json::json!(available);
+                capability["availability"] = serde_json::json!(availability);
+            }
+            capability
+        })
+        .collect()
 }
 
 fn voice_configured() -> bool {
@@ -1252,7 +1279,7 @@ pub(super) async fn handle_call_tool(
             .await
         {
             Ok(v) => mark_upstream_tool_result(v),
-            Err(e) => serde_json::json!({ "error": e }),
+            Err(e) => serde_json::json!({ "error": e.message, "effect": e.effect }),
         }
     } else {
         // Recursive async dispatch requires Box::pin. Meta names are blocked above.
