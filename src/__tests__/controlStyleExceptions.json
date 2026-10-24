@@ -238,13 +238,6 @@
     ]
   },
   {
-    "file": "src/components/McpPopup/McpPopup.module.css",
-    "story": "2211-0aa0",
-    "rules": [
-      "[[],\".footerLink\",[\"border: none\",\"padding: 4px 8px\"]]"
-    ]
-  },
-  {
     "file": "src/components/PrDetailPopover/PrDetailPopover.module.css",
     "story": "2212-493d",
     "rules": [
