@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { HttpRpcError } from "../../transport";
+import { Button } from "../ui/Button";
 import { Textarea } from "../ui/Textarea";
 import s from "./StoryNotes.module.css";
 
@@ -83,14 +84,14 @@ export function StoryNotes(props: { project: string; storyId: string; revision: 
 		<section class={s.notes} aria-label={t("stories.notes.heading", "Notes and evidence")}>
 			<div class={s.header}>
 				<h4>{t("stories.notes.heading", "Notes and evidence")}</h4>
-				<button
+				<Button
 					type="button"
 					onClick={() => void refetch()}
 					disabled={result.loading || saving()}
 					aria-label={t("stories.notes.refresh", "Refresh notes")}
 				>
 					{t("stories.notes.refresh", "Refresh notes")}
-				</button>
+				</Button>
 			</div>
 			<Show when={result.loading}>
 				<p class={s.muted} role="status">
@@ -162,9 +163,9 @@ export function StoryNotes(props: { project: string; storyId: string; revision: 
 						{t("stories.notes.saved", "Note added.")}
 					</p>
 				</Show>
-				<button type="submit" disabled={saving() || props.busy || !draft().trim()}>
+				<Button variant="primary" type="submit" disabled={saving() || props.busy || !draft().trim()}>
 					{t("stories.notes.submit", "Append note")}
-				</button>
+				</Button>
 			</form>
 		</section>
 	);

@@ -683,14 +683,6 @@
     ]
   },
   {
-    "file": "src/components/StoriesDialog/StoryNotes.module.css",
-    "story": "2240-b9f5",
-    "rules": [
-      "[[],\".header button, .form button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 6px 10px\"]]",
-      "[[],\".form button\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/SuggestOverlay/SuggestOverlay.module.css",
     "story": "2241-2c67",
     "rules": [
