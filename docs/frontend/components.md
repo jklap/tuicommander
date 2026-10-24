@@ -958,3 +958,19 @@ and `DangerZone` action slots arrange their children only. Pass shared UI
 controls into these slots; the containers do not set descendant button sizes.
 `SettingButton`, account add/retry actions and list add/remove actions also
 use `ui/Button`; field CSS owns their width and row layout only.
+
+`Button geometry="stretch"` fills a flex/grid cross-axis container with square
+edges and at least 36px desktop or 44px touch targets. Use it for edge actions
+such as swipe actions and tab scroll arrows; the container owns placement.
+
+`ButtonGroup` joins direct `Button` children with connected edges and one
+divider. Each action retains its native events, disabled state and size. Label
+the group with `aria-label` or `aria-labelledby`. Keep dropdown content outside
+the direct action children; the group does not clip focus rings or popovers.
+
+`Textarea autoGrow` is a compact content-sized editor: it starts at the shared
+36px desktop or 44px touch target and grows to three control heights before
+scrolling. It recalculates after native input, controlled value updates and
+width changes. Remove caller height caps and auto-resize handlers when adopting
+it; the shared CSS is the single owner of the bounds. Default Textarea keeps
+its existing three-control-height minimum and manual vertical resize.
