@@ -613,15 +613,6 @@
     ]
   },
   {
-    "file": "src/components/SuggestOverlay/SuggestOverlay.module.css",
-    "story": "2241-2c67",
-    "rules": [
-      "[[],\".chip\",[\"padding: 8px 16px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".chip:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".closeBtn\",[\"height: 24px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/TabBar/TabBar.module.css",
     "story": "2242-bc80",
     "rules": [
