@@ -814,7 +814,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Natural-language query describing what you want to do (e.g. 'manage terminal sessions', 'github PR status', 'cross-repo knowledge search')" },
+                    "query": { "type": "string", "description": "Plain words rank names and descriptions. Each +term must occur in the tool name (case-insensitive, including alias prefixes); several use AND. Optional words rank matching names. select:<name> selects an exact catalogue name without fallback." },
                     "limit": { "type": "integer", "description": "Maximum number of results, default 10" },
                     "schema_byte_budget": { "type": "integer", "minimum": 0, "maximum": 65536, "description": "Serialized UTF-8 byte budget for the complete top_schema; default 16384, 0 omits it" }
                 },

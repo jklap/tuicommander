@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require every `+term` in MCP tool search to match the tool name before limiting results; keep exact `select:<name>` queries free of ranked fallback (#2300-6355).
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).
 
