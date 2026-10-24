@@ -159,7 +159,7 @@ export const ViewModeToggle: Component<{ terminalId: string; onWheel?: (e: Wheel
 	};
 	return (
 		<Show when={term()?.agentType}>
-			<div class={s.toggle} data-mode={mode()} title={reason()} onWheel={props.onWheel}>
+			<div class={s.toggle} data-terminal-view-toggle data-mode={mode()} title={reason()} onWheel={props.onWheel}>
 				<SegmentedControl
 					aria-label="Terminal view"
 					options={[
