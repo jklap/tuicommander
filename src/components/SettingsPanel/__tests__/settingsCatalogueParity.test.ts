@@ -40,6 +40,14 @@ describe("settings catalogue/control identity boundary", () => {
 		).toEqual([]);
 	});
 
+	// Catches: migrating a native action to shared Button/ColorSwatch silently removes it from the identity audit.
+	it.each(["Button", "ColorSwatch", "Slider", "ColorInput"])("audits shared %s identities", (tag) => {
+		const result = extractSettingControls("fixture.tsx", `<${tag} data-setting-id="app.theme" /><${tag} />`);
+		expect(result.map((control) => control.tag)).toEqual([tag, tag]);
+		expect(result[0].settingId).toBe("app.theme");
+		expect(missingControlIdentities(result)).toEqual([result[1]]);
+	});
+
 	// Catches: any computed expression being accepted as a catalogue identity.
 	it("rejects_unresolved_dynamic_control_ids", () => {
 		const result = extractSettingControls(

@@ -30,7 +30,7 @@
 	cursor: not-allowed;
 }
 .control::placeholder { color: var(--fg-muted); }
-.select { cursor: pointer; }
+.select { cursor: pointer; padding-inline-end: 32px; }
 .select[multiple], .select[size]:not([size="1"]) { height: auto; min-height: var(--control-height, 36px); padding-block: 8px; }
 .textarea { height: auto; min-height: calc(var(--control-height, 36px) * 3); padding-block: 8px; resize: vertical; }
 .segmented {

@@ -13,6 +13,7 @@ import {
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { Switch } from "../../../ui/Switch";
@@ -109,7 +110,7 @@ const HeaderRows: Component<{
 	<div style={{ display: "grid", gap: "8px" }}>
 		<div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
 			<span class={s.hint}>Secret headers</span>
-			<button
+			<Button
 				data-non-setting="Add or remove a secret-header draft row; the owner Save commits it"
 				type="button"
 				class={s.copyBtn}
@@ -119,7 +120,7 @@ const HeaderRows: Component<{
 				}
 			>
 				+
-			</button>
+			</Button>
 		</div>
 		<Index each={props.rows}>
 			{(row, index) => (
@@ -153,7 +154,7 @@ const HeaderRows: Component<{
 							props.onChange(props.rows.map((r, i) => (i === index ? { ...r, value: e.currentTarget.value } : r)))
 						}
 					/>
-					<button
+					<Button
 						data-non-setting="Add or remove a secret-header draft row; the owner Save commits it"
 						type="button"
 						class={s.textBtn}
@@ -161,7 +162,7 @@ const HeaderRows: Component<{
 						onClick={() => props.onChange(props.rows.filter((_, i) => i !== index))}
 					>
 						−
-					</button>
+					</Button>
 				</div>
 			)}
 		</Index>
@@ -623,7 +624,7 @@ export const UpstreamMcpPanel: Component = () => {
 			<SectionCard
 				title="Upstream MCP Servers"
 				headingActions={
-					<button
+					<Button
 						data-non-setting="Open, close or cancel the upstream editor"
 						class={s.copyBtn}
 						onClick={() => {
@@ -634,7 +635,7 @@ export const UpstreamMcpPanel: Component = () => {
 						style={{ "font-size": "18px", "line-height": 1 }}
 					>
 						{showAdd() ? "−" : "+"}
-					</button>
+					</Button>
 				}
 			>
 				<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
@@ -799,15 +800,16 @@ export const UpstreamMcpPanel: Component = () => {
 						    right-aligned row, so the pair is never squeezed by the timeout field
 						    and both buttons use the shared save/cancel styling. */}
 							<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-								<button
+								<Button
+									variant="primary"
 									data-non-setting="Create, update or remove a stable upstream through its owner"
 									class={s.saveBtn}
 									onClick={addUpstream}
 									disabled={saving()}
 								>
 									{saving() ? "Adding…" : "Add"}
-								</button>
-								<button
+								</Button>
+								<Button
 									data-non-setting="Open, close or cancel the upstream editor"
 									class={s.testBtn}
 									onClick={() => {
@@ -817,7 +819,7 @@ export const UpstreamMcpPanel: Component = () => {
 									}}
 								>
 									Cancel
-								</button>
+								</Button>
 							</div>
 							<Show when={error()}>
 								<p class={s.hint} style={{ color: "var(--error, #e06c75)" }}>
@@ -938,7 +940,7 @@ export const UpstreamMcpPanel: Component = () => {
 										<Show
 											when={st()?.status === "authenticating"}
 											fallback={
-												<button
+												<Button
 													data-non-setting="Open, close or cancel the upstream editor"
 													class={s.textBtn}
 													style={{
@@ -959,10 +961,10 @@ export const UpstreamMcpPanel: Component = () => {
 													}}
 												>
 													{st()?.status === "ready" ? "Re-authorize" : "Authorize"}
-												</button>
+												</Button>
 											}
 										>
-											<button
+											<Button
 												data-non-setting="Typed upstream credential or OAuth workflow"
 												class={s.textBtn}
 												style={{ color: "var(--warning, #e5c07b)" }}
@@ -974,10 +976,10 @@ export const UpstreamMcpPanel: Component = () => {
 												}
 											>
 												Cancel
-											</button>
+											</Button>
 										</Show>
 									</Show>
-									<button
+									<Button
 										data-non-setting="Open, close or cancel the upstream editor"
 										class={s.copyBtn}
 										style={{ "flex-shrink": 0 }}
@@ -987,9 +989,9 @@ export const UpstreamMcpPanel: Component = () => {
 										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 											<path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293z" />
 										</svg>
-									</button>
+									</Button>
 									{/* Reconnect */}
-									<button
+									<Button
 										data-non-setting="Reconnect the current upstream runtime without editing configuration"
 										class={s.copyBtn}
 										style={{ "flex-shrink": 0 }}
@@ -1004,9 +1006,9 @@ export const UpstreamMcpPanel: Component = () => {
 											<path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z" />
 											<path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466" />
 										</svg>
-									</button>
+									</Button>
 									{/* Remove */}
-									<button
+									<Button
 										data-non-setting="Create, update or remove a stable upstream through its owner"
 										class={s.copyBtn}
 										title="Remove"
@@ -1017,7 +1019,7 @@ export const UpstreamMcpPanel: Component = () => {
 											<path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
 											<path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
 										</svg>
-									</button>
+									</Button>
 								</div>
 								{/* Edit inline panel */}
 								<Show when={isEditing()}>
@@ -1078,7 +1080,7 @@ export const UpstreamMcpPanel: Component = () => {
 														<p class={s.hint} style={{ margin: "2px 0 0" }}>
 															Leave blank to keep current token.
 														</p>
-														<button
+														<Button
 															data-non-setting="Typed upstream credential or OAuth workflow"
 															type="button"
 															class={s.textBtn}
@@ -1086,7 +1088,7 @@ export const UpstreamMcpPanel: Component = () => {
 															onClick={() => void clearUpstreamCredential(server.name)}
 														>
 															Clear saved token
-														</button>
+														</Button>
 													</div>
 												</Show>
 												<HeaderRows
@@ -1203,15 +1205,16 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 											</Show>
 											<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-												<button
+												<Button
+													variant="primary"
 													data-non-setting="Create, update or remove a stable upstream through its owner"
 													class={s.saveBtn}
 													onClick={() => saveEdit(server)}
 													disabled={saving()}
 												>
 													{saving() ? "Saving…" : "Save"}
-												</button>
-												<button
+												</Button>
+												<Button
 													data-non-setting="Open, close or cancel the upstream editor"
 													class={s.testBtn}
 													onClick={() => {
@@ -1221,7 +1224,7 @@ export const UpstreamMcpPanel: Component = () => {
 													}}
 												>
 													Cancel
-												</button>
+												</Button>
 											</div>
 											<Show when={error()}>
 												<p class={s.hint} style={{ color: "var(--error, #e06c75)", margin: "4px 0 0" }}>
