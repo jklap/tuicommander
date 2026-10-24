@@ -184,14 +184,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/GitPanel.module.css",
-    "story": "2199-6efd",
-    "rules": [
-      "[[],\".tab\",[\"border: none\",\"border-bottom: 2px solid transparent\",\"padding: 6px 8px\"]]",
-      "[[],\".tabActive\",[\"border-bottom-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/HistoryTab.module.css",
     "story": "2200-8e6d",
     "rules": [
