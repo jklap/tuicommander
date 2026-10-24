@@ -406,17 +406,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/DictationSettings.module.css",
-    "story": "2222-7c13",
-    "rules": [
-      "[[],\".modelSelect, .modelDownload\",[\"height: var(--control-height, 36px)\",\"padding: 0 16px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".modelDownload\",[\"border-color: var(--accent)\"]]",
-      "[[],\".modelDelete\",[\"border: none\",\"padding: 0 2px\"]]",
-      "[[],\"button.startConversation\",[\"border-color: var(--accent)\"]]",
-      "[[],\"button.stopConversation\",[\"border-color: var(--error)\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/Settings.module.css",
     "story": "2223-32b2",
     "rules": [
