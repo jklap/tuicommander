@@ -498,7 +498,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				    The pill is a preview of the bell's newest notification, so the two
 				    stay adjacent. */}
 				<div class={s.notifGroup} ref={notifRef}>
-					<SmartPromptsDropdown repoPath={props.repoPath} onOpenSettings={props.onOpenSettings} />
+					<SmartPromptsDropdown triggerSize="compact" repoPath={props.repoPath} onOpenSettings={props.onOpenSettings} />
 
 					{/* Last-item shortcut — only when there are items */}
 					<Show when={lastItem()}>
