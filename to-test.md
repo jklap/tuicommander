@@ -1,3 +1,6 @@
+## Mobile unreachable landing (2294-078f)
+
+- [x] Isolated `agent-test-2294` on port 19894, browser viewport 390×844: stopped only its server; dispatched resume events and observed the in-app connection-test region; reloaded offline and observed the cached splash; captured only `[data-connection-landing]`. After restart, a `pageshow` resume event automatically restored Sessions without a retry click or manual reload. Evidence: `~/Gits/.tmp/tuic-2294-live/` (`in-app-landing.png`, `offline-landing.png`, `transcript.md`). The locked screen kept the tab hidden, so this verifies resume-driven recovery, not visible-tab retry timing or a physical installed-PWA resume. The isolated app and named browser session were stopped.
 ## Required MCP tool search names (2300-6355) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, call `search_tools` with `+repo` and `+repo status` at limit 1. Confirm only `repo` is returned with its schema, `+missing_name status` returns nothing, and `select:repo` selects the exact tool. The peer did not restart the daily app; Rust changes do not hot-reload.
