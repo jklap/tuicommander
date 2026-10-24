@@ -3185,7 +3185,7 @@ Paste an image, drop PNG/JPEG/WebP/GIF files on Compose, or select several with 
 
 The existing MCP `repo` tool reads linked work items or explicit references, URLs and exact provider keys, including paged comments. Provider content is enclosed in an untrusted-content block. Optional comments and workflow transitions use the same provider actions; `mcp_work_item_writes` defaults to false. A frontend with the provider loaded is required (#1854-4960).
 
-MCP call audit view (#2136-dc79): Settings > MCP > Call audit lists the body-free `GET /mcp/audit` rows behind the `mcp_call_audit_enabled` setting (off in release, on in debug). Off records nothing.
+MCP call audit view (#2136-dc79): Settings > MCP > Call audit lists the body-free `GET /mcp/audit` rows behind the `mcp_call_audit_enabled` setting (off in release, on in debug). Off records nothing. Effects distinguish read-only, completed, failed, not-started and uncertain dispatch; known operation and target names replace opaque metadata (#2299-07d3).
 
 ### Background tray and menu-bar icon
 

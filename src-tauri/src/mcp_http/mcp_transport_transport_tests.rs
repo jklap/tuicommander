@@ -5925,6 +5925,83 @@ async fn mcp_call_audit_outcome_names_reply_and_error_not_effect() {
     assert_eq!(projection["records"][1]["outcome"], "replied");
 }
 
+// Catches: successful dispatch replies never classify their effects after handlers return.
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_call_audit_classifies_real_read_and_rename_dispatch() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = true;
+    insert_managed_test_session(&state, "audit-target", env!("CARGO_MANIFEST_DIR"));
+    let list = post_test_tool_call(
+        state.clone(),
+        "audit-effects",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    assert_eq!(list["result"]["isError"], false);
+    let rename = post_test_tool_call(state.clone(), "audit-effects", "call_tool", serde_json::json!({"tool_name":"session","arguments":{"action":"rename","session_id":"audit-target","name":"Audit worker"}})).await;
+    assert_eq!(rename["result"]["isError"], false);
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get("audit-target")
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("Audit worker")
+    );
+    let projection = runtime_audit_projection(state).await;
+    let rows = projection["records"].as_array().unwrap();
+    assert_eq!(rows[0]["operation"], "session.rename");
+    assert_eq!(rows[0]["effect"], "completed");
+    assert_eq!(rows[0]["target"]["id"], "audit-target");
+    assert_eq!(rows[0]["target"]["name"], "Audit worker");
+    assert_eq!(rows[1]["operation"], "session.list");
+    assert_eq!(rows[1]["effect"], "read_only");
+}
+
+// Catches: discovery or known upstream names are hashed despite a catalog identity,
+// or a definite upstream preflight refusal is mislabeled as uncertain execution.
+#[tokio::test]
+async fn mcp_call_audit_names_discovery_and_upstream_operations_without_argument_bodies() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = true;
+    post_test_tool_call(
+        state.clone(),
+        "audit-names",
+        "get_tool_schema",
+        serde_json::json!({"tool_name":"session"}),
+    )
+    .await;
+    let url = spawn_upstream_passthrough_mock().await;
+    state
+        .mcp
+        .upstream_registry
+        .inject_ready_http_upstream("audit-upstream", &url, &["probe"]);
+    let response = post_test_tool_call(state.clone(), "audit-names", "call_tool", serde_json::json!({"tool_name":"audit-upstream__probe","arguments":{"token":"PRIVATE_TOKEN"}})).await;
+    assert_eq!(response["result"]["isError"], true); // recorded upstream application error, not a lost reply
+    post_test_tool_call(
+        state.clone(),
+        "audit-names",
+        "missing__tool",
+        serde_json::json!({}),
+    )
+    .await;
+    let projection = runtime_audit_projection(state).await;
+    assert_eq!(projection["records"][0]["effect"], "not_started");
+    assert_eq!(
+        projection["records"][1]["operation"],
+        "audit-upstream__probe"
+    );
+    assert_eq!(projection["records"][1]["effect"], "failed");
+    assert_eq!(projection["records"][2]["operation"], "get_tool_schema");
+    assert_eq!(projection["records"][2]["effect"], "read_only");
+    assert!(!projection.to_string().contains("PRIVATE"));
+}
+
 // Catches: cancelling real dispatch records rollback/no effect, or leaks body values.
 #[tokio::test]
 async fn mcp_outcome_record_cancelled_call_keeps_unknown_effect_without_bodies() {
@@ -6008,7 +6085,15 @@ async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() 
         assert_eq!(row["response_text_bytes"], *cost);
         assert_eq!(row["application_error"], false);
     }
-    assert!(!projection.to_string().contains("recipient-"));
+    for row in rows {
+        assert!(
+            row["target"]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("recipient-")
+        );
+    }
+    assert!(!projection.to_string().contains("é"));
 }
 
 // Catches: UI regrouping bypasses the armed caller/repository boundary or the

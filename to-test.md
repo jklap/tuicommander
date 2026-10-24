@@ -2915,3 +2915,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a backend rebuild/restart, verify disconnected GitHub Settings shows `repo read:project` before login; the shared scope file is compiled into Rust (#2293-8674).
 
 - [ ] MCP Settings domain grouping (#2297-28c1): after a manual `make dev` restart or release rebuild, check the three visible sections, nested child permissions and conditional configuration text. Rust status metadata does not hot-reload.
+
+- [ ] MCP Call audit (#2299-07d3): after a manual backend restart or release rebuild, make session list/rename calls and check Read-only/Completed, known target name/id and explanatory effect tooltips. The existing daily backend does not hot-reload Rust.

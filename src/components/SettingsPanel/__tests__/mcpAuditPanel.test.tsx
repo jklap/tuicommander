@@ -51,7 +51,8 @@ describe("McpAuditPanel", () => {
 		const cells = Array.from(container.querySelectorAll("tbody tr td"));
 		expect(cells).toHaveLength(6);
 		for (const td of cells) expect(td.getAttribute("title")).toBeTruthy();
-		for (const i of [0, 3, 4, 5]) expect(cells[i].getAttribute("title")).toBe(cells[i].textContent);
+		for (const i of [0, 3, 4]) expect(cells[i].getAttribute("title")).toBe(cells[i].textContent);
+		expect(cells[5].getAttribute("title")).toContain("before the operation started");
 	});
 
 	// Catches: a row rendering response bodies or secrets instead of the body-free whitelist.
@@ -81,6 +82,26 @@ describe("McpAuditPanel", () => {
 		expect(text).toContain("Cancelled");
 		expect(text).toContain("Unknown");
 		expect(text).not.toMatch(/success|completed|ok/i);
+	});
+
+	// Catches: resolved identities discarded in favor of opaque digests, and known read-only effects mislabeled.
+	it("shows a known target name and id with classified effects and an uncertainty explanation", async () => {
+		rpc.mockResolvedValue(
+			projection([
+				row({
+					target: { kind: "session", id: "12345678-1234-4234-8234-123456789abc", name: "Build worker" },
+					effect: "read_only",
+				}),
+				row({ effect: "unknown", outcome: "cancelled" }),
+			]),
+		);
+		const { container } = render(() => <McpAuditPanel />);
+		await waitFor(() => expect(container.querySelectorAll("tbody tr")).toHaveLength(2));
+		const rows = container.querySelectorAll("tbody tr");
+		expect(rows[0].textContent).toContain("Build worker · 12345678");
+		expect(rows[0].textContent).toContain("Read-only");
+		expect(rows[0].querySelectorAll("td")[2].title).toContain("12345678-1234-4234-8234-123456789abc");
+		expect(rows[1].querySelectorAll("td")[5].title).toContain("Completion is uncertain");
 	});
 
 	// Catches: the outcome filter hiding nothing, or hiding the wrong rows.

@@ -241,7 +241,7 @@ fn unmark_upstream_tool_result(value: serde_json::Value) -> serde_json::Value {
         .unwrap_or(value)
 }
 
-fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value> {
+pub(super) fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value> {
     value
         .as_object()
         .filter(|object| object.len() == 1)
@@ -451,7 +451,8 @@ where
     match tokio::task::spawn_blocking(f).await {
         Ok(value) => value,
         Err(e) => serde_json::json!({
-            "error": format!("tool handler failed to complete: {e}")
+            "error": format!("tool handler failed to complete: {e}"),
+            "effect": "unknown"
         }),
     }
 }
@@ -1207,7 +1208,7 @@ pub(super) async fn mcp_post(
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             let audit = super::mcp_call_audit::Call::start(
-                &state.mcp.call_audit,
+                &state,
                 &params,
                 state.config.read().mcp_call_audit_enabled,
             );
@@ -1241,7 +1242,7 @@ pub(super) async fn mcp_post(
                         .await
                     {
                         Ok(v) => mark_upstream_tool_result(v),
-                        Err(e) => serde_json::json!({"error": e}),
+                        Err(e) => serde_json::json!({"error": e.message, "effect": e.effect}),
                     }
                 })
                 .await;

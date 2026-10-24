@@ -1279,7 +1279,7 @@ pub(super) async fn handle_call_tool(
             .await
         {
             Ok(v) => mark_upstream_tool_result(v),
-            Err(e) => serde_json::json!({ "error": e }),
+            Err(e) => serde_json::json!({ "error": e.message, "effect": e.effect }),
         }
     } else {
         // Recursive async dispatch requires Box::pin. Meta names are blocked above.

@@ -2745,9 +2745,9 @@ both enter `mcp_post`, so a collapsed call is one runtime ingress record, not an
 extra inferred hop. Existing inbox-read audit records are unchanged.
 
 Each row has a server `call_id`, optional UUID `client_call_id` and
-`parent_operation_id`, catalogue-recognized native `operation`, optional SHA-256
-`target_digest`, start time, `response_text_bytes`, `application_error`,
-`transport_error` and `effect`. Unknown/upstream tool names are digested. Arguments,
+`parent_operation_id`, catalogue-recognized native, discovery or connected-upstream `operation`, optional resolved
+`target` (`kind`, `id`, `name`), optional SHA-256 `target_digest`, start time, `response_text_bytes`, `application_error`,
+`transport_error` and `effect`. Unrecognized tool names are digested. Known runtime session/peer identities may be retained; arbitrary target arguments are not. Arguments,
 response bodies, arbitrary metadata and error messages are never retained.
 The target digest covers the first string target among `to`, `session_id`, `path`,
 `worktree_path`, `id`, including the field name and a NUL separator. It is a grouping
@@ -2763,8 +2763,14 @@ Text cost is the sum of UTF-8 byte lengths of top-level MCP `content` blocks who
 `type` is `text`, after response formatting. It excludes JSON escaping, envelopes,
 resources, images and transport overhead. A native `error:null` is not an
 application error; upstream `isError` is preserved. Error text is not copied.
-Only explicit native `effect=not_started|completed` is retained; other effects
-remain `unknown`, including application refusals without an effect contract.
+Effects classify the handler observation: `read_only` for a recognized read-only action,
+`completed` for a successful handler return, `failed` for an application-error reply,
+and `not_started` for an explicit preflight refusal. Explicit handler effect contracts
+remain authoritative. `completed` does not mean a submitted command finished, queued
+speech was heard, a remote job finished, or the client received the reply. Native
+handler interruption and upstream failures after dispatch remain `unknown`; the
+proxy carries a typed effect so pre-send policy/configuration refusals are not confused
+with a lost upstream reply. No classification parses error prose.
 A cancelled dispatch has unknown application outcome, no observed response bytes,
 `transport_error=cancelled_before_reply` and unknown effect. A constructed reply
 has `transport_error=unobserved_after_reply_construction`: this does not prove
