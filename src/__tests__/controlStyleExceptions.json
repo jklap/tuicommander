@@ -750,14 +750,6 @@
     ]
   },
   {
-    "file": "src/components/Terminal/Terminal.module.css",
-    "story": "2253-a676",
-    "rules": [
-      "[[],\".resumeDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".resumeButton\",[\"padding: 4px 14px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]"
-    ]
-  },
-  {
     "file": "src/components/Terminal/TerminalChatView.module.css",
     "story": "2254-2a7d",
     "rules": [
