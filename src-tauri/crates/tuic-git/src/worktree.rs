@@ -4768,6 +4768,11 @@ fn windows_hook_path(path: &str) -> String {
     dirs.join(";")
 }
 
+#[cfg(test)]
+thread_local! {
+    static SHELL_SCRIPT_DIAGNOSTICS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -4804,7 +4809,27 @@ fn run_shell_script(
     let path = windows_hook_path(&path);
     cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
-    crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
+    #[cfg(test)]
+    let invocation = format!(
+        "argv={:?} {:?}; cwd={:?}",
+        cmd.get_program(),
+        cmd.get_args().collect::<Vec<_>>(),
+        cmd.get_current_dir()
+    );
+    let result = crate::git_cli::output_with_deadline(&mut cmd, timeout);
+    #[cfg(test)]
+    SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| {
+        diagnostics.borrow_mut().push(match &result {
+            Ok(output) => format!(
+                "{invocation}; status={:?}; stdout={:?}; stderr={:?}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            Err(error) => format!("{invocation}; execution error={error:?}"),
+        });
+    });
+    result.map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
             "Script timed out after {:.0}s and was killed",
             after.as_secs_f64()
@@ -13006,6 +13031,7 @@ branch refs/heads/feat
     #[test]
     fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
         // DEFERRED (2026-10-25) — Windows CI retains the tracking ref; inspect the cleanup outcome/stderr before attributing this to shell execution or Git pruning.
+        SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().clear());
         let (_temp, repo, _) = workspace_fixture();
         let origin = add_origin(&repo);
         let worktree = add_worktree(&repo, "pruned-proof");
@@ -13027,7 +13053,11 @@ branch refs/heads/feat
             Some("git fetch --prune origin"),
             false,
         );
-        assert!(rev_at(&repo, "refs/remotes/origin/integration").is_err());
+        assert!(
+            rev_at(&repo, "refs/remotes/origin/integration").is_err(),
+            "tracking ref survived cleanup; outcome={outcome:?}; hook diagnostics={:?}",
+            SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow().clone())
+        );
         assert_eq!(
             rev_at(&repo, "refs/heads/pruned-proof").ok(),
             Some(tip),

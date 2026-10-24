@@ -615,6 +615,7 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
         .to_owned();
     std::fs::write(checkouts[0].join("untracked.txt"), "fresh dirt\n").unwrap();
 
+    super::super::mcp_transport_ancillary::WORKTREE_LIST_TIMINGS.remove(repo.to_str().unwrap());
     let before = tuic_git::git_cli::git_cmd_forks(&repo);
     let started = std::time::Instant::now();
     let second = handle_worktree(&state, &args, false).await;
@@ -646,7 +647,10 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
     );
     assert!(
         elapsed < std::time::Duration::from_secs(3),
-        "40-worktree repeat listing exceeded the CLI response window: {elapsed:?}"
+        "40-worktree repeat listing exceeded the CLI response window: {elapsed:?}; per-checkout timings={:#?}",
+        super::super::mcp_transport_ancillary::WORKTREE_LIST_TIMINGS
+            .get(repo.to_str().unwrap())
+            .map(|entry| entry.value().clone())
     );
 
     // Changed refs must invalidate monitoring proofs, unlike a plain file save.

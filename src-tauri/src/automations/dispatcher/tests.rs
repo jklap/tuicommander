@@ -175,15 +175,28 @@ async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() 
     );
     fixture.dispatcher.dispatch(&id).await.unwrap();
     let saved = fixture.saved(&id);
-    assert_eq!(saved.status, RunStatus::Running);
+    let invocation = saved.workspace.as_deref().and_then(|workspace| {
+        crate::automations::precheck::PRECHECK_INVOCATIONS
+            .get(std::path::Path::new(workspace))
+            .map(|entry| entry.value().clone())
+    });
+    let diagnostic = format!(
+        "invocation={invocation:?}; saved workspace={:?}; outcome={:?}",
+        saved.workspace, saved.precheck_outcome
+    );
+    assert_eq!(saved.status, RunStatus::Running, "{diagnostic}");
     assert_eq!(saved.session_id.as_deref(), Some("owned-session"));
     assert_eq!(saved.task_id.as_deref(), Some("owned-task"));
     assert_eq!(saved.workspace_id.as_deref(), Some("allocated-workspace"));
     let Some(PrecheckOutcome::Executed(result)) = saved.precheck_outcome else {
-        panic!("missing executed outcome")
+        panic!("missing executed outcome; {diagnostic}")
     };
-    assert_eq!(result.termination, Termination::Exited(Some(0)));
-    assert_eq!(result.stdout, "resolved-output");
+    assert_eq!(
+        result.termination,
+        Termination::Exited(Some(0)),
+        "{diagnostic}"
+    );
+    assert_eq!(result.stdout, "resolved-output", "{diagnostic}");
     assert!(!result.stdout_truncated);
     let calls = fixture.dispatcher.effects.calls.lock();
     assert_eq!(calls.len(), 1);

@@ -68,3 +68,15 @@ The admitted adversarial-tdd skill requests its README, but resource retrieval f
 - Forced rb retry did not start: `ssh: connect to host 100.121.52.117 port 22: Operation timed out` and `rb: box unreachable or runner deployment failed; no local fallback; remote command was not started` (exit 69). Log: `~/Gits/.tmp/results/ci-win-targeted-force.log`.
 - Windows MSVC target is installed on this Mac, but all cross-target Rust commands belong on rb. rb target availability and `cargo check --target x86_64-pc-windows-msvc` could not run because the connection failed. No Windows compile or runtime success is claimed.
 - The queued final filter covers the affected worktree, resume, automation, stats, registration, workflow and path-spelling tests. Its Mac prerequisite passed; the full filter still needs rb recovery. No full suite, mutation run, desktop launch or push was performed.
+
+## Diagnostic follow-up for the next Windows run
+
+The follow-up adds test-only evidence; it does not resolve the six open rows or change product decisions, assertions, or time bounds.
+
+- Row 6: the cleanup shell invocation records its program, arguments, cwd, exit status, stdout, stderr, or execution error. The tracking-ref assertion includes this record and the removal outcome.
+- Row 12: the actual precheck execution records its program, arguments and canonical cwd. Failure messages include that invocation and the persisted outcome, including termination, stdout and stderr.
+- Row 9: each Codex refresh records watcher availability/setup errors, native events, rescan/day/directory invalidation flags, pending paths and per-file metadata-read deltas. The zero-extra-read assertion includes these records and per-path totals.
+- Rows 17 and 18: Usage refresh records watcher creation/watch errors, native events, rescan/reconciliation state and pending paths. Each metadata read records the file and whether it was unseen, pending or in a symlinked project. The existing exact-counter assertions include this history.
+- Row 23: warm listing records inventory time and each checkout's blocking-queue and inspection time. The existing three-second assertion includes those measurements.
+
+Diagnostic state and capture operations are guarded by `cfg(test)`. The native Mac touched-filter run is authorized explicitly for this follow-up; rb must not be retried. Windows classification and the Windows CI completion criterion remain open until the next authorized CI run supplies evidence.
