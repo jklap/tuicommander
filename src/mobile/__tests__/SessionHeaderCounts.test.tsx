@@ -140,3 +140,30 @@ it("counts Sub-tasks rows as Working and stops when delegated work ends", () => 
 	setSessions((previous) => reconcileSessions(previous, [session("parent", { active_sub_tasks: 0 })]));
 	expect(header(view)).toEqual(["0Working", "1Idle", "0Awaiting"]);
 });
+
+// Catches: a removed session's accessor reads a missing snapshot, or a re-added id inherits the old Working hold.
+it("drops a removed session's hold and starts a re-added id fresh", () => {
+	vi.useFakeTimers();
+	const [list, setList] = createSignal<SessionInfo[]>([
+		session("a", { agent_state: "working" }),
+		session("b", { agent_state: "idle" }),
+	]);
+	const view = render(() => (
+		<SessionsScreen
+			sessions={list()}
+			loading={false}
+			refreshing={false}
+			error={null}
+			onRefresh={() => {}}
+			onSelectSession={() => {}}
+		/>
+	));
+	expect(header(view)).toEqual(["1Working", "1Idle", "0Awaiting"]);
+	setList((prev) => prev.filter((item) => item.session_id !== "a"));
+	expect(header(view)).toEqual(["0Working", "1Idle", "0Awaiting"]);
+	vi.advanceTimersByTime(3000);
+	setList((prev) => [session("a", { agent_state: "idle" }), ...prev]);
+	expect(header(view)).toEqual(["0Working", "2Idle", "0Awaiting"]);
+	setList((prev) => [...prev].reverse());
+	expect(header(view)).toEqual(["0Working", "2Idle", "0Awaiting"]);
+});
