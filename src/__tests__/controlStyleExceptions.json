@@ -750,13 +750,6 @@
     ]
   },
   {
-    "file": "src/components/TipOfTheDay/TipOfTheDay.module.css",
-    "story": "2255-54a8",
-    "rules": [
-      "[[],\".arrow\",[\"height: 28px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ToastContainer/ToastContainer.module.css",
     "story": "2256-dd37",
     "rules": [
