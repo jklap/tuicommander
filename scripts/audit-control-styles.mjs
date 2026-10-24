@@ -10,7 +10,7 @@ const postcss = require("postcss");
 const purgecssRequire = createRequire(createRequire(import.meta.resolve("vite-plugin-purgecss")).resolve("purgecss"));
 const parseSelector = purgecssRequire("postcss-selector-parser");
 const geometry = /^(?:(?:min-|max-)?(?:height|block-size)|padding(?:-.+)?|border(?:-.+)?)$/;
-const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl"]);
+const controls = new Set(["button", "select", "input", "textarea", "Input", "Select", "Textarea", "SegmentedControl", "Button", "Switch", "Slider", "ColorInput", "ColorSwatch"]);
 
 export function sourceFiles(root = "src") {
 	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -61,24 +61,35 @@ export function auditCss(file, css, classes = new Set()) {
 	postcss.parse(css, { from: file }).walkRules((rule) => {
 		// Parse target compounds so :is/:where and CSS-module :global cannot
 		// hide controls, while :has(input) and input + .slider remain containers.
-		function targetsControl(selector, allowNesting = true) {
+		function targetsControl(selector, allowNesting = true, specialized = false) {
 			const lastCombinator = selector.nodes.findLastIndex((node) => node.type === "combinator");
-			return selector.nodes.slice(lastCombinator + 1).some((node) => {
-				if (node.type === "tag") return controls.has(node.value);
-				if (node.type === "class") return classes.has(node.value);
-				if (node.type === "pseudo" && [":is", ":where", ":global", ":local"].includes(node.value)) return node.nodes.some((selector) => targetsControl(selector, allowNesting));
+			const target = selector.nodes.slice(lastCombinator + 1);
+			// Only explicitly marked native button rows/cards are layout, not form actions.
+			if (target.some((node) => node.type === "tag" && node.value === "button")
+				&& target.some((node) => node.type === "attribute" && node.attribute === "data-control-layout"
+					&& node.operator === "=" && ["row", "card"].includes(node.value))) return false;
+			if (specialized
+				&& target.some((node) => node.type === "tag" && node.value.toLowerCase() === "input")
+				&& target.some((node) => node.type === "attribute" && node.attribute.toLowerCase() === "type"
+					&& node.operator === "=" && ["checkbox", "range", "color"].includes(node.value?.toLowerCase()))) return true;
+			return target.some((node) => {
+				if (node.type === "tag") return !specialized && controls.has(node.value);
+				if (node.type === "class") return !specialized && classes.has(node.value);
+				if (node.type === "pseudo" && [":is", ":where", ":global", ":local"].includes(node.value)) return node.nodes.some((selector) => targetsControl(selector, allowNesting, specialized));
 				if (allowNesting && node.type === "nesting" && rule.parent?.type === "rule") {
 					for (let parent = rule.parent; parent?.type === "rule"; parent = parent.parent) {
 						const selectors = parseSelector().astSync(parent.selector);
-						if (selectors.nodes.some((selector) => targetsControl(selector, false))) return true;
+						if (selectors.nodes.some((selector) => targetsControl(selector, false, specialized))) return true;
 					}
 				}
 				return false;
 			});
 		}
-		const matches = parseSelector().astSync(rule.selector).nodes.some((selector) => targetsControl(selector));
+		const selectors = parseSelector().astSync(rule.selector).nodes;
+		const matches = selectors.some((selector) => targetsControl(selector));
 		if (!matches) return;
-		const declarations = rule.nodes.filter((node) => node.type === "decl" && geometry.test(node.prop.toLowerCase())).map((node) => `${node.prop.toLowerCase()}: ${node.value}${node.important ? " !important" : ""}`);
+		const specialized = selectors.some((selector) => targetsControl(selector, true, true));
+		const declarations = rule.nodes.filter((node) => node.type === "decl" && (geometry.test(node.prop.toLowerCase()) || (specialized && /^(?:min-|max-)?(?:width|inline-size)$/.test(node.prop.toLowerCase())))).map((node) => `${node.prop.toLowerCase()}: ${node.value}${node.important ? " !important" : ""}`);
 		if (!declarations.length) return;
 		const context = [];
 		for (let parent = rule.parent; parent?.type === "atrule"; parent = parent.parent) context.unshift(`@${parent.name} ${parent.params}`);

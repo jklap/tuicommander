@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { t } from "../../i18n";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import s from "./StoriesDialog.module.css";
 
@@ -64,15 +65,16 @@ export function PlanEditForm(props: {
 				</p>
 			</Show>
 			<div class={s.inline}>
-				<button
+				<Button
+					variant="primary"
 					type="submit"
 					disabled={props.busy || !title().trim() || !source().trim() || !Object.keys(patch()).length}
 				>
 					{t("stories.edit.save", "Save")}
-				</button>
-				<button type="button" disabled={props.busy} onClick={props.onCancel}>
+				</Button>
+				<Button type="button" disabled={props.busy} onClick={props.onCancel}>
 					{t("stories.edit.cancel", "Cancel")}
-				</button>
+				</Button>
 			</div>
 		</form>
 	);

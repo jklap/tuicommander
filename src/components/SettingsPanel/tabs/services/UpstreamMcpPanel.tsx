@@ -15,6 +15,7 @@ import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { Switch } from "../../../ui/Switch";
 import { ContextualHelp } from "../../ContextualHelp";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
@@ -843,9 +844,9 @@ export const UpstreamMcpPanel: Component = () => {
 								<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "8px 0" }}>
 									{/* Enable toggle */}
 									<div class={s.toggle} style={{ "margin-right": "4px" }}>
-										<input
+										<Switch
+											role="checkbox"
 											data-setting-id="upstreams.servers.{id}.enabled"
-											type="checkbox"
 											checked={server.enabled}
 											onChange={(e) => toggleUpstream(server.id, e.currentTarget.checked)}
 										/>

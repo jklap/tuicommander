@@ -428,23 +428,37 @@ All follow the same structure:
 
 ### Form Controls
 
-Use `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
+Use `Button`, `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
 They forward native attributes, refs, options and events. `Input` is for text,
-numeric and date fields; toggles, ranges, colour and file pickers keep their
-specialised controls. `FormControls.module.css` owns their presentation:
+numeric and date fields. Use `Switch`, `Slider` and `ColorInput` for native
+checkbox switches, ranges and colour pickers; file pickers keep their specialised controls. `FormControls.module.css` owns their presentation:
 `--control-height` (36px), `--control-padding-x` (8px), theme colours,
 `--radius-lg` and `--font-md`. Containers own width and alignment, never
 control height, padding, borders or colours. Textareas resize vertically;
 multiple selects keep native listbox behavior. At widths up to 600px,
 controls have a 44px minimum height and 16px text to prevent iOS zoom.
 
+`Button` forwards native button attributes and defaults to `type="button"` (set
+`type="submit"` for form submission). Variants are `primary`, `secondary` (default),
+`ghost` and `danger`; sizes are `default` (36px) and `compact` (22px), both with a
+44px touch minimum. It shares FormControls height and padding tokens with fields.
+Clickable list rows/cards retain native buttons with `data-control-layout="row"`
+or `data-control-layout="card"`. Their geometry selectors must include both the
+`button` tag and the exact marker. This exception is for content layout, never
+form, toolbar or dialog actions.
+
 `SegmentedControl` is the shared view switch. It uses a named tablist, one
 keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an
 enabled choice. Tasks uses it for List, Board and Roadmap.
 
-**Toggle switch**: 36×20px track, `--radius-full` (10px), off=`--bg-tertiary`, on=`--accent`. White thumb slides with 0.2s transition.
+**Toggle switch**: use `ui/Switch`, with a 36px row-height target (44px on touch),
+a 36×20px track, `--radius-full` (10px), off=`--bg-tertiary`, on=`--accent`. White thumb slides with 0.2s transition.
 
-**Range slider**: 4px track height, 16px circular thumb in `--accent`.
+**Range slider**: use `ui/Slider`, with the shared row-height target, a 4px track
+and the existing 14px circular thumb in `--accent`. Native input/change events
+remain separate. `ui/ColorInput` keeps the native colour picker over a shared
+swatch target; its `selected` prop marks a custom selection. The controls guard
+also rejects feature-owned checkbox/range/colour widths and shared primitive sizing.
 
 ### Settings Panel
 
@@ -664,3 +678,10 @@ Commander retains its urgent/attention foregrounds and pulse.
 - Dialog footer hints wrap as complete groups, with gaps between groups and actions. Action labels do not wrap letter by letter.
 - Task field labels align at the top when neighboring controls have different heights. Roadmap state labels use ellipsis inside short bars.
 - Native controls use the light color scheme on the Paper theme. Mobile bottom tabs and diff gutters use the existing application surface tokens.
+
+`ui/ColorSwatch` is the shared native button for immediate preset/clear color selection.
+It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
+`type="button"`, forwards native refs/events/disabled, and uses a 36px circular
+target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
+the dashed clear target. Give each target an accessible name. Feature CSS may
+arrange the wrapping picker but must not resize its swatches.

@@ -16,6 +16,7 @@ import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
 import { SegmentedControl } from "../../ui/SegmentedControl";
+import { Switch } from "../../ui/Switch";
 import { ContextualHelp } from "../ContextualHelp";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -201,9 +202,9 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 						<details>
 							<summary class={s.testBtn}>Manage plugin</summary>{" "}
 							<label class={s.toggle}>
-								<input
+								<Switch
+									role="checkbox"
 									data-setting-id="app.disabled_plugin_ids"
-									type="checkbox"
 									aria-label={`Enable ${props.plugin.manifest?.name ?? props.plugin.id}`}
 									checked={props.plugin.enabled}
 									disabled={toggling()}

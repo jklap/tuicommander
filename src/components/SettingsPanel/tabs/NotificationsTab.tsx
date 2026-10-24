@@ -7,6 +7,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
 import { Select } from "../../ui/Select";
+import { Switch } from "../../ui/Switch";
 import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSlider, SettingToggle } from "../SettingFields";
@@ -243,12 +244,10 @@ export const NotificationsTab: Component = () => {
 								<SettingRow label={sound.label}>
 									{(id, descriptionId) => (
 										<div class={s.soundControls}>
-											<input
+											<Switch
 												id={id}
 												aria-describedby={descriptionId()}
-												type="checkbox"
 												role="switch"
-												class={s.rowSwitch}
 												data-setting-id={`notifications.sounds.${sound.key}`}
 												checked={notificationsStore.state.config.sounds[sound.key]}
 												onChange={(event) => notificationsStore.setSoundEnabled(sound.key, event.currentTarget.checked)}

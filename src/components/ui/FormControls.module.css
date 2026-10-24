@@ -59,3 +59,122 @@
 	.control { font-size: 16px; min-height: 44px; }
 	.segmented { min-height: 44px; }
 }
+
+.button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	flex-shrink: 0;
+	white-space: nowrap;
+	cursor: pointer;
+	user-select: none;
+}
+.secondary { background: var(--bg-tertiary); color: var(--fg-primary); }
+.primary { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+.ghost { background: transparent; border-color: transparent; color: var(--fg-secondary); }
+.danger { background: var(--error); border-color: var(--error); color: var(--text-on-error); }
+.secondary:hover:enabled, .ghost:hover:enabled { background: var(--bg-highlight); }
+.primary:hover:enabled, .danger:hover:enabled { filter: brightness(1.1); }
+.button[aria-pressed="true"] { border-color: var(--accent); }
+
+/* Promoted from Settings: Expert's 36x20 track is the shared switch look. */
+.switchControl, .colorInput {
+ box-sizing: border-box;
+ position: relative;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ flex-shrink: 0;
+ width: var(--control-height, 36px);
+ height: var(--control-height, 36px);
+}
+.switchInput, .colorInput input {
+ position: absolute;
+ inset: 0;
+ opacity: 0;
+ width: 100%;
+ height: 100%;
+ margin: 0;
+ cursor: pointer;
+ z-index: 1;
+}
+.switchTrack {
+ box-sizing: border-box;
+ position: relative;
+ width: 36px;
+ height: 20px;
+ border-radius: 10px;
+ background: var(--bg-tertiary);
+ border: 1px solid var(--border);
+ transition: background 0.2s ease;
+ pointer-events: none;
+}
+.switchTrack::before {
+ content: "";
+ position: absolute;
+ top: 2px;
+ left: 2px;
+ width: 14px;
+ height: 14px;
+ border-radius: var(--radius-full);
+ background: #fff;
+ transition: transform 0.2s ease;
+}
+.switchInput:checked + .switchTrack { background: var(--accent); border-color: var(--accent); }
+.switchInput:checked + .switchTrack::before { transform: translateX(16px); }
+.switchControl:has(:focus-visible), .colorInput:has(:focus-visible), .slider:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switchControl:has(:disabled), .colorInput:has(:disabled), .slider:disabled { opacity: 0.5; }
+.switchInput:disabled, .colorInput input:disabled, .slider:disabled { cursor: not-allowed; }
+.slider {
+ box-sizing: border-box;
+ flex: 1;
+ min-width: 0;
+ height: var(--control-height, 36px);
+ margin: 0;
+ padding: 0;
+ appearance: none;
+ background: linear-gradient(var(--bg-tertiary), var(--bg-tertiary)) center / 100% 4px no-repeat;
+ border: 0;
+ border-radius: var(--radius-xs);
+}
+.slider::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; background: var(--accent); border-radius: var(--radius-full); cursor: pointer; }
+.slider::-moz-range-thumb { width: 14px; height: 14px; background: var(--accent); border: 0; border-radius: var(--radius-full); cursor: pointer; }
+.colorInput { cursor: pointer; overflow: hidden; border: 1px dashed var(--border); border-radius: var(--radius-full); }
+.colorValue { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+@media (max-width: 600px) {
+ .switchControl, .colorInput { width: max(44px, var(--control-height, 36px)); height: max(44px, var(--control-height, 36px)); }
+ .slider { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .switchTrack, .switchTrack::before { transition: none; } }
+
+.colorInput[data-selected] { border-color: var(--fg-primary); border-style: solid; }
+
+/* Preset and clear targets promoted from Settings; match the native color picker. */
+.colorSwatch {
+ box-sizing: border-box;
+ position: relative;
+ flex-shrink: 0;
+ width: var(--control-height, 36px);
+ height: var(--control-height, 36px);
+ border-radius: var(--radius-full);
+ border: 2px solid transparent;
+ padding: 0;
+ overflow: hidden;
+ cursor: pointer;
+ transition: transform 0.1s ease;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ font-size: var(--font-xs);
+ color: var(--fg-secondary);
+}
+.colorSwatch:hover:enabled { transform: scale(1.15); }
+.colorSwatch[data-clear] { background: var(--bg-secondary); border: 1px dashed var(--border); }
+.colorSwatch[aria-pressed="true"] { border-color: var(--fg-primary); box-shadow: 0 0 0 2px var(--bg-primary); }
+.colorSwatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.colorSwatch:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 600px) {
+ .colorSwatch { width: max(44px, var(--control-height, 36px)); height: max(44px, var(--control-height, 36px)); }
+}
+@media (prefers-reduced-motion: reduce) { .colorSwatch { transition: none; } }

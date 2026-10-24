@@ -1,9 +1,14 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { Button } from "../../components/ui/Button";
+import { ColorInput } from "../../components/ui/ColorInput";
+import { ColorSwatch } from "../../components/ui/ColorSwatch";
 import { Input } from "../../components/ui/Input";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
+import { Slider } from "../../components/ui/Slider";
+import { Switch } from "../../components/ui/Switch";
 import { Textarea } from "../../components/ui/Textarea";
 
 describe("shared form controls", () => {
@@ -151,4 +156,137 @@ describe("shared form controls", () => {
 		fireEvent.click(roadmap);
 		expect(roadmap).toHaveAttribute("aria-selected", "true");
 	});
+});
+
+it("catches Button losing native submit, reactive disabled state or caller events", () => {
+	const [disabled, setDisabled] = createSignal(false);
+	const clicked = vi.fn();
+	let native: HTMLButtonElement | undefined;
+	render(() => (
+		<>
+			<Button
+				ref={(node) => {
+					native = node;
+				}}
+				class="caller"
+				variant="danger"
+				size="compact"
+				disabled={disabled()}
+				onClick={clicked}
+			>
+				Delete
+			</Button>
+			<Button type="submit">Save</Button>
+		</>
+	));
+	const action = screen.getByRole("button", { name: "Delete" });
+	expect(native).toBe(action);
+	expect(action).toHaveAttribute("type", "button");
+	expect(action).toHaveClass("caller", "compact", "danger");
+	expect(action).not.toHaveAttribute("variant");
+	expect(action).not.toHaveAttribute("size");
+	fireEvent.click(action);
+	expect(clicked).toHaveBeenCalledOnce();
+	setDisabled(true);
+	expect(action).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("type", "submit");
+});
+
+// Catches: promotion freezes native state or redirects callbacks/refs onto a decorative wrapper.
+it("keeps specialized controls reactive and forwards native refs and input/change boundaries", () => {
+	const [checked, setChecked] = createSignal(false);
+	const [value, setValue] = createSignal(5);
+	const [color, setColor] = createSignal("#123456");
+	const [disabled, setDisabled] = createSignal(false);
+	const commit = vi.fn();
+	let toggle: HTMLInputElement | undefined;
+	let picker: HTMLInputElement | undefined;
+	render(() => (
+		<>
+			<Switch
+				aria-label="Enabled"
+				ref={(node) => {
+					toggle = node;
+				}}
+				checked={checked()}
+				disabled={disabled()}
+				onChange={(event) => setChecked(event.currentTarget.checked)}
+			/>
+			<Slider
+				aria-label="Volume"
+				min={0}
+				max={10}
+				step={1}
+				value={value()}
+				disabled={disabled()}
+				onInput={(event) => setValue(event.currentTarget.valueAsNumber)}
+				onChange={(event) => commit(event.currentTarget.valueAsNumber)}
+			/>
+			<ColorInput
+				aria-label="Accent"
+				ref={(node) => {
+					picker = node;
+				}}
+				value={color()}
+				disabled={disabled()}
+				onInput={(event) => setColor(event.currentTarget.value)}
+			/>
+		</>
+	));
+	const input = screen.getByRole("switch", { name: "Enabled" });
+	expect(toggle).toBe(input);
+	fireEvent.change(input, { target: { checked: true } });
+	expect(checked()).toBe(true);
+	setChecked(false);
+	expect(input).not.toBeChecked();
+	const range = screen.getByRole("slider", { name: "Volume" });
+	fireEvent.input(range, { target: { value: "8" } });
+	expect(value()).toBe(8);
+	expect(commit).not.toHaveBeenCalled();
+	fireEvent.change(range, { target: { value: "8" } });
+	expect(commit).toHaveBeenCalledExactlyOnceWith(8);
+	setValue(3);
+	expect(range).toHaveValue("3");
+	const nativeColor = screen.getByLabelText("Accent");
+	expect(picker).toBe(nativeColor);
+	fireEvent.input(nativeColor, { target: { value: "#abcdef" } });
+	expect(color()).toBe("#abcdef");
+	setColor("#654321");
+	expect(nativeColor).toHaveValue("#654321");
+	setDisabled(true);
+	for (const control of [input, range, nativeColor]) expect(control).toBeDisabled();
+});
+
+// Catches: swatch promotion submits its enclosing form or freezes native owner state/ref/events.
+it("keeps preset and clear swatches native, reactive and non-submitting", () => {
+	const [selected, setSelected] = createSignal(false);
+	const [disabled, setDisabled] = createSignal(false);
+	let native: HTMLButtonElement | undefined;
+	const clicked = vi.fn();
+	render(() => (
+		<ColorSwatch
+			aria-label="Blue"
+			swatchColor="#123456"
+			selected={selected()}
+			disabled={disabled()}
+			ref={(node) => {
+				native = node;
+			}}
+			onClick={(event) => {
+				clicked(event.currentTarget);
+				setSelected(true);
+			}}
+		/>
+	));
+	const button = screen.getByRole("button", { name: "Blue" });
+	expect(native).toBe(button);
+	expect(button).toHaveAttribute("type", "button");
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	fireEvent.click(button);
+	expect(clicked).toHaveBeenCalledExactlyOnceWith(button);
+	expect(button).toHaveAttribute("aria-pressed", "true");
+	setSelected(false);
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	setDisabled(true);
+	expect(button).toBeDisabled();
 });

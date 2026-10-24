@@ -50,7 +50,9 @@ describe("shared control geometry guard", () => {
 			:is(button, select) { height: 22px; }
 			.row input { padding-inline: 4px; } .row textarea { block-size: 80px; }
 			.row { padding: 10px; } .row select { width: 100%; }
-			input:checked + .slider { border: 0; }`;
+			input:checked + .slider { border: 0; }
+			input[type="range"] + .track { width: 100%; }
+			.row:has(input[type="checkbox"]) select { width: 100%; }`;
 		const findings: Finding[] = auditCss("src/Feature.module.css", css, classes.get("src/Feature.module.css"));
 		expect(findings.map((row) => row.selector)).toEqual([
 			".row button, .row select",
@@ -81,4 +83,67 @@ it("catches feature CSS resizing a class passed to SegmentedControl undetected",
 		classes.get("src/Feature.module.css"),
 	);
 	expect(findings.map((row) => row.selector)).toEqual([".viewSwitch"]);
+});
+
+it("catches ordinary actions hidden beside explicitly marked layout buttons", () => {
+	const findings: Finding[] = auditCss(
+		"src/Feature.module.css",
+		`
+		button.item[data-control-layout="row"] { padding: 8px; }
+		button.card[data-control-layout="card"]:hover { border-color: red; }
+		button[data-control-layout="row"], button.action { height: 20px; }
+		button[data-control-layout] { padding: 2px; }
+		input[data-control-layout="row"] { height: 18px; }
+		button[data-control-layout="action"] { padding: 3px; }`,
+	);
+	expect(findings.map((row) => row.selector)).toEqual([
+		'button[data-control-layout="row"], button.action',
+		"button[data-control-layout]",
+		'input[data-control-layout="row"]',
+		'button[data-control-layout="action"]',
+	]);
+});
+
+it("catches hand-rolled checkbox, range and color widths and shared specialized control sizing", () => {
+	const css = ["checkbox", "range", "color"].map((type) => `input[type="${type}"] { width: 20px; }`).join("\n");
+	expect(auditCss("src/Feature.module.css", css)).toHaveLength(3);
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css';
+		const Feature = () => <><Switch class={s.toggle}/><Slider class={s.range}/><ColorInput class={s.color}/></>;`,
+	);
+	expect(
+		auditCss(
+			"src/Feature.module.css",
+			".toggle, .range, .color { height: 18px; }",
+			classes.get("src/Feature.module.css"),
+		),
+	).toHaveLength(1);
+});
+
+it.each(['input.toggle[type="checkbox"]', 'input[type="range" i]'])(
+	"catches specialized width hidden by selector refinement: %s",
+	(selector) => {
+		expect(auditCss("src/Feature.module.css", `${selector} { width: 20px; }`)).toHaveLength(1);
+	},
+);
+
+it("catches feature resizing passed to the shared ColorSwatch", () => {
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css'; const Feature = () => <ColorSwatch class={s.swatch}/>;`,
+	);
+	expect(
+		auditCss("src/Feature.module.css", ".swatch { height: 18px; }", classes.get("src/Feature.module.css")),
+	).toHaveLength(1);
+});
+
+it("catches feature resizing passed to the shared Button", () => {
+	const classes = controlClasses(
+		["src/Feature.tsx"],
+		() => `import s from './Feature.module.css'; const Feature = () => <Button class={s.action}/>;`,
+	);
+	expect(
+		auditCss("src/Feature.module.css", ".action { height: 18px; }", classes.get("src/Feature.module.css")),
+	).toHaveLength(1);
 });

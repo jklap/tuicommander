@@ -8,6 +8,7 @@ import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
 import type { PlanState, StoryStatus, StoryType, StoryVisibility } from "../../types/stories.gen";
 import d from "../shared/dialog.module.css";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { SegmentedControl } from "../ui/SegmentedControl";
@@ -840,7 +841,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</span>
 					</div>
 					<div class={s.headerActions}>
-						<button
+						<Button
 							type="button"
 							aria-pressed={!showRuns() && !showDesigner()}
 							onClick={() => {
@@ -849,8 +850,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							}}
 						>
 							Stories
-						</button>
-						<button
+						</Button>
+						<Button
 							type="button"
 							disabled={
 								busy() ||
@@ -862,9 +863,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							onClick={() => void openStart()}
 						>
 							Start story workflow
-						</button>
+						</Button>
 						{/* DEFERRED (2026-10-22) — "Start plan workflow" is hidden until the slice E plan dispatch entry point exists (audit 2137 A11). */}
-						<button
+						<Button
 							type="button"
 							aria-pressed={showRuns()}
 							disabled={!planId()}
@@ -874,8 +875,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							}}
 						>
 							Run history
-						</button>
-						<button
+						</Button>
+						<Button
 							type="button"
 							aria-pressed={showDesigner()}
 							onClick={() => {
@@ -884,7 +885,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							}}
 						>
 							Designer
-						</button>
+						</Button>
 					</div>
 					<div class={s.windowControls}>
 						<PanelWindowControls
@@ -901,9 +902,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				<Show when={error()}>
 					<div class={s.error} role="alert">
 						{error()}{" "}
-						<button type="button" onClick={() => void refresh()}>
+						<Button type="button" onClick={() => void refresh()}>
 							{t("stories.retry", "Retry")}
-						</button>
+						</Button>
 					</div>
 				</Show>
 				<Show when={loading()}>
@@ -942,13 +943,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<For each={startProblems()}>{(problem) => <p>{problem}</p>}</For>
 								</div>
 							</Show>
-							<button type="submit" disabled={busy() || readyFor() !== workflowChoice() || startProblems().length > 0}>
+							<Button
+								variant="primary"
+								type="submit"
+								disabled={busy() || readyFor() !== workflowChoice() || startProblems().length > 0}
+							>
 								Start published workflow
-							</button>
+							</Button>
 						</Show>
-						<button type="button" onClick={() => setStartOpen(false)}>
+						<Button type="button" onClick={() => setStartOpen(false)}>
 							Dismiss
-						</button>
+						</Button>
 					</form>
 				</Show>
 				<Show when={showDesigner()}>
@@ -959,9 +964,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<aside class={s.runList} aria-label="Plan runs">
 							<div class={s.columnHeader}>
 								<h3>Runs · {selectedPlan()?.title}</h3>
-								<button type="button" onClick={() => void openRuns()}>
+								<Button type="button" onClick={() => void openRuns()}>
 									Refresh
-								</button>
+								</Button>
 							</div>
 							<Show when={!runLoading() && runs().length === 0}>
 								<p class={s.empty}>No workflow runs for this plan.</p>
@@ -970,6 +975,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<For each={runs()}>
 									{(item) => (
 										<button
+											data-control-layout="row"
 											type="button"
 											class={s.item}
 											aria-current={selectedRunId() === item.id ? "true" : undefined}
@@ -1028,9 +1034,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													<Show when={attempt().report?.inputRequest?.options.length}>
 														<small>Suggested: {attempt().report?.inputRequest?.options.join(", ")}</small>
 													</Show>
-													<button type="submit" disabled={runLoading() || !inputAnswer().trim()}>
+													<Button variant="primary" type="submit" disabled={runLoading() || !inputAnswer().trim()}>
 														Record answer
-													</button>
+													</Button>
 												</form>
 											)}
 										</Show>
@@ -1039,24 +1045,24 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											<p class={s.muted}>Legacy run · inspect or cancel only.</p>
 										</Show>
 										<Show when={selected().status === "running" && !!selected().graphExecutions?.length}>
-											<button
+											<Button
 												type="button"
 												class={s.loadMore}
 												disabled={runLoading()}
 												onClick={() => void controlRun({ action: "pause" })}
 											>
 												Pause run
-											</button>
+											</Button>
 										</Show>
 										<Show when={selected().status === "running" || selected().status === "paused"}>
-											<button
+											<Button
 												type="button"
 												class={s.loadMore}
 												disabled={runLoading()}
 												onClick={() => void controlRun({ action: "cancel" })}
 											>
 												Cancel run
-											</button>
+											</Button>
 										</Show>
 										<Show when={selected().status === "paused" && selected().pauseCause}>
 											<p role="status">Paused: {selected().pauseCause}</p>
@@ -1168,14 +1174,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 														maxLength={4096}
 													/>
 												</label>
-												<button
+												<Button
+													variant="primary"
 													type="submit"
 													disabled={
 														runLoading() || !recoveryExecution() || !recoveryActivation() || !resolution().trim()
 													}
 												>
 													Resume run
-												</button>
+												</Button>
 											</form>
 										</Show>
 										<ol class={s.timeline}>
@@ -1196,14 +1203,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											</For>
 										</ol>
 										<Show when={(runEvents().at(-1)?.sequence ?? 0) < selected().sequence}>
-											<button
+											<Button
 												type="button"
 												class={s.loadMore}
 												disabled={runLoading()}
 												onClick={() => void loadRun(selected().id)}
 											>
 												Load more events
-											</button>
+											</Button>
 										</Show>
 									</>
 								)}
@@ -1216,7 +1223,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.plans", "Plans")}</h3>
-								<button
+								<Button
 									type="button"
 									onClick={() => {
 										if (!newPlan()) void loadPlanSources();
@@ -1224,7 +1231,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									}}
 								>
 									{t("stories.newPlan", "New plan")}
-								</button>
+								</Button>
 							</div>
 							<div class={s.filters}>
 								<label class={s.archiveToggle}>
@@ -1242,9 +1249,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								</label>
 								<Show when={selectedPlan()}>
 									{(plan) => (
-										<button
+										<Button
 											type="button"
-											class={s.archiveAction}
 											disabled={busy()}
 											onClick={() =>
 												void mutate({
@@ -1257,7 +1263,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											{plan().archived
 												? t("stories.archive.restorePlan", "Restore plan")
 												: t("stories.archive.archivePlan", "Archive plan")}
-										</button>
+										</Button>
 									)}
 								</Show>
 							</div>
@@ -1267,7 +1273,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									keyed
 									fallback={
 										<div class={s.form}>
-											<button
+											<Button
 												type="button"
 												disabled={busy()}
 												onClick={() => {
@@ -1279,7 +1285,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												}}
 											>
 												{t("stories.planEdit.open", "Edit plan")}
-											</button>
+											</Button>
 										</div>
 									}
 								>
@@ -1308,16 +1314,22 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<div class={s.form}>
 									<div class={s.sourceHeader}>
 										<span>{t("stories.existingPlans", "Plans in this project")}</span>
-										<button type="button" disabled={sourcesLoading()} onClick={() => void loadPlanSources()}>
+										<Button type="button" disabled={sourcesLoading()} onClick={() => void loadPlanSources()}>
 											{t("stories.refreshPlans", "Refresh")}
-										</button>
+										</Button>
 									</div>
 									<Show when={sourcesLoading()}>
 										<span>{t("stories.loading", "Loading plans and stories…")}</span>
 									</Show>
 									<For each={planSources().filter((source) => !plans().some((plan) => plan.source === source.source))}>
 										{(candidate) => (
-											<button type="button" disabled={busy()} onClick={() => void addPlanSource(candidate.source)}>
+											<button
+												data-control-layout="row"
+												class={s.item}
+												type="button"
+												disabled={busy()}
+												onClick={() => void addPlanSource(candidate.source)}
+											>
 												{candidate.title}
 												<small>{candidate.source}</small>
 											</button>
@@ -1345,9 +1357,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													/>
 												</label>
 											</Show>
-											<button type="submit" disabled={busy()}>
+											<Button variant="primary" type="submit" disabled={busy()}>
 												{t("stories.createPlan", "Create plan")}
-											</button>
+											</Button>
 										</form>
 									</details>
 								</div>
@@ -1359,6 +1371,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<For each={plans()}>
 									{(plan) => (
 										<button
+											data-control-layout="row"
 											type="button"
 											class={s.item}
 											aria-current={planId() === plan.id ? "true" : undefined}
@@ -1373,13 +1386,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<section class={s.storyColumn} aria-label={t("stories.stories", "Stories")}>
 							<div class={s.columnHeader}>
 								<h3>{t("stories.stories", "Stories")}</h3>
-								<button
+								<Button
 									type="button"
 									disabled={!planId() || selectedPlan()?.archived}
 									onClick={() => setNewStory(!newStory())}
 								>
 									{t("stories.newStory", "New story")}
-								</button>
+								</Button>
 							</div>
 							<div class={s.filters}>
 								<label class={s.archiveToggle}>
@@ -1499,9 +1512,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											<option value="3">P3</option>
 										</Select>
 									</label>
-									<button type="submit" disabled={busy()}>
+									<Button variant="primary" type="submit" disabled={busy()}>
 										{t("stories.createStory", "Create story")}
-									</button>
+									</Button>
 								</form>
 							</Show>
 							<Show when={!loading() && planId() && listedStories().length === 0}>
@@ -1520,6 +1533,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<For each={listedStories()}>
 											{(story) => (
 												<button
+													data-control-layout="row"
 													type="button"
 													class={s.item}
 													aria-current={storyId() === story.id ? "true" : undefined}
@@ -1553,6 +1567,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																<Show when={storiesById().get(id)}>
 																	{(story) => (
 																		<button
+																			data-control-layout="card"
 																			type="button"
 																			class={s.boardCard}
 																			aria-current={storyId() === id ? "true" : undefined}
@@ -1625,7 +1640,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													}
 												>
 													<div class={s.actions}>
-														<button
+														<Button
+															variant="primary"
 															type="button"
 															disabled={busy()}
 															onClick={() => {
@@ -1634,7 +1650,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 															}}
 														>
 															{t("stories.edit.open", "Edit")}
-														</button>
+														</Button>
 													</div>
 												</Show>
 											}
@@ -1705,7 +1721,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																				dependency?.status === "wont_fix"
 																			}
 																		>
-																			<button
+																			<Button
 																				type="button"
 																				disabled={busy()}
 																				aria-label={t("stories.removeNamedDependency", "Remove {title}", {
@@ -1714,7 +1730,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																				onClick={() => removeDependency(id)}
 																			>
 																				{t("stories.remove", "Remove")}
-																			</button>
+																			</Button>
 																		</Show>
 																	</li>
 																);
@@ -1745,9 +1761,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
 															</For>
 														</Select>
-														<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
+														<Button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
 															{t("stories.addDependency", "Add dependency")}
-														</button>
+														</Button>
 													</div>
 												</Show>
 											</section>
@@ -1765,58 +1781,83 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											<div class={s.actions}>
 												<Show when={!story().archived && !selectedPlan()?.archived}>
 													<Show when={story().status === "ready"}>
-														<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
+														<Button
+															variant="primary"
+															type="button"
+															disabled={busy()}
+															onClick={() => transition("start_manual")}
+														>
 															{t("stories.startWork", "Start work")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={story().status === "in_progress"}>
-														<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
+														<Button
+															variant="primary"
+															type="button"
+															disabled={busy()}
+															onClick={() => transition("submit_review")}
+														>
 															{t("stories.submitReview", "Submit for review")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={story().status === "review"}>
-														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+														<Button
+															variant="primary"
+															type="button"
+															disabled={busy()}
+															onClick={() => transition("approve")}
+														>
 															{t("stories.approve", "Approve")}
-														</button>
-														<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
+														</Button>
+														<Button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
 															{t("stories.requestChanges", "Request changes")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={["in_progress", "review"].includes(story().status)}>
-														<button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
+														<Button type="button" disabled={busy()} onClick={() => transition("submit_qa")}>
 															{t("stories.submitQa", "Submit for QA")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={story().status === "qa"}>
-														<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+														<Button
+															variant="primary"
+															type="button"
+															disabled={busy()}
+															onClick={() => transition("approve")}
+														>
 															{t("stories.qaPassed", "QA passed")}
-														</button>
-														<button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
+														</Button>
+														<Button type="button" disabled={busy()} onClick={() => transition("reject_qa")}>
 															{t("stories.qaFailed", "QA failed")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={["ready", "in_progress", "review", "qa"].includes(story().status)}>
-														<button type="button" disabled={busy()} onClick={() => transition("block")}>
+														<Button type="button" disabled={busy()} onClick={() => transition("block")}>
 															{t("stories.block", "Block")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={story().status === "blocked"}>
-														<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
+														<Button
+															variant="primary"
+															type="button"
+															disabled={busy()}
+															onClick={() => transition("unblock")}
+														>
 															{t("stories.unblock", "Unblock")}
-														</button>
+														</Button>
 													</Show>
 													<Show when={story().status !== "done" && story().status !== "wont_fix"}>
-														<button
+														<Button
+															variant="danger"
 															type="button"
-															class={s.danger}
 															disabled={busy()}
 															onClick={() => transition("wont_fix")}
 														>
 															{t("stories.status.wontFix", "Won't fix")}
-														</button>
+														</Button>
 													</Show>
 												</Show>
-												<button
+												<Button
 													type="button"
 													disabled={busy() || !!story().claimSession}
 													onClick={() =>
@@ -1830,7 +1871,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													{story().archived
 														? t("stories.archive.restoreStory", "Restore story")
 														: t("stories.archive.archiveStory", "Archive story")}
-												</button>
+												</Button>
 											</div>
 										</Show>
 										<Show when={`${props.project}:${story().id}`} keyed>

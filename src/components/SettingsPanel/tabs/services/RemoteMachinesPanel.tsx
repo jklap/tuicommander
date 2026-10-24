@@ -14,6 +14,7 @@ import {
 } from "../../../../stores/remoteConnections";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
+import { Switch } from "../../../ui/Switch";
 import { ContextualHelp } from "../../ContextualHelp";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingRow } from "../../SettingsPrimitives";
@@ -613,12 +614,11 @@ export const RemoteMachinesPanel: Component = () => {
 						</Show>
 						<SettingRow label="Auto-update remote daemons">
 							{(id, descriptionId) => (
-								<input
+								<Switch
+									role="checkbox"
 									data-setting-id="connections.connections.{id}.auto_update"
 									id={id}
 									aria-describedby={descriptionId()}
-									class={s.rowSwitch}
-									type="checkbox"
 									checked={props.formData.autoUpdate}
 									onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
 								/>

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Share preset and clear color-swatch targets through the UI design system, with native button selection and 44px touch targets.
+
+### Added
+
+- Promote Settings switches, range sliders and custom colour inputs into shared UI primitives with consistent row-height and touch targets (#2302-35d9).
+
+- Add a shared Button primitive with standard action variants, compact sizing and touch targets aligned with form controls (#2296-2bf2).
 ### Added
 
 - Add, list and update Ideas through the planner API, CLI and workflow MCP tool, with source tracking and race-safe panel synchronization (#2295-abd3).

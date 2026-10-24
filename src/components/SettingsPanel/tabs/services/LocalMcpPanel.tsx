@@ -6,6 +6,7 @@ import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { Switch } from "../../../ui/Switch";
 import { ContextualHelp } from "../../ContextualHelp";
 import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
@@ -63,12 +64,11 @@ export const LocalMcpPanel: Component = () => {
 		return (
 			<SettingRow label={capability.title} hint={capability.description}>
 				{(id, descriptionId) => (
-					<input
+					<Switch
+						role="checkbox"
 						data-setting-id="app.mcp_capabilities.denied"
 						id={id}
 						aria-describedby={descriptionId()}
-						class={s.rowSwitch}
-						type="checkbox"
 						aria-label={capability.title}
 						checked={!disabled()}
 						onChange={(event) => {
@@ -170,12 +170,11 @@ export const LocalMcpPanel: Component = () => {
 				<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
 					<SettingRow label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)">
 						{(id, descriptionId) => (
-							<input
+							<Switch
+								role="checkbox"
 								data-setting-id="app.collapse_tools"
 								id={id}
 								aria-describedby={descriptionId()}
-								class={s.rowSwitch}
-								type="checkbox"
 								checked={collapseTools()}
 								onChange={(e) => {
 									const enabled = e.currentTarget.checked;
@@ -249,12 +248,11 @@ export const LocalMcpPanel: Component = () => {
 					)}
 				>
 					{(id, descriptionId) => (
-						<input
+						<Switch
+							role="checkbox"
 							data-setting-id="app.mcp_call_audit_enabled"
 							id={id}
 							aria-describedby={descriptionId()}
-							class={s.rowSwitch}
-							type="checkbox"
 							checked={callAuditEnabled()}
 							onChange={async (e) => {
 								const enabled = e.currentTarget.checked;
