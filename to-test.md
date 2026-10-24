@@ -2913,3 +2913,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Mobile Sessions: confirm Working / Idle / Awaiting totals and layout on iPad; Finished rows do not count, and Awaiting still opens the first Input row (#2181-c98f).
 
 - [ ] After a backend rebuild/restart, verify disconnected GitHub Settings shows `repo read:project` before login; the shared scope file is compiled into Rust (#2293-8674).
+
+- [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
