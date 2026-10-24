@@ -167,17 +167,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/BranchesTab.module.css",
-    "story": "2197-5ffd",
-    "rules": [
-      "[[],\".createConfirmBtn, .createCancelBtn\",[\"padding: 3px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".popoverActions button\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".secondaryBtn\",[\"border: 1px solid var(--border) !important\"]]",
-      "[[],\".foldToggle\",[\"height: 26px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".foldToggleActive\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GitPanel/ChangesTab.module.css",
     "story": "2198-3154",
     "rules": [
@@ -192,44 +181,6 @@
       "[[],\".filterClear\",[\"border: none\",\"padding: 0 4px\"]]",
       "[[],\".sectionAction\",[\"border: none\",\"padding: 1px 6px\",\"border-radius: var(--radius-sm)\"]]",
       "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/GitPanel.module.css",
-    "story": "2199-6efd",
-    "rules": [
-      "[[],\".tab\",[\"border: none\",\"border-bottom: 2px solid transparent\",\"padding: 6px 8px\"]]",
-      "[[],\".tabActive\",[\"border-bottom-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/HistoryTab.module.css",
-    "story": "2200-8e6d",
-    "rules": [
-      "[[],\".loadMoreBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 16px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/LogTab.module.css",
-    "story": "2201-ea50",
-    "rules": [
-      "[[],\".loadMoreBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 16px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/StashesTab.module.css",
-    "story": "2202-dff2",
-    "rules": [
-      "[[],\".actionBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".diffToggle\",[\"border: none\",\"padding: 2px 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GitPanel/SyncRow.module.css",
-    "story": "2203-f9ff",
-    "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".btnRunning\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
