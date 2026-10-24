@@ -406,17 +406,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/GitHubTab.module.css",
-    "story": "2227-3dcb",
-    "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"padding: 6px 14px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".btn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btnPrimary\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btnDanger:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".actions .btn\",[\"min-height: 36px\",\"padding: 6px 14px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/PluginsTab.module.css",
     "story": "2228-a5fe",
     "rules": [

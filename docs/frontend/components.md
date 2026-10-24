@@ -984,3 +984,6 @@ Agent settings use shared Button, Switch and Textarea controls, including launch
 module and launch-addition editors. Validation fields expose native invalid and
 error descriptions; the installed MCP action uses the shared removal toggle.
 Agent feature CSS retains only layout, width and text presentation.
+
+GitHub settings actions use shared Button variants for secondary, primary and
+danger actions. Feature CSS owns only action-row layout, not button geometry.
