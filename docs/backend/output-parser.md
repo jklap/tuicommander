@@ -186,7 +186,10 @@ A `progress type=blocked` report from an agent with a live PTY emits a
 confident `question` with `source: "progress-blocked"`, and the reducer records
 that source on the awaiting evidence. When the same PTY later reports `done`, or
 journals a `delegated` hand-off, `emit_progress_entry` emits
-`progress-superseded` for that PTY. The reducer clears the badge only when the
+`progress-superseded` for that PTY. A successfully submitted queued user command
+also emits this event: an idle progress wait accepts the user's queued answer,
+while native dialogs still own their controls. A late blocked report cannot
+replace existing confident native awaiting evidence. The reducer clears the badge only when the
 current awaiting evidence still has the `progress-blocked` source: a dialog, a
 choice prompt or another confident question records a different source and
 stays awaiting. A new `blocked` report replaces the question text.

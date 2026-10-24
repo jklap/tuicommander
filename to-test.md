@@ -1,3 +1,7 @@
+## Queued replies to blocked progress (2177-053d) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, queue three follow-ups while an agent reports blocked progress. Confirm one reaches the idle agent per turn, in order, and the progress-owned wait clears. Native questions and permission dialogs must still hold the queue. The peer did not restart the daily app; critic/GREEN validation is pending.
+
 ## Native story notes (2172-6dee) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, add a note through MCP and list it through HTTP/CLI; confirm actor, time and subject revision persist and the story revision stays unchanged. Check a same-plan workflow receipt reference and refusal of a receipt from another plan. The peer did not restart or replace the daily app.

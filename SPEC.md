@@ -877,6 +877,7 @@ Some frontend-only stores persist to localStorage:
 ### Completed (P3)
 - [x] Markdown rendering (MarkdownPanel, not inline terminal), with in-app local links and guarded WebView navigation
 - [x] Task queue UI
+- [x] Queued user commands answer an idle agent's progress-blocked wait in FIFO order; native dialogs, busy state, uncertain delivery and partial drafts still block delivery (#2177-053d).
 - [x] Advanced keyboard shortcuts
 
 ### Pending (P3)
