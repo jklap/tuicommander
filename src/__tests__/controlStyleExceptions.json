@@ -669,13 +669,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/ChoicePromptOverlay.module.css",
-    "story": "2269-922b",
-    "rules": [
-      "[[],\".item\",[\"padding: 14px 16px\",\"border: none\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/CommandInput.module.css",
     "story": "2270-5848",
     "rules": [
