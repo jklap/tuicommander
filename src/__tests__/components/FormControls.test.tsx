@@ -290,3 +290,17 @@ it("keeps preset and clear swatches native, reactive and non-submitting", () => 
 	setDisabled(true);
 	expect(button).toBeDisabled();
 });
+
+// Catches: stretch geometry leaking onto the native element or swallowing caller focus/props.
+it("keeps stretch actions native and consumes the geometry prop", () => {
+	render(() => (
+		<Button geometry="stretch" aria-label="Edge action">
+			Edge
+		</Button>
+	));
+	const button = screen.getByRole("button", { name: "Edge action" });
+	expect(button).not.toHaveAttribute("geometry");
+	button.focus();
+	expect(button).toHaveFocus();
+	expect(button).toHaveAttribute("type", "button");
+});

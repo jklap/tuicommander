@@ -178,3 +178,16 @@
  .colorSwatch { width: max(44px, var(--control-height, 36px)); height: max(44px, var(--control-height, 36px)); }
 }
 @media (prefers-reduced-motion: reduce) { .colorSwatch { transition: none; } }
+
+/* Edge actions fill their container without inheriting feature-owned geometry. */
+.stretchButton {
+ height: auto;
+ align-self: stretch;
+ min-height: var(--control-height, 36px);
+ min-width: var(--control-height, 36px);
+ border-radius: 0;
+}
+.stretchButton.compact { --control-height: 36px; }
+@media (max-width: 600px) {
+ .stretchButton { min-height: max(44px, var(--control-height, 36px)); min-width: max(44px, var(--control-height, 36px)); }
+}

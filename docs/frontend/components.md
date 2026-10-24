@@ -958,3 +958,7 @@ and `DangerZone` action slots arrange their children only. Pass shared UI
 controls into these slots; the containers do not set descendant button sizes.
 `SettingButton`, account add/retry actions and list add/remove actions also
 use `ui/Button`; field CSS owns their width and row layout only.
+
+`Button geometry="stretch"` fills a flex/grid cross-axis container with square
+edges and at least 36px desktop or 44px touch targets. Use it for edge actions
+such as swipe actions and tab scroll arrows; the container owns placement.
