@@ -103,7 +103,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 			<Show when={progressStore.dialogVisible()}>
 				<ProgressDialog />
 			</Show>
-			<Show when={storiesUi.visible()}>
+			<Show when={storiesUi.visible() && !uiStore.isDetached("stories")}>
 				<Show when={storiesUi.project()} keyed>
 					{(project) => (
 						<Suspense>

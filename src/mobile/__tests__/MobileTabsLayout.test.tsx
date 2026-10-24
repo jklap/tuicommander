@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 describe("mobile tab layout", () => {
 	it("shows five tabs with Sessions before Chat and no Settings tab", () => {
-		const view = render(() => <BottomTabs active="sessions" onSelect={() => {}} />);
+		const view = render(() => <BottomTabs aiChatAvailable={true} active="sessions" onSelect={() => {}} />);
 		const names = [...view.getByRole("navigation").querySelectorAll("button")].map((button) =>
 			button.getAttribute("aria-label"),
 		);

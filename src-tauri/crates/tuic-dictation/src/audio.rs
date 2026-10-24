@@ -62,6 +62,29 @@ fn validate_sample_rate(sample_rate: u32) -> Result<u32, String> {
     Ok(sample_rate)
 }
 
+/// Keep capture on its supported F32/I16 path when cpal's default heuristics
+/// prefer a higher-precision format. Preserve the default rate where possible;
+/// the callback resamples whatever rate the device supports to 16 kHz.
+fn compatible_input_config(
+    configs: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    preferred_rate: u32,
+) -> Result<cpal::SupportedStreamConfig, String> {
+    configs
+        .filter(|config| {
+            matches!(
+                config.sample_format(),
+                cpal::SampleFormat::F32 | cpal::SampleFormat::I16
+            )
+        })
+        .max_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics)
+        .map(|config| {
+            config
+                .try_with_sample_rate(preferred_rate)
+                .unwrap_or_else(|| config.with_max_sample_rate())
+        })
+        .ok_or_else(|| "Input device has no supported F32 or I16 configuration".to_string())
+}
+
 /// Audio capture manager. Captures microphone input as 16kHz mono f32 PCM.
 ///
 /// Uses `VecDeque` so the streaming thread can drain from the front while
@@ -98,6 +121,22 @@ impl AudioCapture {
             .default_input_config()
             .map_err(|e| format!("Failed to get input config: {e}"))?;
 
+        // cpal 0.18 ranks F64/I32/I24 above I16. Do not reject a microphone
+        // that still offers one of the formats our capture callback supports.
+        let config = if matches!(
+            config.sample_format(),
+            cpal::SampleFormat::F32 | cpal::SampleFormat::I16
+        ) {
+            config
+        } else {
+            compatible_input_config(
+                device
+                    .supported_input_configs()
+                    .map_err(|e| format!("Failed to get input configs: {e}"))?,
+                config.sample_rate(),
+            )?
+        };
+
         let sample_rate = validate_sample_rate(config.sample_rate())?;
         let channels = validate_channel_count(config.channels() as usize)?;
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
@@ -118,7 +157,7 @@ impl AudioCapture {
                 let mut resample_buf: Vec<f32> = Vec::new();
                 device
                     .build_input_stream(
-                        &config.into(),
+                        config.into(),
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
                             process_audio_chunk(
                                 data,
@@ -141,7 +180,7 @@ impl AudioCapture {
                 let mut resample_buf: Vec<f32> = Vec::new();
                 device
                     .build_input_stream(
-                        &config.into(),
+                        config.into(),
                         move |data: &[i16], _: &cpal::InputCallbackInfo| {
                             float_buf.clear();
                             float_buf
@@ -325,6 +364,61 @@ fn process_audio_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: accepting cpal's new integer default and refusing a device that
+    // still supports I16; also selecting I16 before the preferred F32 path.
+    #[test]
+    fn higher_precision_defaults_keep_a_compatible_capture_format() {
+        let configs = [
+            cpal::SampleFormat::I32,
+            cpal::SampleFormat::I16,
+            cpal::SampleFormat::F32,
+        ]
+        .map(|format| {
+            cpal::SupportedStreamConfigRange::new(
+                2,
+                16_000,
+                96_000,
+                cpal::SupportedBufferSize::Unknown,
+                format,
+            )
+        });
+        let config = compatible_input_config(configs.into_iter(), 48_000).unwrap();
+        assert_eq!(config.sample_format(), cpal::SampleFormat::F32);
+        assert_eq!(config.sample_rate(), 48_000);
+        assert_eq!(config.channels(), 2);
+    }
+
+    // Catches: dropping the I16 fallback, or requesting an unsupported rate.
+    #[test]
+    fn integer_only_capture_uses_a_supported_rate() {
+        let config = cpal::SupportedStreamConfigRange::new(
+            1,
+            44_100,
+            44_100,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
+        let selected = compatible_input_config(std::iter::once(config), 48_000).unwrap();
+        assert_eq!(selected.sample_format(), cpal::SampleFormat::I16);
+        assert_eq!(selected.sample_rate(), 44_100);
+    }
+
+    // Catches: silently selecting a format the callback cannot consume.
+    #[test]
+    fn unsupported_capture_formats_fail_before_stream_creation() {
+        let config = cpal::SupportedStreamConfigRange::new(
+            1,
+            48_000,
+            48_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I32,
+        );
+        assert_eq!(
+            compatible_input_config(std::iter::once(config), 48_000).unwrap_err(),
+            "Input device has no supported F32 or I16 configuration",
+        );
+    }
 
     /// The scratch state a cpal callback owns, so each chunk test reads as one
     /// call instead of six lines of setup.

@@ -898,6 +898,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Allows MCP agents to write work items.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_work_item_writes: bool,
+    /// Record and show body-free outcomes of MCP tools/call requests. Default on in debug builds only.
+    #[serde(default = "default_mcp_call_audit_enabled")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Starts or stops recording MCP call outcomes and showing them in Settings.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) mcp_call_audit_enabled: bool,
     /// Fixed port for MCP server (0 = OS-assigned)
     #[serde(default = "default_mcp_port")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp port for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
@@ -1060,10 +1064,9 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled mcp agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_mcp_agents: Vec<String>,
-    /// Native MCP tool names disabled by the user (excluded from tools/list response)
-    #[serde(default = "default_disabled_native_tools")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled native tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) disabled_native_tools: Vec<String>,
+    /// MCP capability policy; the old field is accepted only for one-time migration.
+    #[serde(default, alias = "disabled_native_tools")]
+    pub(crate) mcp_capabilities: crate::mcp_capabilities::McpCapabilities,
     /// Host-only opt-in; legacy config enablement never grants settings authority.
     #[serde(default)]
     #[schemars(extend("x-not-setting" = "Host-issued MCP settings access policy; only trusted UI can enable it."))]
@@ -1223,12 +1226,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// `config` and `debug` stay off until the user enables them — for a fresh
-/// install and for a config.json written before the field existed.
-fn default_disabled_native_tools() -> Vec<String> {
-    vec!["settings".to_string(), "debug".to_string()]
-}
-
 fn default_update_channel() -> String {
     default_update_channel_for_version(env!("CARGO_PKG_VERSION")).to_string()
 }
@@ -1284,6 +1281,11 @@ fn default_terminal_renderer() -> String {
     "webgl".to_string()
 }
 
+/// The audit records every MCP call: off in release builds, on while developing.
+fn default_mcp_call_audit_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
 fn default_mcp_port() -> u16 {
     3845
 }
@@ -1323,6 +1325,7 @@ impl Default for AppConfig {
             theme: "commander".to_string(),
             mcp_server_enabled: true,
             mcp_work_item_writes: false,
+            mcp_call_audit_enabled: default_mcp_call_audit_enabled(),
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,
             ide: String::new(),
@@ -1361,7 +1364,7 @@ impl Default for AppConfig {
             beta_channel_migrated: true,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
-            disabled_native_tools: default_disabled_native_tools(),
+            mcp_capabilities: Default::default(),
             settings_mcp_enabled: false,
             intent_tab_title: true,
             suggest_followups: true,
@@ -2184,6 +2187,10 @@ pub(crate) struct AgentsConfig {
     #[serde(default = "default_hibernate_minutes")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_idle_minutes: u32,
+    /// Zero disables automatic closure; abandoned markers still appear after one hour.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Closes verified abandoned shells after idle hours; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) abandoned_shell_hours: u16,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether idle agents hibernate only in background or always.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_scope: HibernateScope,
@@ -2224,6 +2231,23 @@ impl AgentsConfig {
         })
     }
 
+    /// Every saved run configuration with its agent, sorted by name.
+    pub(crate) fn saved_run_configs(&self) -> Vec<(&str, &AgentRunConfig)> {
+        let mut saved: Vec<(&str, &AgentRunConfig)> = self
+            .agents
+            .iter()
+            .filter(|(agent, _)| crate::agent::is_known_agent_type(agent))
+            .flat_map(|(agent, settings)| {
+                settings
+                    .run_configs
+                    .iter()
+                    .map(move |profile| (agent.as_str(), profile))
+            })
+            .collect();
+        saved.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        saved
+    }
+
     pub(crate) fn require_named_run_config(
         &self,
         name: &str,
@@ -2262,6 +2286,7 @@ impl Default for AgentsConfig {
             launch_modules: HashMap::new(),
             launch_instructions_disabled: false,
             hibernate_idle_minutes: default_hibernate_minutes(),
+            abandoned_shell_hours: 0,
             hibernate_scope: HibernateScope::default(),
         }
     }
@@ -3067,7 +3092,7 @@ fn commit_config_change_locked(
 
     let effects = ConfigSaveEffects {
         tools_changed: cached.settings_mcp_enabled != next.settings_mcp_enabled
-            || cached.disabled_native_tools != next.disabled_native_tools
+            || cached.mcp_capabilities != next.mcp_capabilities
             || cached.collapse_tools != next.collapse_tools,
         server_changed: server_settings_changed(&cached, &next),
     };
@@ -3270,6 +3295,7 @@ fn read_app_config_unlocked_for_version(
         }
     };
     migrate_flat_services(&mut val);
+    let migrated_capabilities = val.get("disabled_native_tools").is_some();
     match serde_json::from_value(val) {
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
@@ -3277,7 +3303,7 @@ fn read_app_config_unlocked_for_version(
             let migrated_channel = migrate_legacy_beta_channel(&mut config, version);
             Ok((
                 config,
-                migrated_secret || migrated_duration || migrated_channel,
+                migrated_secret || migrated_duration || migrated_channel || migrated_capabilities,
             ))
         }
         Err(e) => {
@@ -3515,6 +3541,27 @@ pub(crate) fn set_branch_label(
                 entry.branch_labels.remove(&branch_name);
             }
         }
+        true
+    })
+}
+
+/// Follow a branch rename: move the label from `old_name` to `new_name`.
+/// No-op when the repo or the label is unknown; an existing label on `new_name`
+/// is replaced, because the renamed branch is the one the user labelled.
+pub(crate) fn move_branch_label(
+    repo_path: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), String> {
+    let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
+    file.update(|settings| {
+        let Some(entry) = settings.repos.get_mut(repo_path) else {
+            return false;
+        };
+        let Some(label) = entry.branch_labels.remove(old_name) else {
+            return false;
+        };
+        entry.branch_labels.insert(new_name.to_string(), label);
         true
     })
 }
@@ -4250,19 +4297,7 @@ pub(crate) fn replace_repositories_for_test(config: serde_json::Value) -> Result
 /// because a legitimate repository that is merely offline, unmounted, or on a
 /// different drive must survive the classifier unchanged.
 fn recognized_temp_roots() -> Vec<PathBuf> {
-    let mut roots = vec![std::env::temp_dir()];
-    for root in [
-        "/tmp",
-        "/private/tmp",
-        "/var/folders",
-        "/private/var/folders",
-    ] {
-        roots.push(PathBuf::from(root));
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Gits").join(".tmp"));
-    }
-    roots
+    tuic_core::temp_paths::recognized_temp_roots()
 }
 
 /// `Path::starts_with` compares path COMPONENTS, so it does not collapse a
@@ -4935,7 +4970,10 @@ mod tests {
             .clear();
         save_agents_config(initial, removed).unwrap();
         let disabled = load_agents_config();
-        assert!(disabled.agents["codex"].run_configs[0].args.is_empty());
+        assert_eq!(
+            disabled.agents["codex"].run_configs[0].args,
+            [] as [std::string::String; 0]
+        );
         let mut enabled = disabled.clone();
         enabled.agents.get_mut("codex").unwrap().run_configs[0].args =
             vec!["--dangerously-bypass-approvals-and-sandbox".into()];
@@ -5498,6 +5536,7 @@ mod tests {
             theme: "dark".to_string(),
             mcp_server_enabled: true,
             mcp_work_item_writes: false,
+            mcp_call_audit_enabled: false,
             mcp_port: 4000,
             mcp_config_installed: false,
             ide: "cursor".to_string(),
@@ -5567,7 +5606,9 @@ mod tests {
             beta_channel_migrated: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
-            disabled_native_tools: vec!["plugin_dev_guide".to_string()],
+            mcp_capabilities: crate::mcp_capabilities::McpCapabilities::from_legacy(&[
+                "plugin_dev_guide".into(),
+            ]),
             settings_mcp_enabled: false,
             intent_tab_title: false,
             suggest_followups: false,
@@ -5639,8 +5680,8 @@ mod tests {
         assert!(loaded.services.server.ipv6_enabled);
         assert!(loaded.services.auth.lan_auth_bypass);
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["plugin_dev_guide".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["plugin_reference".to_string()]
         );
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
@@ -5662,9 +5703,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["settings".to_string(), "debug".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["settings".to_string(), "diagnostics".to_string()]
         );
+    }
+
+    // Catches: startup accepts legacy denials but fails to persist the one-time migration.
+    #[test]
+    #[serial_test::serial]
+    fn mcp_capability_migration_persists_once_and_keeps_unknown_denials() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), None);
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        doc.as_object_mut().unwrap().remove("mcp_capabilities");
+        doc["disabled_native_tools"] =
+            serde_json::json!(["task", "workflow_report", "unrecognized_tool"]);
+        fs::write(&path, doc.to_string()).unwrap();
+        let config = load_app_config_for_version("2.0.0");
+        assert_eq!(
+            config.mcp_capabilities.denied,
+            ["agent_tasks", "workflow.reports"]
+        );
+        assert_eq!(
+            config.mcp_capabilities.migration_unknown_tools,
+            ["unrecognized_tool"]
+        );
+        let saved = fs::read(&path).unwrap();
+        let migrated: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(migrated.get("disabled_native_tools").is_none());
+        assert_eq!(
+            migrated["mcp_capabilities"]["denied"],
+            serde_json::json!(["agent_tasks", "workflow.reports"])
+        );
+        assert_eq!(
+            load_app_config_for_version("2.0.0").mcp_capabilities,
+            config.mcp_capabilities
+        );
+        assert_eq!(fs::read(&path).unwrap(), saved);
     }
 
     // Catches: a fresh beta install silently defaults to stable and misses beta.2.
@@ -6070,7 +6148,7 @@ mod tests {
         // for a JSON object that omits both keys.
         let mut incoming = AppConfig::default();
         assert_eq!(incoming.services.relay.token_exists, None);
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
 
         preserve_redacted_app_config_secrets(&mut incoming, &current);
 
@@ -6091,11 +6169,11 @@ mod tests {
 
         let mut incoming = AppConfig::default();
         incoming.services.relay.token_exists = Some(false);
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
 
         preserve_redacted_app_config_secrets(&mut incoming, &current);
 
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
         assert_eq!(incoming.services.relay.token_exists, Some(false));
     }
 
@@ -6738,10 +6816,9 @@ mod tests {
             .args
             .clear();
         save_agents_config(base, desired).unwrap();
-        assert!(
-            load_agents_config().agents["codex"].run_configs[0]
-                .args
-                .is_empty()
+        assert_eq!(
+            load_agents_config().agents["codex"].run_configs[0].args,
+            [] as [std::string::String; 0]
         );
         let disk: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join("agents.json")).unwrap()).unwrap();
@@ -9528,7 +9605,7 @@ mod tests {
             crate::credentials::get(crate::credentials::Credential::PushVapidPrivateKey).unwrap(),
             Some("old-vapid".to_string())
         );
-        assert!(state.config.read().services.auth.session_token.is_empty());
+        assert_eq!(state.config.read().services.auth.session_token, "");
     }
 
     #[test]
@@ -10008,6 +10085,24 @@ mod tests {
                 "beta_channel_migrated",
             ],
         );
+    }
+
+    // Catches: the debug default not applied (empty view for developers) or release defaulting on.
+    #[test]
+    fn mcp_call_audit_defaults_on_only_in_debug_builds() {
+        assert_eq!(
+            AppConfig::default().mcp_call_audit_enabled,
+            cfg!(debug_assertions)
+        );
+        let mut file = serde_json::to_value(AppConfig::default()).unwrap();
+        file.as_object_mut()
+            .unwrap()
+            .remove("mcp_call_audit_enabled");
+        let legacy: AppConfig = serde_json::from_value(file.clone()).unwrap();
+        assert_eq!(legacy.mcp_call_audit_enabled, cfg!(debug_assertions));
+        file["mcp_call_audit_enabled"] = serde_json::json!(false);
+        let off: AppConfig = serde_json::from_value(file).unwrap();
+        assert!(!off.mcp_call_audit_enabled);
     }
 
     #[test]

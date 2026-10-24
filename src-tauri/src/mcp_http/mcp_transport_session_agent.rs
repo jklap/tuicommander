@@ -924,8 +924,11 @@ fn handle_session_unpaged(
                 .sessions
                 .iter()
                 .filter(|entry| scoped_session.as_ref().is_none_or(|id| entry.key() == id))
-                .map(|entry| {
-                    let id = entry.key().clone();
+                .map(|entry| entry.key().clone())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .filter_map(|id| {
+                    let entry = state.session_maps.sessions.get(&id)?;
                     let s = entry.value().lock();
                     #[cfg(not(windows))]
                     let pgid = s.master.process_group_leader();
@@ -936,6 +939,19 @@ fn handle_session_unpaged(
                         pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
                     #[cfg(windows)]
                     let process_name = pgid.and_then(crate::pty::process_name_from_pid);
+                    let display_name = s.display_name.clone();
+                    let cwd = s.cwd.clone();
+                    let worktree_path = s
+                        .worktree
+                        .as_ref()
+                        .map(|worktree| worktree.path.to_string_lossy().to_string());
+                    let worktree_branch = s
+                        .worktree
+                        .as_ref()
+                        .and_then(|worktree| worktree.branch.clone());
+                    // Snapshot validation re-reads the PTY's process and cwd.
+                    drop(s);
+                    drop(entry);
                     let session_state = state.session_state_with_shell(&id);
                     let shell_state = session_state
                         .as_ref()
@@ -995,7 +1011,7 @@ fn handle_session_unpaged(
                     insert_optional_value(
                         object,
                         "display_name",
-                        s.display_name.clone().map(serde_json::Value::String),
+                        display_name.map(serde_json::Value::String),
                     );
                     insert_optional_value(
                         object,
@@ -1006,25 +1022,16 @@ fn handle_session_unpaged(
                             .get(&id)
                             .map(|value| serde_json::Value::String(value.value().clone())),
                     );
-                    insert_optional_value(
-                        object,
-                        "cwd",
-                        s.cwd.clone().map(serde_json::Value::String),
-                    );
+                    insert_optional_value(object, "cwd", cwd.map(serde_json::Value::String));
                     insert_optional_value(
                         object,
                         "worktree_path",
-                        s.worktree.as_ref().map(|worktree| {
-                            serde_json::Value::String(worktree.path.to_string_lossy().to_string())
-                        }),
+                        worktree_path.map(serde_json::Value::String),
                     );
                     insert_optional_value(
                         object,
                         "worktree_branch",
-                        s.worktree
-                            .as_ref()
-                            .and_then(|worktree| worktree.branch.clone())
-                            .map(serde_json::Value::String),
+                        worktree_branch.map(serde_json::Value::String),
                     );
                     insert_optional_value(
                         object,
@@ -1047,7 +1054,7 @@ fn handle_session_unpaged(
                     {
                         session["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
                     }
-                    session
+                    Some(session)
                 })
                 .collect();
             match crate::suspended_sessions::list() {
@@ -1457,7 +1464,7 @@ fn handle_session_unpaged(
                 return serde_json::json!({"error": msg});
             }
             // Same core as HTTP resize_session: grid before SIGWINCH, same-dims no-op.
-            match crate::pty::resize_session_core(state, session_id, rows, cols) {
+            match crate::pty::resize_session_core(state, session_id, rows, cols, "mcp") {
                 Ok(Some(frame)) => crate::pty::send_grid_frame(state, session_id, frame),
                 Ok(None) => {}
                 Err(e) if e.starts_with("Session not found") => {
@@ -2423,16 +2430,16 @@ pub(super) fn spawn_with_identity(
                 let print_mode = args["print_mode"].as_bool().unwrap_or(false);
                 let app_handle = state.app_handle.read().clone();
                 if !print_mode && let Some(ref app) = app_handle {
-                    let agent_type_val = effective_agent_type.as_deref();
-                    let _ = app.emit(
-                        "session-created",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "cwd": cwd_str,
-                            "agent_type": agent_type_val,
-                            "display_name": requested_name,
-                            "parent_session": published_parent,
-                        }),
+                    super::session::emit_native_agent_session_created(
+                        |event, payload| {
+                            let _ = app.emit(event, payload);
+                        },
+                        state,
+                        &session_id,
+                        cwd_str.as_deref(),
+                        effective_agent_type.as_deref(),
+                        requested_name.as_deref(),
+                        published_parent.as_deref(),
                     );
                 }
             }
@@ -2631,6 +2638,15 @@ pub(super) fn handle_agent_unified_with_parent_cwd(
         Err(e) => return e,
     };
     match action {
+        "task_get" | "task_cancel" => {
+            let mut task_args = args.clone();
+            task_args["action"] = serde_json::json!(if action == "task_get" {
+                "get"
+            } else {
+                "cancel"
+            });
+            handle_task(state, addr, &task_args, mcp_session_id)
+        }
         "spawn" => {
             handle_agent_with_parent_cwd(state, addr, args, mcp_session_id, managed_parent_cwd)
         }

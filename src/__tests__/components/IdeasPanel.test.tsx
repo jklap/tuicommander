@@ -27,6 +27,17 @@ function queueButton(container: HTMLElement): HTMLButtonElement | null {
 	return container.querySelector<HTMLButtonElement>('button[title*="Queue"]');
 }
 
+describe("IdeasPanel — theme-coloured heading", () => {
+	it.each(["inline", "detached"] as const)("rejects a platform emoji in the panel heading (%s)", (mode) => {
+		const { container } = render(() => (
+			<IdeasPanel visible={true} repoPath={null} mode={mode} onClose={noop} onSendToTerminal={noop} />
+		));
+		const title = container.querySelector("#notes-panel > div > div > span");
+		expect(title?.textContent?.trim()).toBe("Ideas");
+		expect(title?.querySelector('svg[fill="currentColor"][aria-hidden="true"]')).not.toBeNull();
+	});
+});
+
 describe("IdeasPanel — IME composition handling", () => {
 	beforeEach(() => {
 		for (const note of [...ideasStore.state.ideas]) {
@@ -226,4 +237,14 @@ describe("IdeasPanel — all-repositories toggle", () => {
 
 		expect(ideasStore.state.ideas).toEqual([]);
 	});
+});
+
+// Catches: permanent usage narration replacing concise state and an actionable input.
+it("rejects empty Ideas narration while retaining the add control", () => {
+	for (const idea of [...ideasStore.state.ideas]) ideasStore.removeIdea(idea.id);
+	const { container, getByTitle } = renderPanel();
+	expect(container.textContent).not.toContain("Add one below");
+	expect(container.textContent).toContain("No ideas yet.");
+	expect(container.querySelector("textarea")?.placeholder).toBe("New idea…");
+	expect(getByTitle("Add idea (Enter)")).not.toBeNull();
 });

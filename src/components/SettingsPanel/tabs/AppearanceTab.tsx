@@ -102,12 +102,7 @@ export const AppearanceTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${s.applicationPage}`}>
-			<SettingPageHeader
-				title="Appearance"
-				breadcrumb="Application / Appearance"
-				description="Tabs, chat presentation and repository groups."
-				scope="Application defaults"
-			/>
+			<SettingPageHeader title="Appearance" breadcrumb="Application / Appearance" scope="Application defaults" />
 			<SectionCard title={t("appearance.heading.tabs", "Tabs")}>
 				<SettingSelect
 					settingId="app.split_tab_mode"

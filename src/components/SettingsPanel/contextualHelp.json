@@ -97,7 +97,7 @@
   {
     "page": "terminal",
     "label": "Shell",
-    "text": "When to change: Override only when another installed shell is needed.\n\nIf wrong: A missing executable prevents a new terminal from starting.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Override only when another installed shell is needed.\n\nIf wrong: A missing executable prevents a new terminal from starting.\n\nDefault: Inherited."
   },
   {
     "page": "terminal",
@@ -132,7 +132,7 @@
   {
     "page": "keyboard-shortcuts",
     "label": "Global Hotkey (Toggle Window)",
-    "text": "When to change: Change when the current combination conflicts with another application.\n\nIf wrong: An OS shortcut conflict can make the window toggle unavailable.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Change when the current combination conflicts with another application.\n\nIf wrong: An OS shortcut conflict can make the window toggle unavailable."
   },
   {
     "page": "keyboard-shortcuts",
@@ -147,7 +147,7 @@
   {
     "page": "github",
     "label": "Repository bindings",
-    "text": "When to change: Bind explicitly when multiple accounts have different access.\n\nIf wrong: A wrong binding can fail repository requests or use the wrong identity.\n\nDefault: Resolve through the existing account owner when unbound."
+    "text": "When to change: Bind explicitly when multiple accounts have different access.\n\nIf wrong: A wrong binding can fail repository requests or use the wrong identity.\n\nDefault: Automatic account selection when unbound."
   },
   {
     "page": "github",
@@ -252,7 +252,7 @@
   {
     "page": "agents",
     "label": "Launch instructions",
-    "text": "When to change: Edit when you need a different launch instruction contract.\n\nIf wrong: Removing required markers can hide intent or follow-up actions; empty disables injection.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Edit when you need a different launch instruction contract.\n\nIf wrong: Removing required markers can hide intent or follow-up actions; empty disables injection.\n\nDefault: Inherited."
   },
   {
     "page": "agents",
@@ -277,17 +277,17 @@
   {
     "page": "agents",
     "label": "Launch instructions",
-    "text": "When to change: Edit when you need a different launch instruction contract.\n\nIf wrong: Removing required markers can hide intent or follow-up actions; empty disables injection.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Edit when you need a different launch instruction contract.\n\nIf wrong: Removing required markers can hide intent or follow-up actions; empty disables injection.\n\nDefault: Inherited."
   },
   {
     "page": "agents",
     "label": "Permissions",
-    "text": "When to change: Choose a mode only when you need a launch-specific approval policy.\n\nIf wrong: Approval policy does not prove filesystem isolation or change an already running process.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Choose a mode only when you need a launch-specific approval policy.\n\nIf wrong: Approval policy does not prove filesystem isolation or change an already running process.\n\nDefault: Inherited."
   },
   {
     "page": "agents",
     "label": "Filesystem sandbox",
-    "text": "When to change: Set it only when the next run needs a different confinement mode.\n\nIf wrong: The wrong mode can block required file access or leave execution less confined; it is not an approval mode.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Set it only when the next run needs a different confinement mode.\n\nIf wrong: The wrong mode can block required file access or leave execution less confined; it is not an approval mode.\n\nDefault: Inherited."
   },
   {
     "page": "agents",
@@ -367,7 +367,7 @@
   {
     "page": "voice",
     "label": "Input device",
-    "text": "When to change: Choose another microphone if the system input is unsuitable.\n\nIf wrong: The wrong input captures silence or unrelated audio.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Choose another microphone if the system input is unsuitable.\n\nIf wrong: The wrong input captures silence or unrelated audio.\n\nDefault: Inherited."
   },
   {
     "page": "voice",
@@ -467,7 +467,7 @@
   {
     "page": "smart-prompts",
     "label": "Headless Agent",
-    "text": "When to change: Choose an installed agent before using headless execution.\n\nIf wrong: A missing agent cannot run the prompt; individual prompts can override this choice.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Choose an installed agent before using headless execution.\n\nIf wrong: A missing agent cannot run the prompt; individual prompts can override this choice.\n\nDefault: Inherited."
   },
   {
     "page": "mcp",
@@ -481,8 +481,8 @@
   },
   {
     "page": "mcp",
-    "label": "Native tools",
-    "text": "When to change: Disable a tool only when agents should not call it.\n\nIf wrong: A disabled tool disappears from discovery and cannot be called; progress also needs global tracking.\n\nDefault: [\"config\",\"debug\"]."
+    "label": "Capabilities",
+    "text": "When to change: Disable a capability when agents should not use that domain or action group.\n\nIf wrong: Denied actions disappear from discovery and cannot be called. Additional restrictions preserve migrated denials; a parent denial also blocks its grouped actions.\n\nDefault: Settings access and Diagnostics / JS inspection are denied."
   },
   {
     "page": "mcp",
@@ -502,17 +502,17 @@
   {
     "page": "mcp",
     "label": "URL",
-    "text": "When to change: Use the endpoint supplied by the server operator.\n\nIf wrong: A wrong path fails connection; a different credential origin requires a new upstream.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Use the endpoint supplied by the server operator.\n\nIf wrong: A wrong path fails connection; a different credential origin requires a new upstream."
   },
   {
     "page": "mcp",
     "label": "Bearer token",
-    "text": "When to change: Replace when the server rotates or revokes it.\n\nIf wrong: An invalid token prevents authentication; stored values are not read back.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Replace when the server rotates or revokes it.\n\nIf wrong: An invalid token prevents authentication; stored values are not read back."
   },
   {
     "page": "mcp",
     "label": "Client Secret",
-    "text": "When to change: Leave it unset for public clients that do not use a secret.\n\nIf wrong: A wrong secret makes token exchange fail; it must not be exposed as plain diagnostic text.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Leave it unset for public clients that do not use a secret.\n\nIf wrong: A wrong secret makes token exchange fail; it must not be exposed as plain diagnostic text."
   },
   {
     "page": "mcp",
@@ -522,12 +522,12 @@
   {
     "page": "mcp",
     "label": "Command",
-    "text": "When to change: Use the installed server command, not an HTTP URL.\n\nIf wrong: A missing command cannot launch; the named program runs as the current user.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Use the installed server command, not an HTTP URL.\n\nIf wrong: A missing command cannot launch; the named program runs as the current user."
   },
   {
     "page": "mcp",
     "label": "Working directory",
-    "text": "When to change: Set when the server needs project-relative files.\n\nIf wrong: A missing or wrong folder can prevent startup or select the wrong project.\n\nDefault: Unset / inherited owner default."
+    "text": "When to change: Set when the server needs project-relative files.\n\nIf wrong: A missing or wrong folder can prevent startup or select the wrong project.\n\nDefault: Inherited."
   },
   {
     "page": "remote-access",
@@ -542,12 +542,12 @@
   {
     "page": "remote-access",
     "label": "Password",
-    "text": "When to change: Replace when rotating remote login access.\n\nIf wrong: A wrong password prevents login; an empty editor must not be mistaken for a readable saved secret.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Replace when rotating remote login access.\n\nIf wrong: A wrong password prevents login; an empty editor must not be mistaken for a readable saved secret."
   },
   {
     "page": "remote-access",
     "label": "Network Interface",
-    "text": "When to change: Use loopback for this host only or reachable interfaces for other devices.\n\nIf wrong: Loopback-only blocks other devices; the wrong interface can leave the desired address unreachable.\n\nDefault: Read the saved interface; no universal default verified in this audit."
+    "text": "When to change: Use loopback for this host only or reachable interfaces for other devices.\n\nIf wrong: Loopback-only blocks other devices; the wrong interface can leave the desired address unreachable.\n\nDefault: Saved interface."
   },
   {
     "page": "remote-access",
@@ -567,7 +567,7 @@
   {
     "page": "remote-access",
     "label": "Bearer Token",
-    "text": "When to change: Replace when registering or rotating relay access.\n\nIf wrong: A wrong token prevents relay authentication; it does not provide end-to-end secrecy.\n\nDefault: No universal default specified in the audited source; keep the owner-provided current value."
+    "text": "When to change: Replace when registering or rotating relay access.\n\nIf wrong: A wrong token prevents relay authentication; it does not provide end-to-end secrecy."
   },
   {
     "page": "remote-machines",
@@ -587,7 +587,7 @@
   {
     "page": "telegram",
     "label": "Polling owner",
-    "text": "When to change: Reload when pairing is unavailable or another owner may have taken over.\n\nIf wrong: No active poller means Link chat cannot accept a pairing message.\n\nDefault: No live owner inferred from the mock."
+    "text": "When to change: Reload when pairing is unavailable or another owner may have taken over.\n\nIf wrong: No active poller means Link chat cannot accept a pairing message."
   },
   {
     "page": "telegram",
@@ -622,17 +622,17 @@
   {
     "page": "github-work",
     "label": "Account",
-    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected unless the plugin owner supplies a default."
+    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected."
   },
   {
     "page": "jira",
     "label": "Account",
-    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected unless the plugin owner supplies a default."
+    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected."
   },
   {
     "page": "gitlab",
     "label": "Account",
-    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected unless the plugin owner supplies a default."
+    "text": "When to change: Choose an identity with access to the intended projects.\n\nIf wrong: A saved sign-in is not proof of live access or entitlement.\n\nDefault: No account selected."
   },
   {
     "page": "repository",

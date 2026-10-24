@@ -44,7 +44,8 @@ interface LocalIpEntry {
  */
 export const RemoteAccessPanel: Component = () => {
 	const { status, relayConnected, refresh } = useMcpStatusPoll();
-	const [localIps] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
 
 	// Remote access form state
@@ -76,7 +77,7 @@ export const RemoteAccessPanel: Component = () => {
 
 	// Auto-select best IP when list loads (prefer Tailscale, then LAN/Wi-Fi)
 	createEffect(() => {
-		const ips = localIps();
+		const ips = availableIps();
 		if (!ips?.length || selectedIp()) return;
 		const preferred =
 			ips.find((e) => e.label.includes("Tailscale")) ??
@@ -85,7 +86,7 @@ export const RemoteAccessPanel: Component = () => {
 		setSelectedIp(preferred.ip);
 	});
 
-	const activeIp = () => selectedIp() || localIps()?.[0]?.ip;
+	const activeIp = () => (localIps.error ? undefined : selectedIp() || availableIps()?.[0]?.ip);
 
 	// Connect URL fetched from backend (token never reaches JS)
 	const [connectUrl, setConnectUrl] = createSignal<string | null>(null);
@@ -96,6 +97,7 @@ export const RemoteAccessPanel: Component = () => {
 	createEffect(() => {
 		const ip = activeIp();
 		void qrVersion(); // subscribe — re-run after token regeneration
+		void status()?.tls_active; // A listener restart can change the URL scheme.
 		if (!ip) {
 			setConnectUrl(null);
 			setQrDataUrl(null);
@@ -253,12 +255,7 @@ export const RemoteAccessPanel: Component = () => {
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
-			<SettingPageHeader
-				title="Remote Access"
-				description="Web access, authentication and relay settings for this machine."
-				scope="This machine"
-				breadcrumb="Integrations / Remote Access"
-			/>
+			<SettingPageHeader title="Remote Access" scope="This machine" breadcrumb="Integrations / Remote Access" />
 			<SectionCard title="Connection status">
 				<SettingToggle
 					settingId="app.services.server.enabled"
@@ -389,25 +386,44 @@ export const RemoteAccessPanel: Component = () => {
 									{(id, descriptionId) => (
 										<>
 											<Show
-												when={(localIps()?.length ?? 0) > 1}
-												fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
+												when={!localIps.error}
+												fallback={
+													<div>
+														<p role="alert" class={layout.discoveryError}>
+															Local IP discovery failed: {String(localIps.error)}
+														</p>
+														<button
+															type="button"
+															class={s.testBtn}
+															data-non-setting="Retry local network discovery"
+															onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}
+														>
+															Retry
+														</button>
+													</div>
+												}
 											>
-												<Select
-													data-non-setting="Displayed connection URL address selection; no persistence"
-													id={id}
-													aria-describedby={descriptionId()}
-													class={s.input}
-													value={selectedIp()}
-													onChange={(e) => setSelectedIp(e.currentTarget.value)}
+												<Show
+													when={(availableIps()?.length ?? 0) > 1}
+													fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
 												>
-													<For each={localIps()}>
-														{(entry) => (
-															<option value={entry.ip}>
-																{entry.label} — {entry.ip}
-															</option>
-														)}
-													</For>
-												</Select>
+													<Select
+														data-non-setting="Displayed connection URL address selection; no persistence"
+														id={id}
+														aria-describedby={descriptionId()}
+														class={s.input}
+														value={selectedIp()}
+														onChange={(e) => setSelectedIp(e.currentTarget.value)}
+													>
+														<For each={availableIps()}>
+															{(entry) => (
+																<option value={entry.ip}>
+																	{entry.label} — {entry.ip}
+																</option>
+															)}
+														</For>
+													</Select>
+												</Show>
 											</Show>
 											<p class={s.hint} style={{ "margin-top": "4px" }}>
 												{t("services.hint.qrScan", "Scan the QR code to connect from another device")}
@@ -520,9 +536,11 @@ export const RemoteAccessPanel: Component = () => {
 						const ts = tailscaleState()!;
 						const statusText =
 							ts.state === "Running"
-								? ts.https_enabled
+								? status()?.tls_active
 									? `HTTPS active (${ts.fqdn})`
-									: "Running (HTTPS not enabled)"
+									: ts.https_enabled
+										? "Running (HTTPS unavailable)"
+										: "Running (HTTPS not enabled)"
 								: ts.state === "NotRunning"
 									? "Not running"
 									: "Not installed";
@@ -549,6 +567,12 @@ export const RemoteAccessPanel: Component = () => {
 											{t("services.action.recheck", "Recheck")}
 										</button>
 									</div>
+									<Show when={ts.state === "Running" && ts.https_enabled && !status()?.tls_active}>
+										<p class={s.hint}>
+											Enable remote access, then recheck Tailscale. If HTTPS remains unavailable, check the Tailscale
+											certificate errors in the app logs.
+										</p>
+									</Show>
 									<Show when={showHint}>
 										<p class={s.hint}>
 											{t(
@@ -703,10 +727,6 @@ export const RemoteAccessPanel: Component = () => {
 						</p>
 					</div>
 				</Show>
-
-				<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
-					{t("services.hint.autoSave", "Settings are saved automatically when changed")}
-				</p>
 			</SectionCard>
 			<Show when={tokenDialog.dialogState()}>
 				{(dialog) => (

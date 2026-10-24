@@ -18,7 +18,7 @@ async fn mcp_create_cannot_skip_definition_validation() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
         dir.path(),
     ));
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     state
         .mcp
         .to_session
@@ -200,7 +200,8 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
             "templates",
             "template",
             "worktree_preview",
-            "cleanup_worktree"
+            "cleanup_worktree",
+            "help"
         ])
     );
 }

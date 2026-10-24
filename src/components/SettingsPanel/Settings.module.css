@@ -1522,7 +1522,7 @@
  .nav > :not(.compactNav):not(.navSearch) { display: none; }
  .nav { overflow: visible; padding: 8px 16px; max-height: none; }
  .compactNav { display: block; }
- .compactNav select { width: 100%; min-height: 44px; }
+ .compactNav select { width: 100%; min-height: 44px; padding-inline-end: 32px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
 .settingRowText .infoBadge { width: 14px; height: 14px; border: 1px solid var(--fg-muted); background: transparent; font-size: 10px; line-height: 1; }
@@ -1571,7 +1571,7 @@
 .content a { color: var(--link-foreground); }
 
 /* Keep contextual help with its label in stacked, row and grid fields. */
-.helpLabel { display: flex; align-items: baseline; min-width: 0; width: fit-content; max-width: 100%; }
+.helpLabel { display: block; min-width: 0; width: fit-content; max-width: 100%; }
 .group .helpLabel { margin-bottom: 6px; }
 .helpLabel > label { display: inline; min-width: 0; margin-bottom: 0; }
 .helpLabel > .infoBadge { flex-shrink: 0; }
@@ -1585,7 +1585,14 @@
   .nav { box-sizing: border-box; padding-right: 24px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
   .navSearch { padding: 0; min-width: 0; }
   .compactNav { min-width: 0; }
-  .content { scrollbar-gutter: auto; }
-  .settingRowControl:has(.colorSwatch) { align-items: flex-start; }
-  .settingRowControl > div:has(.colorSwatch) { justify-content: flex-start; }
 }
+
+/* Catalogue labels wrap their controls rather than sharing a setting row. */
+.catalogueLabel { display: flex; flex-direction: column; gap: 8px; }
+.catalogueLabel select { padding-inline-end: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Reserve the badge width on the final inline label fragment, then occupy that space. */
+.helpLabel > label:has(+ .infoBadge) { padding-inline-end: 20px; }
+.helpLabel > label + .infoBadge { margin-inline-start: -14px; }
+
+.catalogueActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block-start: 8px; }

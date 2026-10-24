@@ -794,11 +794,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 											<Show
 												when={!isHarnessNotice(user().text)}
 												fallback={
-													<div class={s.systemNotice} role="note" title={user().text}>
-														{props.terminalAgent && user().text.trim().startsWith("[TUIC]")
-															? "Message from an agent"
-															: user().text}
-													</div>
+													<Show when={!props.terminalAgent || !user().text.trim().startsWith("[TUIC]")}>
+														<div class={s.systemNotice} role="note" title={user().text}>
+															{user().text}
+														</div>
+													</Show>
 												}
 											>
 												<div class={s.userMsg}>

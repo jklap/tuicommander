@@ -105,7 +105,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 
 	const updateEntry = createMemo(() => {
 		const v = props.plugin.manifest?.version;
-		return v ? registryStore.hasUpdate(props.plugin.id, v) : null;
+		return v ? registryStore.hasUpdate(props.plugin.id, v, props.plugin.manifest?.contentSha256) : null;
 	});
 	const [updating, setUpdating] = createSignal(false);
 
@@ -288,7 +288,7 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 	const updateAvailable = () => {
 		const p = installed();
 		if (!p?.manifest?.version) return false;
-		return registryStore.hasUpdate(props.entry.id, p.manifest.version) !== null;
+		return registryStore.hasUpdate(props.entry.id, p.manifest.version, p.manifest.contentSha256) !== null;
 	};
 
 	const handleInstall = async () => {
@@ -437,12 +437,7 @@ export const PluginsTab: Component<{
 	return (
 		<div class={s.section}>
 			<div>
-				<SettingPageHeader
-					title="Manage plugins"
-					description="Manage installed plugins and browse the community registry."
-					scope="Application defaults"
-					breadcrumb="Plugins / Manage plugins"
-				/>
+				<SettingPageHeader title="Manage plugins" scope="Application defaults" breadcrumb="Plugins / Manage plugins" />
 				<button
 					data-non-setting="Open plugin documentation"
 					class={ps.docsLink}
@@ -483,9 +478,7 @@ export const PluginsTab: Component<{
 
 					<Show
 						when={plugins().length > 0}
-						fallback={
-							<p class={s.hint}>No plugins installed. Use the buttons below to install from a folder or ZIP file.</p>
-						}
+						fallback={<p class={`${s.hint} ${ps.emptyState}`}>No plugins installed.</p>}
 					>
 						<div class={ps.pluginList}>
 							<For each={plugins() as PluginState[]}>

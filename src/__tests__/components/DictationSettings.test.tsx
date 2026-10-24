@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 import { mockInvoke } from "../mocks/tauri";
 
 const mockStore = vi.hoisted(() => ({
@@ -893,11 +894,21 @@ describe("DictationSettings – layout", () => {
 		});
 
 		it("still renders when Rust cannot supply the default text", async () => {
-			mockStore.getDefaultHandsFreeStartNotice.mockRejectedValue(new Error("unknown command"));
-			const { container } = render(() => <DictationSettings />);
-			await Promise.resolve();
-			await Promise.resolve();
-			expect(noticeField(container)?.placeholder).toBe("");
+			const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+			try {
+				mockStore.getDefaultHandsFreeStartNotice.mockRejectedValue(new Error("unknown command"));
+				const { container } = render(() => <DictationSettings />);
+				await vi.waitFor(() =>
+					expect(warning).toHaveBeenCalledExactlyOnceWith(
+						"dictation",
+						"Failed to load the default hands-free start notice",
+					),
+				);
+				expect(noticeField(container)?.placeholder).toBe("");
+			} finally {
+				mockStore.getDefaultHandsFreeStartNotice.mockResolvedValue("Built-in notice from Rust");
+				warning.mockRestore();
+			}
 		});
 	});
 });

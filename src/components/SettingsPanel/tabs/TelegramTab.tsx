@@ -111,16 +111,7 @@ export const TelegramTab: Component = () => {
 	});
 	return (
 		<div class={`${s.section} ${telegram.panel}`}>
-			<SettingPageHeader
-				title="Telegram"
-				description="Bot setup and authorized chats on this machine."
-				scope="This machine"
-				breadcrumb="Integrations / Telegram"
-				source={t(
-					"telegram.pollingHint",
-					"This app and tuic-remote share one polling owner on this machine. The other process stays on standby.",
-				)}
-			/>
+			<SettingPageHeader title="Telegram" scope="This machine" breadcrumb="Integrations / Telegram" />
 			<Show when={settings()}>
 				{(data) => (
 					<>
@@ -289,10 +280,7 @@ export const TelegramTab: Component = () => {
 								)}
 							</SettingRow>
 						</SectionCard>
-						<SectionCard
-							title="Recent messages"
-							description="Last 20 events in this process, newest first. Cleared on restart. Credentials and unauthorized text are redacted."
-						>
+						<SectionCard title="Recent messages" description="Last 20 events, newest first. Cleared on restart.">
 							<Show when={data().recent_events?.length} fallback={<p class={s.hint}>No recent Telegram events.</p>}>
 								<For each={data().recent_events}>
 									{(event) => (

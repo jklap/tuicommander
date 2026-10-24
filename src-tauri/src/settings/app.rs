@@ -140,7 +140,7 @@ impl Store for AppSettingsStore {
             .ok_or_else(|| Error::new("app", "unavailable"))?;
         let cached = state.config.read();
         let tools_changed = cached.settings_mcp_enabled != next.settings_mcp_enabled
-            || cached.disabled_native_tools != next.disabled_native_tools
+            || cached.mcp_capabilities != next.mcp_capabilities
             || cached.collapse_tools != next.collapse_tools;
         let server_changed = server_settings_changed(&cached, &next);
         let reflow_changed = cached.scrollback_reflow != next.scrollback_reflow;

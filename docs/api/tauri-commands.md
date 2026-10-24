@@ -1,10 +1,12 @@
 # Tauri Commands Reference
 
+Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
+
 ## Scoped plugin settings
 
 `plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Workflow runs
 
@@ -20,10 +22,27 @@ Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,def
 
 ## Native stories
 
+Native stories expose `qa` for work that waits on manual checks. A criterion starts with `[MANUAL]`, or is marked through `set_criterion_manual {index,manual}`. Active work automatically enters QA when all unchecked criteria are manual; `submit_qa` explicitly requests that state. `reject_qa` returns QA to In progress; `approve` requires every criterion checked. QA keeps plans Active and dependencies blocked. All transitions retain expected-revision checks. See the [native stories guide](../user-guide/native-stories.md#manual-qa).
+
+### Reversible native record archival
+
+All native story transports share `archive_story`, `unarchive_story`, `archive_plan`, and `unarchive_plan`. Story actions take `story_id`; plan actions take `plan_id`. Each requires `expected_revision` and returns the updated record with its incremented `revision` and `archived` flag. Stale revisions fail without a write. Archival preserves status, criteria, dependencies, and child archive flags; it never deletes records or cascades to children.
+
+`list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
+
+Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+
+
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
+| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, amends, claims, transitions, or removes a cancelled dependency from native stories. `update_story` takes a revision-checked typed patch for unclaimed Backlog/Ready stories without run ownership; metadata, criteria and dependencies commit atomically. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
+
+`list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
+
+`filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
 
 ## Project Progress
 
@@ -78,7 +97,6 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
-| `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `get_pty_capture` | -- | `JSON` | Raw PTY capture tap state: enabled, session filter, directory, bytes per session. Browser parity: `GET /diagnostics/capture`. |
 | `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap` or the absolute `TUIC_CAPTURE_DIR` override; a relative override returns an error and leaves recording disabled. Starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
@@ -86,17 +104,14 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col, history_base?` | `Result<String, String>` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Optional frame `history_base` rebases grid-relative rows atomically against history eviction; evicted endpoints are rejected. Browser parity: `GET /sessions/:id/terminal/selection-text` (`historyBase` query parameter). |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
 | `subscribe_terminal_grid` | `session_id, channel: Channel<Response>, visible: bool` | `u64` (epoch) | Register the grid-frame channel and initial visibility for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
-| `ack_terminal_frame` | `session_id, epoch: u64, received: u64, visible?: bool` | `()` | Report the total number of frames this client has received and optionally update epoch-scoped desktop visibility. Hidden subscriptions receive no frames. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
+| `ack_terminal_frame` | `session_id, epoch: u64, received: u64, visible?: bool` | `()` | Report the total number of frames this client has received and optionally update epoch-scoped desktop visibility. Hidden subscriptions receive no frames. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. A receipt never marks the grid dirty or generates a frame; actual pending damage and recovery debt are retained by the ticker. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
 | `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
-Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
-`terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
-`terminal_get_cursor_line`, `terminal_hyperlink_at` and
-`terminal_hyperlink_span` and `read_vt_log` — is an `async fn` that runs on the blocking pool via
-`pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
+`terminal_get_row_text`, `terminal_get_logical_line`, and `terminal_get_lines`
+use `pty::vt_try_read`, so each returns `Result<T, String>` rather than a bare `T`.
 The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
 [`docs/backend/command-threading.md`](../backend/command-threading.md).
@@ -158,7 +173,6 @@ receive it on `/events`.
 | `get_repo_structure` | `repo_path` | `RepoStructure` | Fast phase: worktree paths + merged branches only (Phase 1 of progressive loading) |
 | `get_repo_diff_stats` | `repo_path` | `RepoDiffStats` | Slow phase: per-worktree diff stats, last commit timestamps, and `workspace_statuses` keyed by opaque workspace id (Phase 2 of progressive loading) |
 | `run_git_command` | `path, args` | `GitCommandResult` | Run allowlisted git command (success, stdout, stderr, exit_code) |
-| `get_git_panel_context` | `path` | `GitPanelContext` | Rich context for Git Panel (branch, ahead/behind, staged/changed/stash counts, last commit, rebase/cherry-pick state). Cached 5s TTL. |
 | `get_working_tree_status` | `path` | `WorkingTreeStatus` | Full porcelain v2 status: branch, upstream, ahead/behind, stash count, staged/unstaged entries, untracked files |
 | `update_from_base` | `path, branch_name, strategy?` | `String` | Fetch configured base ref and rebase or merge the branch onto it. Conflict cleanup reports `(aborted)` only after abort succeeds; abort failure includes manual recovery guidance. |
 | `git_stage_files` | `path, files` | `()` | Stage files (`git add`). Path-traversal validated |
@@ -324,6 +338,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
 | `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
+| `set_remote_connection_relay_pairing` | `id, bundle` | `()` | Parse and store the relay pairing bundle from `tuic-remote --relay-pair` in the OS credential vault, or forget it when `bundle` is empty. Same owner and value-free `connections` Settings change as the HTTP route |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json`. Publishes a value-free `connections` Settings change only after vault persistence, through the same owner as HTTP |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
@@ -362,7 +377,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. IPC and HTTP run filesystem and process reads on the blocking pool. Ego bindings are cached by sessions root and pid, with one-lease pid and writer-lock validation; a miss scans for the latest matching heartbeat. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -378,24 +393,9 @@ Activity Dashboard and the Git panel.
 
 ## The embedded AI engine is gone (#784-0aec)
 
-There is no `ai_chat.rs`, `ai_chat_registry.rs`, `provider_registry.rs`,
-`llm_api.rs`, `diff_triage.rs`, `improvement_scan.rs` or `changelog.rs`, and
-`ai_agent/` holds only `knowledge.rs` and `tui_detect.rs`. Every command those
-modules registered is unregistered, every `/ai/*` route is unmounted, and the
-matching `COMMAND_TABLE` entries are removed from `src/transport.ts`.
-TUICommander makes no provider HTTP call and stores no model API key.
+The embedded ReAct loop, provider registry and model-key storage were removed. `ego` supplies intelligence over ACP — see **ACP client for ego** below. PR review, changelog generation and improvement scanning use unattended ego turns.
 
-`ego` supplies the intelligence over ACP — see **ACP client for ego** below.
-What comes back where is tabulated in [`docs/sync-matrix.md`](../sync-matrix.md)
-under *What #784-0aec removed*.
-
-Command knowledge is the one thing that stayed, because recording it involves no
-model: `pty.rs` still writes `CommandOutcome` rows per session and
-`ai_agent::knowledge::spawn_persist_task` still flushes them to
-`<config_dir>/ai-sessions/<session_id>.json`. No command reads them back — the
-`get_session_knowledge`, `list_knowledge_sessions` and
-`get_knowledge_session_detail` accessors went with the UI that called them.
-
+`ai_agent/` retains only `tui_detect.rs`, which classifies terminal activity. The write-only command knowledge store and its persistence task were removed in #2115-1333. No knowledge accessor command remains.
 
 ## MCP OAuth 2.1 (`mcp_oauth/commands.rs`)
 
@@ -556,16 +556,12 @@ are unaffected (they build `NSAlert`) and stay as they are.
 
 ## Filesystem (`fs.rs`)
 
-`upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
-binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
-
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
 | `resolve_terminal_paths` | `cwd, candidates` | `Vec<Option<ResolvedFilePath>>` | Batched form, answered **positionally**: entry `i` is the result for `candidates[i]`. One IPC round-trip per terminal screen instead of one per candidate |
 | `resolve_markdown_link` | `root, currentFile, href` | `MarkdownLinkTarget` | Decode and resolve a rendered Markdown link relative to its file; return a heading, file, missing path, or blocked network path. Runs filesystem work on the blocking pool |
-| `list_directory` | `path` | `Vec<DirEntry>` | List directory contents |
+| `list_directory` | `repoPath, subdir` | `Vec<DirEntry>` | List directory contents; links add `symlink_target` (link text) and `symlink_target_kind` (`directory`, `file`, `unavailable`), with size 0 |
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
@@ -599,7 +595,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests |
+| `list_user_plugins` | `pluginIds?: string[]` | `Vec<PluginManifest>` | List valid plugin manifests with backend-derived optional `contentSha256` |
 | `get_plugin_readme_path` | `id` | `Option<String>` | Get plugin README.md path |
 | `read_plugin_data` | `plugin_id, path` | `Option<String>` | Read plugin data file |
 | `write_plugin_data` | `plugin_id, path, content` | `()` | Write plugin data file |
@@ -631,7 +627,8 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `plugin_github_action` | `plugin_id, account, reference, request` | `Value` | Account-scoped B6/B7 bridge; requires net:http, manifest github provider consent and matching PR reference |
-| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id, request_id?` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_cancel` | `plugin_id, request_id` | `()` | Cancel a plugin-scoped HTTP request, including its response body. |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -705,7 +702,8 @@ empty result.
 | `hash_password` | `password` | `String` | Bcrypt hash |
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
-| `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `get_mcp_status` | -- | `JSON` | MCP server status including live `tls_active` (not Tailscale capability), plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `get_mcp_audit` | -- | `JSON` | Body-free MCP tools/call outcome audit (same body as `GET /mcp/audit`); `{enabled:false,records:[]}` while `mcp_call_audit_enabled` is off |
 | `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
@@ -1081,3 +1079,34 @@ host-injected state routes both through the shared value-free Settings publisher
 only after owner persistence. Their HTTP equivalents use the same adapters.
 
 Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).
+
+`github_diagnostics` includes `repo_access_errors` grouped by account, host and
+owner, with per-repository reason (`not_found`, `forbidden` or `unknown`) and
+exact message, plus an OAuth app authorization URL for every github.com OAuth group. IPC and HTTP share this DTO.
+
+`github_diagnostics` accepts optional `refresh: boolean` (default false). True
+clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
+`POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.
+
+### Detached checkout inventory
+
+`get_repo_structure` and `get_repo_summary` include `detached_worktrees: Array<{path, head, short_head, directory_name, state: "detached"}>`, matching HTTP. `get_worktree_paths` retains its branch-workspace map response. Detached records have no workspace ID and cannot be used in branch actions.
+
+### Session usage
+
+| Command | Arguments | Result |
+|---------|-----------|--------|
+| `get_session_usage` | `sessionId: string` | Session-owned usage snapshot; same shape as `GET /sessions/{id}/usage` |
+
+This async command runs outside the macOS main thread. Rust selects the owner,
+profile and exact ego ledger row. Missing usage is an explicit unavailable
+snapshot, not a zero quota or cost. No messages-generation fallback is used.
+
+`get_repo_structure` and `get_repo_summary` also return `worktree_diagnostics: Array<{path, branch: string | null, state: "missing" | "duplicate_branch", guidance}>`, identical to HTTP. Diagnostics are read-only and have no workspace ID. Discovery does not prune unavailable registrations.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+
+### Append-only story notes
+
+`add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.

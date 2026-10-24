@@ -19,6 +19,9 @@ const ignoreNonFrontendFile = (path: string): boolean => {
   if (file === "") return false; // Keep the root itself watchable.
   if (file === ".." || file.startsWith("../") || isAbsolute(file)) return true;
   if (file.split("/").includes(".tmp")) return true;
+  // Rust owns this grammar, but frontend imports must invalidate on edits too.
+  const intentGrammar = "src-tauri/crates/tuic-terminal/src/intent_marker.json";
+  if (file === intentGrammar || intentGrammar.startsWith(`${file}/`)) return false;
   if (file === "src" || file.startsWith("src/")) return false;
   if (file === "public" || file.startsWith("public/")) return false;
   if (!file.includes("/") && file.endsWith(".html")) return false;

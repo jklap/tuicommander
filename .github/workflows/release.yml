@@ -18,7 +18,7 @@ on:
 # docs/guides/ci.md.
 env:
   SCCACHE_IDLE_TIMEOUT: "0"
-  RUST_VERSION: "1.98.0"
+  RUST_VERSION: "1.99.1"
 
 jobs:
   build:
@@ -224,6 +224,9 @@ jobs:
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
   remote-daemon:
+    # tauri-action creates the draft at the end of the desktop build. Fast daemon
+    # builds must not upload by tag before that release exists.
+    needs: build
     permissions:
       contents: write
     uses: ./.github/workflows/remote-daemon.yml
@@ -311,6 +314,27 @@ jobs:
           ```
           FOOTER
           } > .tmp/tuic-tests/release-body.md
+
+          # GitHub rejects bodies over 125000 characters. A byte budget is stricter
+          # for UTF-8; reserve the complete download footer and full-changelog link.
+          python3 - "${TAG}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(".tmp/tuic-tests/release-body.md")
+          body = path.read_bytes()
+          if len(body) > 120000:
+              notes, separator, footer = body.rpartition("\n---\n\n📦 **Downloads**".encode("utf-8"))
+              assert separator, "Release download footer not found"
+              footer = separator + footer
+              link = (f"\n\n[Full changelog](https://github.com/sstraus/tuicommander/blob/{sys.argv[1]}/CHANGELOG.md)"
+                      " — release notes truncated.\n").encode("utf-8")
+              budget = 120000 - len(footer) - len(link)
+              # Keep only complete lines, including for an oversized single line.
+              prefix = notes[:budget]
+              prefix = prefix[:prefix.rfind(b"\n") + 1]
+              path.write_bytes(prefix + link + footer)
+          PY
 
           # A stable release leaves "latest" to GitHub, as before; a prerelease never takes it.
           eval "$(bash scripts/release-flags.sh "${VERSION}")"

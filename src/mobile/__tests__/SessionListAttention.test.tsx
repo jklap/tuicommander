@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuestionBanner } from "../components/QuestionBanner";
 import { StatusBadge } from "../components/StatusBadge";
-import { TopBar } from "../components/TopBar";
+import { SessionsScreen } from "../screens/SessionsScreen";
 import type { SessionInfo } from "../useSessions";
 
 afterEach(cleanup);
@@ -37,12 +37,26 @@ describe("mobile session attention", () => {
 		expect(banner.textContent).toContain("Approve?");
 	});
 
-	it("opens a waiting session from the counter", async () => {
+	// Catches: moving the counter action opens an idle session or drops waiting-session navigation.
+	it.each([1, 3])("opens the first of %i waiting sessions from the AWAITING tile", async (count) => {
 		const onNavigate = vi.fn();
 		const view = render(() => (
-			<TopBar notificationCount={1} isConnected onNotificationsClick={() => onNavigate(waiting.session_id)} />
+			<SessionsScreen
+				sessions={[
+					{ ...waiting, session_id: "idle", state: { ...waiting.state!, awaiting_input: false } },
+					...Array.from({ length: count }, (_, index) => ({
+						...waiting,
+						session_id: index === 0 ? "review" : `review-${index}`,
+					})),
+				]}
+				loading={false}
+				refreshing={false}
+				error={null}
+				onRefresh={() => {}}
+				onSelectSession={onNavigate}
+			/>
 		));
-		await fireEvent.click(view.getByRole("button", { name: "Open 1 waiting session" }));
+		await fireEvent.click(view.getByRole("button", { name: new RegExp(`^${count}\\s*Awaiting$`) }));
 		expect(onNavigate).toHaveBeenCalledWith("review");
 	});
 

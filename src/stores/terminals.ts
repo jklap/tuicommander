@@ -1,6 +1,7 @@
 import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { AgentType } from "../agents";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { rpc } from "../transport";
 import { getRepoConnection, setSessionConnectionLookup } from "../transportRuntime";
 import type { TerminalMatch } from "../types";
@@ -78,6 +79,8 @@ export interface TerminalData {
 	/** Legacy backend placement metadata; never overrides cwd for tab placement or cleanup. */
 	placementPath?: string | null;
 	awaitingInput: AwaitingInputType;
+	questionText?: string | null;
+	choicePrompt?: ChoicePrompt | null;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
@@ -88,6 +91,7 @@ export interface TerminalData {
 	agentState: AgentLifecycleState;
 	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
+	abandonedSinceMs?: number | null;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
@@ -142,6 +146,7 @@ type TerminalCreateData = Omit<
 	| "shellStateRevision"
 	| "agentState"
 	| "backgroundWork"
+	| "abandonedSinceMs"
 	| "queuedCommands"
 	| "completionNotified"
 	| "nameIsCustom"

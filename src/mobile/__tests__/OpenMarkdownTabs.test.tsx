@@ -32,13 +32,13 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), info: vi.
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => mockSessions.current,
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
 		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 	}),
 }));
 vi.mock("../useMobileNotifications", () => ({ useMobileNotifications: vi.fn() }));
@@ -122,6 +122,7 @@ it("refreshes tabs closed before the first SSE connection opens", async () => {
 	await waitFor(() => expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBeTruthy());
 	// No SSE subscriber existed when the desktop closed this tab.
 	tabs = [];
+	await waitFor(() => expect(streams).toHaveLength(1));
 	streams[0].onopen?.();
 	await waitFor(() => expect(view.getByText("No open Markdown tabs")).toBeTruthy());
 });

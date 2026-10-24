@@ -55,6 +55,42 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
     assert_eq!(server.requests().len(), requests.len());
 }
 
+// Catches: the owner-side escape or reserved budget alters an exact owner message:
+// a leading '[' gains a backslash, or a full 4096-unit text is split in two.
+#[tokio::test]
+async fn owner_text_reaches_telegram_byte_exact_at_the_limit() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(
+        (1..=2)
+            .map(|id| {
+                (
+                    StatusCode::OK,
+                    json!({"ok":true,"result":{"message_id":id}}),
+                )
+            })
+            .collect(),
+    )
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
+    for text in ["[x] done".to_string(), "a".repeat(4096)] {
+        runtime
+            .tool(
+                PEER,
+                "target-mcp",
+                crate::telegram::tool::Input::Send {
+                    text: text.clone(),
+                    buttons: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let requests = server.requests();
+        let (_, body) = requests.last().unwrap();
+        assert_eq!(body["text"].as_str().unwrap(), text);
+    }
+    assert_eq!(server.requests().len(), 2);
+}
+
 // Catches: activity replaces the draft id, finalization leaves refresh running,
 // a revoked destination is sent after the outbound wait, or refreshed drafts
 // lose the phone Stop control.
@@ -132,7 +168,7 @@ pub(in crate::telegram) async fn runtime(
 ) -> crate::telegram::runtime::Runtime {
     use crate::mcp_http::mcp_transport::local_peer_call_with_message_id;
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     for (sid, peer) in [
         ("adapter-mcp", "22222222-2222-4222-8222-222222222222"),
         ("target-mcp", PEER),
@@ -335,7 +371,10 @@ async fn tool_requires_bound_caller_and_pending_request() {
             .await
             .is_err()
     );
-    assert!(server.requests().is_empty());
+    assert_eq!(
+        server.requests(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
 }
 
 // Catches: partial or failed final delivery starts streaming again or permits

@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use crate::cli_usage_rpc::{UsageCache, looks_like_auth_failure, looks_like_contract_failure};
 
 // ---------------------------------------------------------------------------
 // Stable TUIC transport types (mapped from the App Server response)
@@ -186,49 +188,14 @@ pub struct CodexStatsResponse {
 // Cache + fetch
 // ---------------------------------------------------------------------------
 
-/// TTL cache shared by both endpoints — one generic so the usage ticker and the
-/// dashboard cannot drift into two different staleness policies.
-struct TtlCache<T>(parking_lot::Mutex<Option<(T, Instant)>>);
-
-impl<T: Clone> TtlCache<T> {
-    const fn new() -> Self {
-        Self(parking_lot::Mutex::new(None))
-    }
-
-    fn fresh(&self) -> Option<T> {
-        let guard = self.0.lock();
-        let (value, at) = guard.as_ref()?;
-        (at.elapsed() < API_CACHE_TTL).then(|| value.clone())
-    }
-
-    /// The last good reading, but only while it is still worth showing. Without
-    /// the age bound a reading stood in for a live one forever, so a persistent
-    /// failure froze the ticker on an hours-old percentage that looked current.
-    fn stale(&self) -> Option<T> {
-        let guard = self.0.lock();
-        let (value, at) = guard.as_ref()?;
-        (at.elapsed() < STALE_FALLBACK_MAX_AGE).then(|| value.clone())
-    }
-
-    fn put(&self, value: &T) {
-        *self.0.lock() = Some((value.clone(), Instant::now()));
-    }
-}
-
 #[derive(Clone)]
 struct CodexSnapshot {
     usage: CodexUsageApiResponse,
     stats: CodexStatsResponse,
 }
 
-static SNAPSHOT_CACHE: TtlCache<CodexSnapshot> = TtlCache::new();
+static SNAPSHOT_CACHE: UsageCache<CodexSnapshot> = UsageCache::new();
 static FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Cache TTL — matches the Claude path so both tickers poll at the same cadence.
-const API_CACHE_TTL: Duration = Duration::from_secs(300);
-/// How old a cached reading may be before it stops standing in for a live one.
-/// Past this age the error is more honest than an apparently current figure.
-const STALE_FALLBACK_MAX_AGE: Duration = Duration::from_secs(1800);
 
 fn reset_after(resets_at: Option<i64>, now: i64) -> Option<i64> {
     resets_at.map(|value| value.saturating_sub(now).max(0))
@@ -326,25 +293,6 @@ fn map_app_server_snapshot(
     }
 }
 
-fn looks_like_auth_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("not logged in")
-        || lower.contains("authentication")
-        || lower.contains("unauthorized")
-        || lower.contains("401")
-        || lower.contains("403")
-}
-
-fn looks_like_contract_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    message.contains("Failed to parse")
-        || message.contains("returned no result")
-        || message.contains("returned no response")
-        || lower.contains("method not found")
-        || lower.contains("unknown method")
-        || lower.contains("unsupported method")
-}
-
 async fn fetch_snapshot() -> Result<CodexSnapshot, String> {
     let detection = crate::agent::detect_agent_binary("codex".to_string()).await;
     let binary = detection
@@ -407,6 +355,61 @@ async fn cached_snapshot() -> Result<CodexSnapshot, String> {
     }
 }
 
+/// Query only quota through the existing App Server contract, with explicit process home/profile.
+pub(crate) async fn session_quota(
+    home: &str,
+    codex_home: &str,
+    profile: Option<&str>,
+) -> Result<CodexUsageApiResponse, String> {
+    let detection = crate::agent::detect_agent_binary("codex".into()).await;
+    let binary = detection.path.ok_or("Codex CLI unavailable")?;
+    session_quota_from_binary(Path::new(&binary), home, codex_home, profile).await
+}
+
+async fn session_quota_from_binary(
+    binary: &Path,
+    home: &str,
+    codex_home: &str,
+    profile: Option<&str>,
+) -> Result<CodexUsageApiResponse, String> {
+    let mut args = Vec::new();
+    if let Some(profile) = profile {
+        args.extend(["--profile", profile]);
+    }
+    args.push("app-server");
+    let messages = [
+        serde_json::json!({"method":"initialize","id":0,"params":{"clientInfo":{"name":"tuicommander","version":env!("CARGO_PKG_VERSION")}}}),
+        serde_json::json!({"method":"initialized","params":{}}),
+        serde_json::json!({"method":"account/rateLimits/read","id":1,"params":null}),
+    ];
+    let responses = crate::cli_usage_rpc::request_jsonl_with_env(
+        binary,
+        &args,
+        &messages,
+        &[1],
+        Duration::from_secs(20),
+        &[
+            ("HOME".into(), home.into()),
+            ("CODEX_HOME".into(), codex_home.into()),
+        ],
+    )
+    .await?;
+    let limits = crate::cli_usage_rpc::decode_result(&responses, 1, "Codex rate limits")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    Ok(map_app_server_snapshot(
+        limits,
+        AppTokenUsageResponse {
+            summary: AppTokenSummary::default(),
+            daily_usage_buckets: None,
+        },
+        now,
+    )
+    .usage)
+}
+
 /// Fetch Codex rate-limit usage (powers the status bar ticker).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_codex_usage_api() -> Result<CodexUsageApiResponse, String> {
@@ -422,6 +425,52 @@ pub async fn get_codex_usage_stats() -> Result<CodexStatsResponse, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: passing root --profile after app-server, which the real CLI rejects.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_profile_quota_uses_root_arguments_at_process_boundary() {
+        // Syntax mirrors the installed CLI help captured by critic-2150r1.
+        let script = crate::test_support::fake_ssh_script(
+            "2150-codex-root-profile",
+            r#"
+case "$*" in
+  'app-server'|'--profile work app-server') ;;
+  *) exit 2 ;;
+esac
+while IFS= read -r request; do
+  case "$request" in
+    *account/rateLimits/read*)
+      printf '%s\n' '{"id":1,"result":{"rateLimits":{"primary":{"usedPercent":23.5,"windowDurationMins":300}}}}'
+      ;;
+  esac
+done
+"#,
+            "exit /b 2",
+        );
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let binary = dir.path().join("codex");
+        std::fs::copy(script, &binary).unwrap();
+        for profile in [Some("work"), None] {
+            let quota = session_quota_from_binary(
+                &binary,
+                dir.path().to_str().unwrap(),
+                dir.path().to_str().unwrap(),
+                profile,
+            )
+            .await
+            .expect("profiled CLI must return quota, not an argument error");
+            assert_eq!(
+                quota
+                    .rate_limit
+                    .unwrap()
+                    .primary_window
+                    .unwrap()
+                    .used_percent,
+                23.5
+            );
+        }
+    }
 
     #[test]
     fn maps_official_app_server_snapshot() {

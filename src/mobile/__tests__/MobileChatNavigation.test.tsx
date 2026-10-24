@@ -7,7 +7,7 @@ afterEach(cleanup);
 describe("mobile chat navigation", () => {
 	it("opens Chat as the primary mobile tab", () => {
 		const select = vi.fn();
-		render(() => <BottomTabs active={"chat"} onSelect={select} />);
+		render(() => <BottomTabs aiChatAvailable={true} active={"chat"} onSelect={select} />);
 		const chat = screen.getByRole("button", { name: "Chat" });
 		expect(chat.getAttribute("aria-current")).toBe("page");
 		chat.click();

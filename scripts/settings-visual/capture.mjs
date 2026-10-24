@@ -1,13 +1,13 @@
 import {spawn,spawnSync} from 'node:child_process';
 import {createWriteStream} from 'node:fs';
+import {lockProbeFailure} from './lock-probe.mjs';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 const source=new URL('./',import.meta.url).pathname;
 const dir=process.cwd()+'/.tmp/settings-visual/'+(process.env.VISUAL_RUN??'capture')+'/';
 await mkdir(dir,{recursive:true});
 if(process.platform==='darwin'){
  const lock=spawnSync('ioreg',['-n','Root','-d1','-a'],{encoding:'utf8',timeout:10000});
- const state=/<key>CGSSessionScreenIsLocked<\/key>\s*<(true|false)\/>/.exec(lock.stdout??'');
- const reason=lock.error?'macOS lock probe failed: '+lock.error.message:lock.status!==0?'macOS lock probe failed with status '+lock.status:!state?'macOS lock probe returned no usable lock state':state[1]==='true'?'macOS screen is locked; unlock the display before screenshot or rAF checks':null;
+ const reason=lockProbeFailure(lock);
  if(reason){
   // DEFERRED (2026-10-18) — macOS pauses Chrome rendering while locked; screenshots need an unlocked display.
   const error='Visual prerequisite unavailable: '+reason+'. No UI assertion ran.';
@@ -30,8 +30,11 @@ function send(method,params={}){return new Promise((resolve,reject)=>{const id=+
 async function ev(expression){const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value;}
 await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await send('Page.enable');await send('Runtime.enable');await send('Fetch.enable',{patterns:[{urlPattern:'*'}]});
 const tabs=process.env.VISUAL_PAGES?process.env.VISUAL_PAGES.split(','):test==='settings_text_contrast_on_themed_surfaces'?['general','terminal','keyboard-shortcuts','ai-chat','plugins','repo:/workspace/fixture-project']:test==='settings_agent_initials_contrast'?['agents']:test==='settings_appearance_legend_light_text_contrast'?['appearance']:test==='settings_help_badges_share_label_line'?['general','notifications','github','agents','repo:/workspace/fixture-project']:['general','appearance','notifications','terminal','keyboard-shortcuts','github','agents','ai-chat','dictation','smart-prompts','mcp','remote-access','remote-machines','telegram','plugins','repo:/workspace/fixture-project'];
+// Custom launchers are desktop-only. Keep the scenario and its assertion for
+// desktop captures; browser mode must not expect controls the app deliberately hides.
+const launcherScenarios=process.env.VISUAL_BROWSER==='1'?[]:[{tab:'general',state:'launcher-editor'}];
 const results=[];
-for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},{tab:'general',state:'launcher-editor'},...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});const url=`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}${process.env.VISUAL_BROWSER==='1'?'&browser=1':''}`;
+for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},...launcherScenarios,...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});const url=`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}${process.env.VISUAL_BROWSER==='1'?'&browser=1':''}`;
 await send('Page.navigate',{url});
 let settled=false;
 for(let ready=0;ready<100;ready++){

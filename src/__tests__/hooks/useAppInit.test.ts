@@ -25,7 +25,8 @@ import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import * as transport from "../../transport";
-import { makeTerminal } from "../helpers/store";
+import egoAwaiting2103 from "../fixtures/ego-awaiting-2103.json";
+import { makeTerminal, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
@@ -134,6 +135,53 @@ describe("initApp", () => {
 		});
 	});
 
+	// Catches: live session adoption drops tuic_session, so declarations cannot move a new worker's sidebar tab.
+	it("live_created_caller_declaration_moves_only_its_tab_without_changing_cwd", async () => {
+		const handlers = new Map<string, (event: { payload: unknown }) => void>();
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			handlers.set(event, handler);
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		await initApp(createMockDeps());
+		const { useWorktreeSwitchPrompt } = await import("../../hooks/useWorktreeSwitchPrompt");
+		await testInScopeAsync(async () => {
+			useWorktreeSwitchPrompt({ handleBranchSelect: vi.fn(), closeTerminalsForBranch: vi.fn() });
+			await Promise.resolve();
+			const created = handlers.get("session-created")!;
+			const caller = {
+				payload: { session_id: "caller-pty", tuic_session: "stable-caller", cwd: "/repo", agent_type: "ego" },
+			};
+			created(caller);
+			created({
+				payload: { session_id: "sibling-pty", tuic_session: "stable-sibling", cwd: "/repo", agent_type: "ego" },
+			});
+			const callerId = terminalsStore.findBySessionId("caller-pty")!;
+			const siblingId = terminalsStore.findBySessionId("sibling-pty")!;
+			const declared = {
+				payload: {
+					creator_session: "caller-pty",
+					spawn_session: false,
+					repo_path: "/repo",
+					workspace_id: "feature",
+					branch: "feature",
+					worktree_path: "/repo__wt/feature",
+					kind: "worktree",
+				},
+			};
+			handlers.get("session-worktree-declared")!(declared);
+			expect(repositoriesStore.findOwnerForTerminal(callerId)?.workspaceId).toBe("feature");
+			created(caller);
+			handlers.get("session-worktree-declared")!(declared);
+			reconcileTerminalOwnership();
+			expect(repositoriesStore.get("/repo")?.workspaces.feature.terminals).toEqual([callerId]);
+			expect(repositoriesStore.findOwnerForTerminal(siblingId)?.workspaceId).toBe("main");
+			expect(terminalsStore.get(callerId)).toMatchObject({ cwd: "/repo", tuicSession: "stable-caller" });
+			expect(terminalsStore.getCount()).toBe(2);
+		});
+	});
+
 	// Catches: HTTP/MCP creation being confused with execution on another machine.
 	it("adopts a local MCP-spawned agent without marking its Chat remote", async () => {
 		let created: ((event: { payload: unknown }) => void) | undefined;
@@ -191,7 +239,11 @@ describe("initApp", () => {
 		expect(toast?.message).toContain("Open in Browser");
 	});
 	beforeEach(({ task }) => {
-		if (/^(adopts a local MCP-spawned|keeps local reconnected)/.test(task.name)) {
+		if (
+			/^(live_created_caller_declaration|adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration|offers Chat for a restored awaiting ego)/.test(
+				task.name,
+			)
+		) {
 			vi.spyOn(appLogger, "info").mockImplementation(() => {});
 			vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 			for (const level of ["warn", "error"] as const) {
@@ -748,6 +800,39 @@ describe("initApp", () => {
 		expect(tabs.getVisibleIds("/repos/alpha|main")).toContain(tabId);
 	});
 
+	// Catches: reconnect searches declarations only under cwd-derived repo B or null, losing repo A's placement.
+	it.each(["/repo-b/src", "/unregistered/src"])(
+		"reconnect_preserves_declaration_after_cross_repo_cwd (%s)",
+		async (cwd) => {
+			repositoriesStore._testSetHydrated(true);
+			repositoriesStore.add({ path: "/repo-a", displayName: "repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "declared", { worktreePath: "/repo-a__wt/declared" });
+			repositoriesStore.setDeclaredWorktree("/repo-a", "stable-declared-peer", {
+				workspaceId: "declared",
+				branch: "declared",
+				worktreePath: "/repo-a__wt/declared",
+			});
+			repositoriesStore.add({ path: "/repo-b", displayName: "repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "main", { worktreePath: "/repo-b" });
+			await initApp(
+				createMockDeps({
+					pty: {
+						listActiveSessions: vi
+							.fn()
+							.mockResolvedValue([{ session_id: "declared-pty", tuic_session: "stable-declared-peer", cwd }]),
+						close: vi.fn().mockResolvedValue(undefined),
+					},
+				}),
+			);
+			const id = terminalsStore.getTerminalForSession("declared-pty")!;
+			expect(repositoriesStore.findOwnerForTerminal(id)).toEqual({ repoPath: "/repo-a", workspaceId: "declared" });
+			expect(terminalsStore.get(id)?.repoPath).toBe("/repo-a");
+			expect(terminalsStore.get(id)?.cwd).toBe(cwd);
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(id);
+		},
+	);
+
 	it("re-adopts surviving PTY sessions", async () => {
 		const deps = createMockDeps({
 			pty: {
@@ -766,6 +851,22 @@ describe("initApp", () => {
 		expect(terminalsStore.get(ids[0])?.sessionId).toBe("sess-1");
 		expect(terminalsStore.get(ids[1])?.sessionId).toBe("sess-2");
 		expect(terminalsStore.get(ids[0])?.nameIsCustom).toBe(false);
+	});
+
+	// Catches: reload disables desktop ego Chat for a pending prompt in the Global Workspace.
+	// Recorded list_active_sessions row from the 2021-30cd live audit; see fixture provenance.
+	it("offers Chat for a restored awaiting ego session without a saved frontend binding", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([egoAwaiting2103]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		const id = terminalsStore.getTerminalForSession(egoAwaiting2103.session_id)!;
+		const restored = terminalsStore.get(id)!;
+		expect(restored).toMatchObject({ agentType: "ego", awaitingInput: "question", agentSessionId: null });
+		expect(chatViewAvailability(restored)).toEqual({ available: true });
 	});
 
 	it("preserves an explicitly customized surviving session name", async () => {

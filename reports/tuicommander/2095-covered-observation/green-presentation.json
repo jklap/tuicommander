@@ -1,0 +1,3483 @@
+[
+  {
+    "elapsed": 23,
+    "frames": 2,
+    "maxFrameGap": 17,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 5174,
+    "frames": 311,
+    "maxFrameGap": 23,
+    "lastFrameAge": 2,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 10348,
+    "frames": 621,
+    "maxFrameGap": 23,
+    "lastFrameAge": 9,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 15501,
+    "frames": 930,
+    "maxFrameGap": 23,
+    "lastFrameAge": 13,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 20682,
+    "frames": 1241,
+    "maxFrameGap": 23,
+    "lastFrameAge": 11,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 25844,
+    "frames": 1551,
+    "maxFrameGap": 23,
+    "lastFrameAge": 6,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 31051,
+    "frames": 1863,
+    "maxFrameGap": 24,
+    "lastFrameAge": 12,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 36313,
+    "frames": 2179,
+    "maxFrameGap": 24,
+    "lastFrameAge": 7,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 41476,
+    "frames": 2489,
+    "maxFrameGap": 24,
+    "lastFrameAge": 4,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 46617,
+    "frames": 2797,
+    "maxFrameGap": 24,
+    "lastFrameAge": 13,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 51763,
+    "frames": 3002,
+    "maxFrameGap": 35,
+    "lastFrameAge": 25,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 56910,
+    "frames": 3132,
+    "maxFrameGap": 134,
+    "lastFrameAge": 72,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 62171,
+    "frames": 3251,
+    "maxFrameGap": 136,
+    "lastFrameAge": 32,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 67305,
+    "frames": 3361,
+    "maxFrameGap": 136,
+    "lastFrameAge": 33,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 72554,
+    "frames": 3479,
+    "maxFrameGap": 142,
+    "lastFrameAge": 16,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 77804,
+    "frames": 3594,
+    "maxFrameGap": 142,
+    "lastFrameAge": 104,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 83074,
+    "frames": 3710,
+    "maxFrameGap": 142,
+    "lastFrameAge": 41,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 88329,
+    "frames": 3821,
+    "maxFrameGap": 142,
+    "lastFrameAge": 33,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 93683,
+    "frames": 3949,
+    "maxFrameGap": 154,
+    "lastFrameAge": 46,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 98980,
+    "frames": 4092,
+    "maxFrameGap": 154,
+    "lastFrameAge": 14,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 104344,
+    "frames": 4230,
+    "maxFrameGap": 154,
+    "lastFrameAge": 11,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 109669,
+    "frames": 4347,
+    "maxFrameGap": 154,
+    "lastFrameAge": 105,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 114817,
+    "frames": 4534,
+    "maxFrameGap": 232,
+    "lastFrameAge": 11,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 120011,
+    "frames": 4846,
+    "maxFrameGap": 232,
+    "lastFrameAge": 7,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 125190,
+    "frames": 5157,
+    "maxFrameGap": 232,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 130339,
+    "frames": 5466,
+    "maxFrameGap": 232,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 135492,
+    "frames": 5775,
+    "maxFrameGap": 232,
+    "lastFrameAge": 4,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 140647,
+    "frames": 6084,
+    "maxFrameGap": 232,
+    "lastFrameAge": 8,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 145787,
+    "frames": 6392,
+    "maxFrameGap": 232,
+    "lastFrameAge": 15,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 150926,
+    "frames": 6701,
+    "maxFrameGap": 232,
+    "lastFrameAge": 6,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 156074,
+    "frames": 7010,
+    "maxFrameGap": 232,
+    "lastFrameAge": 3,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 161274,
+    "frames": 7322,
+    "maxFrameGap": 232,
+    "lastFrameAge": 2,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 166459,
+    "frames": 7633,
+    "maxFrameGap": 232,
+    "lastFrameAge": 5,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 171613,
+    "frames": 7843,
+    "maxFrameGap": 232,
+    "lastFrameAge": 25,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 176785,
+    "frames": 7938,
+    "maxFrameGap": 267,
+    "lastFrameAge": 65,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 182169,
+    "frames": 8003,
+    "maxFrameGap": 267,
+    "lastFrameAge": 14,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 187318,
+    "frames": 8065,
+    "maxFrameGap": 267,
+    "lastFrameAge": 30,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 192471,
+    "frames": 8125,
+    "maxFrameGap": 267,
+    "lastFrameAge": 184,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 197741,
+    "frames": 8195,
+    "maxFrameGap": 267,
+    "lastFrameAge": 19,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 202906,
+    "frames": 8284,
+    "maxFrameGap": 267,
+    "lastFrameAge": 118,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 208203,
+    "frames": 8357,
+    "maxFrameGap": 319,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 213501,
+    "frames": 8465,
+    "maxFrameGap": 319,
+    "lastFrameAge": 48,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 219026,
+    "frames": 8542,
+    "maxFrameGap": 319,
+    "lastFrameAge": 39,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 224421,
+    "frames": 8606,
+    "maxFrameGap": 319,
+    "lastFrameAge": 67,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 229807,
+    "frames": 8676,
+    "maxFrameGap": 319,
+    "lastFrameAge": 20,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 234964,
+    "frames": 8741,
+    "maxFrameGap": 319,
+    "lastFrameAge": 211,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 240235,
+    "frames": 8804,
+    "maxFrameGap": 319,
+    "lastFrameAge": 148,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 245500,
+    "frames": 8884,
+    "maxFrameGap": 319,
+    "lastFrameAge": 3,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 250791,
+    "frames": 8971,
+    "maxFrameGap": 319,
+    "lastFrameAge": 3,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 255945,
+    "frames": 9045,
+    "maxFrameGap": 319,
+    "lastFrameAge": 157,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 261212,
+    "frames": 9119,
+    "maxFrameGap": 319,
+    "lastFrameAge": 24,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 266372,
+    "frames": 9198,
+    "maxFrameGap": 319,
+    "lastFrameAge": 119,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 271660,
+    "frames": 9288,
+    "maxFrameGap": 319,
+    "lastFrameAge": 90,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 277095,
+    "frames": 9381,
+    "maxFrameGap": 319,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 282385,
+    "frames": 9455,
+    "maxFrameGap": 319,
+    "lastFrameAge": 30,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 287565,
+    "frames": 9535,
+    "maxFrameGap": 319,
+    "lastFrameAge": 0,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 292849,
+    "frames": 9625,
+    "maxFrameGap": 319,
+    "lastFrameAge": 62,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 298604,
+    "frames": 9748,
+    "maxFrameGap": 319,
+    "lastFrameAge": 26,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 300157,
+    "frames": 9791,
+    "maxFrameGap": 319,
+    "lastFrameAge": 1,
+    "visibility": "visible",
+    "changes": [
+      {
+        "at": 4641,
+        "state": "visible"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1712,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 422,
+        "name": "loginwindow"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "2",
+      "windows": [
+        {
+          "pid": 48173,
+          "number": 5394,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 48173,
+          "number": 5393,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 856,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  }
+]

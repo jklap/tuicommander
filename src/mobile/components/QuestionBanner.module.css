@@ -32,6 +32,10 @@
   flex-shrink: 0;
 }
 
+:global(html[data-theme="vscode-light"]) .agent {
+  color: var(--warning);
+}
+
 .repo {
   font-size: 11px;
   color: var(--fg-muted);

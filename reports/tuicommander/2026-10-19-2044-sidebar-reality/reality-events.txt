@@ -1,0 +1,14 @@
+retry: 5000
+
+: ping
+
+event: worktree-created
+id: 3
+data: {"creator_session":"6f1c5b1a-cc27-4877-b019-b8f037631bd5","spawn_session":false,"repo_path":"/Users/stefano.straus/Gits/.tmp/results/live-2044-isolated/fixture-repo","workspace_id":"chore/sidebar-reality-2044","branch":"chore/sidebar-reality-2044","worktree_path":"/Users/stefano.straus/Gits/.tmp/results/live-2044-isolated/fixture-repo__wt/chore-sidebar-reality-2044","kind":"worktree"}
+
+event: session-worktree-declared
+id: 5
+data: {"creator_session":"6f1c5b1a-cc27-4877-b019-b8f037631bd5","spawn_session":false,"repo_path":"/Users/stefano.straus/Gits/.tmp/results/live-2044-isolated/fixture-repo","workspace_id":"chore/sidebar-reality-2044","branch":"chore/sidebar-reality-2044","worktree_path":"/Users/stefano.straus/Gits/.tmp/results/live-2044-isolated/fixture-repo__wt/chore-sidebar-reality-2044","kind":"worktree"}
+
+: ping
+

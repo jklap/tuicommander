@@ -355,7 +355,8 @@
 {"record":346,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":347,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":348,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":349,"state":{"shell":1,"agent":"completed","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":349,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
+{"record":349,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":350,"event":{"type":"choice-prompt","title":"May I run ls?","options":[{"key":"1","label":"Yes","highlighted":true,"destructive":false},{"key":"2","label":"No","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
 {"record":350,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"May I run ls?","confident":true,"last_question":"","choice_sig":"May I run ls?|1,2","fullscreen":false}}
 {"record":352,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"May I run ls?","confident":true,"last_question":"","choice_sig":"May I run ls?|1,2","fullscreen":false}}

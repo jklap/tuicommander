@@ -15,7 +15,7 @@ async fn automation_mcp_http_cli_wire_cannot_drift() {
     use crate::mcp_http::mcp_transport::handle_mcp_tool_call;
     use axum::extract::ConnectInfo;
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     state
         .mcp
         .to_session
@@ -140,7 +140,10 @@ async fn automation_http_matches_shared_ipc_results_and_errors() {
             assert_eq!(body["code"], "invalid_arguments");
             assert_eq!(body["effect"], "not_started");
             assert_eq!(body["repair"]["retry_after_correction"], true);
-            assert!(!body["violations"].as_array().unwrap().is_empty());
+            assert_ne!(
+                body["violations"].as_array().unwrap().as_slice(),
+                [] as [serde_json::Value; 0]
+            );
             continue;
         }
         match expected {

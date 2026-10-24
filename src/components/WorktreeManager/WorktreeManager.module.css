@@ -98,25 +98,8 @@
 }
 
 .searchInput {
-  flex: 1;
-  min-width: 0;
-  height: 36px;
-  font-size: var(--font-sm);
-  color: var(--fg-primary);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0 8px;
-  outline: none;
-}
-
-.searchInput:focus {
-  border-color: var(--accent);
-}
-
-.searchInput::placeholder {
-  color: var(--fg-muted);
-  opacity: 0.5;
+  flex: 0 0 auto;
+  width: 100%;
 }
 
 .batchBar {

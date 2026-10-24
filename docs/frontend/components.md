@@ -1,5 +1,7 @@
 # Components
 
+The selected plan has an **Edit plan** control in the Plans column. It edits title and document/link with Save and Cancel. Save sends only changed fields using the revision captured when editing started. A conflict keeps the draft and requires Cancel and reopening Edit plan to load the latest version; an active-coordinator refusal keeps the source draft and displays the backend remedy. Successful saves refresh the plan list.
+
 Repository Settings uses scoped cards and responsive labelled rows. The existing repository update callbacks and export command remain authoritative. Reset is presented with its repository scope and consequences rather than as an unscoped footer action.
 
 Agents Settings uses page and section primitives while its machine context still owns agent configuration writes. Per-agent lists and nested run/environment editors use scoped responsive styles; drafts, validation, and save handlers are unchanged.
@@ -37,7 +39,7 @@ picker and per-type fields with `SettingField` and `SettingMultiSelect`.
 request cancellation and stale-response fencing. Free labels keep raw text until
 collection; required-field messages sit beside their inputs.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 All components are SolidJS functional components in `src/components/`.
 
@@ -188,7 +190,7 @@ Copy buttons use a single unwrapped line, including in the full app shell.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
+Messages, tool output and code blocks have copy actions. Chat preserves fenced-code padding inside highlighted answers and places Copy in a normal-flow row above the code, so the control neither clips nor covers wrapped text. The transcript has
 text selection and find/select-all/clear shortcuts. Find selects phrases across
 inline Markdown within each block, skips collapsed disclosure bodies, and closes
 on Escape from the input or navigation buttons. Local file paths use the
@@ -210,6 +212,8 @@ prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
+
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
 
 `SessionDetailScreen` replaces its state with each complete WebSocket or polled
 session snapshot, except polls whose `last_activity_ms` is older than the applied
@@ -233,24 +237,30 @@ The backend preserves the full Claude `/resume` modal in both the initial HTTP
 screen and log-WebSocket frames, including session rows and no-match results;
 the mobile view does not reconstruct the picker from transcript text.
 
-Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
+Terminal ego selectors open the existing `ChoicePromptOverlay` when a new native question arrives or a waiting session is opened. The header question action can close and reopen it; equivalent polling snapshots and highlight changes preserve a manual close. Full titles and option labels, including descriptions, wrap within its scrollable overlay. A `selection_required` composer refusal reopens the current question without sending the refused draft. Free-text cards still open explicitly; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
 The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
 the row. Mobile AI Chat uses the shared composer to stage images as ACP image
 blocks and other files as ACP resource links with a readable path in text.
-The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+The mobile PWA opens on Sessions. Its bottom tabs are Sessions, Chat (only with ego configured),
 Files, Progress, and Activity; Settings opens from the app-bar overflow.
 The session detail screen loads after a session is selected (or opened from a
 deep link), keeping its terminal and attachment controls out of the Sessions
 entry graph.
 
+`SessionsScreen` shares one debounced status accessor per session between its card badge
+and the Working, Idle and Awaiting header counts. Accessors are keyed by session id
+so the Working hold survives replacement snapshots. Sub-tasks counts as Working.
+Finished and other badge states
+are excluded from these totals; exited sessions leave the live snapshot. The counts
+cover the full snapshot even while search is open. Working and Idle are read-only.
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
 Waiting sessions sort above idle agents and shells without changing order within each
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
-session; each banner shows its session name and repository.
+session from the AWAITING tile, without a duplicate app-bar count; each banner shows its session name and repository.
 Each session card uses separate buttons to open or kill the session. Both have
 accessible names, and the kill button has a 44 px hit area. The list reserves
 space below its last card so the floating new-session button cannot cover it.
@@ -260,6 +270,12 @@ display name, repository/branch and elapsed state, tasks count, and overflow.
 The name, tasks, and session-scoped Progress open temporary sheets over the
 terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
 remain reachable in overflow. No fixed intent/task rows reduce terminal space.
+
+`MobileApp` measures `visualViewport.height` and `offsetTop` into the fixed shell's
+CSS variables. Resize, viewport scroll, `pageshow`, foreground `visibilitychange`
+and document `resume` share one animation-frame measurement. Lifecycle listeners
+are removed on unmount. This prevents stale geometry after a restore without a
+viewport event; it does not establish the cause of the reported iPhone grey screen.
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
@@ -333,6 +349,8 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
+Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID, child PID, or alias. PID and alias come from the owning row of an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; they are checked again before copying. Unknown PID and absent alias entries are hidden, including exited or suspended sessions. Both desktop and mobile copy confirmation uses the toast store.
+
 Repository tree with branch management. Touch branch rows reveal their existing
 actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
 row identity permits one open tray across repositories; vertical scrolling and
@@ -351,7 +369,8 @@ Branch rows keep the status icon separate from the always-visible agents disclos
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
-  consequence in a WebView-compatible hover/focus tooltip
+  consequence in a WebView-compatible hover/focus tooltip. Branch-name tooltips include each
+  diagnostic once and omit removal warnings for main checkouts
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal
@@ -407,7 +426,7 @@ label row above its pages, and the configured repositories follow under
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
-  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
@@ -597,7 +616,15 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
+Archive and restore controls send the selected record revision to the shared native service. Independent Archived plans and Archived stories toggles select archived records; Rust projects list ids and Kanban columns. Archived details stay readable, but work actions and new-story creation under archived plans are unavailable until restoration. Ownership refusals use the existing error banner.
+
+QA stories have a separate status label, QA-only filter and Kanban column. Criteria remain editable in QA. QA passed sends approval; QA failed returns development work to In progress. These controls use the shared revision-checked story service.
+
+Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
+
 The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It uses wire status types generated from Rust with `python3 scripts/generate-story-types.py` (`--check` detects drift). The selected plan state stays visible beside cancellation counts while a story is selected. It renders the Rust `plan_view` projection, including transitive abandoned dependency labels and the WontFix count or all-cancelled label. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
+
+The Plans and Stories toolbar button (`StoriesButton.tsx`) widens into a pill while the project has an active plan: active plans, stories in progress and a done/total bar, with the breakdown in its tooltip and `aria-label`. Counts come from the Rust `summary` story action. Nothing signals story changes, so it re-reads on repo change, window focus or visibility, dialog close, and every 60 s while the window is visible; a failed call leaves the plain icon.
 
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
@@ -616,8 +643,11 @@ The whole Progress UI: one newest-first list for the active PTY by default,
 with a selector for other PTYs and the repository aggregate. It has a divider
 marking where the last visit ended, and a blocked-only
 checkbox. Blocked entries are red, host-written `intent` entries are muted, and
-each row can be deleted. There are no pages, no tabs, no workstream projections
-and no export — Progress is a thing you glance at, so it is a dialog and not a
+each row can be deleted. The list opens with at most 100 entries; **Load older**
+appends another cursor page. The control is disabled while a read is pending.
+The header uses its project selector as the project label when available.
+Without a selector, including on desktop, it shows a project subtitle instead.
+There is no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.
 The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
@@ -712,6 +742,13 @@ system and never turns an absent provider value into zero.
 | Activity Dashboard | — | `activityDashboardStore.toggle()` |
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
+
+Dashboard row navigation uses the shared `navigateToTerminal` path. It opens the
+manual Global Workspace for parked sessions before activating their content,
+leaves that workspace for a repository session that is not a member, and focuses
+its existing pane group when present. Undocked terminals use the full-page overlay
+without changing the split layout being left. Existing tab/session bindings are
+preserved. Notification and detached-dashboard navigation use the same path.
 
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
 in its detached window. On startup and reopening, saved detached geometry cannot
@@ -831,7 +868,7 @@ Confirmations. It uses the shared setting toggle and persists
 
 The mobile AI Chat composer uses the same device-local keyboard correction preference as the terminal composer; toggling it updates autocorrect, spellcheck and sentence capitalization on the open textarea. Desktop Chat retains its existing input attributes.
 
-Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate.
+Answer highlights in the terminal grid, AnswersPanel, AI Chat markdown and terminal Chat cards use a green left rule without an answer background layer. Paragraph spacing and each content block's own background stay unchanged. User-question styling is separate. Terminal Chat draws its rule on the blocks selected by `answerBlockRanges` and `answerExtent`, never on the final-message wrapper; desktop and mobile use the same selection.
 
 The shared `--answer-rule` token preserves the dark-theme rule and uses `--success` in Paper to keep the rule visible on the light page. Terminal Chat cards already use `--success`.
 
@@ -866,3 +903,36 @@ A non-empty composer refuses the retry; the status bar displays the error.
 Voice correction controls carry `corrections.replacements.{from}.from` and
 `corrections.replacements.{from}.to` catalogue identities. Import, add and remove
 retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.
+
+### Context menu viewport bounds
+
+Context menus use their unscaled layout size to stay within an 8px viewport margin.
+Oversized menus scroll; their minimum width also shrinks in narrow windows.
+Shell workspace rows do not offer branch workflow actions or Git smart prompts.
+
+Shell-folder rows offer the same available-agent menu as Git workspace rows.
+Launching an agent uses the folder as its working directory, without creating a
+branch or worktree. The Add Terminal button also offers agents on a long press.
+
+Detached worktree inventory is rendered by `RepoSection` as informational rows, outside the selectable branch-workspace list. The header retains a detached count while folded; no branch or terminal actions are attached to detached rows.
+
+FileBrowserPanel and TreeNode render the backend link target and target kind with a link icon instead of a file-size badge. Navigation stays unchanged. The code editor shows the backend target-specific refusal when an outside-repository link is opened.
+
+### Mobile SessionUsageBlock
+
+`SessionUsageBlock` is mounted inside the session overflow. It loads
+`get_session_usage` on mount/session change, invalidates pending responses on
+cleanup, and renders backend-owned lines without usage computation. It has
+explicit loading, unavailable, unknown-model and stale presentation.
+
+Sidebar worktree diagnostics render recorded paths and repair guidance without buttons, tab focus or branch-selection handlers. The repository header retains a diagnostic count while folded. These transient inventory rows are separate from branch workspaces and are not saved in repository configuration.
+
+### StoryNotes (native story detail)
+
+`StoryNotes` renders the selected story's append-only notes and workflow receipt references. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.

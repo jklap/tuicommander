@@ -27,6 +27,11 @@ pub enum RunAction {
     Incidents {
         run_id: String,
     },
+    /// Say before a start what would stop the first Agent step.
+    StartReadiness {
+        definition_id: String,
+        definition_revision: i64,
+    },
     Get {
         run_id: String,
     },
@@ -65,19 +70,6 @@ pub enum RunAction {
     },
 }
 
-/// Inline schema is embedded under MCP `input`, like the native story schema.
-pub fn run_action_schema() -> serde_json::Value {
-    let generator = schemars::generate::SchemaSettings::draft2020_12()
-        .with(|settings| settings.inline_subschemas = true)
-        .into_generator();
-    let mut schema =
-        serde_json::to_value(generator.into_root_schema_for::<RunAction>()).unwrap_or_default();
-    if let Some(object) = schema.as_object_mut() {
-        object.remove("$schema");
-    }
-    schema
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum RunReply {
@@ -86,6 +78,7 @@ pub enum RunReply {
     Events(Vec<RunEvent>),
     Receipt(Box<RunReceipt>),
     Incidents(Vec<super::RunIncident>),
+    Readiness(Vec<String>),
 }
 
 /// The live coordinator is the only inbox recipient for story-worker results.
@@ -139,6 +132,19 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         RunAction::StartGraph { .. } => {
             Err("graph start requires the owning daemon service".into())
         }
+        RunAction::StartReadiness {
+            definition_id,
+            definition_revision,
+        } => {
+            let definition =
+                WorkflowStore::open()?.get_published(&definition_id, definition_revision)?;
+            Ok(RunReply::Readiness(
+                super::runtime::effects::profile_problems(
+                    &definition,
+                    &crate::config::load_agents_config(),
+                ),
+            ))
+        }
         RunAction::StartPlan {
             plan_id,
             definition_id,
@@ -153,9 +159,9 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         )?))),
         RunAction::Incidents { run_id } => {
             let run = scoped_snapshot(&store, &owner, &run_id)?;
-            Ok(RunReply::Incidents(super::incidents::project_incidents(
+            Ok(RunReply::Incidents(super::incidents::read_incidents(
                 &run, None,
-            )))
+            )?))
         }
         RunAction::Get { run_id } => Ok(RunReply::Snapshot(Box::new(scoped_snapshot(
             &store, &owner, &run_id,
@@ -275,10 +281,10 @@ pub fn run_action_with_events(
         else {
             unreachable!("get returns a snapshot")
         };
-        return Ok(RunReply::Incidents(super::incidents::project_incidents(
+        return Ok(RunReply::Incidents(super::incidents::read_incidents(
             &run,
             Some(state),
-        )));
+        )?));
     }
     let mutation = matches!(
         action,
@@ -328,7 +334,10 @@ pub fn run_action_with_events(
                 &receipt.snapshot.id,
                 receipt.sequence,
             ),
-            RunReply::Events(_) | RunReply::Runs(_) | RunReply::Incidents(_) => {
+            RunReply::Events(_)
+            | RunReply::Runs(_)
+            | RunReply::Incidents(_)
+            | RunReply::Readiness(_) => {
                 unreachable!("mutations return a snapshot or receipt")
             }
         };

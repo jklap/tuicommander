@@ -271,12 +271,8 @@ export function TasksList(props: TasksListProps) {
 			</Show>
 			<div class={s.status} role="status" aria-live="polite">
 				{model.state().loading ? "Loading tasks…" : itemsLabel()}
-				<Show when={!model.state().loading && provider()}>
-					<span>
-						{model.state().local
-							? "All items loaded · local queries"
-							: "Server queries · provider-supported fields only"}
-					</span>
+				<Show when={!model.state().loading && provider() && model.state().local}>
+					<span>All items loaded</span>
 				</Show>
 				<Show when={model.state().stale}>
 					<span class={s.stale}>Stale results</span>

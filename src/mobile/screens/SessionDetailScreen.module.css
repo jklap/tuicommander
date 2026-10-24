@@ -329,3 +329,14 @@
   box-shadow: var(--shadow-dropdown);
 }
 .markdownPopover .markdownSection { border: 0; }
+
+.usageBlock {
+  padding: 8px 12px;
+  border-block: 1px solid var(--border);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

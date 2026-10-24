@@ -49,6 +49,9 @@ pub fn restore_from_config(app: &tauri::AppHandle) {
 
 /// Register a global shortcut combo string (e.g. "CommandOrControl+Shift+T").
 pub fn register(app: &tauri::AppHandle, combo: &str) -> Result<()> {
+    if crate::agent_test::active() {
+        anyhow::bail!("Global shortcuts are disabled in agent-test");
+    }
     let shortcut = Shortcut::from_str(combo)?;
     app.global_shortcut().register(shortcut)?;
     Ok(())

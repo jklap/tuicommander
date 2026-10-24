@@ -1,0 +1,1229 @@
+{
+  "source": "b64dfbfe8b0fb3bc28d2b9ca33b440893679cdd8",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "taps": [
+    {
+      "time": "2026-10-20T06:17:42.223Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Idle now",
+        "Markdown",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "Reply alpha",
+        "Reply beta",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "events": []
+    },
+    {
+      "time": "2026-10-20T06:17:42.439Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        }
+      ]
+    },
+    {
+      "time": "2026-10-20T06:17:43.919Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        }
+      ]
+    },
+    {
+      "time": "2026-10-20T06:17:46.919Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062271
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792477062283
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792477062284
+        }
+      ]
+    }
+  ],
+  "polls": [
+    {
+      "time": "2026-10-20T06:17:43.765Z",
+      "status": 200,
+      "body": [
+        {
+          "session_id": "061e35ba-e8da-4557-ac17-15da53403a10",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-1",
+          "tuic_session": "061e35ba-e8da-4557-ac17-15da53403a10",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "busy",
+            "agent_state": "working",
+            "last_activity_ms": 1792477062425,
+            "agent_type": "claude",
+            "current_task": "Mulling",
+            "last_prompt": "Repeat the UI marker check now: output only the standalone final line suggest: [ Reply alpha | Reply beta ]. On the next message answer ACK only, without suggestions."
+          }
+        },
+        {
+          "session_id": "159d9b14-7b3a-481d-8ba0-73e5b2ce58c2",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-6",
+          "tuic_session": "159d9b14-7b3a-481d-8ba0-73e5b2ce58c2",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "idle",
+            "agent_state": "completed",
+            "last_activity_ms": 1792476911876,
+            "agent_type": "ego",
+            "agent_intent": "Proving the prime number theorem analytically",
+            "last_prompt": "Without tools, reconstruct a complete analytic proof of the prime number theorem, considering each technical condition and why a zero on the line Re s equals 1 is impossible. Give the proof in two paragraphs.",
+            "suggested_actions": [
+              "Prove Wiener\u2013Ikehara",
+              "Explain boundary zeros",
+              "Finish busy check"
+            ],
+            "slash_menu_items": [
+              {
+                "command": "/goal",
+                "description": "usage: /goal [show|set TEXT|achieve|block REASON]",
+                "highlighted": true
+              }
+            ]
+          }
+        },
+        {
+          "session_id": "578a6076-fc9d-4458-b42f-fde176f37a9c",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-2",
+          "tuic_session": "578a6076-fc9d-4458-b42f-fde176f37a9c",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "idle",
+            "agent_state": "idle",
+            "last_activity_ms": 1792476578923,
+            "agent_type": "codex"
+          }
+        }
+      ]
+    },
+    {
+      "time": "2026-10-20T06:17:46.765Z",
+      "status": 200,
+      "body": [
+        {
+          "session_id": "061e35ba-e8da-4557-ac17-15da53403a10",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-1",
+          "tuic_session": "061e35ba-e8da-4557-ac17-15da53403a10",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "busy",
+            "agent_state": "working",
+            "last_activity_ms": 1792477064029,
+            "agent_type": "claude",
+            "current_task": "Mulling",
+            "last_prompt": "Repeat the UI marker check now: output only the standalone final line suggest: [ Reply alpha | Reply beta ]. On the next message answer ACK only, without suggestions."
+          }
+        },
+        {
+          "session_id": "159d9b14-7b3a-481d-8ba0-73e5b2ce58c2",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-6",
+          "tuic_session": "159d9b14-7b3a-481d-8ba0-73e5b2ce58c2",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "idle",
+            "agent_state": "completed",
+            "last_activity_ms": 1792476911876,
+            "agent_type": "ego",
+            "agent_intent": "Proving the prime number theorem analytically",
+            "last_prompt": "Without tools, reconstruct a complete analytic proof of the prime number theorem, considering each technical condition and why a zero on the line Re s equals 1 is impossible. Give the proof in two paragraphs.",
+            "suggested_actions": [
+              "Prove Wiener\u2013Ikehara",
+              "Explain boundary zeros",
+              "Finish busy check"
+            ],
+            "slash_menu_items": [
+              {
+                "command": "/goal",
+                "description": "usage: /goal [show|set TEXT|achieve|block REASON]",
+                "highlighted": true
+              }
+            ]
+          }
+        },
+        {
+          "session_id": "578a6076-fc9d-4458-b42f-fde176f37a9c",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-mobile2/scratch",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "scr-2",
+          "tuic_session": "578a6076-fc9d-4458-b42f-fde176f37a9c",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "idle",
+            "agent_state": "idle",
+            "last_activity_ms": 1792476578923,
+            "agent_type": "codex"
+          }
+        }
+      ]
+    }
+  ],
+  "slash": [
+    {
+      "name": "ego-mobile-slash",
+      "time": "2026-10-20T06:13:12.478Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "ego\nscratch \u00b7 Idle now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "Repeat check",
+        "Longer check",
+        "Done",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "/helpShow interactive actions and shortcuts",
+        "/modelChoose the current model",
+        "/thinkingChoose reasoning effort",
+        "/fastSet fast tier: /fast on|off (premium token price)",
+        "/modeInspect or change execution mode",
+        "/planEnter plan mode",
+        "/yoloConfirm relaxed execution policy",
+        "/permissionsInspect effective permission rules",
+        "/mcpusage: /mcp [toggle NAME | add NAME --http URL | add NAME --stdi...",
+        "/sessionsBrowse durable sessions",
+        "/forkFork a durable session",
+        "/compactCompact the active context",
+        "/clearClear composer and menu state",
+        "/usageShow usage, context, cost and budget",
+        "/statuslineConfigure the native status line",
+        "/exportExport this session \u2014 /export [local|sanitized] [md|json|jsonl]",
+        "/configInspect configuration \u2014 /config [perimeter | set KEY VALUE]",
+        "/setupInspect expected work without effects",
+        "/doctorShow health \u2014 /doctor [details]",
+        "/quitExit the interactive session",
+        "/refreshApply current instructions in a new prompt epoch",
+        "/newCreate a durable session",
+        "/nameusage: /name [show|set TEXT|clear]",
+        "/goalusage: /goal [show|set TEXT|achieve|block REASON]",
+        "/tasksInspect background exec \u2014 /tasks [ID | cancel ID]",
+        "/toolsShow tools \u2014 /tools [details]",
+        "/expandShow the last tool output or collapsed prompt",
+        "/skillsShow skills \u2014 /skills [details|diagnose|rescan|invoke NAME]",
+        "/hooksInspect admitted hooks",
+        "/memoryReview scoped persistent MDKB memories",
+        "/initReview project instruction initialization",
+        "/retryRetry a waiting provider now",
+        "/versionShow packaged version information",
+        "/history/history QUERY \u2014 search sessions",
+        "/resume/resume [ID] or /continue [ID] \u2014 resume a session",
+        "/continue/resume [ID] or /continue [ID] \u2014 resume a session",
+        "/adversarial-tddVerification method for stories with behavioral changes. A short...",
+        "/capture-meetingExtract a meeting into the operational memory graph (people/meet...",
+        "/context-managementDecide when to compact or clear context at a safe sub-task bound...",
+        "/imagegenGenerate or edit raster images when the task benefits from AI-cr...",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "completed",
+        "last_activity_ms": 1792476787480,
+        "agent_type": "ego",
+        "agent_intent": "Considering primes up to 10000",
+        "last_prompt": "Without tools, consider the prime numbers up to 10000 carefully, then reply with one short sentence. This is a UI busy-state check.",
+        "suggested_actions": [
+          "Repeat check",
+          "Longer check",
+          "Done"
+        ],
+        "slash_menu_items": [
+          {
+            "command": "/help",
+            "description": "Show interactive actions and shortcuts",
+            "highlighted": true
+          },
+          {
+            "command": "/model",
+            "description": "Choose the current model",
+            "highlighted": false
+          },
+          {
+            "command": "/thinking",
+            "description": "Choose reasoning effort",
+            "highlighted": false
+          },
+          {
+            "command": "/fast",
+            "description": "Set fast tier: /fast on|off (premium token price)",
+            "highlighted": false
+          },
+          {
+            "command": "/mode",
+            "description": "Inspect or change execution mode",
+            "highlighted": false
+          },
+          {
+            "command": "/plan",
+            "description": "Enter plan mode",
+            "highlighted": false
+          },
+          {
+            "command": "/yolo",
+            "description": "Confirm relaxed execution policy",
+            "highlighted": false
+          },
+          {
+            "command": "/permissions",
+            "description": "Inspect effective permission rules",
+            "highlighted": false
+          },
+          {
+            "command": "/mcp",
+            "description": "usage: /mcp [toggle NAME | add NAME --http URL | add NAME --stdi...",
+            "highlighted": false
+          },
+          {
+            "command": "/sessions",
+            "description": "Browse durable sessions",
+            "highlighted": false
+          },
+          {
+            "command": "/fork",
+            "description": "Fork a durable session",
+            "highlighted": false
+          },
+          {
+            "command": "/compact",
+            "description": "Compact the active context",
+            "highlighted": false
+          },
+          {
+            "command": "/clear",
+            "description": "Clear composer and menu state",
+            "highlighted": false
+          },
+          {
+            "command": "/usage",
+            "description": "Show usage, context, cost and budget",
+            "highlighted": false
+          },
+          {
+            "command": "/statusline",
+            "description": "Configure the native status line",
+            "highlighted": false
+          },
+          {
+            "command": "/export",
+            "description": "Export this session \u2014 /export [local|sanitized] [md|json|jsonl]",
+            "highlighted": false
+          },
+          {
+            "command": "/config",
+            "description": "Inspect configuration \u2014 /config [perimeter | set KEY VALUE]",
+            "highlighted": false
+          },
+          {
+            "command": "/setup",
+            "description": "Inspect expected work without effects",
+            "highlighted": false
+          },
+          {
+            "command": "/doctor",
+            "description": "Show health \u2014 /doctor [details]",
+            "highlighted": false
+          },
+          {
+            "command": "/quit",
+            "description": "Exit the interactive session",
+            "highlighted": false
+          },
+          {
+            "command": "/refresh",
+            "description": "Apply current instructions in a new prompt epoch",
+            "highlighted": false
+          },
+          {
+            "command": "/new",
+            "description": "Create a durable session",
+            "highlighted": false
+          },
+          {
+            "command": "/name",
+            "description": "usage: /name [show|set TEXT|clear]",
+            "highlighted": false
+          },
+          {
+            "command": "/goal",
+            "description": "usage: /goal [show|set TEXT|achieve|block REASON]",
+            "highlighted": false
+          },
+          {
+            "command": "/tasks",
+            "description": "Inspect background exec \u2014 /tasks [ID | cancel ID]",
+            "highlighted": false
+          },
+          {
+            "command": "/tools",
+            "description": "Show tools \u2014 /tools [details]",
+            "highlighted": false
+          },
+          {
+            "command": "/expand",
+            "description": "Show the last tool output or collapsed prompt",
+            "highlighted": false
+          },
+          {
+            "command": "/skills",
+            "description": "Show skills \u2014 /skills [details|diagnose|rescan|invoke NAME]",
+            "highlighted": false
+          },
+          {
+            "command": "/hooks",
+            "description": "Inspect admitted hooks",
+            "highlighted": false
+          },
+          {
+            "command": "/memory",
+            "description": "Review scoped persistent MDKB memories",
+            "highlighted": false
+          },
+          {
+            "command": "/init",
+            "description": "Review project instruction initialization",
+            "highlighted": false
+          },
+          {
+            "command": "/retry",
+            "description": "Retry a waiting provider now",
+            "highlighted": false
+          },
+          {
+            "command": "/version",
+            "description": "Show packaged version information",
+            "highlighted": false
+          },
+          {
+            "command": "/history",
+            "description": "/history QUERY \u2014 search sessions",
+            "highlighted": false
+          },
+          {
+            "command": "/resume",
+            "description": "/resume [ID] or /continue [ID] \u2014 resume a session",
+            "highlighted": false
+          },
+          {
+            "command": "/continue",
+            "description": "/resume [ID] or /continue [ID] \u2014 resume a session",
+            "highlighted": false
+          },
+          {
+            "command": "/adversarial-tdd",
+            "description": "Verification method for stories with behavioral changes. A short...",
+            "highlighted": false
+          },
+          {
+            "command": "/capture-meeting",
+            "description": "Extract a meeting into the operational memory graph (people/meet...",
+            "highlighted": false
+          },
+          {
+            "command": "/context-management",
+            "description": "Decide when to compact or clear context at a safe sub-task bound...",
+            "highlighted": false
+          },
+          {
+            "command": "/imagegen",
+            "description": "Generate or edit raster images when the task benefits from AI-cr...",
+            "highlighted": false
+          }
+        ]
+      },
+      "native_busy_line_present": false
+    },
+    {
+      "name": "ego-mobile-go-idle",
+      "time": "2026-10-20T06:13:19.609Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/go",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "ego\nscratch \u00b7 Idle now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "Repeat check",
+        "Longer check",
+        "Done",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "/goalusage: /goal [show|set TEXT|achieve|block REASON]",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "completed",
+        "last_activity_ms": 1792476792520,
+        "agent_type": "ego",
+        "agent_intent": "Considering primes up to 10000",
+        "last_prompt": "Without tools, consider the prime numbers up to 10000 carefully, then reply with one short sentence. This is a UI busy-state check.",
+        "suggested_actions": [
+          "Repeat check",
+          "Longer check",
+          "Done"
+        ],
+        "slash_menu_items": [
+          {
+            "command": "/goal",
+            "description": "usage: /goal [show|set TEXT|achieve|block REASON]",
+            "highlighted": true
+          }
+        ]
+      },
+      "native_busy_line_present": false
+    },
+    {
+      "name": "ego-mobile-go-realbusy",
+      "time": "2026-10-20T06:15:02.628Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/go",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "ego\nscratch \u00b7 Idle now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "/goalusage: /goal [show|set TEXT|achieve|block REASON]",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "completed",
+        "last_activity_ms": 1792476902618,
+        "agent_type": "ego",
+        "agent_intent": "Proving the prime number theorem analytically",
+        "last_prompt": "Without tools, reconstruct a complete analytic proof of the prime number theorem, considering each technical condition and why a zero on the line Re s equals 1 is impossible. Give the proof in two paragraphs.",
+        "slash_menu_items": [
+          {
+            "command": "/goal",
+            "description": "usage: /goal [show|set TEXT|achieve|block REASON]",
+            "highlighted": true
+          }
+        ]
+      },
+      "native_busy_line_present": true
+    },
+    {
+      "name": "claude-mobile-slash",
+      "time": "2026-10-20T06:15:57.025Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Idle now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "/wiz:handoff(wiz) Use at session end to write handoff + capture session",
+        "/wiz:review(wiz) Exhaustive multi-agent code review for PRs, branches,",
+        "/wiz:stories(wiz) Use when managing stories, creating tasks, changing",
+        "/wiz:plan(wiz) Transform feature descriptions into well-structured",
+        "/wiz:work(wiz) Execute work plans efficiently while maintaining",
+        "/add-dirAdd a new working directory",
+        "/autocompactSet how full the context gets before auto-summarizing",
+        "/autofix-prMonitor and autofix any issues with the current PR",
+        "/branchCreate a branch of the current conversation at this point",
+        "/btwAsk a quick side question without interrupting the main",
+        "/bugReport a bug or share your conversation",
+        "/cdMove this session to a new working directory",
+        "/chromeOpen Claude in Chrome settings",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "idle",
+        "last_activity_ms": 1792476952170,
+        "agent_type": "claude",
+        "current_task": "Hyperspacing",
+        "last_prompt": "For this isolated UI check, reply with exactly the following standalone final line and no tools: suggest: [ Reply alpha | Reply beta ]. On the next message, reply ACK only and no suggest marker.",
+        "slash_menu_items": [
+          {
+            "command": "/wiz:handoff",
+            "description": "(wiz) Use at session end to write handoff + capture session",
+            "highlighted": true
+          },
+          {
+            "command": "/wiz:review",
+            "description": "(wiz) Exhaustive multi-agent code review for PRs, branches,",
+            "highlighted": false
+          },
+          {
+            "command": "/wiz:stories",
+            "description": "(wiz) Use when managing stories, creating tasks, changing",
+            "highlighted": false
+          },
+          {
+            "command": "/wiz:plan",
+            "description": "(wiz) Transform feature descriptions into well-structured",
+            "highlighted": false
+          },
+          {
+            "command": "/wiz:work",
+            "description": "(wiz) Execute work plans efficiently while maintaining",
+            "highlighted": false
+          },
+          {
+            "command": "/add-dir",
+            "description": "Add a new working directory",
+            "highlighted": false
+          },
+          {
+            "command": "/autocompact",
+            "description": "Set how full the context gets before auto-summarizing",
+            "highlighted": false
+          },
+          {
+            "command": "/autofix-pr",
+            "description": "Monitor and autofix any issues with the current PR",
+            "highlighted": false
+          },
+          {
+            "command": "/branch",
+            "description": "Create a branch of the current conversation at this point",
+            "highlighted": false
+          },
+          {
+            "command": "/btw",
+            "description": "Ask a quick side question without interrupting the main",
+            "highlighted": false
+          },
+          {
+            "command": "/bug",
+            "description": "Report a bug or share your conversation",
+            "highlighted": false
+          },
+          {
+            "command": "/cd",
+            "description": "Move this session to a new working directory",
+            "highlighted": false
+          },
+          {
+            "command": "/chrome",
+            "description": "Open Claude in Chrome settings",
+            "highlighted": false
+          }
+        ]
+      },
+      "native_busy_line_present": false
+    },
+    {
+      "name": "claude-mobile-he",
+      "time": "2026-10-20T06:16:01.723Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/he",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "claude\nscratch \u00b7 Idle now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "/helpShow help and available commands",
+        "/wiz:heal-skill(wiz) Detect and repair broken skill files with user",
+        "/wiz:ci-heal(wiz) Self-healing CI \u2014 monitors PR checks, collects",
+        "/themeChange the theme",
+        "/scheduleCreate, update, list, or run scheduled cloud agents",
+        "/doctorHealth-check the user's Claude Code setup and fix issues:",
+        "/rewindRestore the code and/or conversation to a previous point",
+        "/tasksView and manage everything running in the background",
+        "/datavizUse this skill whenever you are about to create ANY chart,",
+        "/frontend-design:frontend-design(frontend-design) Guidance for distinctive, intentional",
+        "/debugEnable debug logging for this session and help diagnose",
+        "/team-onboardingHelp teammates ramp on Claude Code with a guide from your",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "idle",
+        "last_activity_ms": 1792476957068,
+        "agent_type": "claude",
+        "current_task": "Hyperspacing",
+        "last_prompt": "For this isolated UI check, reply with exactly the following standalone final line and no tools: suggest: [ Reply alpha | Reply beta ]. On the next message, reply ACK only and no suggest marker.",
+        "slash_menu_items": [
+          {
+            "command": "/help",
+            "description": "Show help and available commands",
+            "highlighted": true
+          },
+          {
+            "command": "/wiz:heal-skill",
+            "description": "(wiz) Detect and repair broken skill files with user",
+            "highlighted": false
+          },
+          {
+            "command": "/wiz:ci-heal",
+            "description": "(wiz) Self-healing CI \u2014 monitors PR checks, collects",
+            "highlighted": false
+          },
+          {
+            "command": "/theme",
+            "description": "Change the theme",
+            "highlighted": false
+          },
+          {
+            "command": "/schedule",
+            "description": "Create, update, list, or run scheduled cloud agents",
+            "highlighted": false
+          },
+          {
+            "command": "/doctor",
+            "description": "Health-check the user's Claude Code setup and fix issues:",
+            "highlighted": false
+          },
+          {
+            "command": "/rewind",
+            "description": "Restore the code and/or conversation to a previous point",
+            "highlighted": false
+          },
+          {
+            "command": "/tasks",
+            "description": "View and manage everything running in the background",
+            "highlighted": false
+          },
+          {
+            "command": "/dataviz",
+            "description": "Use this skill whenever you are about to create ANY chart,",
+            "highlighted": false
+          },
+          {
+            "command": "/frontend-design:frontend-design",
+            "description": "(frontend-design) Guidance for distinctive, intentional",
+            "highlighted": false
+          },
+          {
+            "command": "/debug",
+            "description": "Enable debug logging for this session and help diagnose",
+            "highlighted": false
+          },
+          {
+            "command": "/team-onboarding",
+            "description": "Help teammates ramp on Claude Code with a guide from your",
+            "highlighted": false
+          }
+        ]
+      },
+      "native_busy_line_present": false
+    },
+    {
+      "name": "codex-mobile-slash",
+      "time": "2026-10-20T06:15:21.047Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "codex\nscratch \u00b7 Idle 5m",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "AGENTS.md",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "idle",
+        "last_activity_ms": 1792476578923,
+        "agent_type": "codex"
+      },
+      "native_busy_line_present": false
+    },
+    {
+      "name": "codex-mobile-sta",
+      "time": "2026-10-20T06:15:30.191Z",
+      "width": 390,
+      "height": 844,
+      "visibility": "visible",
+      "inputs": [
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "INPUT",
+          "value": "",
+          "placeholder": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "value": "/sta",
+          "placeholder": "Type a command..."
+        }
+      ],
+      "buttons": [
+        "",
+        "codex\nscratch \u00b7 Idle 5m",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "AGENTS.md",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "idle",
+        "last_activity_ms": 1792476578923,
+        "agent_type": "codex"
+      },
+      "native_busy_line_present": false
+    }
+  ]
+}

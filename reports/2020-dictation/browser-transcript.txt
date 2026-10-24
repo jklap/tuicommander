@@ -1,0 +1,203 @@
+['set', 'viewport', '390', '844']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['eval', 'window.__calls=[]; window.fetch=async (url,opts)=>{ const path=new URL(String(url),location.origin).pathname; window.__calls.push(path); let data={}; if(path==="/sessions") data=[{session_id:"desk-2020-test",display_name:"Dictation verification",cwd:"/verification",worktree_path:null,worktree_branch:null,state:{agent_type:"ego",agent_state:"idle",awaiting_input:true,last_activity_ms:Date.now()}}]; if(path.includes("ideas")||path.includes("markdown")) data=[]; if(path.includes("dictation")) data={language:"en"}; return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}}); }; window.SpeechRecognition=class{constructor(){window.__recognition=this;} start(){} stop(){this.onend?.()} abort(){queueMicrotask(()=>this.onend?.())}}; "stub installed"']
+"stub installed"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['snapshot']
+- generic
+  - status
+    - StaticText "Server unreachable — showing last known data, retrying…"
+    - button "Retry now" [ref=e1]
+  - banner
+    - StaticText "TUICommander"
+    - StaticText "Reconnecting…"
+    - button "More options" [expanded=false, ref=e2]
+  - main
+  - navigation
+    - button "Sessions" [ref=e3]
+      - image
+      - StaticText "Sessions"
+    - button "Files" [ref=e4]
+      - image
+      - StaticText "Files"
+    - button "Progress" [ref=e5]
+      - image
+      - StaticText "Progress"
+    - button "Activity" [ref=e6]
+      - image
+      - StaticText "Activity"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['click', '@e1']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['snapshot']
+- generic
+  - banner
+    - StaticText "TUICommander"
+    - button "More options" [expanded=false, ref=e2]
+  - button "Dictation verification verification Awaiting input" [ref=e7]
+    - StaticText "Dictation verification"
+    - StaticText "verification"
+    - StaticText "Awaiting input"
+  - main
+    - StaticText "Sessions"
+    - button "Sort sessions" [expanded=false, ref=e13]
+    - button "Search sessions" [expanded=false, ref=e12]
+    - StaticText "1"
+    - StaticText "ACTIVE"
+    - button "1 AWAITING" [ref=e8]
+      - StaticText "1"
+      - StaticText "AWAITING"
+    - button "Open session Dictation verification" [ref=e9]
+      - image
+      - StaticText "Dictation verification"
+      - StaticText "Input"
+      - StaticText "verification"
+    - StaticText "now"
+    - button "Kill session Dictation verification" [ref=e10]
+      - image
+    - button "New session" [ref=e11]
+      - image
+  - navigation
+    - button "Sessions" [ref=e3]
+      - image
+      - StaticText "Sessions"
+    - button "Files" [ref=e4]
+      - image
+      - StaticText "Files"
+    - button "Progress" [ref=e5]
+      - image
+      - StaticText "Progress"
+    - button "Activity" [ref=e6]
+      - image
+      - StaticText "Activity"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['click', '@e9']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['snapshot']
+- generic
+  - banner
+    - button "Back to sessions" [ref=e14]
+    - image "Ego logo"
+      - image
+    - button "Dictation verification" [ref=e15]
+      - StaticText "Dictation verification"
+      - StaticText "verification"
+      - StaticText " · "
+      - StaticText "Input"
+      - StaticText "now"
+    - group "Terminal view"
+      - button "CLI" [ref=e21]
+      - button "Chat" [ref=e22]
+    - button "More session actions" [expanded=false, ref=e16]
+  - generic
+    - generic
+      - button "Yes" [ref=e23]
+      - button "No" [ref=e24]
+      - button "/" [ref=e25]
+      - button "Ctrl" [expanded=false, ref=e26]
+      - button "Tab" [ref=e27]
+      - button "Esc" [ref=e28]
+      - button "↑" [ref=e29]
+      - button "↓" [ref=e30]
+      - button "←" [ref=e31]
+      - button "→" [ref=e32]
+      - button "↵" [ref=e33]
+    - button "More composer actions" [expanded=false, ref=e17]
+    - textbox "Type a command..." [ref=e18]
+    - button "Dictate into draft" [ref=e19]
+    - button "Send" [expanded=false, ref=e20]
+      - image
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['click', '@e18']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['eval', 'Object.defineProperty(visualViewport,"height",{configurable:true,value:500}); visualViewport.dispatchEvent(new Event("resize")); const k=document.createElement("div"); k.id="emulated-keyboard"; k.textContent="Emulated keyboard area · not iOS"; Object.assign(k.style,{position:"fixed",top:"500px",bottom:"0",left:"0",right:"0",background:"#292929",color:"#ccc",borderTop:"1px solid #888",padding:"24px",boxSizing:"border-box",font:"14px sans-serif",zIndex:"99999"}); document.body.append(k); "visualViewport resize 844 → 500; keyboard area 344px"']
+"visualViewport resize 844 → 500; keyboard area 344px"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['click', '@e19']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['eval', 'window.__recognition.onerror({error:"no-speech"}); "no-speech emitted"']
+"no-speech emitted"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['screenshot', '/Users/stefano.straus/Gits/.tmp/desk-2020-visual/failure-390x844.png']
+✓ Screenshot saved to /Users/stefano.straus/Gits/.tmp/desk-2020-visual/failure-390x844.png
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['eval', 'JSON.stringify({width:innerWidth,height:innerHeight,visualViewport:visualViewport.height,appHeight:getComputedStyle(document.documentElement).getPropertyValue("--app-height"),focused:document.activeElement?.tagName,status:[...document.querySelectorAll("[role=status]")].map(e=>({text:e.textContent,bounds:e.getBoundingClientRect().toJSON()})),mic:[...document.querySelectorAll("button")].find(e=>e.getAttribute("aria-label")==="Dictate into draft")?.outerHTML})']
+"{\"width\":390,\"height\":844,\"visualViewport\":500,\"appHeight\":\"500px\",\"focused\":\"TEXTAREA\",\"status\":[{\"text\":\"Dictation failed\",\"bounds\":{\"x\":233.6953125,\"y\":469,\"width\":85.3046875,\"height\":14,\"top\":469,\"right\":319,\"bottom\":483,\"left\":233.6953125}}],\"mic\":\"<button type=\\\"button\\\" class=\\\"kYbS8W_dictate\\\" aria-label=\\\"Dictate into draft\\\" aria-pressed=\\\"false\\\" data-failed=\\\"true\\\"><span role=\\\"status\\\">Dictation failed</span><svg width=\\\"18\\\" height=\\\"18\\\" viewBox=\\\"0 0 24 24\\\" fill=\\\"currentColor\\\" aria-hidden=\\\"true\\\"><path d=\\\"M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V22h2v-3.07A7 7 0 0 0 19 12Z\\\"></path></svg></button>\"}"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['snapshot']
+- generic
+  - generic
+    - generic
+      - banner
+        - button "Back to sessions" [ref=e14]
+        - image "Ego logo"
+          - image
+        - button "Dictation verification" [ref=e15]
+          - StaticText "Dictation verification"
+          - StaticText "verification"
+          - StaticText " · "
+          - StaticText "Input"
+          - StaticText "now"
+        - group "Terminal view"
+          - button "CLI" [ref=e21]
+          - button "Chat" [ref=e22]
+        - button "More session actions" [expanded=false, ref=e16]
+      - generic
+        - generic
+          - button "Yes" [ref=e35]
+          - button "No" [ref=e36]
+          - button "/" [ref=e25]
+          - button "Ctrl" [expanded=false, ref=e26]
+          - button "Tab" [ref=e27]
+          - button "Esc" [ref=e28]
+          - button "↑" [ref=e29]
+          - button "↓" [ref=e30]
+          - button "←" [ref=e31]
+          - button "→" [ref=e32]
+          - button "↵" [ref=e33]
+        - button "More composer actions" [expanded=false, ref=e17]
+        - textbox "Type a command..." [ref=e18]
+        - button "Dictate into draft" [ref=e19]
+          - status
+            - StaticText "Dictation failed"
+        - button "Send" [expanded=false, ref=e20]
+          - image
+    - button "Dictation failed No speech detected" [ref=e34]
+      - StaticText "Dictation failed"
+      - StaticText "No speech detected"
+  - StaticText "Emulated keyboard area · not iOS"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['click', '@e19']
+✓ Done
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['eval', 'window.__recognition.onresult({results:[{0:{transcript:"retry succeeded"},isFinal:true}]}); window.__recognition.onend(); JSON.stringify({draft:document.querySelector("textarea").value,status:[...document.querySelectorAll("[role=status]")].map(e=>e.textContent),requests:window.__calls})']
+"{\"draft\":\"retry succeeded\",\"status\":[],\"requests\":[\"/sessions\",\"/config\",\"/dictation/config\",\"/dictation/hands-free\",\"/sessions/desk-2020-test/output\",\"/repo/open-markdown-tabs\",\"/dictation/config\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/api/version\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/logs\",\"/sessions\",\"/logs\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/sessions\",\"/logs\",\"/logs\",\"/logs\",\"/logs\"]}"
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['screenshot', '/Users/stefano.straus/Gits/.tmp/desk-2020-visual/recovered-390x844.png']
+✓ Screenshot saved to /Users/stefano.straus/Gits/.tmp/desk-2020-visual/recovered-390x844.png
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
+
+['tab', 'close']
+✓ Tab [t2] closed
+[ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned

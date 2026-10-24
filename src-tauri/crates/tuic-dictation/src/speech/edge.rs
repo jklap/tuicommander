@@ -830,6 +830,34 @@ mod tests {
     }
 
     #[test]
+    fn one_italian_reply_sends_one_request_with_the_resolved_italian_voice_1996() {
+        // Catches: a short reply being synthesized twice or the selected Italian
+        // voice being replaced by an English voice at the request boundary.
+        // The response is the recorded service stream, not proof of live audio.
+        for (configured, expected) in [
+            ("it-IT-ElsaNeural", "it-IT-ElsaNeural"),
+            ("en-US-AriaNeural", "it-IT-IsabellaNeural"),
+            ("", "it-IT-IsabellaNeural"),
+        ] {
+            let voice = choose_voice("it", configured).expect("Italian voice resolves");
+            assert_eq!(voice, expected);
+            let (engine, sent) = engine_playing(recorded_frames(), || Frame::Closed);
+            let audio = engine
+                .synthesize(SENTENCE, &voice, &SpeechCancel::new())
+                .expect("recorded response decodes without another engine");
+            assert_ne!(audio.samples, [] as [f32; 0]);
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 2, "one config and one SSML request: {sent:?}");
+            assert_eq!(message_path(&sent[0]), Some("speech.config"));
+            assert_eq!(message_path(&sent[1]), Some("ssml"));
+            assert_eq!(sent[1].matches("<voice ").count(), 1);
+            assert!(sent[1].contains(&format!("<voice name='{expected}'>")));
+            assert!(sent[1].contains(SENTENCE));
+            assert!(!sent[1].contains("en-US-AriaNeural"));
+        }
+    }
+
+    #[test]
     fn cancelling_while_the_service_is_silent_stops_the_request() {
         // Catches: a read loop that only checks the flag between frames, so an
         // abandoned reply on a stalled connection hangs until the deadline.
@@ -980,7 +1008,7 @@ mod tests {
             rejoined.split_whitespace().count(),
             text.split_whitespace().count()
         );
-        assert!(split_text("   ").is_empty());
+        assert_eq!(split_text("   "), [] as [&str; 0]);
     }
 
     #[test]
@@ -1113,9 +1141,9 @@ mod tests {
                 "it-IT-IsabellaNeural"
             ]
         );
-        assert!(voices_for_language(&voices, "i").is_empty());
-        assert!(voices_for_language(&voices, "").is_empty());
-        assert!(voices_for_language(&voices, "auto").is_empty());
+        assert_eq!(voices_for_language(&voices, "i"), [] as [EdgeVoice; 0]);
+        assert_eq!(voices_for_language(&voices, ""), [] as [EdgeVoice; 0]);
+        assert_eq!(voices_for_language(&voices, "auto"), [] as [EdgeVoice; 0]);
         assert!(
             voices_for_language(&voices, "en")
                 .iter()
@@ -1653,7 +1681,7 @@ mod critic_round2 {
         assert!(matches!(first, Err(SpeechError::Cancelled)), "{first:?}");
 
         let second = synth(&speech, "nuovo testo").expect("the second reply is served");
-        assert!(!second.samples.is_empty());
+        assert_ne!(second.samples, [] as [f32; 0]);
         std::thread::sleep(Duration::from_millis(500)); // the abandoned dial finishes
         let sent = sent.lock().unwrap();
         assert_eq!(dials.load(Ordering::SeqCst), 2);
@@ -1732,7 +1760,7 @@ mod critic_round2 {
         let pieces = split_text(&text);
         assert!(pieces.len() > 3);
         for piece in &pieces {
-            assert!(!piece.is_empty());
+            assert_ne!(*piece, "");
             assert!(
                 escape_xml(piece).len() <= MAX_TEXT_BYTES,
                 "{}",

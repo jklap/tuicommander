@@ -113,7 +113,7 @@ pub struct AgentBinding {
     pub audit_preview: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CriterionResult {
     pub index: usize,
@@ -121,7 +121,7 @@ pub struct CriterionResult {
     pub evidence: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputRequest {
     pub question: String,
@@ -129,14 +129,14 @@ pub struct InputRequest {
     pub options: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     Approved,
     ChangesRequested,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewSeverity {
     Minor,
@@ -144,7 +144,7 @@ pub enum ReviewSeverity {
     Blocker,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewFinding {
     pub criterion_index: usize,
@@ -153,7 +153,7 @@ pub struct ReviewFinding {
     pub evidence: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewAssessment {
     pub decision: ReviewDecision,
@@ -161,7 +161,7 @@ pub struct ReviewAssessment {
     pub findings: Vec<ReviewFinding>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttemptReport {
     pub contract_version: u16,
@@ -276,6 +276,9 @@ pub struct RunSnapshot {
     pub paused_since_ms: Option<i64>,
     #[serde(default)]
     pub paused_duration_ms: i64,
+    /// Why the daemon paused the run; cleared on resume. Absent for manual pauses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_cause: Option<String>,
     pub limits: RunLimits,
     pub loops: u16,
     pub story_creations: u16,
@@ -361,6 +364,9 @@ pub enum RunEventKind {
         fingerprint: String,
     },
     Paused,
+    PausedFor {
+        cause: String,
+    },
     DeadlineExpired {
         deadline_ms: i64,
     },
@@ -470,6 +476,11 @@ pub enum RunCommand {
     FinalVerificationPassed,
     Complete,
     Pause,
+    /// Internal: the daemon pauses a run and keeps the cause it already knows.
+    #[schemars(skip)]
+    PauseFor {
+        cause: String,
+    },
     /// Internal daemon timer command, never a caller-supplied timeout assertion.
     #[schemars(skip)]
     ExpireDeadline,

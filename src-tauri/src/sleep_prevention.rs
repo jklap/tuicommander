@@ -14,6 +14,9 @@ impl SleepBlocker {
 /// Acquire a system sleep lock. No-op if already held.
 #[tauri::command]
 pub(crate) fn block_sleep(blocker: tauri::State<'_, SleepBlocker>) -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Ok(());
+    }
     let mut guard = blocker.0.lock().map_err(|e| e.to_string())?;
     if guard.is_none() {
         let ka = keepawake::Builder::default()

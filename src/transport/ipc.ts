@@ -1,13 +1,7 @@
 import type { LogLine } from "../mobile/utils/logLine";
-import {
-	getRemoteBaseUrl,
-	getSessionConnection,
-	previewLogPayload,
-	transportLogger,
-	withRemoteToken,
-} from "../transportRuntime";
+import { getRemoteBaseUrl, getSessionConnection, transportLogger, withRemoteToken } from "../transportRuntime";
 import { isTauri } from "./environment";
-import { buildHttpUrl } from "./http";
+import { subscribeSse } from "./sse";
 import type { PtySubscription, SubscribeEventsOptions, SubscribePtyOptions, Unsubscribe, WsParsedEvent } from "./types";
 
 export async function subscribePty(
@@ -348,7 +342,7 @@ export async function subscribePty(
  * Subscribe to application-level events (head-changed, repo-changed, etc.)
  *
  * In Tauri: delegates to individual listen() calls.
- * In browser: creates a single EventSource to /events SSE endpoint.
+ * In browser: shares one EventSource per backend with all browser consumers.
  *
  * @param handlers - Map of event type → callback
  * @param options - Remote base URL and the missed-events callback
@@ -358,7 +352,7 @@ export async function subscribeEvents(
 	handlers: Record<string, (payload: unknown) => void>,
 	options: SubscribeEventsOptions = {},
 ): Promise<Unsubscribe> {
-	const { baseUrl, onResync } = options;
+	const { baseUrl } = options;
 	if (!baseUrl && isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
 		const unsubscribers: Array<() => void> = [];
@@ -369,41 +363,5 @@ export async function subscribeEvents(
 		return () => unsubscribers.forEach((fn) => fn());
 	}
 
-	// Browser/remote mode: SSE via EventSource
-	const types = Object.keys(handlers).join(",");
-	const url = buildHttpUrl(`/events?types=${encodeURIComponent(types)}`, baseUrl);
-	const es = new EventSource(url);
-
-	for (const [eventType, handler] of Object.entries(handlers)) {
-		es.addEventListener(eventType, ((event: MessageEvent) => {
-			try {
-				const payload = JSON.parse(event.data);
-				handler(payload);
-			} catch {
-				transportLogger().warn("network", `Failed to parse SSE event "${eventType}"`, {
-					eventData: previewLogPayload(event.data),
-				});
-			}
-		}) as EventListener);
-	}
-
-	es.addEventListener("lagged", ((event: MessageEvent) => {
-		transportLogger().warn("network", "SSE lagged", { eventData: previewLogPayload(event.data) });
-		// The backend's broadcast channel dropped events for this subscriber. They
-		// are gone; only the consumer knows how to re-derive what they carried.
-		onResync?.("lagged");
-	}) as EventListener);
-
-	// A snapshot read can finish before the server subscribes, even on initial connect.
-	let everOpened = false;
-	es.onopen = () => {
-		onResync?.(everOpened ? "reconnect" : "connect");
-		everOpened = true;
-	};
-
-	es.onerror = () => {
-		transportLogger().debug("network", "SSE connection error — will auto-reconnect");
-	};
-
-	return () => es.close();
+	return subscribeSse(handlers, options);
 }

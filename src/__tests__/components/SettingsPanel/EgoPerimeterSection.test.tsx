@@ -28,7 +28,7 @@ describe("EgoPerimeterSection", () => {
 		const setNetwork = vi.fn(async () => initial);
 		render(() => <EgoPerimeterSection client={client({ perimeter, setRoots, setNetwork })} />);
 		fireEvent.click(await screen.findByRole("button", { name: "How to verify" }));
-		expect(screen.getByText(/Reload from ego reads configuration/)).toBeTruthy();
+		expect(screen.getByText(/Run ego doctor in a terminal and inspect its command-isolation report/)).toBeTruthy();
 		expect(perimeter).toHaveBeenCalledTimes(1);
 		expect(setRoots).not.toHaveBeenCalled();
 		expect(setNetwork).not.toHaveBeenCalled();
@@ -40,6 +40,7 @@ describe("EgoPerimeterSection", () => {
 		expect(await screen.findByText("Not verified here")).toBeTruthy();
 		expect(screen.queryByText("Enforced by OS")).toBeNull();
 		expect(screen.getByText(initial.preview)).toBeTruthy();
+		expect(screen.queryByText(/ego roots extend the AI Chat workspace/)).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		expect((screen.getByLabelText("Root directory") as HTMLInputElement).value).toBe("/Users/stefano.straus/Gits");
 	});
@@ -70,8 +71,9 @@ describe("EgoPerimeterSection", () => {
 				/>
 			));
 			expect(await screen.findByText(text)).toBeTruthy();
-			expect(screen.getByText(/Command isolation for spawned processes/)).toBeTruthy();
-			if (execEnforcement === "promptOnly") expect(screen.getByText(/not fully OS-enforced/)).toBeTruthy();
+			expect(screen.getByText(initial.preview)).toBeTruthy();
+			if (execEnforcement === "promptOnly")
+				expect(screen.getByText(/not fully enforced by the operating system/)).toBeTruthy();
 		},
 	);
 

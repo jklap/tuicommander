@@ -345,6 +345,11 @@ html, body {
   color-scheme: dark;
 }
 
+html[data-theme="vscode-light"],
+html[data-theme="vscode-light"] body {
+  color-scheme: light;
+}
+
 #app {
   display: flex;
   flex-direction: column;

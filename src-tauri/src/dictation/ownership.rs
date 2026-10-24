@@ -60,6 +60,14 @@ impl Ownership {
     /// filesystem quirk must not switch dictation off for the only instance.
     pub fn acquire(config_dir: &Path) -> Self {
         let path = config_dir.join(LOCK_FILE);
+        // Verification never claims machine-wide input, even on its own config dir.
+        if crate::agent_test::active() {
+            return Self {
+                owner: false,
+                path,
+                _lock: None,
+            };
+        }
         let open = std::fs::create_dir_all(config_dir).and_then(|()| {
             File::options()
                 .create(true)

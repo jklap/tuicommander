@@ -27,6 +27,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { WorktreeManager } from "../../components/WorktreeManager";
+import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import { repositoriesStore } from "../../stores/repositories";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
@@ -71,6 +72,7 @@ describe("WorktreeManager", () => {
 	beforeEach(() => {
 		worktreeManagerStore.close();
 		vi.clearAllMocks();
+		vi.mocked(invoke).mockImplementation(async (cmd: string) => (cmd === "detect_orphan_worktrees" ? [] : undefined));
 		// Clear repos — reset to empty
 		for (const path of Object.keys(repositoriesStore.state.repositories)) {
 			repositoriesStore.remove(path);
@@ -93,10 +95,12 @@ describe("WorktreeManager", () => {
 		expect(container.querySelector("[class*='panel']")).not.toBeNull();
 	});
 
-	it("shows empty state when no worktrees exist", () => {
+	it("rejects empty Worktrees narration while retaining its filter", () => {
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
 		expect(container.querySelector("[class*='empty']")?.textContent).toContain("No worktrees found");
+		expect(container.textContent).not.toContain("Create one from the sidebar");
+		expect(container.querySelector('input[placeholder="Filter worktrees…"]')).not.toBeNull();
 	});
 
 	it("lists worktrees from repositories store", () => {
@@ -559,6 +563,7 @@ describe("WorktreeManager", () => {
 		});
 
 		it("keeps orphan row when remove_orphan_worktree fails", async () => {
+			const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 
@@ -580,8 +585,14 @@ describe("WorktreeManager", () => {
 
 			// Row should still be present after failure
 			await vi.waitFor(() => {
+				expect(warning).toHaveBeenCalledWith(
+					"git",
+					"Failed to prune orphan worktree /repo/.wt/stale",
+					expect.any(Error),
+				);
 				expect(container.querySelector("[class*='orphanBadge']")).not.toBeNull();
 			});
+			warning.mockRestore();
 		});
 
 		it("calls remove_orphan_worktree and removes row on prune click", async () => {

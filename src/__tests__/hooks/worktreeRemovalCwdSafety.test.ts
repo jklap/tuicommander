@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { createWorktreeRemovalCoordinator } from "../../hooks/git/createWorktreeRemovalCoordinator";
 import { createWorktreeWorkflowCoordinator } from "../../hooks/git/createWorktreeWorkflowCoordinator";
+import type { RemoveWorktreeResult } from "../../hooks/useRepository";
 import { pruneRemovedWorktree } from "../../hooks/useWorktreeSwitchPrompt";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
+import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { makeTerminal } from "../helpers/store";
@@ -42,11 +44,14 @@ describe("worktree removal cwd authority", () => {
 		>[0]);
 	}
 
-	function removal(closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>) {
+	function removal(
+		closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>,
+		outcome?: RemoveWorktreeResult,
+	) {
 		const [removingBranches, setRemovingBranches] = createSignal(new Set<string>());
 		return createWorktreeRemovalCoordinator({
 			repo: {
-				removeWorktree: vi.fn(async () => undefined),
+				removeWorktree: vi.fn(async () => outcome),
 				getWorkspaceLifecycle: async () => ({ dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" }),
 			},
 			dialogs: { confirmRemoveWorktree: async () => true },
@@ -56,6 +61,69 @@ describe("worktree removal cwd authority", () => {
 			setRemovingBranches,
 		});
 	}
+
+	// Catches: sidebar cleanup erases a label after the backend recycled and kept its branch.
+	it("recycling a worktree keeps its branch label after sidebar cleanup", async () => {
+		await repoSettingsStore.hydrate();
+		repoSettingsStore.getOrCreate(REPO, "repo");
+		repoSettingsStore.update(REPO, {
+			deleteBranchOnRemove: true,
+			branchLabels: { feature: "Keep this label" },
+		});
+		try {
+			await removal(
+				vi.fn(async () => {}),
+				{
+					branch: "feature",
+					removal_rule: "recyclable",
+					branch_delete_warning: null,
+				},
+			).handleRemoveWorkspace(REPO, "feature");
+
+			expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+			expect(repoSettingsStore.get(REPO)?.branchLabels.feature).toBe("Keep this label");
+		} finally {
+			repoSettingsStore.remove(REPO);
+		}
+	});
+
+	// Catches: force removal reports "force" even when the user explicitly keeps the branch.
+	it("force removing a dirty worktree while keeping its branch preserves the label", async () => {
+		await repoSettingsStore.hydrate();
+		repoSettingsStore.getOrCreate(REPO, "repo");
+		repoSettingsStore.update(REPO, {
+			deleteBranchOnRemove: true,
+			branchLabels: { feature: "Keep dirty branch label" },
+		});
+		const [removingBranches, setRemovingBranches] = createSignal(new Set<string>());
+		const coordinator = createWorktreeRemovalCoordinator({
+			repo: {
+				removeWorktree: async () => ({
+					branch: "feature",
+					removal_rule: "force",
+					branch_delete_warning: null,
+				}),
+				getWorkspaceLifecycle: async () => ({
+					dirtyFiles: 1,
+					commitStatus: "unmerged",
+					removalSafety: "requires_force",
+					dirtyFingerprint: "confirmed-dirty-checkout",
+				}),
+			},
+			dialogs: { confirmRemoveWorktree: async () => true },
+			closeTerminal: async () => {},
+			setStatusInfo: vi.fn(),
+			removingBranches,
+			setRemovingBranches,
+		});
+		try {
+			await coordinator.handleRemoveWorkspace(REPO, "feature", true);
+			expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+			expect(repoSettingsStore.get(REPO)?.branchLabels.feature).toBe("Keep dirty branch label");
+		} finally {
+			repoSettingsStore.remove(REPO);
+		}
+	});
 
 	// Catches: explicit removal closes sidebar members before the safe backend event can preserve them.
 	it("explicit removal preserves misfiled outside-cwd tabs and closes only checkout residents", async () => {
@@ -89,6 +157,12 @@ describe("worktree removal cwd authority", () => {
 	// Catches: the backend removal event closes a root coordinator by sidebar membership.
 	it("keeps a misfiled root coordinator alive and visible after a removal event", async () => {
 		const root = add(REPO);
+		terminalsStore.update(root, { tuicSession: "declared-root" });
+		repositoriesStore.setDeclaredWorktree(REPO, "declared-root", {
+			workspaceId: "feature",
+			branch: "feature",
+			worktreePath: WT,
+		});
 		const nested = add(`${WT}/src`);
 		const close = vi.fn(async (id: string) => terminalsStore.remove(id));
 		await pruneRemovedWorktree(REPO, "feature", workflow(close).closeTerminalsForBranch);
@@ -96,6 +170,7 @@ describe("worktree removal cwd authority", () => {
 		expect(terminalsStore.get(root)?.cwd).toBe(REPO);
 		expect(repositoriesStore.findOwnerForTerminal(root)?.workspaceId).toBe("main");
 		expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+		expect(repositoriesStore.get(REPO)?.declaredWorktrees?.["declared-root"]).toBeUndefined();
 	});
 
 	// Catches: an unrelated or unknown-cwd tab is closed, or disappears with its stale row.

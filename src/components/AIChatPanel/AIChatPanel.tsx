@@ -119,7 +119,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	const emptyMessage = () => {
 		switch (chat.phase()) {
 			case "unconfigured":
-				return "AI Chat is inactive because the ego executable is not configured. Select it in Settings → General, then configure your provider and model in Settings → AI Chat.";
+				return "AI Chat is inactive because the ego executable is not configured.";
 			case "starting":
 				return "Connecting conversation…";
 			case "failed":

@@ -1,0 +1,161 @@
+build-slot: admitted after 0s (running=0 free=71%)
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.0 [39m[90m/Users/stefano.straus/Gits/personal/tuicommander__wt/chore-desk-2020-visual[39m
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after draft edit before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-0260a36b-4b21-41c9-8eae-d7912c56aa4f]
+[dictation] Browser dictation lifecycle: first-result [dictation-0260a36b-4b21-41c9-8eae-d7912c56aa4f]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-0260a36b-4b21-41c9-8eae-d7912c56aa4f]
+[dictation] Browser dictation lifecycle: end [dictation-0260a36b-4b21-41c9-8eae-d7912c56aa4f]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-0260a36b-4b21-41c9-8eae-d7912c56aa4f]
+[dictation] Browser dictation lifecycle: start [dictation-786f01df-a2d6-4e8d-a35e-5fbba5d95104]
+[dictation] Browser dictation lifecycle: first-result [dictation-786f01df-a2d6-4e8d-a35e-5fbba5d95104]
+[dictation] Browser dictation lifecycle: end [dictation-786f01df-a2d6-4e8d-a35e-5fbba5d95104]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-786f01df-a2d6-4e8d-a35e-5fbba5d95104]
+[dictation] Browser dictation lifecycle: start [dictation-0cc89755-f859-45f0-afb6-2fc0d1d021f1]
+[dictation] Browser dictation lifecycle: first-result [dictation-0cc89755-f859-45f0-afb6-2fc0d1d021f1]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after draft edit before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-0cc89755-f859-45f0-afb6-2fc0d1d021f1]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after aborted before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: first-result [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: error [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: end [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-713aaae0-1b4e-4a8a-a33a-93afb6752119]
+[dictation] Browser dictation lifecycle: start [dictation-c5ce982d-5729-414b-af2c-4896442d3698]
+[dictation] Browser dictation lifecycle: first-result [dictation-c5ce982d-5729-414b-af2c-4896442d3698]
+[dictation] Browser dictation lifecycle: end [dictation-c5ce982d-5729-414b-af2c-4896442d3698]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-c5ce982d-5729-414b-af2c-4896442d3698]
+[dictation] Browser dictation lifecycle: start [dictation-b45c6c82-25ac-480c-b763-f6c4b568589f]
+[dictation] Browser dictation lifecycle: first-result [dictation-b45c6c82-25ac-480c-b763-f6c4b568589f]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after aborted before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-b45c6c82-25ac-480c-b763-f6c4b568589f]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after network before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: first-result [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: error [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: end [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-b0ba9360-3e75-48a7-a938-9b9c4fcc40fa]
+[dictation] Browser dictation lifecycle: start [dictation-ce09895e-33f3-4ada-9dc7-1f78b092ec64]
+[dictation] Browser dictation lifecycle: first-result [dictation-ce09895e-33f3-4ada-9dc7-1f78b092ec64]
+[dictation] Browser dictation lifecycle: end [dictation-ce09895e-33f3-4ada-9dc7-1f78b092ec64]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-ce09895e-33f3-4ada-9dc7-1f78b092ec64]
+[dictation] Browser dictation lifecycle: start [dictation-27c3f2f3-9d35-4e2e-aef9-f6f1c50a207c]
+[dictation] Browser dictation lifecycle: first-result [dictation-27c3f2f3-9d35-4e2e-aef9-f6f1c50a207c]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mwaits for end after network before dictating again
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-27c3f2f3-9d35-4e2e-aef9-f6f1c50a207c]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed aborted take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: error [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: first-result [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: end [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-bee89665-257e-4348-95c0-34166bab058a]
+[dictation] Browser dictation lifecycle: start [dictation-3d62effc-9fe4-4561-bc22-dab42df55da8]
+[dictation] Browser dictation lifecycle: first-result [dictation-3d62effc-9fe4-4561-bc22-dab42df55da8]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed aborted take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-3d62effc-9fe4-4561-bc22-dab42df55da8]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed network take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: error [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: first-result [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: end [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-9b273b13-39b7-4b52-a0ab-844eda29a881]
+[dictation] Browser dictation lifecycle: start [dictation-0a5bbd5c-f926-45a4-aa32-7739e97bdccf]
+[dictation] Browser dictation lifecycle: first-result [dictation-0a5bbd5c-f926-45a4-aa32-7739e97bdccf]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed network take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-0a5bbd5c-f926-45a4-aa32-7739e97bdccf]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed no-speech take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: error [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: first-result [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: end [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-2b5ee036-691d-4ae3-9f08-25bd663f8f64]
+[dictation] Browser dictation lifecycle: start [dictation-f5bc60c1-dcf3-4152-ad63-2dba7c3cab79]
+[dictation] Browser dictation lifecycle: first-result [dictation-f5bc60c1-dcf3-4152-ad63-2dba7c3cab79]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mfinishes a failed no-speech take before inserting the next transcript
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-f5bc60c1-dcf3-4152-ad63-2dba7c3cab79]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2minserts the next transcript after an empty take ends
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-9de801ff-830d-48bd-aec1-72a86939fbf4]
+[dictation] Browser dictation lifecycle: first-result [dictation-9de801ff-830d-48bd-aec1-72a86939fbf4]
+[dictation] Browser dictation lifecycle: end [dictation-9de801ff-830d-48bd-aec1-72a86939fbf4]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-9de801ff-830d-48bd-aec1-72a86939fbf4]
+[dictation] Browser dictation lifecycle: start [dictation-26080e39-ece0-45ad-9923-acf76afce058]
+[dictation] Browser dictation lifecycle: first-result [dictation-26080e39-ece0-45ad-9923-acf76afce058]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2minserts the next transcript after an empty take ends
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-26080e39-ece0-45ad-9923-acf76afce058]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mdictates three times after result then end without duplicating earlier speech
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-73feb179-f56d-434c-afde-e3e556149150]
+[dictation] Browser dictation lifecycle: first-result [dictation-73feb179-f56d-434c-afde-e3e556149150]
+[dictation] Browser dictation lifecycle: end [dictation-73feb179-f56d-434c-afde-e3e556149150]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-73feb179-f56d-434c-afde-e3e556149150]
+[dictation] Browser dictation lifecycle: start [dictation-8eb0228e-d7ae-41dd-b764-3b200c56ec13]
+[dictation] Browser dictation lifecycle: first-result [dictation-8eb0228e-d7ae-41dd-b764-3b200c56ec13]
+[dictation] Browser dictation lifecycle: end [dictation-8eb0228e-d7ae-41dd-b764-3b200c56ec13]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-8eb0228e-d7ae-41dd-b764-3b200c56ec13]
+[dictation] Browser dictation lifecycle: start [dictation-381fea90-719b-4318-bf9d-321f5e62db9d]
+[dictation] Browser dictation lifecycle: first-result [dictation-381fea90-719b-4318-bf9d-321f5e62db9d]
+[dictation] Browser dictation lifecycle: end [dictation-381fea90-719b-4318-bf9d-321f5e62db9d]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-381fea90-719b-4318-bf9d-321f5e62db9d]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mdictates again after a synchronous start failure without waiting for end
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-e1ec7c09-5e3c-4fba-9cc8-2b3476c94201]
+[dictation] Browser dictation lifecycle: error [dictation-e1ec7c09-5e3c-4fba-9cc8-2b3476c94201]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-e1ec7c09-5e3c-4fba-9cc8-2b3476c94201]
+[dictation] Browser dictation lifecycle: start [dictation-36adb85d-16ec-4ee1-bcdd-67964af5533b]
+[dictation] Browser dictation lifecycle: first-result [dictation-36adb85d-16ec-4ee1-bcdd-67964af5533b]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mdictates again after a synchronous start failure without waiting for end
+[22m[39m[dictation] Browser dictation lifecycle: abort-requested [dictation-36adb85d-16ec-4ee1-bcdd-67964af5533b]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mholds the lock from start to end
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-0599fe14-fbc5-40e1-80ed-6587d8b6f577]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mholds the lock from start to end
+[22m[39m[dictation] Browser dictation lifecycle: end [dictation-0599fe14-fbc5-40e1-80ed-6587d8b6f577]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-0599fe14-fbc5-40e1-80ed-6587d8b6f577]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mreleases the lock when recognition fails to start
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-0734312d-7e29-44fe-8015-fbde2d8ec208]
+[dictation] Browser dictation lifecycle: error [dictation-0734312d-7e29-44fe-8015-fbde2d8ec208]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-0734312d-7e29-44fe-8015-fbde2d8ec208]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mholds one lock across a repeat dictation, not a leaked one per take
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-1eeb7492-707e-4377-95b1-78184a8fd412]
+[dictation] Browser dictation lifecycle: end [dictation-1eeb7492-707e-4377-95b1-78184a8fd412]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-1eeb7492-707e-4377-95b1-78184a8fd412]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mholds one lock across a repeat dictation, not a leaked one per take
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-3e6ce6f5-743b-428b-88e9-ed969d2ba6e5]
+[dictation] Browser dictation lifecycle: end [dictation-3e6ce6f5-743b-428b-88e9-ed969d2ba6e5]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-3e6ce6f5-743b-428b-88e9-ed969d2ba6e5]
+
+[90mstdout[2m | src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22m[2mscreen wake lock while dictating[2m > [22m[2mholds one lock across a repeat dictation, not a leaked one per take
+[22m[39m[dictation] Browser dictation lifecycle: start [dictation-d8071cd2-2384-46ec-956d-70c903951710]
+[dictation] Browser dictation lifecycle: end [dictation-d8071cd2-2384-46ec-956d-70c903951710]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-d8071cd2-2384-46ec-956d-70c903951710]
+
+ [32m✓[39m src/mobile/__tests__/BrowserDictation.repeat.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[32m 165[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m12 passed[39m[22m[90m (12)[39m
+[2m   Start at [22m 12:56:58
+[2m   Duration [22m 1.36s[2m (transform 27%, import 22%, environment 20%, setup 17%, tests 14%)[22m

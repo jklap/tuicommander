@@ -423,13 +423,19 @@ pub(super) async fn set_dictation_config_http(
     // browser cancels the reply being spoken on the desktop. Before startup
     // finishes there is no conversation to cancel, and the file is still
     // written — the setting is not lost, it simply has nothing live to affect.
-    let app_handle = state.app_handle.read();
-    let dictation = app_handle.as_ref().map(|app| app.state::<DictationState>());
-    json_result(dictation::commands::save_dictation_config(
-        request.base,
-        request.config,
-        dictation.as_deref(),
-    ))
+    let result = {
+        let app_handle = state.app_handle.read();
+        let dictation = app_handle.as_ref().map(|app| app.state::<DictationState>());
+        dictation::commands::save_dictation_config(
+            request.base,
+            request.config,
+            dictation.as_deref(),
+        )
+    };
+    if result.is_ok() {
+        crate::settings::api::publish_change(&state, "voice", true);
+    }
+    json_result(result)
 }
 
 /// The audio socket a browser client holds while it wants a conversation.

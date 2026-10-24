@@ -1,0 +1,19 @@
+{
+  "url": "tauri://localhost",
+  "visibility": "hidden",
+  "focus": false,
+  "events": [
+    {
+      "kind": "dispatch-start",
+      "time": 89881,
+      "wall": 1792493592255
+    },
+    {
+      "kind": "keydown",
+      "time": 89881,
+      "key": "\u03a9",
+      "trusted": false
+    }
+  ],
+  "defaultPrevented": true
+}

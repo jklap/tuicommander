@@ -1,0 +1,1274 @@
+[
+  {
+    "elapsed": 23,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 5157,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 10298,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 15472,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 20681,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 25908,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 31370,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 36777,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 42055,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 14678,
+        "name": "tuicommander"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 48230,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 55252,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  },
+  {
+    "elapsed": 60034,
+    "frames": 0,
+    "maxFrameGap": 0,
+    "lastFrameAge": null,
+    "visibility": "hidden",
+    "changes": [
+      {
+        "at": 6030,
+        "state": "hidden"
+      }
+    ],
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    },
+    "native": {
+      "front": {
+        "pid": 72876,
+        "name": "tuicommander-agent-test"
+      },
+      "applicationHidden": false,
+      "windows": [
+        {
+          "pid": 72876,
+          "number": 4659,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 500,
+            "Y": 482,
+            "Width": 500
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4658,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4657,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4656,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4655,
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "X": 0,
+            "Height": 33,
+            "Y": 0,
+            "Width": 1512
+          }
+        },
+        {
+          "pid": 72876,
+          "number": 4654,
+          "layer": 5,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 816,
+            "Height": 420,
+            "Y": 546,
+            "Width": 640
+          }
+        }
+      ]
+    }
+  }
+]

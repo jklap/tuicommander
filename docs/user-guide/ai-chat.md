@@ -59,6 +59,8 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
 On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
 tab, and opens without choosing a repository. It uses the same workspace root
 and saved sessions as desktop. The composer shares the session input styling,
@@ -257,11 +259,7 @@ the panel's composer and open it. They write the question; you send it.
 
 ## The session knowledge store
 
-Command outcomes are still recorded per terminal — exit codes from OSC 133 where
-the shell supports it, an `Inferred` outcome from the PTY silence timer where it
-does not — and persist to `<config_dir>/ai-sessions/<session_id>.json`. Nothing
-reads them today. They are kept because the recording has nothing to do with a
-model and re-deriving the history later is impossible.
+The write-only command knowledge store was removed in #2115-1333. TUICommander no longer records or periodically saves command outcomes for AI context. Existing `<config_dir>/ai-sessions/<session_id>.json` files remain untouched. Shell activity and command blocks still use OSC 133 markers.
 
 ## Not here
 

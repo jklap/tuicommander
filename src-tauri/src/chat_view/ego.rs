@@ -60,17 +60,24 @@ impl ExportSource {
                         }
                         absorb(&line)?;
                     }
-                    if !header { return Err(io::Error::other("ego transcript v1 header missing")); }
-                    Ok(())
+                    Ok(header)
                 }.await;
-                if let Err(error) = result {
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-                    return Err(error);
+                let header = match result {
+                    Ok(header) => header,
+                    Err(error) => {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        return Err(error);
+                    }
+                };
+                let status = child.wait().await?;
+                if !status.success() {
+                    return Err(io::Error::other(format!(
+                        "ego export failed ({status}); the configured executable {} must support local transcript v1 and read this session; check the ego executable in Settings",
+                        self.program.display(),
+                    )));
                 }
-                if !child.wait().await?.success() {
-                    return Err(io::Error::other("ego export failed; the configured executable must support local transcript v1 and read this session"));
-                }
+                if !header { return Err(io::Error::other("ego transcript v1 header missing")); }
                 Ok(())
             }).await.map_err(|_| io::Error::other("ego transcript export timed out after ten seconds"))?
         })

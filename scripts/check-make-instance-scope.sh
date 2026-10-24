@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Guard: `make dev` must launch on the shared production config directory, and
-# only `make test` may default to the isolated `tuic-test` instance.
+# `make test` and `make agent-test` keep separate isolated defaults.
 #
 # Written as a bare `TUIC_APP_INSTANCE?=tuic-test`, that default is a *global*
 # make variable — its position in the file buys nothing — so `make dev` expanded
@@ -73,6 +73,12 @@ expect() {
 expect "make dev" "" "$(instance_for dev)"
 # The throwaway verification target keeps its isolated namespace.
 expect "make test" "tuic-test" "$(instance_for test)"
+# The agent target uses dedicated arguments, not the daily driver's env variable.
+agent_plan=$(env -u CARGO_TARGET_DIR MAKEFLAGS= make --no-print-directory agent-test AGENT_TEST_DRY_RUN=1)
+if ! printf '%s' "$agent_plan" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p["environment"]["TUIC_APP_INSTANCE"] == "agent-test"; assert p["environment"]["TUIC_PORT"] == "19876"'; then
+	echo "  ✗ make agent-test lost its isolated defaults"
+	fail=1
+fi
 # A target-specific `?=` must still yield to an explicit override, both ways.
 expect "make test TUIC_APP_INSTANCE=scope-check" "scope-check" \
 	"$(instance_for test TUIC_APP_INSTANCE=scope-check)"

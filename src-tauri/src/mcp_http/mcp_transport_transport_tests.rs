@@ -542,10 +542,14 @@ fn tool_call_text(body: &serde_json::Value) -> String {
 /// from errors), or documenting obsolete actor restrictions.
 #[test]
 fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
-    let definition = native_tool_named("story");
+    let definition = native_tool_named("workflow");
     let input = &definition["inputSchema"]["properties"]["input"];
     assert!(
-        input["oneOf"].as_array().is_some_and(|v| v.len() > 10),
+        input.to_string().contains("create_story")
+            && input.to_string().contains("remove_dependency")
+            && input.to_string().contains("set_criterion_manual")
+            && input.to_string().contains("submit_qa")
+            && input.to_string().contains("reject_qa"),
         "the StoryAction variants must be published: {input}"
     );
     let description = definition["description"].as_str().unwrap_or_default();
@@ -564,6 +568,9 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
 /// into whichever conversation happened to be armed.
 #[tokio::test]
 async fn voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
     let state = test_state();
 
     let unbound_direct = tool_call_text(
@@ -1520,53 +1527,6 @@ async fn remote_mcp_caller_cannot_rename_resize_or_wait_for_peer_mail() {
     );
 }
 
-#[tokio::test]
-async fn removed_native_actions_name_a_single_call_replacement() {
-    let state = test_state();
-    let cases = [
-        ("agent", "detect", "GET /agents"),
-        ("agent", "stats", "GET /stats"),
-        ("agent", "metrics", "GET /metrics"),
-        ("session", "process_stats", "GET /process/stats"),
-        ("repo", "prs", "GET /repo/prs"),
-        ("repo", "issues", "GET /repo/issues"),
-        ("repo", "close_issue", "POST /repo/issues/close"),
-        ("repo", "reopen_issue", "POST /repo/issues/reopen"),
-        ("repo", "ci_logs", "GET /repo/ci-failure-logs"),
-    ];
-    for (tool, action, replacement) in cases {
-        let response = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            tool,
-            &serde_json::json!({"action": action}),
-            None,
-        )
-        .await;
-        assert!(
-            response["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(replacement)),
-            "{tool} {action}: {response}"
-        );
-        let definitions = native_tool_definitions();
-        let schema = definitions
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["name"] == tool)
-            .unwrap();
-        let actions = schema["inputSchema"]["properties"]["action"]["description"]
-            .as_str()
-            .unwrap()
-            .trim_start_matches("One of: ");
-        assert!(
-            !actions.split(", ").any(|listed| listed == action),
-            "{tool} still advertises {action}: {actions}"
-        );
-    }
-}
-
 async fn subscribed_acp_mail_recipient() -> (Arc<AppState>, String, String) {
     use crate::acp::McpOverAcpHost;
 
@@ -2014,6 +1974,192 @@ fn a_task_owned_by_another_identity_is_refused() {
         crate::tasks::TaskStatus::Working,
         "a refused cancel must not have mutated the task"
     );
+}
+
+/// Catches: moving task cancellation to agent loses the spawning caller's ownership check.
+#[tokio::test]
+async fn agent_task_cancel_refuses_a_non_owner() {
+    let state = test_state();
+    let id = state
+        .tasks
+        .create(crate::tasks::TaskKind::AgentSpawn, "peer-a", None);
+    state.mcp.to_session.insert("mcp-b".into(), "peer-b".into());
+    for action in ["task_cancel", "task_get"] {
+        let refused = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":action, "task_id":id}),
+            Some("mcp-b"),
+        )
+        .await;
+        assert_eq!(
+            refused["error"], "task_id is not owned by the calling identity",
+            "{action}: {refused}"
+        );
+    }
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: agent task actions bypass remote-control guards or lose headerless ownership.
+#[tokio::test]
+async fn agent_task_actions_keep_headerless_ownership_and_remote_cancel_guard() {
+    let state = test_state();
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("headerless")),
+        None,
+    );
+    let polled = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_get", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(polled["status"], "working", "{polled}");
+    let refused = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(
+        refused["error"],
+        "Task cancellation is restricted to localhost connections"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: the new adapter rewrites completed/failed/cancelled outcomes on cancellation.
+#[tokio::test]
+async fn agent_task_cancel_preserves_every_final_outcome() {
+    use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+    let state = test_state();
+    let owner = task_owner_identity(None, Some("owner"));
+    for status in [
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ] {
+        let id = state.tasks.create(TaskKind::AgentSpawn, &owner, None);
+        state
+            .tasks
+            .set_status(
+                &id,
+                status,
+                TaskUpdate {
+                    result: Some(serde_json::json!({"exit_code":137})),
+                    error: Some("child failed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let cancelled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_cancel", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(cancelled["cancelled"], false, "{cancelled}");
+        assert_eq!(state.tasks.get(&id).unwrap().status, status);
+        let polled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_get", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(polled["status"], cancelled["status"]);
+        assert_eq!(polled["result"]["exit_code"], 137);
+        assert_eq!(polled["error_detail"], "child failed");
+        assert!(polled.get("error").is_none(), "{polled}");
+    }
+}
+
+/// Catches: task_cancel is accidentally wired to session kill instead of task cancellation.
+#[tokio::test]
+async fn agent_task_cancel_does_not_kill_its_pty() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    let session_id = created["session_id"]
+        .as_str()
+        .expect("test needs a real PTY");
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("owner")),
+        Some(session_id),
+    );
+    let cancelled = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("owner"),
+    )
+    .await;
+    let still_running = state.session_maps.sessions.contains_key(session_id);
+    kill_test_session(&state, session_id);
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    assert!(
+        still_running,
+        "cancelling a task must leave its real PTY alive"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Cancelled
+    );
+}
+
+/// Catches: an existing task denial becomes bypassable through the new agent actions.
+#[tokio::test]
+async fn agent_task_actions_honor_existing_tool_denials() {
+    for disabled in ["agent_tasks", "agent"] {
+        let state = test_state();
+        let id = state.tasks.create(
+            crate::tasks::TaskKind::AgentSpawn,
+            &task_owner_identity(None, Some("owner")),
+            None,
+        );
+        state
+            .config
+            .write()
+            .mcp_capabilities
+            .denied
+            .push(disabled.into());
+        for action in ["task_get", "task_cancel"] {
+            let refused = handle_mcp_tool_call(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                "agent",
+                &serde_json::json!({"action":action, "task_id":id}),
+                Some("owner"),
+            )
+            .await;
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("disabled by configuration")),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            crate::tasks::TaskStatus::Working
+        );
+    }
 }
 
 #[test]
@@ -2690,8 +2836,8 @@ async fn mcp_run_history_matches_owner_event_cursor() {
         let actual = handle_mcp_tool_call(
             &state,
             loopback_addr(),
-            "workflow_run",
-            &serde_json::json!({"input":input}),
+            "workflow",
+            &serde_json::json!({"action":"run","input":input}),
             Some("run-mcp"),
         )
         .await;
@@ -2729,7 +2875,7 @@ async fn mcp_run_history_matches_owner_event_cursor() {
 #[test]
 fn workflow_run_schema_exposes_typed_starts_and_recovery_without_internal_receipts() {
     // Catches: schema-less starts/recovery, unresolved embedded refs, or internal commands advertised.
-    let definition = native_tool_named("workflow_run");
+    let definition = native_tool_named("workflow");
     let schema = &definition["inputSchema"]["properties"]["input"];
     let encoded = schema.to_string();
     for required in [
@@ -4336,7 +4482,13 @@ async fn capture_codex_spawn_with(
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = root.path().join("argv");
     let binary = root.path().join(command_name);
-    std::fs::write(&binary, MOCK_CODEX_ARGV_SCRIPT).unwrap();
+    // Keep the mock alive until the observer has read both argv and the queue.
+    // Otherwise EOF cleanup can remove a correctly deferred initial prompt.
+    std::fs::write(
+        &binary,
+        format!("{MOCK_CODEX_ARGV_SCRIPT}read -r release\n"),
+    )
+    .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     let cfg = serde_json::from_value(serde_json::json!({
@@ -4365,6 +4517,7 @@ async fn capture_codex_spawn_with(
         .get(spawned["session_id"].as_str().unwrap())
         .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+    let _ = crate::pty::close_pty_core(&state, spawned["session_id"].as_str().unwrap(), false);
     (
         actual.split_terminator('\0').map(str::to_string).collect(),
         spawned,
@@ -5123,61 +5276,34 @@ async fn background_mode_ui_requests_fail_immediately_when_webview_unloaded() {
     }
 }
 
-// Catches: shared meta discovery leaking an armed browser tool to unrelated MCP sessions.
-#[cfg(all(unix, feature = "desktop"))]
+// Catches: retired Design Mode schemas remain discoverable after the cutover.
 #[tokio::test]
-async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
+async fn retired_design_mode_is_absent_from_meta_discovery() {
     let state = test_state();
-    insert_managed_test_session(&state, "owner", "/repo");
-    insert_managed_test_session(&state, "other", "/repo");
-    state
-        .mcp
-        .to_session
-        .insert("owner-mcp".into(), "owner".into());
-    state
-        .mcp
-        .to_session
-        .insert("other-mcp".into(), "other".into());
-    crate::mcp_http::mcp_transport_catalogue::rebuild_tool_search_index(&state);
-    let manager = crate::design_mode::manager(&state).await;
-    manager.arm_extension("/repo".into(), "owner".into()).await;
-    for (sid, expected) in [("owner-mcp", true), ("other-mcp", false)] {
-        let result = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "search_tools",
-            &serde_json::json!({"query":"design_mode browser", "limit":100}),
-            Some(sid),
-        )
-        .await;
-        assert_eq!(
-            result["results"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|r| r["name"] == "design_mode"),
-            expected
-        );
-        let schema = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "get_tool_schema",
-            &serde_json::json!({"tool_name":"design_mode"}),
-            Some(sid),
-        )
-        .await;
-        assert_eq!(schema["name"] == "design_mode", expected);
-    }
-    manager.stop("/repo").await.unwrap();
     let schema = handle_mcp_tool_call(
         &state,
         loopback_addr(),
         "get_tool_schema",
         &serde_json::json!({"tool_name":"design_mode"}),
-        Some("owner-mcp"),
+        None,
     )
     .await;
-    assert_eq!(schema["error"], "Design Mode not armed for this session");
+    assert!(schema["error"].as_str().unwrap().contains("not found"));
+    let result = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "search_tools",
+        &serde_json::json!({"query":"design browser", "limit":100}),
+        None,
+    )
+    .await;
+    assert!(
+        !result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "design_mode")
+    );
 }
 
 // Catches: generated settings requests cannot reach the published dispatcher.
@@ -5185,7 +5311,7 @@ async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
 async fn published_request_executes() {
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5201,7 +5327,7 @@ async fn published_request_executes() {
 #[tokio::test]
 async fn disabled_meta_call_denied() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["settings".into()];
+    state.config.write().mcp_capabilities.denied = vec!["settings".into()];
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5217,7 +5343,7 @@ async fn disabled_meta_call_denied() {
 #[tokio::test]
 async fn old_config_unknown() {
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5330,7 +5456,7 @@ async fn settings_mcp_patch_http_and_native_read_agree() {
     let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let read = serde_json::json!({"action":"get","target":{"kind":"machine"},"store":"notifications","paths":["/volume"]});
     let before = crate::settings::api::execute(
         &state,
@@ -5751,6 +5877,54 @@ async fn runtime_audit_projection(state: Arc<AppState>) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+// Catches: audit rows still recorded or returned while the feature is disabled.
+#[tokio::test]
+async fn mcp_call_audit_disabled_records_nothing_and_endpoint_reports_disabled() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = false;
+    post_test_tool_call(
+        state.clone(),
+        "audit-off",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    let off = runtime_audit_projection(state.clone()).await;
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["records"], serde_json::json!([]));
+    state.config.write().mcp_call_audit_enabled = true;
+    let on = runtime_audit_projection(state).await;
+    assert_eq!(on["enabled"], true);
+    assert_eq!(
+        on["retained"], 0,
+        "the call made while disabled left no row"
+    );
+}
+
+// Catches: the row outcome hides an application error, or labels a reply as success of the effect.
+#[tokio::test]
+async fn mcp_call_audit_outcome_names_reply_and_error_not_effect() {
+    let state = test_state();
+    state.config.write().mcp_call_audit_enabled = true;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "progress",
+        serde_json::json!({"type":"done","text":"x".repeat(600)}),
+    )
+    .await;
+    let projection = runtime_audit_projection(state).await;
+    assert_eq!(projection["records"][0]["outcome"], "error");
+    assert_eq!(projection["records"][1]["outcome"], "replied");
+}
+
 // Catches: cancelling real dispatch records rollback/no effect, or leaks body values.
 #[tokio::test]
 async fn mcp_outcome_record_cancelled_call_keeps_unknown_effect_without_bodies() {
@@ -5835,4 +6009,247 @@ async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() 
         assert_eq!(row["application_error"], false);
     }
     assert!(!projection.to_string().contains("recipient-"));
+}
+
+// Catches: UI regrouping bypasses the armed caller/repository boundary or the
+// previous Design Mode denial, or maps a lifecycle action to ordinary UI behavior.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn ui_design_actions_preserve_caller_repository_and_saved_denials() {
+    let state = test_state();
+    insert_managed_test_session(&state, "owner", "/repo");
+    insert_managed_test_session(&state, "other", "/repo");
+    state
+        .mcp
+        .to_session
+        .insert("owner-mcp".into(), "owner".into());
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), "other".into());
+    let manager = crate::design_mode::manager(&state).await;
+    manager.arm_extension("/repo".into(), "owner".into()).await;
+    let actions = ["stop", "reload", "navigate", "screenshot", "errors", "eval"];
+    for action in actions {
+        for (caller, repo) in [("other-mcp", "/repo"), ("owner-mcp", "/other")] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "call_tool",
+                &serde_json::json!({"tool_name":"ui","arguments":{
+                    "action":format!("design_{action}"),"repo_path":repo,
+                    "url":"http://localhost:3000", "script":"document.title"
+                }}),
+                Some(caller),
+            )
+            .await;
+            assert_eq!(
+                reply["error"], "Design Mode not armed for this session",
+                "{action}: {reply}"
+            );
+        }
+    }
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status[0]["repoPath"], "/repo", "{status}");
+    assert_eq!(status[0]["sessionId"], "owner", "{status}");
+    for disabled in ["ui", "design"] {
+        state.config.write().mcp_capabilities.denied = vec![disabled.into()];
+        for action in [
+            "design_start",
+            "design_status",
+            "design_stop",
+            "design_eval",
+        ] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "ui",
+                &serde_json::json!({
+                    "action":action,"session_id":"owner","repo_path":"/repo","script":"1"
+                }),
+                Some("owner-mcp"),
+            )
+            .await;
+            assert_eq!(
+                reply["error"], "Tool 'ui' is disabled by configuration",
+                "{reply}"
+            );
+        }
+    }
+    state.config.write().mcp_capabilities.denied.clear();
+    let stopped = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_stop","repo_path":"/repo"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert!(stopped.get("error").is_none(), "{stopped}");
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status["error"], "Design Mode not armed for this session");
+}
+
+// Catches: flat advertised UI fields cannot express Design Mode requests, or
+// missing required fields reach the browser owner instead of static validation.
+#[tokio::test]
+async fn ui_design_contract_is_discoverable_and_validates_before_dispatch() {
+    let state = test_state();
+    let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"ui"}));
+    for action in [
+        "design_start",
+        "design_stop",
+        "design_status",
+        "design_reload",
+        "design_navigate",
+        "design_screenshot",
+        "design_errors",
+        "design_eval",
+    ] {
+        assert!(
+            schema["inputSchema"]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(action)),
+            "{action}"
+        );
+    }
+    for field in ["session_id", "repo_path", "browser", "script", "url"] {
+        assert!(
+            schema["inputSchema"]["properties"].get(field).is_some(),
+            "{field}"
+        );
+    }
+    for args in [
+        serde_json::json!({"action":"design_start"}),
+        serde_json::json!({"action":"design_stop"}),
+        serde_json::json!({"action":"design_navigate","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_eval","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_start","session_id":"owner","browser":"unknown"}),
+    ] {
+        let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &args, None).await;
+        assert_eq!(reply["code"], "invalid_arguments", "{args}: {reply}");
+        assert_eq!(reply["effect"], "not_started", "{reply}");
+    }
+}
+
+// Catches: the breaking cutover leaves retired names advertised or callable.
+#[tokio::test]
+async fn capability_cutover_rejects_retired_names_and_measures_catalogue() {
+    let state = test_state();
+    state.config.write().mcp_capabilities.denied.clear();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().collapse_tools = false;
+    let classic = merged_tool_definitions_for_mode(&state, None, false);
+    state.config.write().collapse_tools = true;
+    let collapsed = merged_tool_definitions_for_mode(&state, None, false);
+    println!(
+        "CAPABILITY_CATALOGUE_BYTES classic={} collapsed={} upstreams=0 settings=enabled optional_owners=unconfigured framing=compact_tools_array",
+        serde_json::to_vec(&classic).unwrap().len(),
+        serde_json::to_vec(&collapsed).unwrap().len()
+    );
+    for name in [
+        "task",
+        "story",
+        "workflow_run",
+        "workflow_launch",
+        "workflow_report",
+        "workflow_story_create",
+        "design_mode",
+    ] {
+        assert!(
+            !classic
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name),
+            "retired name advertised: {name}"
+        );
+        let direct =
+            handle_mcp_tool_call(&state, loopback_addr(), name, &serde_json::json!({}), None).await;
+        assert_eq!(direct["error"], format!("Unknown tool '{name}'"));
+        let meta = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "call_tool",
+            &serde_json::json!({"tool_name":name,"arguments":{}}),
+            None,
+        )
+        .await;
+        assert_eq!(meta["error"], format!("Unknown tool '{name}'"));
+    }
+}
+
+// Catches: a migrated member denial disappears in list/search/schema or a known-name meta call bypasses it.
+#[tokio::test]
+async fn migrated_capability_denials_filter_every_public_surface_without_index_refresh() {
+    let state = test_state();
+    for (old, tool, action, sibling) in [
+        ("task", "agent", "task_get", "list_peers"),
+        ("story", "workflow", "story", "run"),
+        ("workflow_run", "workflow", "run", "story"),
+        (
+            "workflow_story_create",
+            "workflow",
+            "proposal_create",
+            "run",
+        ),
+        ("workflow_report", "workflow", "report", "run"),
+        ("workflow_launch", "workflow", "launch", "run"),
+        ("design_mode", "ui", "design_status", "toast"),
+    ] {
+        state.config.write().mcp_capabilities =
+            crate::mcp_capabilities::McpCapabilities::from_legacy(&[old.into()]);
+        let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":tool}));
+        let actions = schema["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(
+            !actions.iter().any(|value| value == action),
+            "{old}: {schema}"
+        );
+        assert!(
+            actions.iter().any(|value| value == sibling),
+            "{old}: {schema}"
+        );
+        for definition in filtered_native_tools(&state)
+            .iter()
+            .filter(|entry| entry["name"] == tool)
+        {
+            assert_eq!(definition, &schema);
+        }
+        let search = handle_search_tools(
+            &state,
+            &serde_json::json!({"query":match tool { "agent" => "Managed peers mail", "workflow" => "Durable project work", "ui" => "TUIC interaction", _ => unreachable!() }, "limit":1, "schema_byte_budget":65536}),
+        );
+        assert_eq!(search["top_schema"], schema, "{old}: {search}");
+        for (name, args) in [
+            (tool, serde_json::json!({"action":action})),
+            (
+                "call_tool",
+                serde_json::json!({"tool_name":tool,"arguments":{"action":action}}),
+            ),
+        ] {
+            let reply = handle_mcp_tool_call(&state, loopback_addr(), name, &args, None).await;
+            assert_eq!(
+                reply["error"],
+                format!("Tool '{tool}' is disabled by configuration"),
+                "{old}: {reply}"
+            );
+        }
+    }
 }

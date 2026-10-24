@@ -37,15 +37,54 @@ pub(super) fn revision(paths: &Paths) -> Vec<Option<std::time::SystemTime>> {
         .collect()
 }
 pub(super) async fn changed(paths: &Paths, previous: &[Option<std::time::SystemTime>]) {
-    loop {
-        tokio::select! {
-            _ = CHANGED.notified() => return,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                if revision(paths) != previous { return; }
-            }
+    use notify::Watcher;
+    let (send, mut receive) = tokio::sync::mpsc::channel(1);
+    let directory = paths.directory.clone();
+    let watched_directory = directory.clone();
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let relevant = super::config::watch_event_relevant(
+            &event,
+            &watched_directory,
+            &["config.json", "bot.token"],
+            true,
+        );
+        if relevant {
+            let _ = send.try_send(());
         }
+    });
+    let mut watcher = match watcher {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            tracing::error!(source="telegram", %error, "Cannot watch Telegram setup; waiting for an explicit settings change");
+            CHANGED.notified().await;
+            return;
+        }
+    };
+    // An unconfigured install may not have the private directory yet. Watching
+    // its nearest existing parent wakes setup when the missing directory appears.
+    let watch_root = directory
+        .ancestors()
+        .find(|path| path.is_dir())
+        .unwrap_or(&directory);
+    if let Err(error) = watcher.watch(watch_root, notify::RecursiveMode::NonRecursive) {
+        tracing::error!(source="telegram", %error, "Cannot watch Telegram setup; waiting for an explicit settings change");
+        CHANGED.notified().await;
+        return;
+    }
+    if revision(paths) != previous {
+        return;
+    }
+    tokio::select! {
+        _ = CHANGED.notified() => {},
+        _ = receive.recv() => {},
     }
 }
+#[cfg(test)]
+pub(crate) fn paths() -> Result<Paths, Error> {
+    Ok(Paths::new(crate::config::config_dir().join("telegram")))
+}
+
+#[cfg(not(test))]
 pub(crate) fn paths() -> Result<Paths, Error> {
     let home = dirs::home_dir().ok_or(Error::Config)?;
     Ok(Paths::new(home.join(".config/tuic-telegram")))
@@ -87,6 +126,20 @@ pub(crate) struct Snapshot {
     polling_owner: Option<&'static str>,
     last_error: Option<String>,
     last_message_time: Option<u64>,
+}
+
+/// Match setup's opt-in without reading the bot credential or requiring a live
+/// polling connection. Registration remains a separate, caller-bound gate.
+pub(crate) fn configured() -> bool {
+    if crate::agent_test::active() {
+        return false;
+    }
+    paths().is_ok_and(|paths| configured_at(&paths))
+}
+
+fn configured_at(paths: &Paths) -> bool {
+    config(paths).is_ok_and(|config| config.enabled && !config.bot_alias.is_empty())
+        && super::config::private_open(&paths.file("bot.token"), false).is_ok()
 }
 
 fn config(paths: &Paths) -> Result<Config, Error> {
@@ -236,8 +289,11 @@ fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
 }
 
 pub(crate) async fn change(state: &Arc<AppState>, change: Change) -> Result<Value, Error> {
-    let _ = state;
-    change_owner(paths()?, change).await
+    let result = change_owner(paths()?, change).await;
+    if result.is_ok() {
+        crate::settings::api::publish_change(state, "telegram", true);
+    }
+    result
 }
 pub(crate) async fn change_owner(paths: Paths, change: Change) -> Result<Value, Error> {
     change_owner_with_phase(paths, change, &mut false).await
@@ -248,6 +304,9 @@ pub(crate) async fn change_owner_with_phase(
     change: Change,
     persisted: &mut bool,
 ) -> Result<Value, Error> {
+    if crate::agent_test::active() {
+        return Err(Error::Config);
+    }
     // Cross-process serialization prevents a desktop save racing daemon pairing.
     ensure_directory(&paths)?;
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;

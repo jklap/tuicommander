@@ -53,7 +53,7 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
         .with_state(requests.clone());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     for (sid, identity, name) in [
         ("critic-target-mcp", peer, "critic-target"),
         (

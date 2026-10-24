@@ -34,6 +34,7 @@ pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
+mod agent_test;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 mod frame_workload;
@@ -52,7 +53,9 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
+pub(crate) mod session_usage;
 pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -136,7 +139,10 @@ pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
+mod app_nap;
+#[cfg(feature = "desktop")]
 mod panel_window;
+mod plugin_content;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
@@ -157,8 +163,11 @@ pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
 pub(crate) mod chat_view;
 mod codex_binding;
+mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
+pub(crate) mod relay_tunnel;
+pub use relay_tunnel::service::{RelayPairOptions, relay_pair};
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod remote_deploy;
@@ -202,6 +211,8 @@ pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod webview_recovery;
+#[cfg(feature = "desktop")]
+pub(crate) mod webview_url;
 pub(crate) mod workflows;
 pub(crate) mod workitem_links;
 pub(crate) mod worktree;
@@ -980,6 +991,15 @@ pub(crate) fn read_file_impl_with_limit(
         .map_err(|e| format!("Failed to resolve file path: {e}"))?;
 
     if !canonical_file.starts_with(&canonical_repo) {
+        if file_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(format!(
+                "Cannot open symbolic link \"{file}\": target \"{}\" is outside the repository.",
+                canonical_file.display()
+            ));
+        }
         return Err("Access denied: file is outside repository".to_string());
     }
 
@@ -1061,6 +1081,13 @@ pub(crate) fn write_external_file_impl(path: String, content: String) -> Result<
     fs::atomic_write(p, content.as_bytes()).map_err(|e| format!("Failed to write file: {e}"))
 }
 
+/// Body-free MCP tools/call outcome audit; `enabled: false` while the setting is off.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn get_mcp_audit(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+    Ok(mcp_http::mcp_call_audit::snapshot(&state))
+}
+
 /// Get MCP server status (running, port, active sessions).
 /// Async to avoid blocking the Tauri IPC thread during the TCP self-test.
 #[cfg(feature = "desktop")]
@@ -1117,6 +1144,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
     Ok(serde_json::json!({
         "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
+        "native_capabilities": mcp_capabilities::catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
@@ -1124,6 +1152,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
         "mcp_clients": mcp_protocol_sessions,
         "max_sessions": MAX_CONCURRENT_SESSIONS,
         "reachable": reachable,
+        "tls_active": state.tls_listener.read().strong_count() > 0,
     }))
 }
 
@@ -1198,6 +1227,7 @@ fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
         ref fqdn,
         https_enabled: true,
     } = ts
+        && state.tls_listener.read().strong_count() > 0
         && crate::mcp_http::auth::is_tailscale_ip(&ip)
     {
         return build_connect_url("https", fqdn, port, &token);
@@ -1251,6 +1281,7 @@ fn restart_server(state: &Arc<AppState>, reason: &'static str) {
         remote_enabled = state.config.read().services.server.enabled,
         "HTTP server reconfiguration requested; local MCP IPC remains active"
     );
+    *state.tls_listener.write() = std::sync::Weak::new();
     // Shutdown existing server
     if let Some(tx) = state.server_shutdown.lock().take()
         && tx.send(()).is_err()
@@ -1323,7 +1354,9 @@ fn apply_tailscale_status(
 
     // Restart server if HTTPS availability changed (HTTP→HTTPS or HTTPS→HTTP)
     #[cfg(feature = "desktop")]
-    if old_https != new_https && state.config.read().services.server.enabled {
+    if (old_https != new_https || (new_https && state.tls_listener.read().strong_count() == 0))
+        && state.config.read().services.server.enabled
+    {
         tracing::info!(
             source = "tailscale",
             old_https,
@@ -1559,6 +1592,23 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
         .remove_webview(webview_label);
 }
 
+/// Isolated desktop entry point. Normal launches cannot enable this policy by env.
+#[cfg(feature = "desktop")]
+pub fn run_agent_test(mut context: tauri::Context<tauri::Wry>) {
+    // DEFERRED (2026-10-20) — coordinator owns simultaneous desktop/TCC proof;
+    // the implementation-only peer must not launch another desktop instance.
+    if let Err(error) = agent_test::enable() {
+        eprintln!("agent-test: {error}");
+        std::process::exit(1);
+    }
+    context.config_mut().identifier = "com.tuic.commander.agent-test".into();
+    context.config_mut().product_name = Some("TUICommander Agent Test".into());
+    for window in &mut context.config_mut().app.windows {
+        window.title = "TUICommander Agent Test".into();
+    }
+    run(context);
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(mut context: tauri::Context<tauri::Wry>) {
@@ -1599,6 +1649,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let worktrees_dir = config::config_dir().join("worktrees");
 
     let mut config = config::load_app_config();
+    if let Some(port) = agent_test::port() {
+        agent_test::apply_config(&mut config, port);
+    }
 
     // Auto-generate VAPID keys and session token on first run
     let mut config_dirty = false;
@@ -1661,10 +1714,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 spawn_background_tasks(&server_state);
                 telegram::start(&server_state);
 
-                tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                if !agent_test::active() {
+                    tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                }
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
-                let tls_config = if remote_enabled {
+                let tls_config = if remote_enabled && !agent_test::active() {
                     let ts_state = detect_tailscale_bounded(async {
                         tokio::task::spawn_blocking(tailscale::detect)
                             .await
@@ -1737,7 +1792,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Skips agents the user explicitly disabled via Settings > Agents.
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
-    sanitize_window_state();
+    if !agent_test::active() {
+        sanitize_window_state();
+    }
 
     let themes_dir = config::config_dir().join("themes");
     if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
@@ -1755,6 +1812,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!agent_test::active());
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())
@@ -1816,6 +1875,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_filter(|_| !agent_test::active())
                 .with_state_flags(
                     // Exclude SIZE to prevent progressive shrinking with titleBarStyle Overlay
                     tauri_plugin_window_state::StateFlags::POSITION
@@ -1855,8 +1915,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 release_webview_document_resources(state.inner(), window.label());
             }
         })
-        .plugin(tauri_plugin_deep_link::init())
         .manage(native_clipboard::NativeClipboard::default());
+    let builder = if agent_test::active() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_deep_link::init())
+    };
 
     #[cfg(feature = "desktop")]
     let builder = builder.manage(sleep_prevention::SleepBlocker::new());
@@ -1874,8 +1938,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     builder
         .setup(move |app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if !agent_test::active() {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             #[cfg(feature = "desktop")]
             {
@@ -1895,7 +1961,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 });
             }
 
-            {
+            if !agent_test::active() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
@@ -1977,6 +2043,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // Disable macOS press-and-hold accent popup so held keys repeat
                 // in the terminal's hidden input (vim j/l/i — issue #79)
                 press_and_hold::disable();
+
+                // An occluded window must not nap the backend: PTYs, the local
+                // API and the heartbeat share this process (story 1638-c94c).
+                app_nap::disable();
             }
 
             // Themes are seeded before window creation so the first paint uses
@@ -2062,6 +2132,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
             remote_connection::set_remote_connection_password,
+            remote_connection::set_remote_connection_relay_pairing,
             remote_connection::remote_connection_password_exists,
             remote_connection::fetch_remote_connection_token,
             remote_runtime::connect_remote_connection,
@@ -2084,7 +2155,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::force_retry_provider_recovery_command,
             pty::write_pty,
             pty::write_pty_parts,
-            attachments::upload_attachment,
             pty::get_input_buffer_content,
             pty::send_agent_input_if_empty,
             pty::resize_pty,
@@ -2127,7 +2197,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::list_queued_agent_commands,
             pty::remove_queued_agent_command,
             pty::get_process_stats,
-            pty::read_vt_log,
             pty::subscribe_terminal_grid,
             pty::unsubscribe_terminal_grid,
             pty::terminal_request_frame,
@@ -2140,7 +2209,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_scroll_to_anchor,
             pty::terminal_styled_rows,
             pty::terminal_scroll_to,
-            pty::terminal_get_block_rows,
             pty::terminal_scroll_info,
             pty::terminal_search,
             pty::terminal_search_buffer,
@@ -2149,7 +2217,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_get_selection_text,
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
-            pty::terminal_hyperlink_at,
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
@@ -2158,7 +2225,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
-            pty::debug_agent_detection,
             pty_capture::get_pty_capture,
             pty_capture::set_pty_capture,
             load_config,
@@ -2205,7 +2271,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             git::check_is_main_branch,
             git::get_initials,
             git::run_git_command,
-            git::get_git_panel_context,
             git::get_working_tree_status,
             git::git_stage_files,
             git::git_unstage_files,
@@ -2315,6 +2380,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             get_local_ips,
             updater::check_update_channel,
             get_mcp_status,
+            get_mcp_audit,
             deep_link_mcp_call,
             get_connect_url,
             regenerate_session_token,
@@ -2509,6 +2575,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             plugin_fs::delete_build_artifact,
             plugin_fs::trim_build_artifact,
             plugin_http::plugin_http_fetch,
+            plugin_http::plugin_http_cancel,
             plugin_github::plugin_github_action,
             plugin_pty::plugin_read_session_output,
             plugin_exec::plugin_exec_cli,
@@ -2518,6 +2585,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             claude_usage::get_claude_usage_timeline,
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
+            session_usage::get_session_usage,
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
             grok_usage::get_grok_usage_api,
@@ -2592,6 +2660,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             ego_cli::ego_set_default_model
         ])
         .build(context)
+        .map(agent_test::without_launch_activation)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
@@ -2605,7 +2674,14 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // not in setup() which fires before the plugin applies its state.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        ensure_window_visible(&window);
+                        if agent_test::active() {
+                            #[cfg(target_os = "macos")]
+                            if let Err(error) = agent_test::present_without_focus(&window) {
+                                tracing::warn!(%error, "Failed to present agent-test window");
+                            }
+                        } else {
+                            ensure_window_visible(&window);
+                        }
                     }
                 }
                 // Dock-icon click (applicationShouldHandleReopen). macOS suppresses
@@ -2659,7 +2735,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                         // End every ego AI Chat started: `std::process::exit`
                         // skips the destructors that would kill them.
                         tauri::async_runtime::block_on(state.acp.shutdown_all());
-                        crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the
                     // process exits (story #672-c1a3) — the lines a shutdown
@@ -2703,7 +2778,6 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     // loop, and the CPU watchdog must not be able to hang behind it.
     #[cfg(feature = "desktop")]
     webview_recovery::spawn(state.clone());
-    ai_agent::knowledge::spawn_persist_task(state.clone());
 }
 
 /// Interactive CLI to set username + password for headless auth.
@@ -2793,11 +2867,6 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     //
     // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
     //   not exist in this build. There is no WebView whose document can be lost.
-    // - `ai_agent::knowledge::spawn_persist_task` — `build_remote_router`
-    //   serves no route that exposes command knowledge. Deleting the embedded
-    //   AI engine (#784-0aec) took its last reader too, so the desktop build
-    //   keeps recording while nothing consumes it yet; the daemon has no reason
-    //   to write files no one asks it for.
 }
 
 /// Run the tuic-remote server.
@@ -3104,6 +3173,28 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
+    // Outbound registration with the relay, when `--relay-pair` has stored a
+    // pairing. The agent can only reach this daemon's own loopback listener.
+    let relay_shutdown = Arc::new(tokio::sync::Notify::new());
+    let upstream = std::net::SocketAddr::new(
+        if options.bind.is_unspecified() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            options.bind
+        },
+        options.port,
+    );
+    match relay_tunnel::service::load_agent(upstream, &app_config.services.auth.session_token) {
+        Ok(Some(agent)) => {
+            let stop = relay_shutdown.clone();
+            tokio::spawn(relay_tunnel::daemon::run(agent, async move {
+                stop.notified().await;
+            }));
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(source = "remote", "Relay tunnel not started: {e}"),
+    }
+
     let router = mcp_http::build_remote_router(state.clone());
     let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let lifetime = remote_lifetime::expired(
@@ -3133,6 +3224,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         }
     };
 
+    relay_shutdown.notify_one();
     workflows::shutdown_checks();
     shutdown_result?;
     // Flush the last buffered log lines to disk before the process exits
@@ -3212,12 +3304,12 @@ mod tests {
         assert!(state.grid.gates.is_empty());
         assert!(!crate::pty::grid_has_subscriber(&state, "one"));
         assert!(!crate::pty::grid_has_subscriber(&state, "two"));
-        assert!(
+        assert_eq!(
             state
                 .plugin_output_watchers
                 .read()
-                .matching_ids("old document")
-                .is_empty()
+                .matching_ids("old document"),
+            [] as [std::string::String; 0]
         );
     }
 
@@ -3244,7 +3336,10 @@ mod tests {
         assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("main line"), vec!["main-client/w"]);
-        assert!(watchers.matching_ids("panel line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("panel line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3313,7 +3408,10 @@ mod tests {
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("browser line"), vec!["browser/w"]);
         assert_eq!(watchers.matching_ids("new line"), vec!["new-document/w"]);
-        assert!(watchers.matching_ids("old line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("old line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3332,7 +3430,10 @@ mod tests {
         }
         let watchers = state.plugin_output_watchers.read();
         for i in 0..9 {
-            assert!(watchers.matching_ids(&format!("line-{i}")).is_empty());
+            assert_eq!(
+                watchers.matching_ids(&format!("line-{i}")),
+                [] as [std::string::String; 0]
+            );
         }
         assert_eq!(watchers.matching_ids("line-9"), vec!["document-9/w"]);
     }
@@ -3627,14 +3728,23 @@ mod tests {
             vec!["/b".to_string()]
         );
         // An active repo that is not registered (or parked) warms nothing.
-        assert!(repos_to_prewarm(known(), Some("/gone".to_string()), "active_only").is_empty());
-        assert!(repos_to_prewarm(known(), None, "active_and_switch").is_empty());
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/gone".to_string()), "active_only"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            repos_to_prewarm(known(), None, "active_and_switch"),
+            [] as [std::string::String; 0]
+        );
         // `all_sequential` warms every repo, active first so it is ready first.
         assert_eq!(
             repos_to_prewarm(known(), Some("/c".to_string()), "all_sequential"),
             vec!["/c".to_string(), "/b".to_string(), "/a".to_string()]
         );
-        assert!(repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential").is_empty());
+        assert_eq!(
+            repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]

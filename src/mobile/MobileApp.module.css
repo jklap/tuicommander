@@ -5,6 +5,8 @@
   top: var(--app-top, 0px);
   left: 0;
   right: 0;
+  /* Keep viewport sizing: the recorded iOS band came from translucent
+     status-bar metadata, not a missing amount to add to this height. */
   height: var(--app-height, 100dvh);
   padding-top: env(safe-area-inset-top, 0px);
   background: var(--bg-primary);

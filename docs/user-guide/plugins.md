@@ -75,6 +75,66 @@ The explicit flag confirms that the selected port belongs to the isolated deskto
 
 This probe does **not** prove Tasks rendering, the actual Tasks registry's unload cleanup, start-work delivery or live mutations. Those remain separate checks. Shut down only the verification instance when finished. Until the operator runs it, the account/desktop integration criterion remains unchecked.
 
+### Registered-provider desktop E2E
+
+For an authorized `agent-test-<name>` desktop, use the Unix socket printed by
+`make agent-test AGENT_TEST_DRY_RUN=1`. Install GitHub Work through the desktop
+installer. Configure exactly one account with repository
+`sstraus/tuic-test-sandbox` in its `data/work-items.json`. Complete that instance's
+Device Flow with the same account. Supply a sandbox issue with a comment and a
+sandbox PR with a review thread:
+
+```sh
+node scripts/github-work-desktop-e2e.mjs "$GH_WORK_CHECK_SOCKET" sstraus 1 2 --isolated-desktop
+```
+
+This E2E uses the installed plugin's existing registration and actual Tasks UI.
+It reads both items, opens their details, and pages PR comments into the B6
+review thread. It also reads the B7 state through the production account-scoped
+IPC port. It does not replace modules, register a test host, or mock HTTP.
+It sends no GitHub mutations. Projects, start-work, unload cleanup, and B7
+mutation behavior remain separate checks. The result contains check names, not
+private response bodies. The outer result deadline is 450 seconds.
+
+Append `--preflight-only` to check plugin load, sandbox configuration and Tasks
+mounting before login. A preflight success is **not** authenticated E2E evidence.
+The socket must be below `~/Gits/.tmp/tuic-at/`; there is no default-app target.
+Stop the selected instance with the matching `make agent-test-stop` variables.
+
+### Provider closure prerequisites
+
+A private headless backend and a worktree Vite frontend isolate backend state,
+but the normal browser loader skips user plugins before discovery. They do not
+provide an equivalent loaded-user-plugin E2E. Do not work around this by faking
+Tauri globals, manually substituting a host, or mocking authenticated HTTP. An
+agent must not start an ordinary second desktop app to bypass this limitation.
+An explicitly authorized `make agent-test` instance is the isolated desktop
+verification path; use a unique `agent-test-<name>` instance and port.
+
+The remaining checks need operator input:
+
+- **GitHub Work integration:** complete device-flow login for a test account with
+  `repo read:project`; configure its repository in Tasks; supply an accessible
+  issue, PR and Projects v2 project. In an approved loaded-plugin runtime, run
+  the read-only probe above and separately check the actual Tasks views.
+- **GitHub create metadata E2E:** authorize one issue creation in a named scratch
+  repository. With the installed plugin loaded, open Tasks → New task, select
+  Issue, confirm repository labels/milestones/assignees load, then submit the
+  authorized issue and read back its repository and metadata. Record its URL.
+  Discovery alone and the read-only probe do not prove issue creation.
+- **Jira recordings:** authorize a test site/account and read-only collection of
+  issue transitions, comment pages and agile board configuration with a
+  multi-status column. Keep the observed 429/Retry-After boundary unverified
+  until a real response is available; do not force a rate limit. Account
+  verification and post-write ADF read-back remain separate boundaries; the
+  latter needs explicit scratch-project write consent. The Jira fixture README
+  lists recorded and synthetic evidence separately.
+
+Enter credentials only through the core account login. Do not send them in chat,
+copy them from token stores, or commit them with fixtures. Until these prerequisites
+and the real-runtime checks are satisfied, keep the corresponding integration,
+recorded-fixture and create-E2E criteria unchecked.
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:
@@ -196,3 +256,15 @@ Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matc
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
 
 Async plugin startup completes before the plugin is marked as loaded. Startup failures appear in the plugin error state and its log. Disabling or reloading a plugin cancels its startup lifetime and prevents late registrations from the old host.
+
+Cancelling Jira URL resolution stops its in-flight HTTP requests. Plugins can also cancel their own HTTP requests; unloading a plugin cancels its active requests.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
+### Same-version updates
+
+An Update badge can also mean that installed payload files differ from the
+catalogue at the same version. User settings in `data/` do not cause this badge.
+The app computes installed identity when it discovers plugins; Refresh updates
+the catalogue. Older catalogue entries without a payload digest use version-only
+comparison. A newer locally installed version is not downgraded.

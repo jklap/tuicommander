@@ -131,3 +131,21 @@ performance. Native WebKit replay with the actual recorded font, paired frontend
 heartbeat/input and independent backend timings is still required for story
 1638's real-stall RED/GREEN. This recorder and timing harness do not fix or prove
 the cause of that stall.
+
+
+### Generated workload research harness
+
+`scripts/stall-workload/run.mjs` generates paced synthetic output in isolated
+headless PTYs, captures the production CanvasTerminal pipeline through worktree
+Vite, and compares exact git-exported renderers with identical retained paint
+snapshots. It records Chrome event-loop/rAF gaps and independent backend request
+latency. It does not generate a fixture of the historical stall or compare the
+whole application at two revisions. The bounded recorder can retain only a
+short suffix under this workload.
+
+See [the harness runbook](../../scripts/stall-workload/README.md) and
+[the 2026-10-20 measurements](../../scripts/stall-workload/RESULTS.md). The measured
+30-second output run did not reproduce the long heartbeat outage. The prepared
+`desktop-replay.mjs` helper is for the verified isolated `make agent-test`
+instance after story 2086 lands; it has not yet been run in WKWebView. The
+original real-stall RED/GREEN remain open.

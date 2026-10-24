@@ -23,13 +23,13 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [session],
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
 		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 	}),
 }));
 vi.mock("../useMobileNotifications", () => ({ useMobileNotifications: vi.fn() }));

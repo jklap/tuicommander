@@ -13,6 +13,24 @@ Access TUICommander from a browser on another device on your network.
 
 Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
+On macOS, TUICommander can use the installed Tailscale app when no `tailscale`
+CLI is on its PATH, including launches from Finder. Status detection, peer lookup
+and certificate requests run the app executable with `TAILSCALE_BE_CLI=1`.
+You do not need to set this variable globally. A standalone CLI on PATH keeps
+its existing environment.
+
+The **Tailscale HTTPS** status reports **HTTPS active** only while the server
+has loaded a certificate and its TLS listener is running. Tailscale's HTTPS
+capability alone is not enough. If it says **Running (HTTPS unavailable)**,
+enable Remote Access and select **Recheck**. If it remains unavailable, inspect
+the Tailscale certificate errors in the app logs. Connect URLs use HTTPS only
+while that listener is active.
+
+The macOS app's CLI runs in a filesystem sandbox. TUICommander reads certificate
+and key PEM from its stdout instead of asking it to write into the caller's
+temporary directory; this avoids `operation not permitted` on certificate writes.
+
+
 ## Connecting from Another Device
 
 1. Open a browser on any device on the same network
@@ -23,6 +41,10 @@ Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 ### QR Code
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
+
+If local IP discovery fails, the settings controls and QR dialog remain open. The
+network address area shows the error and a **Retry** action. Retry repeats address
+discovery without changing the saved remote-access configuration.
 
 ## What Works Remotely
 
@@ -90,7 +112,13 @@ At widths of 768 px or more, tap **Markdown** in the session top bar to open a d
 
 After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
 
+In **Sessions → New session**, the Agent picker lists installed CLI agents from the shared registry, including ego. Git and direct API entries are excluded. The first installed agent is selected. Creation stays disabled while detection runs or when no agents are installed; detection failures show an error instead of a fallback list.
+
 ### Add to Home Screen
+
+The iOS PWA uses a non-overlay status bar. On the tested iPhone simulator, the previous translucent setting left a 62pt band outside the drawable content area; adding that height to the CSS shell only clipped the composer. The non-overlay setting removes the band while shell height and position continue to follow `visualViewport.height` and `visualViewport.offsetTop`. The CLI composer retains its compact 4px bottom padding; no extra safe-area gutter is added.
+
+**Existing iPhone Home Screen installs:** remove the installed PWA and add it from Safari again after this update. iOS reads the status-bar setting at installation; a normal page reload does not update that installed setting. Physical iPhone confirmation is still pending. If the band remains after reinstallation, capture the device screen, iOS version, orientation and keyboard state before reloading.
 
 The mobile UI supports PWA (Progressive Web App) installation:
 
@@ -99,11 +127,17 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
-**The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+**Historical title-fade report, before the non-overlay status-bar change.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+
+Long file paths in mobile **CLI** output wrap inline with the surrounding text and keep the line's hanging indent. Tap a path to open it, or focus it and press Enter or Space.
 
 At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
+
+A choice answer stays bound to the terminal that showed the question, even if you
+leave the detail screen while its keys are being sent. A failed send shows an error
+and enables the choice buttons again. Send and Queue also keep their original terminal.
 
 For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
@@ -206,7 +240,7 @@ Hold Send with a finger or mouse, then select **Queue** to hold your current age
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
-- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available.
+- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available. Native ego selectors open automatically; use the header question action to hide or reopen them. If a typed reply requires an option selection, the question controls reopen and the draft stays editable. Free-text cards still open on request.
 - **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
 - **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
@@ -351,6 +385,18 @@ A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
 compares the `instance_id` in `GET /health` against this process's own, so a
 second daemon on the same machine (a different port) is still a valid peer.
+
+### Adding a Relay Connection
+
+Use this when the remote machine accepts no inbound connection.
+
+1. On the remote machine run `tuic-remote --relay-pair <relay-url> --relay-register`, or set `TUIC_RELAY_TOKEN` instead of `--relay-register`. Add `--relay-out <file>` to write the bundle to a private file.
+2. Restart `tuic-remote` so it registers with the relay.
+3. Copy the printed `tuic-pair-v1:` bundle to this machine over a trusted channel. It holds the end-to-end secret.
+4. Open **Settings** → **Remote Machines**, click **+**, and select **Relay**.
+5. Paste the bundle and save, then click **Connect**.
+
+If the status shows `pairing_rejected`, the daemon was paired again: import the new bundle. `daemon_offline` means the daemon is not connected to the relay. After `link_lost` or `relay_unreachable` TUICommander reconnects by itself. Running `--relay-pair` again replaces the pairing.
 
 ### Connect or Install
 
@@ -869,3 +915,7 @@ Typed Ego startup login returns a session on the explicitly selected daemon.
 Open that session in the owning client's terminal view to authenticate, then
 request status and refresh providers on that same daemon. Never read a local
 credential owner to infer the result of remote authentication.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.

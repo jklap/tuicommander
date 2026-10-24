@@ -38,10 +38,12 @@ pub(super) enum Command {
 pub(super) struct Runtime {
     pub state: Arc<AppState>,
     pub config: Config,
+    config_watch: super::config::WatchedConfig,
     pub outbound: Outbound,
     pub pending: VecDeque<(String, i64)>,
     pub(super) requests: VecDeque<super::streaming::Request>,
     pub callbacks: super::callbacks::Callbacks,
+    pub(super) sender_limits: std::collections::HashMap<String, tokio::time::Instant>,
     pub adapter_sid: String,
     pub(super) registration: Option<super::registration::Registration>,
 }
@@ -52,21 +54,26 @@ impl Runtime {
         paths: Paths,
         adapter_sid: String,
     ) -> Result<Self, Error> {
+        let config_watch = super::config::WatchedConfig::new(paths.clone())?;
         let mut outbound = Outbound::new(paths.clone(), BotApi::new(paths)?);
         outbound.recent = state.telegram_recent.clone();
         Ok(Self {
             state,
             config,
+            config_watch,
             outbound,
             pending: VecDeque::new(),
             requests: VecDeque::new(),
             callbacks: Default::default(),
+            sender_limits: Default::default(),
             adapter_sid,
             registration: None,
         })
     }
     pub fn live(&self, peer: &str, pty: &str, epoch: u64) -> bool {
-        self.recipient_peer().as_deref() == Some(peer) && live(&self.state, peer, pty, epoch)
+        // Draft ownership follows the correlated recipient, including a reply sender.
+        // Registration takeover already retires the active draft and its token.
+        live(&self.state, peer, pty, epoch)
     }
     pub fn current(&self, peer: &str) -> Result<(String, u64), Error> {
         let pty = self.state.live_pty_for_peer(peer).ok_or(Error::State)?;
@@ -126,7 +133,7 @@ impl Runtime {
                         || self.pending.iter().any(|(id, _)| id == &request.id))
             },
         );
-        if !authorized
+        if (!authorized && !matches!(input, Input::Send { .. }))
             || bound
                 .as_deref()
                 .and_then(|peer| self.state.resolve_peer_ref_checked(peer).ok().flatten())
@@ -181,7 +188,22 @@ impl Runtime {
             }
             Input::Send { text, buttons } => {
                 let chat = self.destination()?;
-                self.send_buttons(chat, &text, buttons).await
+                if self.recipient_peer().as_deref() == Some(caller) {
+                    self.send_buttons(chat, &text, buttons).await
+                } else {
+                    if !buttons.is_empty() {
+                        return Err(Error::NonOwnerButtons);
+                    }
+                    let prefix = self.sender_prefix(caller)?;
+                    // Reject empty input before charging the sender's interval.
+                    super::outbound::chunks(&text)?;
+                    self.limit_sender(caller)?;
+                    let ids = self
+                        .outbound
+                        .send_tagged(chat, &text, None, &prefix)
+                        .await?;
+                    Ok(json!({"message_ids":ids}))
+                }
             }
         }
     }
@@ -270,7 +292,10 @@ impl Runtime {
             .is_ok_and(|result| result == Value::Bool(true));
         self.stage("received");
         let text = envelope["text"].as_str();
-        let Some(peer) = self.recipient_peer() else {
+        let Some(peer) = self
+            .reply_recipient(&envelope)
+            .or_else(|| self.recipient_peer())
+        else {
             self.state
                 .telegram_recent
                 .lock()
@@ -352,10 +377,7 @@ impl Runtime {
         Ok(json!({"accepted":true}))
     }
     pub(super) fn enabled(&self) -> bool {
-        Config::load(&self.outbound.paths)
-            .ok()
-            .flatten()
-            .is_some_and(|c| c.bot_alias == self.config.bot_alias)
+        self.config_watch.enabled(&self.config.bot_alias)
     }
     pub async fn event(&mut self, event: AppEvent) {
         self.retire_registration();

@@ -3,6 +3,16 @@ import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Catches: browser reload dropping the changed-ID filter and scanning every plugin.
+it("maps targeted plugin discovery with the same ID array as IPC", () => {
+	const ids = ["plugin-a", "odd,id"];
+	const mapping = mapCommandToHttp("list_user_plugins", { pluginIds: ids });
+	const url = new URL(mapping!.path, "http://localhost");
+	expect(url.pathname).toBe("/plugins/list");
+	expect(JSON.parse(url.searchParams.get("plugin_ids")!)).toEqual(ids);
+	expect(mapCommandToHttp("list_user_plugins", {})?.path).toBe("/plugins/list");
+});
+
 // Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps scoped plugin settings actions without adding host authority", () => {
 	const action = { action: "get", paths: ["/retryDelayMs"] };
@@ -203,7 +213,10 @@ function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<str
 		subscribed.set(name, where);
 	};
 	for (const { path, source } of sources) {
-		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+		// Most frontend files cannot contain either supported call. Keep Unicode
+		// escapes eligible: TypeScript decodes escaped identifiers in the AST.
+		if (!source.includes("listen") && !source.includes("onEvent") && !source.includes("\\u")) continue;
+		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false);
 		for (const call of findNodes(file, ts.isCallExpression)) {
 			const argument = call.arguments[0];
 			if (argument && ts.isIdentifier(call.expression) && call.expression.text === "listen") {
@@ -223,6 +236,16 @@ function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<str
 }
 
 describe("PTY event source scan", () => {
+	// Catches: the cheap prefilter dropping escaped listeners or wrapped onEvent calls.
+	it.each([
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
+		["escaped listen", "li\\u0073ten(`pty-activity-${sessionId}`, () => {});"],
+		["wrapped onEvent", 'transport.onEvent(mutant ? "activity" : (coverage(), "activity"), handler);'],
+		["escaped onEvent", String.raw`transport.on\u0045vent("activity", handler);`],
+	])("finds the activity listener with %s", (_name, source) => {
+		expect(extractSubscribedPtyEvents([{ path: "src/transport.ts", source }]).has("pty-activity")).toBe(true);
+	});
+
 	it("finds the activity listener when instrumentation wraps its template argument", () => {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
 		const source = "listen(mutant ? `` : (coverage(), `pty-activity-${sessionId}`), () => {});";
@@ -243,6 +266,10 @@ describe("transport", () => {
 	 * consumes) is wasteful but harmless, and is deliberately not asserted.
 	 */
 	describe("per-session Tauri event parity", () => {
+		// Both assertions inspect one immutable repository snapshot, not two full AST scans.
+		let subscribed: Map<string, string[]> | undefined;
+		const subscriptions = () => (subscribed ??= extractSubscribedPtyEvents());
+
 		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
 			const rustSources = [
 				"src-tauri/src/pty.rs",
@@ -252,7 +279,7 @@ describe("transport", () => {
 				.map((relative) => readRepoFile(relative))
 				.join("\n");
 
-			const subscribed = extractSubscribedPtyEvents();
+			const subscribed = subscriptions();
 			expect(subscribed.size).toBeGreaterThan(0);
 
 			const orphaned = [...subscribed.entries()].filter(([name]) => !rustSources.includes(`${name}-{session_id}`));
@@ -263,7 +290,7 @@ describe("transport", () => {
 		it("includes the activity pulse, which is the signal that regressed", () => {
 			// Guards the guard: if the extraction above silently stopped matching,
 			// the parity test would pass vacuously for the very event it exists for.
-			expect([...extractSubscribedPtyEvents().keys()]).toContain("pty-activity");
+			expect([...subscriptions().keys()]).toContain("pty-activity");
 		});
 	});
 
@@ -442,6 +469,18 @@ describe("transport", () => {
 				method: "POST",
 				path: "/stories/action?path=%2Frepo%20a",
 				body: { action: remove },
+			});
+		});
+		it("catches dropping nested native story filters on the browser transport", () => {
+			const action = {
+				action: "filtered_plan_view",
+				plan_id: "plan",
+				filter: { visibility: "open", storyType: null, untypedOnly: true },
+			};
+			expect(mapCommandToHttp("story_action_command", { project: "/repo", action })).toEqual({
+				method: "POST",
+				path: "/stories/action?path=%2Frepo",
+				body: { action },
 			});
 		});
 		it("routes versioned workflow definitions to their owning project", () => {
@@ -741,6 +780,12 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base: { font_family: "Menlo" }, config: cfg });
 		});
 
+		it("maps the MCP call audit read to GET /mcp/audit", () => {
+			const result = mapCommandToHttp("get_mcp_audit", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/mcp/audit");
+		});
+
 		it("maps upstream saves with both the loaded base and desired config", () => {
 			const base = { servers: [{ id: "a", enabled: true }] };
 			const config = { servers: [{ id: "a", enabled: false }] };
@@ -988,6 +1033,16 @@ describe("transport", () => {
 				expect(result.body).toEqual({ password: "hunter2" });
 			});
 
+			it("maps set_remote_connection_relay_pairing to PUT with the bundle in the body", () => {
+				const result = mapCommandToHttp("set_remote_connection_relay_pairing", {
+					id: "c1",
+					bundle: "tuic-pair-v1:abc",
+				});
+				expect(result.method).toBe("PUT");
+				expect(result.path).toBe("/config/remote-connections/c1/relay-pairing");
+				expect(result.body).toEqual({ bundle: "tuic-pair-v1:abc" });
+			});
+
 			it("maps remote_connection_password_exists to a GET that carries no secret", () => {
 				const result = mapCommandToHttp("remote_connection_password_exists", { id: "c1" });
 				expect(result.method).toBe("GET");
@@ -1188,14 +1243,6 @@ describe("transport", () => {
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
-		});
-
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
 		});
 
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
@@ -1461,6 +1508,12 @@ describe("transport", () => {
 		});
 
 		// --- Claude Usage dashboard (story 063) ---
+		it("maps session usage to the encoded session-owned endpoint", () => {
+			expect(mapCommandToHttp("get_session_usage", { sessionId: "private/session" })).toEqual({
+				method: "GET",
+				path: "/sessions/private%2Fsession/usage",
+			});
+		});
 		it("maps get_claude_usage_api to GET /claude/usage", () => {
 			const result = mapCommandToHttp("get_claude_usage_api", {});
 			expect(result.method).toBe("GET");
@@ -1872,7 +1925,12 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
 			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
-			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+			expect(mapCommandToHttp("github_diagnostics", {})).toEqual({ method: "GET", path: "/github/diagnostics" });
+			// Catches manual refresh being mapped to the read-only diagnostics route.
+			expect(mapCommandToHttp("github_diagnostics", { refresh: true })).toEqual({
+				method: "POST",
+				path: "/github/diagnostics",
+			});
 		});
 
 		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
@@ -2154,6 +2212,12 @@ describe("transport", () => {
 				body: { account: "selected", reference: githubReference, request: githubRequest },
 			});
 
+			// Catches: cancellation losing plugin/request identity in browser transport.
+			expect(mapCommandToHttp("plugin_http_cancel", { pluginId: "my-plugin", requestId: "req-1" })).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/http/cancel",
+				body: { requestId: "req-1" },
+			});
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {
 				pluginId: "my-plugin",
@@ -2162,6 +2226,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
@@ -2172,6 +2237,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines

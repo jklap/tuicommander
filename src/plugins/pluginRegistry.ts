@@ -20,7 +20,7 @@ import { terminalsStore } from "../stores/terminals";
 import { workItemLinksStore } from "../stores/workItemLinks";
 import type { WorkItemRef } from "../types/work-items.gen";
 import type { GitRemote } from "../types/workItemLinks";
-import { randomId } from "../utils/randomId";
+import { randomId, randomUuid } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import { dashboardRegistry } from "./dashboardRegistry";
@@ -289,6 +289,13 @@ function createPluginRegistry() {
 			return safe;
 		}
 
+		const httpCancels = new Set<() => void>();
+		track({
+			dispose: () => {
+				for (const cancel of httpCancels) cancel();
+				httpCancels.clear();
+			},
+		});
 		const logger = pluginStore.getLogger(pluginId);
 		const wrapActivityItemCallbacks = <T extends Partial<ActivityItem>>(item: T): T => {
 			const wrapped = { ...item };
@@ -898,14 +905,33 @@ function createPluginRegistry() {
 
 			async httpFetch(url: string, options?: HttpFetchOptions): Promise<HttpResponse> {
 				requireCapability(pluginId, capabilities, "net:http");
-				return invoke<HttpResponse>("plugin_http_fetch", {
-					url,
-					method: options?.method ?? null,
-					headers: options?.headers ?? null,
-					body: options?.body ?? null,
-					account: options?.account ?? null,
-					pluginId,
-				});
+				const signal = options?.signal;
+				if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+				const requestId = randomUuid();
+				const cancel = () => {
+					void invoke("plugin_http_cancel", { pluginId, requestId }).catch(() => {});
+				};
+				httpCancels.add(cancel);
+				signal?.addEventListener("abort", cancel, { once: true });
+				try {
+					const response = await invoke<HttpResponse>("plugin_http_fetch", {
+						url,
+						method: options?.method ?? null,
+						headers: options?.headers ?? null,
+						body: options?.body ?? null,
+						account: options?.account ?? null,
+						pluginId,
+						requestId,
+					});
+					if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+					return response;
+				} catch (error) {
+					if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+					throw error;
+				} finally {
+					httpCancels.delete(cancel);
+					signal?.removeEventListener("abort", cancel);
+				}
 			},
 
 			async githubReviewThreads(

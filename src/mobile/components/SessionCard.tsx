@@ -7,10 +7,12 @@ import type { SessionInfo } from "../useSessions";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
 import styles from "./SessionCard.module.css";
-import { StatusBadge } from "./StatusBadge";
+import { type SessionStatus, StatusBadge } from "./StatusBadge";
 
 interface SessionCardProps {
 	session: SessionInfo;
+	/** Shared with the list header so its counts include the same busy hold. */
+	status?: () => SessionStatus;
 	/** Nesting level under the spawning agent; 0 or absent for a top-level row. */
 	depth?: number;
 	/** Last row of its sibling group: the left guide line ends here. */
@@ -58,7 +60,7 @@ function TerminalIcon() {
 }
 
 export function SessionCard(props: SessionCardProps) {
-	const status = useDebouncedStatus(() => props.session);
+	const status = props.status ?? useDebouncedStatus(() => props.session);
 	const agentType = () => props.session.state?.agent_type;
 	const task = () => displayTask(props.session.state?.current_task, agentType());
 	const agentColor = () => {
@@ -95,7 +97,9 @@ export function SessionCard(props: SessionCardProps) {
 							<SubAgentIcon parent={props.spawnedBy!} class={styles.subAgentTag} iconClass={styles.subAgentIcon} />
 						</Show>
 						<span class={styles.name}>{props.session.display_name || agentType() || "Terminal"}</span>
-						<StatusBadge status={status()} />
+						<Show when={!props.session.state?.abandoned_since_ms}>
+							<StatusBadge status={status()} />
+						</Show>
 					</div>
 					<div class={styles.meta}>
 						<span class={styles.project}>{projectName(props.session.cwd)}</span>
@@ -103,6 +107,13 @@ export function SessionCard(props: SessionCardProps) {
 							<span class={styles.branch}>{props.session.worktree_branch}</span>
 						</Show>
 					</div>
+					<Show when={props.session.state?.abandoned_since_ms}>
+						{(since) => (
+							<div class={styles.subRow} data-testid="abandoned-marker">
+								Abandoned · idle since {formatTime(since())}
+							</div>
+						)}
+					</Show>
 					<Show when={props.session.state?.question_text}>
 						<div class={styles.snippet}>{props.session.state!.question_text}</div>
 					</Show>

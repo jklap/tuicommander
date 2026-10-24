@@ -39,7 +39,28 @@ const SESSION_MAX_AGE: Duration = Duration::from_secs(300);
 /// - `env_overrides`: fallback env overrides from the TUIC run config. Only used for keys
 ///   NOT found in the process env (i.e. process env takes precedence).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn discover_agent_session(
+pub(crate) async fn discover_agent_session(
+    agent_type: String,
+    cwd: String,
+    claimed_ids: Vec<String>,
+    agent_pid: Option<u32>,
+    env_overrides: HashMap<String, String>,
+) -> Option<DiscoveredSession> {
+    match tokio::task::spawn_blocking(move || {
+        discover_agent_session_blocking(agent_type, cwd, claimed_ids, agent_pid, env_overrides)
+    })
+    .await
+    {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::warn!(%error, "Agent session discovery task failed");
+            None
+        }
+    }
+}
+
+/// Blocking service for callers already running on a blocking owner.
+pub(crate) fn discover_agent_session_blocking(
     agent_type: String,
     cwd: String,
     claimed_ids: Vec<String>,
@@ -576,22 +597,26 @@ fn discover_codex_session(
     claimed_ids: &[String],
     codex_home: Option<&str>,
 ) -> Option<String> {
+    discover_codex_session_at(cwd, claimed_ids, codex_home, SystemTime::now())
+}
+
+fn discover_codex_session_at(
+    cwd: &str,
+    claimed_ids: &[String],
+    codex_home: Option<&str>,
+    now: SystemTime,
+) -> Option<String> {
     let sessions_root = codex_sessions_dir(codex_home)?;
 
     if !sessions_root.exists() {
         return None;
     }
 
-    // Walk only today's/yesterday's YYYY/MM/DD subtrees — a session younger than
-    // SESSION_MAX_AGE can only live there. This prunes the entire historical tree
-    // by date before walking, so cost stays bounded regardless of how much
-    // lifetime history has accumulated.
-    let now = SystemTime::now();
     let wanted_cwd = normalize_cwd(cwd);
-    let mut candidates: Vec<(SystemTime, String)> = Vec::new();
-    for day_dir in codex_recent_day_dirs(&sessions_root, chrono::Local::now()) {
-        collect_codex_files(&day_dir, now, &wanted_cwd, &mut candidates);
-    }
+    let index = CODEX_INDEXES.get_with(sessions_root.clone(), || {
+        std::sync::Arc::new(CodexIndex::new(&sessions_root))
+    });
+    let mut candidates = index.candidates(&sessions_root, now, &wanted_cwd);
 
     // Sort newest first
     candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -634,38 +659,221 @@ fn read_codex_rollout_cwd(path: &Path) -> Option<PathBuf> {
     Some(normalize_cwd(cwd))
 }
 
-fn collect_codex_files(
-    dir: &PathBuf,
+#[cfg(test)]
+static CODEX_ROLLOUT_STATS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+fn codex_rollout_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    {
+        *CODEX_ROLLOUT_STATS.entry(path.to_path_buf()).or_insert(0) += 1;
+    }
+    std::fs::metadata(path)
+}
+
+/// Shared per-store index: discovery polls inspect memory, while filesystem
+/// events update only the rollout paths that moved. This remains heuristic
+/// discovery, not a PID/session binding.
+static CODEX_INDEXES: std::sync::LazyLock<moka::sync::Cache<PathBuf, std::sync::Arc<CodexIndex>>> =
+    std::sync::LazyLock::new(|| moka::sync::Cache::builder().max_capacity(16).build());
+
+#[derive(Default)]
+struct CodexUpdates {
+    paths: std::collections::HashSet<PathBuf>,
+    rescan: bool,
+}
+
+struct CodexCandidate {
+    modified: SystemTime,
+    id: String,
+    cwd: PathBuf,
+}
+
+#[derive(Default)]
+struct CodexCandidates {
+    days: Vec<PathBuf>,
+    files: HashMap<PathBuf, CodexCandidate>,
+    initialized: bool,
+}
+
+struct CodexIndex {
+    watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
+    updates: std::sync::Arc<std::sync::Mutex<CodexUpdates>>,
+    state: std::sync::Mutex<CodexCandidates>,
+}
+
+impl CodexIndex {
+    fn new(root: &Path) -> Self {
+        use notify::Watcher;
+        let updates = std::sync::Arc::new(std::sync::Mutex::new(CodexUpdates::default()));
+        let pending = updates.clone();
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if let Ok(event) = &event
+                && matches!(event.kind, notify::EventKind::Access(_))
+            {
+                return;
+            }
+            let mut updates = pending.lock().unwrap_or_else(|e| e.into_inner());
+            match event {
+                Ok(event) if !event.need_rescan() => {
+                    for path in event.paths {
+                        if updates.paths.len() >= 4096 {
+                            updates.paths.clear();
+                            updates.rescan = true;
+                            break;
+                        }
+                        updates.paths.insert(path);
+                    }
+                }
+                _ => updates.rescan = true,
+            }
+        })
+        .and_then(|mut watcher| {
+            watcher.watch(root, notify::RecursiveMode::NonRecursive)?;
+            Ok(watcher)
+        })
+        .map_err(|error| tracing::warn!(%error, "Codex discovery watcher unavailable; using fresh scans"))
+        .ok();
+        Self {
+            watcher: std::sync::Mutex::new(watcher),
+            updates,
+            state: std::sync::Mutex::new(CodexCandidates::default()),
+        }
+    }
+
+    fn candidates(&self, root: &Path, now: SystemTime, cwd: &Path) -> Vec<(SystemTime, String)> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Drain before reading: events arriving during the refresh remain queued
+        // for the next lookup rather than being erased by this snapshot.
+        let updates = std::mem::take(&mut *self.updates.lock().unwrap_or_else(|e| e.into_inner()));
+        // Removing/replacing a watched directory invalidates its inode watch on
+        // platforms such as inotify, even when the date paths stay identical.
+        // Recreate the bounded watch set through the existing next-lookup path.
+        if updates.rescan
+            || updates.paths.contains(root)
+            || state.days.iter().any(|day| {
+                day.ancestors()
+                    .take(3)
+                    .any(|directory| updates.paths.contains(directory))
+            })
+        {
+            CODEX_INDEXES.invalidate(root);
+        }
+        let days = codex_recent_day_dirs(root, chrono::Local::now());
+        let mut watcher = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        if state.days != days && watcher.is_some() {
+            use notify::Watcher;
+            let active = watcher.as_mut().unwrap();
+            // Never recursively watch the lifetime session tree: watch only the
+            // two recent date subtrees and their shallow creation boundaries.
+            let old_parents: std::collections::HashSet<_> = state
+                .days
+                .iter()
+                .flat_map(|day| day.ancestors().skip(1).take(2))
+                .collect();
+            for day in &state.days {
+                let _ = active.unwatch(day);
+            }
+            for parent in old_parents {
+                let _ = active.unwatch(parent);
+            }
+            let parents: std::collections::HashSet<_> = days
+                .iter()
+                .flat_map(|day| day.ancestors().skip(1).take(2))
+                .collect();
+            let armed = parents
+                .into_iter()
+                .try_for_each(|parent| active.watch(parent, notify::RecursiveMode::NonRecursive))
+                .and_then(|_| {
+                    days.iter()
+                        .try_for_each(|day| active.watch(day, notify::RecursiveMode::Recursive))
+                });
+            if let Err(error) = armed {
+                tracing::warn!(%error, "Codex discovery date watch failed; using fresh scans");
+                *watcher = None;
+            }
+        }
+        let directory_changed = updates.paths.iter().any(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(extract_codex_uuid)
+                .is_none()
+        });
+        if !state.initialized
+            || watcher.is_none()
+            || updates.rescan
+            || state.days != days
+            || directory_changed
+        {
+            state.files.clear();
+            for day in &days {
+                collect_codex_candidates(day, now, &mut state.files);
+            }
+            state.days = days;
+            state.initialized = true;
+        } else {
+            for path in updates.paths {
+                if state.days.iter().any(|day| path.starts_with(day)) {
+                    update_codex_candidate(&path, now, &mut state.files);
+                }
+            }
+        }
+        state.files.retain(|_, candidate| {
+            now.duration_since(candidate.modified).unwrap_or_default() <= SESSION_MAX_AGE
+        });
+        state
+            .files
+            .values()
+            .filter(|candidate| candidate.cwd == cwd)
+            .map(|candidate| (candidate.modified, candidate.id.clone()))
+            .collect()
+    }
+}
+
+fn update_codex_candidate(
+    path: &Path,
     now: SystemTime,
-    wanted_cwd: &Path,
-    out: &mut Vec<(SystemTime, String)>,
+    out: &mut HashMap<PathBuf, CodexCandidate>,
+) {
+    // Replacement, deletion and unreadable/truncated headers all revoke the old
+    // candidate before a fresh record can be accepted.
+    out.remove(path);
+    let Some(id) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(extract_codex_uuid)
+    else {
+        return;
+    };
+    let Some(modified) = codex_rollout_metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+    else {
+        return;
+    };
+    if now.duration_since(modified).unwrap_or_default() > SESSION_MAX_AGE {
+        return;
+    }
+    let Some(cwd) = read_codex_rollout_cwd(path) else {
+        return;
+    };
+    out.insert(path.to_path_buf(), CodexCandidate { modified, id, cwd });
+}
+
+fn collect_codex_candidates(
+    dir: &Path,
+    now: SystemTime,
+    out: &mut HashMap<PathBuf, CodexCandidate>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_dir() {
-            collect_codex_files(&path, now, wanted_cwd, out);
-        } else if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
-            && let Some(uuid) = extract_codex_uuid(&name)
-            && let Ok(meta) = entry.metadata()
-            && let Ok(mtime) = meta.modified()
-        {
-            // Age first: it is a stat we already have, and it rejects almost
-            // everything before any file is opened.
-            if now.duration_since(mtime).unwrap_or_default() > SESSION_MAX_AGE {
-                continue;
-            }
-            // A rollout whose cwd cannot be read is REJECTED, not accepted. If Codex
-            // ever moves the field, resume-after-restart quietly stops working —
-            // annoying but obvious. Accepting instead would silently reinstate
-            // cross-project binding, which resumes the wrong history.
-            if read_codex_rollout_cwd(&path).as_deref() != Some(wanted_cwd) {
-                continue;
-            }
-            out.push((mtime, uuid));
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_codex_candidates(&path, now, out);
+        } else {
+            update_codex_candidate(&path, now, out);
         }
     }
 }
@@ -880,15 +1088,34 @@ fn select_grok_session_for_pid(contents: &str, pid: u32, cwd: &str) -> Option<St
     let entries: serde_json::Value = serde_json::from_str(contents).ok()?;
     let wanted_cwd = normalize_cwd(cwd);
 
-    entries.as_array()?.iter().find_map(|entry| {
-        if entry.get("pid")?.as_u64()? != u64::from(pid) {
-            return None;
-        }
-        if normalize_cwd(entry.get("cwd")?.as_str()?) != wanted_cwd {
+    let mut matches = entries.as_array()?.iter().filter_map(|entry| {
+        let registered_pid = u32::try_from(entry.get("pid")?.as_u64()?).ok()?;
+        let owns_terminal = registered_pid == pid || {
+            #[cfg(unix)]
+            {
+                // npm's Node bootstrap retains the foreground process group while
+                // the native child publishes its own PID. Do not guess by CWD.
+                match (i32::try_from(registered_pid), i32::try_from(pid)) {
+                    (Ok(registered_pid), Ok(group)) if registered_pid > 0 && group > 0 => {
+                        // SAFETY: getpgid only queries the OS.
+                        (unsafe { libc::getpgid(registered_pid) }) == group
+                    }
+                    _ => false,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        if !owns_terminal || normalize_cwd(entry.get("cwd")?.as_str()?) != wanted_cwd {
             return None;
         }
         Some(entry.get("session_id")?.as_str()?.to_string())
-    })
+    });
+    let session = matches.next()?;
+    // A nested Grok in the same process group is not an exact binding.
+    matches.next().is_none().then_some(session)
 }
 
 /// Read the session id grok registered for `pid`, rejecting a stale entry whose
@@ -971,15 +1198,102 @@ fn ego_sessions_dir(ego_home: Option<&str>) -> Option<PathBuf> {
     }
 }
 
-/// The session whose `lease` file names `pid`.
-///
-/// ego writes `{"pid":<n>,"heartbeat":<ms>}` to `<session>/lease` while a process
-/// holds the session, which is the exact pid→session binding (no "newest file"
-/// guess). The file outlives its process, so a dead holder is rejected by the
-/// caller's pid (the live agent pid never matches it) except under pid reuse; the
-/// most recent heartbeat wins then.
+#[cfg(test)]
+thread_local! {
+    static EGO_INDEX_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EGO_SESSION_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EGO_LEASE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[derive(serde::Deserialize)]
+struct EgoLease {
+    pid: u32,
+    heartbeat: u64,
+}
+
+fn read_ego_lease(path: &Path) -> Option<(EgoLease, bool)> {
+    use std::io::Read;
+
+    #[cfg(test)]
+    EGO_LEASE_READS.with(|reads| reads.set(reads.get() + 1));
+    let mut file = std::fs::File::open(path).ok()?;
+    // ego's writer holds flock (Unix) / byte zero (Windows) until exit.
+    // A leftover pid alone is not evidence that the cached holder still lives.
+    let held = matches!(
+        file.try_lock_shared(),
+        Err(std::fs::TryLockError::WouldBlock)
+    );
+    #[cfg(windows)]
+    {
+        use std::io::{Seek, SeekFrom};
+        // Ego reserves byte zero for LockFileEx so readers can read the JSON
+        // starting at byte one while its exclusive writer lock is held.
+        file.seek(SeekFrom::Start(1)).ok()?;
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    Some((serde_json::from_str(&contents).ok()?, held))
+}
+
+type EgoBindings = HashMap<(PathBuf, u32), String>;
+static EGO_BINDINGS: std::sync::LazyLock<parking_lot::Mutex<EgoBindings>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+#[derive(serde::Deserialize)]
+struct EgoPidIndex {
+    pid: u32,
+    session_id: String,
+}
+
+/// Resolve an indexed pid against its held lease, or scan for older ego versions.
+/// An invalid index fails closed; only an absent index permits the legacy scan.
+/// Only a held writer lease can validate a cached binding: ego leaves the file
+/// after exit and writes its heartbeat only at acquisition, so matching stale
+/// pid text would otherwise hide pid reuse or an in-process session switch.
 fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
-    std::fs::read_dir(sessions_dir)
+    let key = (sessions_dir.to_path_buf(), pid);
+    let index_path = sessions_dir
+        .parent()?
+        .join("pids")
+        .join(format!("{pid}.json"));
+    #[cfg(test)]
+    EGO_INDEX_READS.with(|reads| reads.set(reads.get() + 1));
+    match std::fs::read(index_path) {
+        Ok(contents) => {
+            // The index is a locator, never liveness evidence. Read it before
+            // the cache so an active session switch cannot return the old id.
+            EGO_BINDINGS.lock().remove(&key);
+            let index: EgoPidIndex = serde_json::from_slice(&contents).ok()?;
+            if index.pid != pid || !is_uuid(&index.session_id) {
+                return None;
+            }
+            let (lease, held) =
+                read_ego_lease(&sessions_dir.join(&index.session_id).join("lease"))?;
+            if lease.pid != pid || !held {
+                return None;
+            }
+            EGO_BINDINGS.lock().insert(key, index.session_id.clone());
+            return Some(index.session_id);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            EGO_BINDINGS.lock().remove(&key);
+            return None;
+        }
+    }
+    let cached = EGO_BINDINGS.lock().get(&key).cloned();
+    if let Some(session) = cached {
+        if let Some((lease, true)) = read_ego_lease(&sessions_dir.join(&session).join("lease"))
+            && lease.pid == pid
+        {
+            return Some(session);
+        }
+        EGO_BINDINGS.lock().remove(&key);
+    }
+
+    #[cfg(test)]
+    EGO_SESSION_SCANS.with(|scans| scans.set(scans.get() + 1));
+    let (_, session, held) = std::fs::read_dir(sessions_dir)
         .ok()?
         .flatten()
         .filter_map(|entry| {
@@ -987,16 +1301,14 @@ fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
             if !is_uuid(&name) {
                 return None;
             }
-            let lease: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(entry.path().join("lease")).ok()?)
-                    .ok()?;
-            if lease.get("pid")?.as_u64()? != u64::from(pid) {
-                return None;
-            }
-            Some((lease.get("heartbeat")?.as_u64()?, name))
+            let (lease, held) = read_ego_lease(&entry.path().join("lease"))?;
+            (lease.pid == pid).then_some((lease.heartbeat, name, held))
         })
-        .max()
-        .map(|(_, name)| name)
+        .max()?;
+    if held {
+        EGO_BINDINGS.lock().insert(key, session.clone());
+    }
+    Some(session)
 }
 
 /// Exact terminal Chat binding, with the same store the live process reads.
@@ -1218,7 +1530,7 @@ mod tests {
             fs::write(session.join("manifest.json"), "{}").unwrap();
             fs::write(
                 session.join("lease"),
-                format!(r#"{{"pid":{pid},"heartbeat":{heartbeat}}}"#),
+                format!(r#" {{"pid":{pid},"heartbeat":{heartbeat}}}"#),
             )
             .unwrap();
         }
@@ -1236,6 +1548,268 @@ mod tests {
         assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
         assert_eq!(ego_session_for_pid(dir.path(), 222).as_deref(), Some(EGO_B));
         assert_eq!(ego_session_for_pid(dir.path(), 333), None);
+    }
+
+    // ego uses flock on Unix and LockFileEx on byte zero on Windows.
+    // Match its writer lock, not a mock liveness flag.
+    fn hold_ego_lease(path: &Path) -> fs::File {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        #[cfg(unix)]
+        file.lock().unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+            };
+            let mut overlapped = unsafe { std::mem::zeroed() };
+            assert_ne!(
+                unsafe {
+                    LockFileEx(
+                        file.as_raw_handle(),
+                        LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                        0,
+                        1,
+                        0,
+                        &mut overlapped,
+                    )
+                },
+                0
+            );
+        }
+        file
+    }
+
+    fn write_ego_pid_index(home: &Path, pid: u32, session: &str) {
+        fs::create_dir_all(home.join("pids")).unwrap();
+        fs::write(
+            home.join("pids").join(format!("{pid}.json")),
+            serde_json::json!({"pid": pid, "session_id": session, "cwd": home}).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Catches: cold discovery still enumerating all historical sessions.
+    #[test]
+    fn ego_pid_index_binds_without_listing_sessions() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        fs::create_dir_all(sessions.join(EGO_A)).unwrap();
+        fs::write(
+            sessions.join(EGO_A).join("lease"),
+            r#" {"pid":111,"heartbeat":5}"#,
+        )
+        .unwrap();
+        let _held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        EGO_SESSION_SCANS.with(|scans| scans.set(0));
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_A));
+        assert_eq!(
+            EGO_SESSION_SCANS.with(|scans| scans.get()),
+            0,
+            "indexed lookup listed sessions"
+        );
+        assert_eq!(EGO_LEASE_READS.with(|reads| reads.get()), 1);
+    }
+
+    /// Catches: a stale index binding a recycled pid through the legacy scan.
+    #[test]
+    fn stale_ego_pid_index_is_rejected() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        for (id, pid) in [(EGO_A, 222), (EGO_B, 111)] {
+            fs::create_dir_all(sessions.join(id)).unwrap();
+            fs::write(
+                sessions.join(id).join("lease"),
+                format!(r#" {{"pid":{pid},"heartbeat":5}}"#),
+            )
+            .unwrap();
+        }
+        let _held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        let _other = hold_ego_lease(&sessions.join(EGO_B).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        assert_eq!(ego_session_for_pid(&sessions, 111), None);
+    }
+
+    /// Catches: malformed indexes, unheld writers or replaced indexes reviving
+    /// a cached session or silently selecting an unrelated legacy candidate.
+    #[test]
+    fn ego_pid_index_fails_closed_and_tracks_active_session_switches() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        for id in [EGO_A, EGO_B] {
+            fs::create_dir_all(sessions.join(id)).unwrap();
+            fs::write(
+                sessions.join(id).join("lease"),
+                r#" {"pid":111,"heartbeat":5}"#,
+            )
+            .unwrap();
+        }
+        let held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        let other = hold_ego_lease(&sessions.join(EGO_B).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_A));
+        write_ego_pid_index(home.path(), 111, EGO_B);
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_B));
+        drop(other);
+        assert_eq!(ego_session_for_pid(&sessions, 111), None);
+        for contents in [
+            "broken".to_string(),
+            serde_json::json!({"pid": 222, "session_id": EGO_A}).to_string(),
+            serde_json::json!({"pid": 111, "session_id": "../escape"}).to_string(),
+        ] {
+            fs::write(home.path().join("pids/111.json"), contents).unwrap();
+            assert_eq!(ego_session_for_pid(&sessions, 111), None);
+        }
+        drop(held);
+    }
+
+    /// Catches: the index fast path diverging from real ego writer files.
+    /// Captured from native ego 584; replay its held writer lock on this host.
+    #[test]
+    fn ego_pid_index_real_writer_opens_only_index_and_lease() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let index_bytes = include_bytes!("fixtures/ego_pid_index/pid.json");
+        let index: serde_json::Value = serde_json::from_slice(index_bytes).unwrap();
+        let pid = index["pid"].as_u64().unwrap() as u32;
+        let expected = index["session_id"].as_str().unwrap();
+        let lease_path = home.path().join("sessions").join(expected).join("lease");
+        fs::create_dir_all(lease_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(home.path().join("pids")).unwrap();
+        fs::write(
+            home.path().join("pids").join(format!("{pid}.json")),
+            index_bytes,
+        )
+        .unwrap();
+        fs::write(
+            &lease_path,
+            include_bytes!("fixtures/ego_pid_index/lease.json"),
+        )
+        .unwrap();
+        let _held = hold_ego_lease(&lease_path);
+        EGO_INDEX_READS.with(|reads| reads.set(0));
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        EGO_SESSION_SCANS.with(|scans| scans.set(0));
+        assert_eq!(
+            ego_session_for_pid(&home.path().join("sessions"), pid).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(EGO_INDEX_READS.with(|reads| reads.get()), 1);
+        assert_eq!(EGO_LEASE_READS.with(|reads| reads.get()), 1);
+        assert_eq!(EGO_SESSION_SCANS.with(|scans| scans.get()), 0);
+    }
+
+    /// Catches: a released old lease retaining a recycled pid after another
+    /// already-existing session acquires it with a later heartbeat.
+    #[test]
+    fn ego_cached_pid_reuse_rescans_after_writer_releases_lease() {
+        let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 222, 9)]);
+        let held = hold_ego_lease(&dir.path().join(EGO_A).join("lease"));
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+        drop(held);
+        fs::write(
+            dir.path().join(EGO_B).join("lease"),
+            r#" {"pid":111,"heartbeat":10}"#,
+        )
+        .unwrap();
+        let _new_holder = hold_ego_lease(&dir.path().join(EGO_B).join("lease"));
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_B));
+    }
+
+    /// Catches: a cached binding surviving a missing, corrupt or changed-pid lease.
+    #[test]
+    fn ego_cached_binding_revalidates_lease_before_returning() {
+        for replacement in [None, Some("broken"), Some(r#" {"pid":333,"heartbeat":12}"#)] {
+            let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 111, 4)]);
+            let held = hold_ego_lease(&dir.path().join(EGO_A).join("lease"));
+            assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+            drop(held);
+            let path = dir.path().join(EGO_A).join("lease");
+            match replacement {
+                Some(contents) => fs::write(path, contents).unwrap(),
+                None => fs::remove_file(path).unwrap(),
+            }
+            assert_eq!(
+                ego_session_for_pid(dir.path(), 111).as_deref(),
+                Some(EGO_B),
+                "replacement: {replacement:?}"
+            );
+        }
+    }
+
+    /// Catches: identical pids under different EGO_HOME roots sharing one binding.
+    #[test]
+    fn ego_cached_binding_is_scoped_to_session_store() {
+        let first = ego_store(&[(EGO_A, 111, 5)]);
+        let second = ego_store(&[(EGO_B, 111, 9)]);
+        let _first_holder = hold_ego_lease(&first.path().join(EGO_A).join("lease"));
+        let _second_holder = hold_ego_lease(&second.path().join(EGO_B).join("lease"));
+        assert_eq!(
+            ego_session_for_pid(first.path(), 111).as_deref(),
+            Some(EGO_A)
+        );
+        assert_eq!(
+            ego_session_for_pid(second.path(), 111).as_deref(),
+            Some(EGO_B)
+        );
+        assert_eq!(
+            ego_session_for_pid(first.path(), 111).as_deref(),
+            Some(EGO_A)
+        );
+    }
+
+    /// Catches: every 30-second poll reopening all historical lease files.
+    #[test]
+    fn ego_cached_poll_reads_one_lease_among_1500_sessions() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for index in 0..1500_u32 {
+            let session = dir
+                .path()
+                .join(format!("00000000-0000-0000-0000-{index:012x}"));
+            fs::create_dir(&session).unwrap();
+            fs::write(
+                session.join("lease"),
+                format!(r#" {{"pid":{},"heartbeat":9}}"#, index + 1),
+            )
+            .unwrap();
+        }
+        let expected = "00000000-0000-0000-0000-000000000000";
+        let _held = hold_ego_lease(&dir.path().join(expected).join("lease"));
+        assert_eq!(
+            ego_session_for_pid(dir.path(), 1).as_deref(),
+            Some(expected)
+        );
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        assert_eq!(
+            ego_session_for_pid(dir.path(), 1).as_deref(),
+            Some(expected)
+        );
+        let reads = EGO_LEASE_READS.with(|reads| reads.get());
+        assert!(reads <= 1, "cached poll read {reads} leases instead of one");
+    }
+
+    /// Catches: Tauri dispatching filesystem discovery inline on the UI thread.
+    #[test]
+    fn discovery_command_offloads_filesystem_work() {
+        let source = include_str!("agent_session.rs");
+        let command = source
+            .split("#[cfg_attr(feature = \"desktop\", tauri::command)]")
+            .nth(1)
+            .unwrap();
+        let command = command.split("/// What discovery found").next().unwrap();
+        assert!(
+            command.contains("async fn discover_agent_session("),
+            "discovery command is synchronous"
+        );
+        assert!(
+            command.contains("spawn_blocking"),
+            "discovery parks an async worker instead of offloading filesystem work"
+        );
     }
 
     /// Catches: a recycled pid binding a tab to a dead process's older session.
@@ -1346,6 +1920,86 @@ mod tests {
         )
         .unwrap();
         home
+    }
+
+    // Catches: npm's Node launcher owns the terminal process group, but Grok
+    // registers its native child PID, leaving Chat unable to read its transcript.
+    #[cfg(unix)]
+    #[test]
+    fn test_grok_chat_history_binds_registered_native_child_of_npm_launcher() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        struct Launcher(std::process::Child);
+        impl Drop for Launcher {
+            fn drop(&mut self) {
+                // Only this test's newly created process group is signalled.
+                unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+                let _ = self.0.wait();
+            }
+        }
+        let mut launcher = Launcher(
+            Command::new("sh")
+                .args(["-c", "sleep 600 & first=$!; sleep 600 & second=$!; printf '%s %s\\n' \"$first\" \"$second\"; wait"])
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut line = String::new();
+        BufReader::new(launcher.0.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let pids: Vec<u32> = line
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let cwd = home.path().to_str().unwrap();
+        let mut registry: serde_json::Value = serde_json::from_str(include_str!(
+            "fixtures/chat_view/grok_npm_active_sessions.json"
+        ))
+        .unwrap();
+        registry[0]["pid"] = pids[0].into();
+        registry[0]["cwd"] = cwd.into();
+        let id = registry[0]["session_id"].as_str().unwrap().to_owned();
+        let transcript = home
+            .path()
+            .join(".grok/sessions")
+            .join(grok_path_encode(cwd))
+            .join(id)
+            .join("chat_history.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "registered native Grok transcript").unwrap();
+        let registry_path = home.path().join(".grok/active_sessions.json");
+        std::fs::write(&registry_path, registry.to_string()).unwrap();
+        let bound = grok_chat_history_for_pid(home.path(), launcher.0.id(), cwd);
+        assert_eq!(
+            bound
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .as_deref(),
+            Some("registered native Grok transcript")
+        );
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), std::process::id(), cwd),
+            None,
+            "another process group must not claim this session"
+        );
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), launcher.0.id(), "/other/project"),
+            None
+        );
+        let mut second = registry[0].clone();
+        second["pid"] = pids[1].into();
+        registry.as_array_mut().unwrap().push(second);
+        std::fs::write(&registry_path, registry.to_string()).unwrap();
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), launcher.0.id(), cwd),
+            None,
+            "multiple native registrations in one group are ambiguous"
+        );
     }
 
     // Catches: two grok tabs in one folder showing each other's conversation, or a
@@ -1986,6 +2640,196 @@ mod tests {
         );
     }
 
+    // Catches re-statting every historical rollout on each idle/busy discovery.
+    #[test]
+    fn codex_warm_discovery_does_not_restat_historical_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let current = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        for n in 0..64 {
+            let id = format!("aaaaaaaa-aaaa-aaaa-aaaa-{n:012x}");
+            let path = make_codex_rollout(&day, &format!("rollout-test-{id}.jsonl"), cwd);
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(3600))
+                .unwrap();
+        }
+        make_codex_rollout(&day, &format!("rollout-test-{current}.jsonl"), cwd);
+        let discover = || discover_codex_session(cwd, &[], Some(cwd));
+        assert_eq!(discover().as_deref(), Some(current));
+        let count = || {
+            CODEX_ROLLOUT_STATS
+                .iter()
+                .filter(|entry| entry.key().starts_with(root.path()))
+                .map(|entry| *entry.value())
+                .sum::<usize>()
+        };
+        let before = count();
+        for _ in 0..10 {
+            assert_eq!(discover().as_deref(), Some(current));
+        }
+        assert_eq!(
+            count() - before,
+            0,
+            "unchanged discovery must not stat rollouts again"
+        );
+    }
+
+    // Catches a cached candidate hiding a replacement session, stale claimed-ID
+    // filtering, and a deleted or atomically replaced file remaining resumable.
+    #[test]
+    fn codex_watched_discovery_observes_replacement_and_deletion() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let first = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let second = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        make_codex_rollout(&day, &format!("rollout-test-{first}.jsonl"), cwd);
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        assert!(
+            index.watcher.lock().unwrap().is_some(),
+            "real filesystem watcher must be available"
+        );
+        let wait_for = |expected: Option<&str>| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let actual = discover_codex_session(cwd, &[], Some(cwd));
+                if actual.as_deref() == expected {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Codex watcher did not publish {expected:?}; got {actual:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let path = make_codex_rollout(&day, &format!("rollout-test-{second}.jsonl"), cwd);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        wait_for(Some(second));
+        assert_eq!(
+            discover_codex_session(cwd, &[second.to_string()], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        fs::remove_file(&path).unwrap();
+        wait_for(Some(first));
+        // Replace the remaining file with another cwd at the same path. Cached
+        // cwd metadata must not let the original project keep the candidate.
+        let other = root.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        let temporary = make_codex_rollout(&day, "replacement.tmp", other.to_str().unwrap());
+        fs::rename(temporary, day.join(format!("rollout-test-{first}.jsonl"))).unwrap();
+        wait_for(None);
+    }
+
+    // Catches: replacing a date directory leaves discovery attached to its deleted inode.
+    #[test]
+    fn codex_replaced_day_directory_keeps_observing_new_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let first = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let second = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let third = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        make_codex_rollout(&day, &format!("rollout-test-{first}.jsonl"), cwd);
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        assert!(
+            index.watcher.lock().unwrap().is_some(),
+            "real watcher must be available"
+        );
+        // No discovery call between removal and recreation: the date paths are equal.
+        fs::remove_dir_all(&day).unwrap();
+        fs::create_dir_all(&day).unwrap();
+        make_codex_rollout(&day, &format!("rollout-test-{second}.jsonl"), cwd);
+        let wait_for = |expected: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let actual = discover_codex_session(cwd, &[], Some(cwd));
+                if actual.as_deref() == Some(expected) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "replacement day watcher did not discover {expected}; got {actual:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait_for(second);
+        // Drain the directory-creation burst before changing only a child file.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(second)
+        );
+        let path = make_codex_rollout(&day, &format!("rollout-test-{third}.jsonl"), cwd);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        wait_for(third);
+    }
+
+    // Catches an unchanged in-memory candidate bypassing the five-minute age bound.
+    #[test]
+    fn codex_cached_candidate_still_expires_without_file_events() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        make_codex_rollout(
+            &day,
+            "rollout-test-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl",
+            cwd,
+        );
+        let now = SystemTime::now();
+        assert_eq!(
+            discover_codex_session_at(cwd, &[], Some(cwd), now).as_deref(),
+            Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        );
+        assert_eq!(
+            discover_codex_session_at(
+                cwd,
+                &[],
+                Some(cwd),
+                now + SESSION_MAX_AGE + Duration::from_secs(1)
+            ),
+            None,
+            "discovery must not resume an expired cached session"
+        );
+    }
+
+    fn codex_recent_day_dirs_for_test(root: &Path) -> PathBuf {
+        use chrono::Datelike;
+        let today = chrono::Local::now().date_naive();
+        codex_day_dir(root, today.year(), today.month(), today.day())
+    }
+
     #[test]
     fn test_discover_codex_session_ignores_old_date_subtree() {
         use chrono::Datelike;
@@ -2420,15 +3264,16 @@ mod tests {
     }
 
     /// Discovery must not invent a launch command when it has no pid to read.
-    #[test]
-    fn discover_agent_session_reports_no_launch_command_without_a_pid() {
+    #[tokio::test]
+    async fn discover_agent_session_reports_no_launch_command_without_a_pid() {
         let found = discover_agent_session(
             "goose".to_string(),
             "/tmp".to_string(),
             Vec::new(),
             None,
             HashMap::new(),
-        );
+        )
+        .await;
         assert_eq!(found, None, "goose has no filesystem discovery");
     }
 }

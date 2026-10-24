@@ -1,0 +1,1 @@
+{"status":"acknowledged","submission_id":"1c12a0f1-a630-403c-ab7e-f23ad799d45b","submitted":true,"write_state":"complete","acknowledged":true,"retry_safe":false,"turn_epoch":3,"composer_state":"cleared","acknowledgement":{"kind":"terminal_movement","screen_state":"terminal_output","output_offset":37224}}

@@ -32,3 +32,16 @@
   letter-spacing: 0.05em;
   color: var(--fg-muted);
 }
+
+.awaiting {
+  font: inherit;
+  cursor: pointer;
+}
+
+.awaiting:disabled {
+  cursor: default;
+}
+
+.awaiting:active:not(:disabled) {
+  background: var(--bg-highlight);
+}

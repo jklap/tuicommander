@@ -168,7 +168,7 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
 								</div>
 							</div>
 
-							<div class={s.section}>
+							<div class={`${s.section} ${s.footer}`}>
 								<p class={s.menuNote}>MIT License &middot; Tauri 2 &middot; SolidJS &middot; Alacritty &middot; Rust</p>
 								<p class={s.menuNote}>&copy; 2026 Stefano Straus</p>
 								<div class={s.versionRow}>

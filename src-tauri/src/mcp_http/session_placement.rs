@@ -106,7 +106,12 @@ pub(super) fn declare_worktree(
         .ok_or("Invalid workspace configuration")?;
     let mut saved = Vec::new();
     for workspace in workspaces.values_mut() {
-        if let Some(terminals) = workspace["savedTerminals"].as_array_mut() {
+        // Reading an optional restore list must not insert null: newly discovered
+        // workspace rows omit this field until the frontend's first snapshot.
+        if let Some(terminals) = workspace
+            .get_mut("savedTerminals")
+            .and_then(serde_json::Value::as_array_mut)
+        {
             terminals.retain(|terminal| {
                 if terminal["tuicSession"].as_str() == Some(peer) {
                     saved.push(terminal.clone());

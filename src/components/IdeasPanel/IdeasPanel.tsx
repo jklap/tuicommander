@@ -168,7 +168,16 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 			<div class={p.header}>
 				<div class={p.headerLeft}>
 					<span class={p.title}>
-						<span style={{ filter: "grayscale(1) brightness(1.5)", "font-style": "normal" }}>💡</span>{" "}
+						<svg
+							viewBox="0 0 24 24"
+							width="14"
+							height="14"
+							fill="currentColor"
+							aria-hidden="true"
+							style={{ "vertical-align": "text-bottom" }}
+						>
+							<path d="M9 21c0 .5.4 1 1 1h4c.6 0 1-.5 1-1v-1H9v1zm3-19C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .5.4 1 1 1h6c.6 0 1-.5 1-1v-2.3c1.8-1.3 3-3.4 3-5.7 0-3.9-3.1-7-7-7z" />
+						</svg>{" "}
 						{t("ideasPanel.title", "Ideas")}
 					</span>
 					<Show when={badgeCount() > 0}>
@@ -207,7 +216,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 
 			<div class={cx(p.content, s.list)}>
 				<Show when={filteredIdeas().length === 0}>
-					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet. Add one below.")}</div>
+					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet.")}</div>
 				</Show>
 				<For each={filteredIdeas()}>
 					{(idea) => (
@@ -334,7 +343,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					placeholder={
 						editingId()
 							? t("ideasPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
-							: t("ideasPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
+							: t("ideasPanel.placeholder", "New idea…")
 					}
 					value={inputText()}
 					onInput={(e) => setInputText(e.currentTarget.value)}

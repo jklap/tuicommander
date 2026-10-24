@@ -96,7 +96,6 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 						<path d="M8 2h2v5h4V2h2v5h3v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h3V2Zm-1 7v2a5 5 0 0 0 10 0V9H7Z" />
 					</svg>
 				}
-				description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
 				scope="Plugin"
 				breadcrumb={`Plugin settings / ${props.page.label}`}
 				source={`Source: ${pluginStore.getPlugin(props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}

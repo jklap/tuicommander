@@ -1,15 +1,25 @@
 # Git Operations
 
-Terminal placement uses reported cwd, not `placementPath` or a persisted
-`declaredWorktrees` association. Creating a checkout through `git -C` does not
-move the caller's process or its tab into that checkout. Cold saved-terminal
-restoration and reconnect also resolve the workspace from cwd.
+Terminal placement uses a valid caller-bound `declaredWorktrees` association when
+one exists, otherwise reported cwd. Creating a checkout through `git -C` does not
+move the caller's process or its tab into that checkout. An explicit declaration
+moves only its tab; saved-terminal restoration, reconnect and OSC 7 retain that
+placement without changing shell cwd. Legacy `placementPath` alone is not authority.
 
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
 The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches complete, paginated merged GitHub PR evidence over account-aware HTTP GraphQL and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.
 
 Workflow launch uses `validate_branch_worktree_path`: the canonical path must identify a registered isolated branch checkout outside the archive pool, with no Git operation in progress. Detached-orphan removal uses the separate `validate_worktree_path` guard, which continues to refuse attached branch checkouts. Launch authorization never grants removal permission (#1883-eba0).
+
+Orphan scans and orphan removal share the temporary-path policy in
+`tuic_core::temp_paths`. OS/environment temp roots, `~/Gits/.tmp` and Unix
+`/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` are excluded
+before per-checkout assessment. Component matching checks registered and resolved
+paths, including existing ancestors of missing checkouts. The path validator and
+low-level orphan remover recheck the exclusion, so stale or confirmed requests
+cannot remove temporary detached checkouts. Detached sidebar inventory is
+independent: it can display these checkouts without authorizing cleanup.
 
 Worktree removal verifies checkout and submodule safety before asking Git to unregister it. Git can return `Directory not empty` after removing the registration and some files. In that state, the removal call finishes deleting the known checkout directory and only then compares and deletes the branch ref. A failed cleanup reports the remaining path; an unregistered directory without TUIC ownership evidence is never recursively deleted.
 
@@ -23,11 +33,17 @@ The root Git adapters run blocking domain operations inside `tokio::task::spawn_
 
 Git data is cached with a 60s TTL in `GitCacheState` (`state.rs`), one `moka::sync::Cache<String, Arc<T>>` per result type keyed by repo path. `moka`'s `get_with`/`try_get_with` **coalesce concurrent identical loads to a single computation** — replacing the previous hand-rolled `DashMap<String,(T,Instant)>` whose check-then-compute-then-set pattern had a TOCTOU race that let a `repo-changed` burst fan out N duplicate computes. `sync::Cache` is used (not `future::Cache`) because every loader is blocking git work run on the blocking pool; the sync `*_cached` helpers keep working without async (`git.rs::cached_get`/`cached_try` wrap the pattern). `github_repo_cooldown` stays a plain `DashMap` — it is a cooldown set, not a TTL value cache.
 
-The `repo_watcher` (FSEvents on macOS, inotify on Linux) monitors the working tree with per-category debounce (Git/WorkTree/Config) and calls `invalidate_repo_caches()` on file system changes (which also clears the prompt `var_cache` for the repo), so git data refreshes immediately instead of waiting for TTL expiry. On macOS/Windows it registers a single recursive watch (near-zero cost at the OS level); on Linux it splits into pruned non-recursive watches over the working tree (skipping `ALWAYS_EXCLUDED_DIRS` and gitignored paths, adding watches for newly created dirs from the event callback) plus targeted `.git` watches (root non-recursive for HEAD/index/sentinels, `refs` and `worktrees` recursive — never `objects`/`logs`), because a recursive inotify watch would walk and watch every subtree (`node_modules`, `target`, `.git/objects`) and flood the callback (issue #82). Each **linked worktree gets its own watch**: its working tree usually lives outside the repo root (the `Sibling`/`AppDir` storage strategies), so the root's watch never sees it, and the git-state fingerprint is computed from the main checkout's index + porcelain status, so a worktree-local edit leaves it identical and the emit is suppressed. Without those watches an agent editing a worktree produced no event at all and the branch's sidebar diff badge stayed stale until the user selected the branch. The roots come from `.git/worktrees/*/gitdir` (`linked_worktree_roots`) and are re-synced by `sync_worktree_watches` on every git-state change — worktree add/remove is part of the fingerprint, so it always rides an emit and needs no watcher restart. `classify_path` matches worktree roots *before* the repo root, so a worktree stored inside the repo (`.worktrees/`, `.claude/worktrees/` — usually gitignored) is not dropped as noise. The watcher respects `.gitignore` rules and hot-reloads them when `.gitignore` is modified. The 60s TTL serves as a safety net for missed watcher events. Most IPC calls for git data hit the cache (~0.2ms) instead of spawning a git subprocess (~20-30ms).
+The `repo_watcher` (FSEvents on macOS, inotify on Linux) monitors the working tree with per-category debounce (Git/WorkTree/Config) and invalidates aggregate repository caches on file system changes (which also clears the prompt `var_cache` for the repo), so git data refreshes immediately instead of waiting for TTL expiry. On macOS/Windows it registers a single recursive watch (near-zero cost at the OS level); on Linux it splits into pruned non-recursive watches over the working tree (skipping `ALWAYS_EXCLUDED_DIRS` and gitignored paths, adding watches for newly created dirs from the event callback) plus targeted `.git` watches (root non-recursive for HEAD/index/sentinels, `refs` and `worktrees` recursive — never `objects`/`logs`), because a recursive inotify watch would walk and watch every subtree (`node_modules`, `target`, `.git/objects`) and flood the callback (issue #82). Each **linked worktree gets its own watch**: its working tree usually lives outside the repo root (the `Sibling`/`AppDir` storage strategies), so the root's watch never sees it, and the git-state fingerprint is computed from the main checkout's index + porcelain status, so a worktree-local edit leaves it identical and the emit is suppressed. Without those watches an agent editing a worktree produced no event at all and the branch's sidebar diff badge stayed stale until the user selected the branch. The roots come from `.git/worktrees/*/gitdir` (`linked_worktree_roots`) and are re-synced by `sync_worktree_watches` on every git-state change — worktree add/remove is part of the fingerprint, so it always rides an emit and needs no watcher restart. `classify_path` matches worktree roots *before* the repo root, so a worktree stored inside the repo (`.worktrees/`, `.claude/worktrees/` — usually gitignored) is not dropped as noise. The watcher respects `.gitignore` rules and hot-reloads them when `.gitignore` is modified. The 60s TTL serves as a safety net for missed watcher events. Most IPC calls for git data hit the cache (~0.2ms) instead of spawning a git subprocess (~20-30ms).
 
-**Sidebar monitoring:** `get_repo_diff_stats` uses the same single-flight repository cache for progressive loading and `get_repo_summary`. Working-tree events invalidate it, so dirty badges read current checkout state. Monitoring counts porcelain dirty records through gix (staged plus unstaged modifications to one tracked path count once; untracked records count separately, including a file also staged for deletion); sparse checkouts and submodules retain the existing CLI fallback. It does not compute the removal fingerprint or recursive submodule recovery inventory. Cleanup and removal continue to call the fresh lifecycle preflight.
+**Sidebar monitoring:** `get_repo_diff_stats` uses the same single-flight repository cache for progressive loading and `get_repo_summary`. Working-tree events invalidate it, so dirty badges read current checkout state. Monitoring derives unstaged line totals and porcelain dirty records from one gix status traversal per checkout. Untracked files affect dirty count only. A status-entry error retains partial diff totals but sends dirty counting through its fresh CLI fallback. Monitoring counts porcelain dirty records through gix (staged plus unstaged modifications to one tracked path count once; untracked records count separately, including a file also staged for deletion); sparse checkouts and submodules retain the existing CLI fallback. It does not compute the removal fingerprint or recursive submodule recovery inventory. Cleanup and removal continue to call the fresh lifecycle preflight. A bounded monitoring-only cache retains each successful checkout diff/dirty pair for at most five minutes on macOS/Windows, only after complete recursive watches are armed. Raw callbacks invalidate the owning checkout before ignore filters; linked admin index/HEAD events use the checkout's resolved Git directory. Generation checks reject results superseded during a scan. Normal linked-worktree inventory growth does not revoke existing watches, including when the bounded cache has evicted the main entry; the new checkout starts fresh and gets reuse only after its own watch is armed. Config, attributes, excludes and index/HEAD metadata signatures cover dependencies outside working-tree events. Watch loss, root replacement, stop and partial registration disable reuse until watches are re-established. Linux keeps fresh status reads because its pruned watches can omit tracked files in ignored/excluded directories. Sparse/submodule and failed status reads never reuse snapshots. Explicit Git operations invalidate their checkout; broad watcher refreshes preserve unchanged siblings. The fingerprint's main-checkout CLI status uses `--no-optional-locks` to avoid optional index writes.
 
 PR proof is reapplied on each repository stats refresh and is not stored in the ref-keyed local integration cache, so an upstream lookup can recover without local refs moving.
+
+A sidebar refresh uses `monitoring_ref_keys` to share one ref snapshot. The cold read enumerates refs once; later reads retain ref targets and reflog hashes. A complete main-checkout watcher forwards changed paths to this snapshot, so a branch-only event refreshes that ref and its own reflog without probing sibling signatures. Watch startup uses signature validation until a delivered event confirms the stream is live. Watch errors, incomplete watches and standalone callers use mtime/size signatures; changed loose refs are resolved individually, while a changed packed-ref file rebuilds the shared targets. Unchanged HEAD/config and reflog contents are not reopened. Directory-level events conservatively validate signatures. A sibling branch tip is not part of another branch's key. All remote refs remain dependencies because any remote may prove containment. Repository handles come from the shared gix handle cache. This does not cache dirty-state scans or the worktree inventory across refreshes. The existing per-repository coordinator keeps one active refresh and one pending trailing request; Git events use the existing 500 ms debounce. A pending shared-ref/configuration or linked-HEAD change bypasses the base-checkout fingerprint, which cannot observe a sibling commit. Other no-op Git events retain the fingerprint guard.
+
+Worktree inventory reuses its root repository handle and reads each checkout’s admin HEAD directly. It does not open a full repository for the main checkout or each linked checkout. Detached rebase checkouts still recover their branch from Git’s operation files; missing and archived checkouts remain excluded.
+
+Dirty-state and lifecycle monitoring also reuse cached gix handles. The handle cache checks configuration mtime/size signatures before reuse, including loaded sources, standard user configuration, explicit includes and worktree configuration. A changed signature reopens the handle; unchanged checks do not reopen Git configuration. Branch-conditional includes also track symbolic HEAD. A configuration source modified during loading prevents reuse of that snapshot.
 
 Merged classifications have a separate bounded cache keyed by repository refs, symbolic HEAD, Git configuration and branch reflogs. File saves and the repository cache TTL do not rerun `cherry`, integration history or `merge-tree`; moving a ref recomputes classification. This eliminates the integration-process fan-out across active worktrees. Git subprocess counts for unsupported gix checkouts remain dependent on the fallback reads.
 
@@ -37,9 +53,9 @@ Internal callers that need synchronous access use `_impl` suffixes (e.g. `get_di
 
 ## GitReads Port (gix migration)
 
-Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
+Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.89) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
 
-**An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix 0.84 cannot match git's exact output, the op stays on the CLI.
+**An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix cannot match git's exact output, the adapter retains its CLI fallback.
 
 | Op | Backend | Notes |
 |----|---------|-------|
@@ -52,6 +68,8 @@ Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-
 | `diff_stats` | **gix** (worktree) | unstaged worktree-vs-index `--shortstat` via per-blob `imara` (Myers + slider), binary excluded. Staged (`--cached`) and commit (`hash^..hash`) modes → CLI; sparse/submodule/error → CLI. |
 
 **All 8 read ops are served by gix**, each gated by a byte-for-byte shootout test; the gix adapters fall back to the CLI internally for their unsupported edge cases (sparse/submodule, renamed-history blame, staged/commit diff). `Backend::Cli` is retained in `PerOpBackend` as a per-op rollback lever. The lever is temporary: after **2026-12-05**, if the shootout tests have stayed green and no op has been rolled back, `Backend::Cli` and its router arms are deleted (`CliGitReads` itself stays — the gix fallbacks and the shootout tests both use it).
+
+The 0.85 → 0.89 dependency migration retains these operations, features and fallbacks. The cached repository-open error uses the unified `gix::Error` type. Upstream raises its minimum Rust version to 1.88, below this repository's CI compiler. Repository, status, blame and worktree facade calls keep the same inputs; worktree proxy paths are now anchored to the repository's opening directory. The existing CLI parity tests remain the behavior contract on macOS, Linux and Windows.
 
 The displayed unified diff/patch (`get_git_diff`), stash, reflog, and **all writes/auth stay on the CLI permanently** — they are not part of the port. The `gix` dependency uses `default-features = false` with only `["sha1","revision","status","blame","blob-diff","dirwalk","parallel"]` (pure Rust, no C toolchain).
 
@@ -234,7 +252,10 @@ uninitialized module or a misplaced `.git` file stops removal without deleting
 the source checkout. Every stash and
 reflog tip also gets a durable preserved ref, including older stash entries and
 commits that have fallen off a branch. A missing checkout's module bundle
-includes reflog objects before Git removes its registration. If preservation
+includes reflog objects before Git removes its registration. Missing-checkout
+module destinations are resolved from each owning main module's `.gitmodules`
+name-to-path mapping, including nested modules. Missing, duplicate, empty, absolute,
+or parent-traversing paths stop cleanup before pruning; admin names are not a fallback. If preservation
 fails, removal stops. For a deinitialized module, the leftover Git directory is
 located by its configured `.gitmodules` name, including nested names that
 differ from checkout paths; any retained admin state stops removal. The checkout is checked again after preservation,
@@ -257,7 +278,9 @@ local `main`, then local `master`, then `origin/HEAD` (local branch when present
 otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
-shows **No base branch**, with the full reason in its tooltip.
+shows **No base branch**, with the full reason in its tooltip. Each branch-name
+tooltip includes the status diagnostic once. Main checkouts do not show removal
+warnings, because the sidebar cannot remove them.
 
 The checked-out main worktree branch is another integration target: if it
 contains the candidate tip, removal records `integration_ancestry` even when
@@ -267,6 +290,14 @@ unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
 The request uses the repository-bound GitHub account and host. An incomplete
 pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
+MCP worktree listing uses local monitoring proofs keyed by current refs without
+resolving the full worktree inventory again for each entry. It reads GitHub proof
+from the existing definitive-answer cache only; a miss stays locally unproven and
+never starts network I/O. Background monitoring may populate the cache, while
+destructive preflights still ask freshly. Its dirt,
+fingerprint and submodule fields are still inspected freshly. A checkout HEAD
+that differs from its branch ref bypasses the proof cache; destructive lifecycle
+preflights always bypass it.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
 The integration query does not treat `in_sync` as merged and supplies no proof
@@ -519,11 +550,24 @@ before closing it and uses directory-boundary, separator-independent containment
 Missing cwd is not permission to close. Surviving tabs from a removed row are
 reconciled to their cwd workspace or parked in the Global Workspace.
 
-Creation declarations remain backend metadata. They do not override cwd for tab
-placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
+Creation alone remains cwd-based. Explicit caller declarations override cwd only
+for display placement, never terminal cleanup. A declaration must match an existing
+workspace id and checkout path; removal retracts it. An undeclared repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
 
 Explicit worktree removal uses the same current-cwd terminal cleanup as removal
 events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
 outside the removed checkout are rehomed after successful removal.
+
+### Checkout discovery inventory
+
+CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool; an unrelated directory with that name does not hide a checkout. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
+
+### Worktree discovery diagnostics
+
+The additive inventory also returns `worktree_diagnostics` records with `path`, nullable `branch`, `state` (`missing` or `duplicate_branch`), and `guidance`. Missing or broken checkouts never enter the selectable map. Discovery does not prune registrations. A forced duplicate branch keeps one deterministic primary checkout (lexicographically smallest path); additional paths become read-only diagnostics. Legacy lifecycle resolution uses the same primary ordering so an action does not target a different duplicate. Workspace IDs do not change.
+
+Synchronous and asynchronous inventory cache loaders retain only successful reads. MCP repository listings report `worktree_error` on discovery failure; ACP workspace snapshots report `worktreeError`. Bisect recovers `BISECT_START` only when it resolves to an existing local branch. Rebase recovery uses the shared Git directory resolver, including relative gitdir paths and the main checkout.
+
+Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.

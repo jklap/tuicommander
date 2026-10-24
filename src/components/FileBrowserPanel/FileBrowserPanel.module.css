@@ -11,6 +11,13 @@
   overflow: hidden;
 }
 
+.detached {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border-left: none;
+}
+
 .hidden {
   display: none;
 }
@@ -174,6 +181,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-primary);
+}
+
+.entryLink {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
 }
 
 .entryDir .entryName {

@@ -201,12 +201,7 @@ export const DictationSettings: Component = () => {
 	// h3 heading — see `SpeechRecognition` for why that matters.
 	return (
 		<div class={s.section}>
-			<SettingPageHeader
-				title="Voice"
-				description="Dictation, speech recognition and spoken conversations on this machine."
-				scope="This machine"
-				breadcrumb="AI / Voice"
-			/>
+			<SettingPageHeader title="Voice" scope="This machine" breadcrumb="AI / Voice" />
 			<SectionCard title={t("dictation.heading.dictation", "Dictation")}>
 				<Show when={dictationStore.state.ownedElsewhere}>
 					<p class={s.hint}>
@@ -478,10 +473,7 @@ const SpeechRecognition: Component = () => {
 					</ExpertSetting>
 				</Show>
 
-				<SettingRow
-					label={t("dictation.languageLabel", "Language")}
-					hint={t("dictation.languageHint", "Auto-detect works well for most languages.")}
-				>
+				<SettingRow label={t("dictation.languageLabel", "Language")}>
 					{(id, descriptionId) => (
 						<>
 							<Select
@@ -528,10 +520,7 @@ const SpeechRecognition: Component = () => {
 						max={50}
 						step={1}
 						formatValue={(v) => `${v}%`}
-						hint={t(
-							"dictation.rmsHint",
-							"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
-						)}
+						hint={t("dictation.rmsHint", "Audio below this level is ignored.")}
 					/>
 				</ExpertSetting>
 

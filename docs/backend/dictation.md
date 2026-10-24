@@ -15,6 +15,15 @@ Notification audio remains available in desktop builds without dictation. Both
 notification and speech output share `tuic-core::audio_output`, behind its
 optional `audio-output` feature. The output-device selection is unchanged.
 
+The application, `tuic-core` and `tuic-dictation` use rodio 0.23 with CPAL
+0.18.2. Capture explicitly starts its stream and retains F32/I16 input handling:
+if CPAL prefers a higher-precision default, capture selects a supported F32/I16
+configuration, retaining the default sample rate when that range supports it.
+Captured audio still becomes 16 kHz mono PCM. Playback retains the selected-device
+then system-default routing, notification volume/envelopes and rodio's output
+buffer policy. Edge speech retains the `symphonia-mp3` decoder feature.
+
+
 Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk workflow with streaming partial results: hold hotkey to record, see partial transcriptions in real-time, release to finalize.
 
 On macOS, losing main-window focus does not release a physically held Fn key.

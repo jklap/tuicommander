@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
+import { getDeclaredTerminalWorkspace } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { pathStartsWith } from "../../utils/pathUtils";
 
@@ -31,14 +32,13 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentRepoPath = repositoriesStore.getRepoPathForTerminal(terminalId);
 		const currentWorkspaceId = repositoriesStore.findOwnerForTerminal(terminalId)?.workspaceId ?? null;
 
-		// Declarations do not move a process: only its reported cwd determines placement.
-		const placementCwd = newCwd;
-		let target = findWorkspaceForCwd(placementCwd);
+		// A declaration changes display placement without moving the process.
+		let target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
 		if (!target && currentRepoPath) {
-			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(placementCwd, repoPath));
+			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(newCwd, repoPath));
 			if (insideKnownRepo) {
 				await deps.refreshBranches();
-				target = findWorkspaceForCwd(placementCwd);
+				target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
 			}
 		}
 

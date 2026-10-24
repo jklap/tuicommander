@@ -150,6 +150,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
 import { appLogger } from "../../stores/appLogger";
+import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -233,7 +234,14 @@ describe("Sidebar", () => {
 		mockLastActivityAt.mockReturnValue(0);
 		// Nested terminal tabs are opt-in and off by default — reset per test so the
 		// feature-behavior block can enable it and the gating block can rely on off.
+		const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		settingsStore.setTabTreeEnabled(false);
+		for (const call of errors.mock.calls)
+			expect(call).toEqual([
+				"config",
+				"Refusing to persist settings: store not hydrated — would clobber config.json with defaults",
+			]);
+		errors.mockRestore();
 		_resetMergedActivityAccum();
 		// Rich rows cache fetch times; cases that move the clock must not inherit them.
 		progressStore.resetForTests();
@@ -425,6 +433,68 @@ describe("Sidebar", () => {
 			fireEvent.click(addButton!);
 			expect(onAddRepo).toHaveBeenCalledOnce();
 		});
+	});
+
+	// Catches detached metadata being omitted, made selectable, or hidden without a folded count.
+	it("renders detached checkouts without branch actions and keeps a folded indicator", () => {
+		const detached = {
+			path: "/external/detached-checkout",
+			head: "abcdef0123456789",
+			short_head: "abcdef0",
+			directory_name: "detached-checkout",
+			state: "detached",
+		};
+		setRepos({ "/repo1": makeRepo({ detachedWorktrees: [detached] }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const row = view.getByTestId("detached-worktree");
+		expect(row).toHaveTextContent("detached-checkout");
+		expect(row).toHaveTextContent("abcdef0 detached");
+		expect(row.getAttribute("data-tooltip")).toContain(detached.path);
+		expect(row.querySelector("button")).toBeNull();
+		expect(row.getAttribute("tabindex")).toBeNull();
+		fireEvent.click(row);
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, detachedWorktrees: [detached] }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("detached-worktree")).toBeNull();
+		expect(folded.getByTestId("detached-worktree-count")).toHaveTextContent("1 detached");
+	});
+
+	// Catches missing/duplicate registrations being hidden or acquiring branch click actions.
+	it("renders repair diagnostics without selectable controls", () => {
+		const diagnostics = [
+			{
+				path: "/old/missing",
+				branch: "feature",
+				state: "missing",
+				guidance: "Run git worktree repair from the new location.",
+			},
+			{
+				path: "/other/duplicate",
+				branch: "main",
+				state: "duplicate_branch",
+				guidance: "Use a distinct branch to select independently.",
+			},
+		];
+		setRepos({ "/repo1": makeRepo({ worktreeDiagnostics: diagnostics }) });
+		const onBranchSelect = vi.fn();
+		const view = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+		const rows = view.getAllByTestId("worktree-diagnostic");
+		expect(rows).toHaveLength(2);
+		rows.forEach((row, index) => {
+			expect(row).toHaveTextContent(diagnostics[index].path);
+			expect(row).toHaveTextContent(diagnostics[index].guidance);
+			expect(row.querySelector("button, [tabindex]")).toBeNull();
+			fireEvent.click(row);
+		});
+		expect(onBranchSelect).not.toHaveBeenCalled();
+		view.unmount();
+		setRepos({ "/repo1": makeRepo({ expanded: false, worktreeDiagnostics: diagnostics }) });
+		const folded = render(() => <Sidebar {...defaultProps()} />);
+		expect(folded.queryByTestId("worktree-diagnostic")).toBeNull();
+		expect(folded.getByTestId("worktree-diagnostic-count")).toHaveTextContent("2 diagnostics");
 	});
 
 	describe("density attribute", () => {
@@ -1562,7 +1632,7 @@ describe("Sidebar", () => {
 				expect(menuLabels(container)).not.toContain("Claude Code");
 			});
 
-			it("a shell row has no agents, so a right click falls through to the row menu", () => {
+			it("a shell row right click keeps the row menu instead of directly listing agents", () => {
 				setRepos({
 					"/repo1": makeRepo({
 						workspaces: {
@@ -2327,6 +2397,34 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe("PR #256 — 1 uncommitted file");
 		});
 
+		// Catches: dirty and commit tooltip fragments repeat the same unknown diagnostic.
+		it("shows the status diagnostic once in the branch name tooltip", () => {
+			const error = "Cannot resolve default branch: no verified base.";
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown", error },
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip.split(error)).toHaveLength(2);
+			expect(tooltip.split("Status unavailable")).toHaveLength(2);
+		});
+
+		// Catches: a non-removable main checkout inherits linked-worktree removal warnings.
+		it.each([true, false])("keeps main checkout status free of removal wording (isMain=%s)", (isMain) => {
+			const container = renderLifecycle({
+				isMain,
+				worktreePath: "/repo1",
+				lifecycleStatus: {
+					dirtyFiles: null,
+					commitStatus: "unknown",
+					removalSafety: "unknown",
+					error: "git status failed",
+				},
+			});
+			const tooltip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+			expect(tooltip).toContain("Status unavailable");
+			expect(tooltip).not.toMatch(/remov|delet|discard/i);
+		});
+
 		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
 			const container = renderLifecycle({
 				lifecycleStatus: {
@@ -2337,7 +2435,7 @@ describe("Sidebar", () => {
 				},
 			});
 			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toBe(
-				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
+				"Status unavailable; removal is blocked. git status failed",
 			);
 		});
 
@@ -2609,8 +2707,127 @@ describe("Sidebar", () => {
 	describe("branch tab list", () => {
 		// The nested terminal-tab list is opt-in; this block verifies behavior with it enabled.
 		beforeEach(() => {
+			const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 			settingsStore.setTabTreeEnabled(true);
+			for (const call of errors.mock.calls)
+				expect(call).toEqual([
+					"config",
+					"Refusing to persist settings: store not hydrated — would clobber config.json with defaults",
+				]);
+			errors.mockRestore();
 		});
+
+		// Catches: copying the active tab, a stale store alias, or a same-ID session on another host.
+		it("sidebar_session_row_context_menu_copies_ids", async () => {
+			mockTerminalsGet.mockImplementation((id) => ({
+				id,
+				name: id === "t1" ? "Agent" : "Shell",
+				alias: "stale-store-alias",
+				sessionId: `pty-${id}`,
+				agentType: id === "t1" ? "ego" : null,
+				shellState: "idle",
+				unseen: false,
+			}));
+			mockInvoke.mockImplementation(async (command: string) =>
+				command === "list_active_sessions"
+					? [
+							{ session_id: "pty-t1", child_pid: 999, alias: "wrong-host", connection_id: "remote-other" },
+							{ session_id: "pty-t1", child_pid: 731, alias: "orc-1" },
+							{ session_id: "pty-t2", child_pid: 947, alias: "tu-2" },
+						]
+					: undefined,
+			);
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+						feature: {
+							workspaceId: "feature",
+							branchName: "feature",
+							isMain: false,
+							worktreePath: "/wt/feature",
+							terminals: ["t2"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const view = render(() => <Sidebar {...defaultProps()} />);
+			for (const [index, sessionId, pid, alias] of [
+				[0, "pty-t1", "731", "orc-1"],
+				[1, "pty-t2", "947", "tu-2"],
+			] as const) {
+				const row = view.container.querySelectorAll(".branchTabItem")[index];
+				expect(fireEvent.contextMenu(row, { clientX: 100, clientY: 120 })).toBe(false);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy session ID"));
+				await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: sessionId });
+				fireEvent.contextMenu(row);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy process ID"));
+				for (let n = 0; n < 5; n++) await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: pid });
+				fireEvent.contextMenu(row);
+				await Promise.resolve();
+				await Promise.resolve();
+				expect(view.getByText("Copy alias").closest("button")).toHaveAttribute("title", alias);
+				fireEvent.click(view.getByText("Copy alias"));
+				for (let n = 0; n < 5; n++) await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: alias });
+			}
+			expect(mockNavigateToTerminal).not.toHaveBeenCalled();
+			mockInvoke.mockResolvedValue(undefined);
+		});
+
+		// Catches: offering a null PID for a live session, or retaining a PID for an exited/suspended tab.
+		it.each(["idle", "exited", "suspended"])(
+			"sidebar_session_row_context_menu_hides_missing_process_%s",
+			async (state) => {
+				mockTerminalsGet.mockReturnValue({
+					id: "t1",
+					name: "Unknown PID",
+					sessionId: "unknown",
+					shellState: state === "suspended" ? "idle" : state,
+					suspended: state === "suspended",
+				});
+				mockInvoke.mockImplementation(async (command: string) =>
+					command === "list_active_sessions" ? [{ session_id: "unknown", child_pid: null }] : undefined,
+				);
+				setRepos({
+					"/repo1": makeRepo({
+						workspaces: {
+							main: {
+								workspaceId: "main",
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: ["t1"],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const view = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(view.container.querySelector(".branchTabItem")!);
+				await Promise.resolve();
+				await Promise.resolve();
+				expect(view.queryByText("Copy process ID")).not.toBeInTheDocument();
+				expect(view.queryByText("Copy alias")).not.toBeInTheDocument();
+			},
+		);
 
 		/** Find the .branchItem row whose name matches. */
 		function branchRow(container: HTMLElement, name: string): HTMLElement {
@@ -3302,6 +3519,76 @@ describe("Sidebar", () => {
 	});
 
 	describe("context menu", () => {
+		it("offers and invokes Add Agent for a non-git shell workspace", () => {
+			// Catches: shell/non-git gating drops an otherwise valid agent launch.
+			setRepos({
+				"/repo1": makeRepo({
+					isGitRepo: false,
+					activeWorkspaceId: "shell",
+					workspaces: {
+						shell: {
+							workspaceId: "shell",
+							branchName: "shell",
+							isShell: true,
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const launch = vi.fn();
+			const buildAgentMenuItems = vi.fn(() => [{ label: "Add Agent", action: launch }]);
+			const { container } = render(() => <Sidebar {...defaultProps({ buildAgentMenuItems })} />);
+			fireEvent.contextMenu(container.querySelector(".branchItem")!);
+			const agent = Array.from(container.querySelectorAll(".menu button")).find(
+				(button) => button.textContent === "Add Agent",
+			);
+			expect(agent).toBeDefined();
+			expect(container.querySelector(".menu")?.textContent).not.toContain("Create Worktree");
+			fireEvent.click(agent!);
+			expect(buildAgentMenuItems).toHaveBeenCalledWith("/repo1", "shell");
+			expect(launch).toHaveBeenCalledOnce();
+		});
+
+		it("hides branch workflow actions on non-git shell rows", () => {
+			// Catches: Create PR and other branch prompts offered without a Git branch.
+			const action = contextMenuActionsStore.registerContextAction("test", {
+				id: "create-pr",
+				label: "Create PR",
+				target: "branch",
+				action: vi.fn(),
+			});
+			try {
+				setRepos({
+					"/repo1": makeRepo({
+						isGitRepo: false,
+						activeWorkspaceId: "shell",
+						workspaces: {
+							shell: {
+								workspaceId: "shell",
+								branchName: "shell",
+								isShell: true,
+								isMain: true,
+								worktreePath: "/repo1",
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(container.querySelector(".branchItem")!);
+				expect(container.querySelector(".menu")?.textContent).toContain("Add Terminal");
+				expect(container.querySelector(".menu")?.textContent).not.toContain("Create PR");
+			} finally {
+				action.dispose();
+			}
+		});
+
 		it("opens context menu on right-click of branch item", () => {
 			setRepos({ "/repo1": makeRepo() });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);

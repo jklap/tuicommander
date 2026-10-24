@@ -79,22 +79,23 @@ it.each(["draft edit", "aborted", "network"])("waits for end after %s before dic
 	expect(draft.value).toBe(reason === "draft edit" ? "edited second third" : "first second third");
 });
 
-// Catches: onerror latches discarding without ending the service, so every later
-// result is ignored and neither the mic nor a draft edit can request an abort.
+// Catches: onerror latches discarding without requesting shutdown, so the next
+// take cannot insert its transcript without a manual send. This synthetic service
+// ends after abort; it is not evidence of the original iPhone callback ordering.
 it.each(["aborted", "network", "no-speech"])(
 	"finishes a failed %s take before inserting the next transcript",
-	(error) => {
+	async (error) => {
 		const draft = mount();
 		const first = start();
+		first.abort.mockImplementation(() => queueMicrotask(() => first.onend?.()));
 		first.onerror?.({ error });
-		// We own requesting shutdown; the browser owns when shutdown completes.
-		expect(first.abort).toHaveBeenCalledOnce();
-		expect(screen.getByRole("status").textContent).toBe("Dictation failed");
 		first.result("discarded");
 		expect(draft.value).toBe("");
-		first.onend?.();
-		start().result("retry succeeded");
-		expect(screen.queryByRole("status")).toBeNull();
+		await Promise.resolve();
+		// Retry through the actual mic control, even if stale ownership left it
+		// labelled Stop. The oracle is inserted text, not an abort spy count.
+		fireEvent.click(screen.getByRole("button", { name: /^(Dictate into draft|Stop dictation)$/ }));
+		Recognition.instances.at(-1)!.result("retry succeeded");
 		expect(draft.value).toBe("retry succeeded");
 	},
 );

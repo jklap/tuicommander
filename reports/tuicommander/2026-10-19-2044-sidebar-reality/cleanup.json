@@ -1,0 +1,101 @@
+{
+  "fixture": [
+    {
+      "operation": "delete-own-PTY",
+      "exit": 0,
+      "stdout": "{\"ok\":true}",
+      "stderr": ""
+    },
+    {
+      "operation": "remove-own-worktree",
+      "workspace_id": "chore/live-agent-2044",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\ntuic: repo parameter workspace_id was renamed to branch\n"
+    },
+    {
+      "operation": "remove-own-worktree",
+      "workspace_id": "chore/live-visible-2044",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\ntuic: repo parameter workspace_id was renamed to branch\n"
+    },
+    {
+      "operation": "remove-own-worktree",
+      "workspace_id": "chore/sidebar-reality-2044",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\ntuic: repo parameter workspace_id was renamed to branch\n"
+    },
+    {
+      "operation": "remove-own-worktree-correct-contract",
+      "branch": "chore/live-agent-2044",
+      "exit": 0,
+      "stdout": "{\"ok\":true,\"removal_rule\":\"recyclable\",\"warnings\":[\"This branch has nothing of its own, not merged work\"]}\n",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\n"
+    },
+    {
+      "operation": "remove-own-worktree-correct-contract",
+      "branch": "chore/live-visible-2044",
+      "exit": 0,
+      "stdout": "{\"ok\":true,\"removal_rule\":\"recyclable\",\"warnings\":[\"This branch has nothing of its own, not merged work\"]}\n",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\n"
+    },
+    {
+      "operation": "remove-own-worktree-correct-contract",
+      "branch": "chore/sidebar-reality-2044",
+      "exit": 0,
+      "stdout": "{\"ok\":true,\"removal_rule\":\"recyclable\",\"warnings\":[\"This branch has nothing of its own, not merged work\"]}\n",
+      "stderr": "tuic: no TUIC_SESSION; registering an external MCP caller\n"
+    }
+  ],
+  "browser": [
+    {
+      "argv": [
+        "/Users/stefano.straus/Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh",
+        "--",
+        "tab",
+        "close"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "[ab-stealth] ERROR: agent-browser failed: \u2717 Cannot close the last tab\n"
+    },
+    {
+      "argv": [
+        "agent-browser",
+        "--session",
+        "ab-shared-live-2044-isolated-81136",
+        "close"
+      ],
+      "exit": 0,
+      "stdout": "\u2713 Browser closed\n",
+      "stderr": ""
+    }
+  ],
+  "browser_target": {
+    "target_present_after_named_session_close": false
+  },
+  "stopped": {
+    "vite": 49181,
+    "backend": 84928
+  },
+  "process_checks": {
+    "vite": {
+      "ps_exit": 1,
+      "output": ""
+    },
+    "backend": {
+      "ps_exit": 1,
+      "output": ""
+    }
+  },
+  "ports": {
+    "19444": {
+      "accepting_connections": false
+    },
+    "19445": {
+      "accepting_connections": false
+    }
+  }
+}

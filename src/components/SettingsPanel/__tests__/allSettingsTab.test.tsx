@@ -68,6 +68,33 @@ it.each(Object.values(settingsCatalogue.fields).filter(hasCatalogueEditor))(
 	},
 );
 
+// Catches: catalogue actions rendering as adjacent buttons without a shared wrapping row.
+it("groups catalogue owner actions separately from the field control", async () => {
+	const field = settingsCatalogue.fields["app.shell"];
+	invoke.mockResolvedValue(snapshot(field.path, null));
+	const view = render(() => <CatalogueFieldEditor field={field} path={field.path} />);
+	await view.findByText("Save setting");
+	const actions = view.getByRole("group", { name: "Setting actions" });
+	expect([...actions.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+		"Use null / inherit",
+		"Save setting",
+		"Reset to owner default",
+		"Reload owner",
+	]);
+	expect(actions.querySelector("input,select")).toBeNull();
+});
+
+// Catches: owner provenance repeating the effect already shown beneath the field label.
+it("shows the setting effect once and keeps provenance source-only", async () => {
+	const field = settingsCatalogue.fields["app.shell"];
+	invoke.mockResolvedValue(snapshot(field.path, null));
+	const view = render(() => <CatalogueFieldEditor field={field} path={field.path} />);
+	await view.findByText("Save setting");
+	expect(view.getByRole("status").textContent).toBe("Source: stored.");
+	expect(view.getByText(`${field.effect} Apply: ${field.apply}.`)).toBeTruthy();
+	expect(view.container.textContent?.split(field.effect)).toHaveLength(2);
+});
+
 describe("catalogue owner writes", () => {
 	// Catches: a dynamic stable record row reading one path but saving a sibling.
 	it("writes_the_bound_record_with_the_read_revision", async () => {

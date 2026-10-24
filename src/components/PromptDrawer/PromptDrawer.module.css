@@ -185,6 +185,8 @@
 
 .footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
@@ -192,6 +194,8 @@
 }
 
 .footer button {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 4px 10px;
   background: var(--accent);
   border: none;

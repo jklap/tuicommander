@@ -221,6 +221,14 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
     let stderr = output.try_clone().map_err(|e| e.to_string())?;
     let code = match Command::new(&command[0])
         .args(&command[1..])
+        // The command is not the foreground peer. A detached reviewer that
+        // inherits its identity can report progress blocked as that peer and
+        // strand this runner's completion behind its own confident wait.
+        // Keep the runner's identity for wake/mail, not in the command tree.
+        .env_remove("TUIC_SESSION")
+        .env_remove("TUIC_PARENT")
+        // Stop headerless MCP ancestry recovery at this detached command.
+        .env("TUIC_BG_COMMAND", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(output.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(stderr))

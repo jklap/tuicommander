@@ -24,7 +24,7 @@ concurrency:
 # See docs/guides/ci.md.
 env:
   SCCACHE_IDLE_TIMEOUT: "0"
-  RUST_VERSION: "1.98.0"
+  RUST_VERSION: "1.99.1"
 
 jobs:
   socket:
@@ -100,6 +100,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Release body size workflow contracts
+        run: python3 .github/workflows/tests/test-release-body-limit.py
+
+      - name: Remote daemon release workflow contracts
+        run: python3 .github/workflows/tests/test-remote-daemon-release.py
 
       - name: Shell tests
         run: make test-shell

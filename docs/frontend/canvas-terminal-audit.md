@@ -13,6 +13,23 @@ Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines
 
 Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker. User prompt echoes do not open answer regions: indented quoted markers stay in the prompt until an agent output bullet or an unindented answer marker begins output.
 
+## Incremental base-grid painting
+
+Whole-row forward viewport movement can copy retained base-canvas pixels once.
+The renderer compares all retained cells before reusing them and repaints changed
+or newly exposed rows. Geometry, font, theme, explicit invalidation and hidden
+marker layouts disable the copy. Full wire frames replace decoded state without
+forcing a full canvas clear. Overlay painting remains independent. Workload
+recordings include the optional absolute viewport origin for the same replay path;
+older recordings remain readable without scroll reuse.
+
+Dirty rows are compared as cells, including colors, attributes and combining
+content. Unchanged rows do not paint. In-place changes repaint a clipped column
+span with neighboring glyphs for wide-cell and italic overlap. Changed row widths,
+marker ownership and combining sequences keep the whole-row fallback. Adjacent
+cells with the same resolved explicit background share one fill operation; default
+background gaps and resolved color changes split the runs.
+
 ## Architecture
 
 ```
@@ -118,6 +135,13 @@ cell's full text span, since native search points have no subcell index.
 - **`send_grid_frame` clone guard:** Frame is only cloned for the `grid_watch` channel when `receiver_count() > 0` (i.e. WS clients connected). Desktop-only path (Tauri Channel) is zero-copy.
 - **Raw bytes over the IPC:** the channel carries `tauri::ipc::Response`, not `Vec<u8>`. A bare `Vec<u8>` matches Tauri's blanket `IpcResponse` impl and is serialised as a JSON array of decimal numbers — a 110 KB frame becomes a ~250 KB string plus an extra IPC round trip, and JS receives a `number[]` to walk instead of an `ArrayBuffer`. Same for `terminal_styled_rows`. `toBinaryPayload` still accepts `number[]`, because Tauri's postMessage fallback (custom-protocol IPC blocked) delivers that shape.
 - **Frame acks are counters, not a flag:** the frontend echoes its total receipt count, so an ack for a frame the ticker already abandoned is a number in the past and cannot release a burst. See `tuic-terminal/src/grid_gate.rs` for pure ordering and `src-tauri/src/grid_watch.rs` for the Tokio adapter.
+- **Receipts are not damage:** desktop ACKs only release the gate. Paused ticks
+  retain actual damage, and a missed-frame recovery sends its
+  private full frame only to desktop and its delta only to browsers, without
+  offering the same snapshot to desktop twice; normal output batching and input quotas are unchanged.
+- **Retained input retry:** newer reader damage that arrives during a send keeps
+  its retry on the existing ticker. This does not add input credits, relax the
+  8 ms spacing or expiry, bypass desktop receipts, or change synchronized output.
 - **Visibility batches:** `IntersectionObserver` can deliver multiple states for
   a terminal in one callback after resize/layout changes. `latestIntersectionVisibility`
   selects the greatest `entry.time` (last entry wins ties), so a transient hidden
@@ -238,7 +262,7 @@ cell's full text span, since native search points have no subcell index.
 | File path Cmd+click open | OK | |
 | Pointer cursor on link | OK | |
 | Web URL links (http/https) | OK | `webUrlRe` regex in `checkLinksAtRow` |
-| OSC 8 hyperlinks | OK | `terminal_hyperlink_at` IPC, priority over other link types |
+| OSC 8 hyperlinks | OK | `terminal_hyperlink_span` IPC, priority over other link types |
 
 ### Search
 

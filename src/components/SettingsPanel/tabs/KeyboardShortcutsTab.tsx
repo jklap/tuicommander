@@ -628,10 +628,6 @@ export const KeyboardShortcutsTab: Component = () => {
 						value={filter()}
 						onInput={(e) => setFilter(e.currentTarget.value)}
 					/>
-
-					<p class={s.hint}>
-						{t("helpPanel.editableNote", "Click Rebind to change a shortcut. Press Escape to cancel.")}
-					</p>
 				</div>
 				<For each={filteredSections()}>
 					{(section) => (

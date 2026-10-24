@@ -48,7 +48,9 @@ describe("UpstreamMcpPanel lifecycle", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		view.getByTitle("Add upstream server").click();
 		expect((view.getByDisplayValue("Bearer token") as HTMLSelectElement).value).toBe("bearer");
-		const bearer = view.getByPlaceholderText("API key for remote MCP servers (optional, stored in OS keychain)");
+		const bearer = view.container.querySelector<HTMLInputElement>(
+			'input[data-setting-id="upstreams.servers.{id}.auth.token"]',
+		)!;
 		expect(bearer.getAttribute("type")).toBe("password");
 		view.getByTitle("Add secret header").click();
 		view.getByTitle("Add secret header").click();
@@ -180,9 +182,12 @@ describe("UpstreamMcpPanel lifecycle", () => {
 		const view = render(() => <UpstreamMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
 		view.getByTitle("Add upstream server").click();
-		fireEvent.input(view.getByPlaceholderText("API key for remote MCP servers (optional, stored in OS keychain)"), {
-			target: { value: "DUMMY_BEARER" },
-		});
+		fireEvent.input(
+			view.container.querySelector<HTMLInputElement>('input[data-setting-id="upstreams.servers.{id}.auth.token"]')!,
+			{
+				target: { value: "DUMMY_BEARER" },
+			},
+		);
 		view.getByTitle("Add secret header").click();
 		fireEvent.input(view.getByLabelText("Header name 1"), { target: { value: "aUtHoRiZaTiOn" } });
 		fireEvent.input(view.getByLabelText("Header secret 1"), { target: { value: "DUMMY_CUSTOM" } });

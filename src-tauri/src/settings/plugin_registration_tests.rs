@@ -191,7 +191,7 @@ async fn loaded_owner_refuses_relinked_data_before_settings_patch() {
 
 // Catches: Tasks provider data is mistaken for schema-backed settings and blocks shipped plugins.
 #[test]
-fn shipped_work_item_plugins_register_and_round_trip_tasks_data_without_schema() {
+fn shipped_work_item_plugins_keep_tasks_data_separate_from_settings() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = crate::state::tests_support::make_test_app_state();
@@ -219,6 +219,51 @@ fn shipped_work_item_plugins_register_and_round_trip_tasks_data_without_schema()
             crate::plugins::read_plugin_data(id.into(), "work-items.json".into()).unwrap(),
             Some(data)
         );
-        assert!(!plugin_dir.join("data/config.json").exists());
+        let manifest: Value = serde_json::from_str(shipped).unwrap();
+        assert_eq!(
+            plugin_dir.join("data/config.json").exists(),
+            manifest.get("settings").is_some()
+        );
+    }
+}
+
+// Catches: provider schema rejected or project writes diverging from the plugin config read.
+#[tokio::test]
+async fn provider_project_settings_register_and_persist_through_http() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    for (id, field, value) in [
+        ("jira", "projectId", "10000"),
+        ("gitlab", "project", "group/project"),
+    ] {
+        let raw = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../plugins")
+                .join(id)
+                .join("manifest.json"),
+        )
+        .unwrap();
+        let plugin_dir = dir.path().join("plugins").join(id);
+        std::fs::create_dir_all(plugin_dir.join("data")).unwrap();
+        std::fs::write(plugin_dir.join("manifest.json"), raw).unwrap();
+        register_loaded_plugin_impl(&state, id.into(), vec!["net:http".into()]).unwrap();
+        let router = crate::mcp_http::build_router(state.clone(), false, false);
+        let (status, catalogue) =
+            super::action(router.clone(), id, json!({"action":"describe"})).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(catalogue["fields"].to_string().contains(field));
+        let path = format!("/{field}");
+        let (_, snapshot) =
+            super::action(router.clone(), id, json!({"action":"get","paths":[path]})).await;
+        let (status, _) = super::action(router, id, json!({"action":"set","path":path,"value":value,"expectedRevision":snapshot["revision"]})).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        let consumed = crate::plugins::read_plugin_data(id.into(), "config.json".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&consumed).unwrap()[field],
+            value
+        );
     }
 }

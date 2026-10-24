@@ -20,6 +20,14 @@ afterEach(() => {
 });
 
 describe("Tasks list", () => {
+	// Catches: permanent query-engine narration returns beside the real item count.
+	it("rejects query narration while retaining the Tasks status value", async () => {
+		const view = render(() => <TasksList providers={[listDemo(4)]} onOpen={() => {}} />);
+		await view.findByRole("button", { name: /Task 00004/ });
+		expect(view.getByRole("status")).toHaveTextContent("4 items");
+		expect(view.queryByText("Server queries · provider-supported fields only")).toBeNull();
+	});
+
 	// Catches: a large provider result creates one mounted DOM row per item.
 	it("list_renders_bounded_dom_for_10k_items", async () => {
 		const items = await allDemoRows(listDemo(10_000));

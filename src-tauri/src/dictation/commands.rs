@@ -2973,8 +2973,11 @@ pub fn set_dictation_config(
     base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    save_dictation_config(base, config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))?;
+    crate::settings::api::publish_change(&state, "voice", true);
+    Ok(())
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.
@@ -3119,7 +3122,7 @@ mod tests {
             transcribe::VoiceGates::default(),
         )
         .unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -3171,7 +3174,7 @@ mod tests {
         };
         let result =
             transcribe_final_ptt_audio(&PhraseTranscriber, &audio, Some("en"), gates).unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -3191,7 +3194,7 @@ mod tests {
             transcribe::VoiceGates::default(),
         )
         .unwrap();
-        assert!(result.text.is_empty());
+        assert_eq!(result.text, "");
         assert_eq!(
             result.skip_reason.as_deref(),
             Some("no sustained speech (need 200ms of active audio)")
@@ -3667,7 +3670,7 @@ mod tests {
         let link = dictation.browser_endpoints.connect("browser-9");
         let mut endpoint = open_muted_endpoint(&dictation, "browser-9").expect("endpoint");
         assert!(endpoint.connected());
-        assert!(endpoint.drain().unwrap().is_empty());
+        assert_eq!(endpoint.drain().unwrap(), [] as [f32; 0]);
         drop(link);
     }
 
@@ -5255,10 +5258,9 @@ mod tests {
     #[test]
     fn get_speech_voices_offers_nothing_until_the_language_is_downloaded() {
         let (_root, _guard) = speech_root();
-        assert!(
-            get_speech_voices("it".into())
-                .expect("Italian ships")
-                .is_empty()
+        assert_eq!(
+            get_speech_voices("it".into()).expect("Italian ships"),
+            [] as [tuic_dictation::speech::library::VoiceChoice; 0]
         );
     }
 

@@ -99,16 +99,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{editingRoots() ? "Hide folder editor" : "Add folder"}
 								</button>
 							}
-							description={t(
-								"perimeter.hint",
-								"ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
-							)}
 						>
 							<p class={s.hint}>
-								{t("perimeter.target", "Editing ego user configuration:")}{" "}
-								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
+								{t("perimeter.target", "Profile:")} {loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
-							<SettingRow label="Workspace · set in TUICommander">
+							<SettingRow label="Workspace">
 								{(id, descriptionId) => (
 									<Input
 										data-non-setting="Read-only effective workspace reported by ego"
@@ -284,10 +279,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 											? "warning"
 											: undefined
 								}
-								source={
-									loaded().effective.capabilities_reason ||
-									"Command isolation for spawned processes; profile-root tool permissions are separate."
-								}
+								source={loaded().effective.capabilities_reason}
 							>
 								<button
 									data-non-setting="Open or close perimeter editing and recovery instructions"
@@ -298,17 +290,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								</button>
 							</StatusSummary>
 							<Show when={verifyOpen()}>
-								<p class={s.hint}>
-									Run ego doctor in a terminal and inspect its command-isolation report. Reload from ego reads
-									configuration; it does not run an OS enforcement probe.
-								</p>
+								<p class={s.hint}>Run ego doctor in a terminal and inspect its command-isolation report.</p>
 							</Show>
 							<Show when={loaded().execEnforcement === "promptOnly"}>
 								<p class={s.hint}>
-									{t(
-										"perimeter.incomplete",
-										"The selected exec perimeter is not fully OS-enforced. This badge covers spawned processes; profile-root tool permissions are separate.",
-									)}
+									{t("perimeter.incomplete", "Command isolation is not fully enforced by the operating system.")}
 								</p>
 							</Show>
 						</SectionCard>

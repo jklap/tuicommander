@@ -488,13 +488,16 @@ pub(super) async fn spawn_agent_session(
 
     #[cfg(feature = "desktop")]
     if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "cwd": body.cwd,
-                "display_name": null,
-            }),
+        super::session::emit_native_agent_session_created(
+            |event, payload| {
+                let _ = app.emit(event, payload);
+            },
+            &state_ref,
+            &session_id,
+            body.cwd.as_deref(),
+            body.agent_type.as_deref(),
+            None,
+            None,
         );
     }
 
@@ -508,6 +511,248 @@ pub(super) async fn spawn_agent_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: HTTP/MCP readers start without the identity inherited by the
+    // child, so a genuine native Codex hook cannot authorize its Chat transcript.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_spawned_codex_pty_accepts_its_native_binding() {
+        exercise_native_binding(false).await;
+    }
+
+    // Catches: session listing holds the PTY mutex while native binding
+    // validation tries to acquire the same mutex, deadlocking HTTP and IPC.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_codex_session_listing_does_not_relock_pty() {
+        exercise_native_binding(true).await;
+    }
+
+    #[cfg(unix)]
+    async fn exercise_native_binding(check_listing: bool) {
+        use base64::Engine;
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        crate::config::save_agents_config(
+            crate::config::AgentsConfig::default(),
+            crate::config::AgentsConfig {
+                launch_instructions: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cwd = scratch.path().canonicalize().unwrap();
+        let mut hook: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/chat_view/codex/http-user-prompt-submit.json"
+        ))
+        .unwrap();
+        hook["cwd"] = cwd.to_string_lossy().as_ref().into();
+        hook["transcript_path"] = cwd.join("rollout.jsonl").to_string_lossy().as_ref().into();
+        let mut header: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/chat_view/codex/session-meta.json"
+        ))
+        .unwrap();
+        header["payload"]["id"] = hook["session_id"].clone();
+        header["payload"]["cwd"] = hook["cwd"].clone();
+        std::fs::write(
+            hook["transcript_path"].as_str().unwrap(),
+            format!(
+                "{header}\n{}",
+                include_str!("../fixtures/chat_view/codex/completed.jsonl")
+            ),
+        )
+        .unwrap();
+        // Like ForegroundIdentityProbe: this is an OS process-name probe,
+        // not a fake implementation of Codex. The hook bytes are recorded.
+        let probe = cwd.join("codex");
+        std::fs::copy("/bin/cat", &probe).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            let signed = std::process::Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&probe)
+                .output()
+                .unwrap();
+            assert!(signed.status.success(), "sign the local process-name probe");
+        }
+        let frame = cwd.join("hook-frame");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(hook.to_string());
+        let script = crate::test_support::fake_ssh_script(
+            "codex-http-native-binding",
+            "if [ \"$1\" = '--help' ]; then exit 0; fi; printf '\\033]7770;codex-session=%s:%s\\033\\\\\\nHOOK_REPLAY_DONE\\n' \"$TUIC_SESSION\" \"$CODEX_HOOK\" > \"$CODEX_FRAME\"; exec \"$CODEX_PROBE\" \"$CODEX_FRAME\" -",
+            "exit /b 0",
+        );
+        let mut failures = Vec::new();
+        for path in ["http", "mcp", "generic-restored"] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = match path {
+                "http" => {
+                    let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+                        "prompt": "ignored", "agent_type": "codex", "args": [],
+                        "binary_path": script, "cwd": cwd, "env": {"CODEX_HOOK": encoded, "CODEX_FRAME": frame, "CODEX_PROBE": probe}
+                    })).unwrap();
+                    let response = spawn_agent_session(
+                        State(state.clone()),
+                        ConnectInfo(loopback()),
+                        None,
+                        Json(body),
+                    )
+                    .await;
+                    assert_eq!(response.status(), StatusCode::CREATED);
+                    response_json(response).await["session_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }
+                "mcp" => {
+                    let result = super::super::mcp_transport_session_agent::handle_agent(
+                        &state,
+                        loopback(),
+                        &serde_json::json!({
+                            "action": "spawn", "prompt": "ignored", "agent_type": "codex", "args": [],
+                            "binary_path": script, "cwd": cwd, "env": {"CODEX_HOOK": encoded, "CODEX_FRAME": frame, "CODEX_PROBE": probe}
+                        }),
+                        None,
+                    );
+                    result["session_id"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("MCP spawn failed: {result}"))
+                        .to_owned()
+                }
+                _ => super::super::session::spawn_pty_session(
+                    state.clone(),
+                    "/bin/sh".into(),
+                    Some(cwd.to_string_lossy().into()),
+                    24,
+                    80,
+                    None,
+                    super::super::session::RequestedIdentity {
+                        tuic_session: Some("restored-codex-owner".into()),
+                        startup_command: Some(format!(
+                            "CODEX_HOOK='{encoded}' CODEX_FRAME='{}' CODEX_PROBE='{}' exec '{}'",
+                            frame.display(),
+                            probe.display(),
+                            script.display()
+                        )),
+                        agent_type: Some("codex".into()),
+                        ..Default::default()
+                    },
+                )
+                .expect("generic shell launch")
+                .to_owned(),
+            };
+            let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    if state.grid.vt_log_buffers.get(&sid).is_some_and(|vt| {
+                        vt.lock()
+                            .screen_rows()
+                            .join("\n")
+                            .contains("HOOK_REPLAY_DONE")
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            // Wait for the reader to finish processing the chunk that painted the
+            // marker, not for a protocol deadline: this is setup, not the subject.
+            let result = if ready.is_ok() {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if state
+                            .session_maps
+                            .session_states
+                            .get(&sid)
+                            .is_some_and(|s| s.codex_binding.is_some())
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .ok();
+                // Observe the real exec'd process through the production probe;
+                // the generic shell path must discover its agent, not hand-set it.
+                super::super::session::get_foreground_process(
+                    State(state.clone()),
+                    axum::extract::Path(sid.clone()),
+                )
+                .await;
+                crate::chat_view::chat_view_snapshot(&state, &sid, None, 0)
+            } else {
+                Err("hook replay never reached the reader".into())
+            };
+            if check_listing && result.is_ok() {
+                let pid = state
+                    .session_maps
+                    .sessions
+                    .get(&sid)
+                    .unwrap()
+                    .lock()
+                    ._child
+                    .process_id()
+                    .unwrap();
+                let listed_state = state.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let listing = std::thread::spawn(move || {
+                    let rows = super::super::session::local_session_rows(&listed_state);
+                    let mcp = super::super::mcp_transport_session_agent::handle_session(
+                        &listed_state,
+                        &serde_json::json!({"action":"list"}),
+                        None,
+                    );
+                    let _ = tx.send((rows, mcp));
+                });
+                let (rows, mcp) = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        // The failed worker owns the locked session. Do not
+                        // deadlock cleanup on it: kill only our spawned probe.
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                        panic!("{path}: session listing deadlocked on native binding: {error}");
+                    }
+                };
+                listing.join().unwrap();
+                assert!(
+                    mcp.as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row["session_id"] == sid),
+                    "MCP must list the same bound PTY"
+                );
+                let row = rows.iter().find(|row| row.session_id == sid).unwrap();
+                assert_eq!(
+                    row.state
+                        .as_ref()
+                        .unwrap()
+                        .codex_binding
+                        .as_ref()
+                        .unwrap()
+                        .session_id,
+                    hook["session_id"].as_str().unwrap()
+                );
+            }
+            crate::pty::close_pty_core(&state, &sid, false);
+            match result {
+                Ok(snapshot) => assert!(
+                    serde_json::to_string(&snapshot.updates)
+                        .unwrap()
+                        .contains("Recorded reply"),
+                    "{path}: wrong transcript"
+                ),
+                Err(error) => failures.push(format!("{path}: {error}")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "native binding lost: {}",
+            failures.join("; ")
+        );
+    }
 
     fn spawn_request() -> SpawnAgentRequest {
         SpawnAgentRequest {

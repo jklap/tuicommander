@@ -55,6 +55,14 @@ pub(super) async fn handle_remote_update(
     }
 }
 
+/// The spelling under which `repo add` stores a repository path.
+fn registered_spelling(path: &str) -> std::io::Result<String> {
+    let canonical = std::fs::canonicalize(path)?;
+    Ok(tuic_core::path_spelling::portable_spelling(
+        &canonical.to_string_lossy(),
+    ))
+}
+
 pub(super) async fn handle_github(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -65,7 +73,7 @@ pub(super) async fn handle_github(
     };
     match action {
         "status" => {
-            // Cross-repo aggregate: for each workspace repo, return branch/ahead/behind/open PRs
+            // Cross-repo aggregate (or the one repo named by `path`): for each workspace repo, return branch/ahead/behind/open PRs
             // Reads from poller cache to avoid fan-out API calls
             let repo_data = crate::config::load_repositories();
             let repo_order = repo_data
@@ -73,11 +81,28 @@ pub(super) async fn handle_github(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
+            // Same spelling `repo add` stores, so a trailing slash or symlink still matches.
+            // An unresolvable path keeps its raw spelling and is reported as unregistered.
+            let requested = args["path"]
+                .as_str()
+                .map(|raw| registered_spelling(raw).unwrap_or_else(|_| raw.to_string()));
+            let requested = requested.as_deref();
+            if let Some(requested) = requested
+                && !repo_order.iter().any(|p| p.as_str() == Some(requested))
+            {
+                let given = args["path"].as_str().unwrap_or(requested);
+                return serde_json::json!({"error": format!(
+                    "Path '{given}' is not a registered repository. Use repo action=list to see registered paths."
+                )});
+            }
             let mut results: Vec<serde_json::Value> = Vec::new();
             for path_val in &repo_order {
                 let Some(path) = path_val.as_str() else {
                     continue;
                 };
+                if requested.is_some_and(|requested| requested != path) {
+                    continue;
+                }
                 let info = crate::git::get_repo_info_cached(state, path);
                 if !info.is_git_repo {
                     continue;
@@ -227,23 +252,31 @@ async fn handle_worktree_with_caller(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let mut wts = match crate::worktree::get_worktree_paths(path.clone()) {
-                Ok(wts) => wts,
-                Err(e) => return serde_json::json!({"error": e}),
+            let inventory_path = path.clone();
+            let mut wts = match tokio::task::spawn_blocking(move || {
+                crate::worktree::get_worktree_paths(inventory_path)
+            })
+            .await
+            {
+                Ok(Ok(wts)) => wts,
+                Ok(Err(error)) => return serde_json::json!({"error": error}),
+                Err(error) => {
+                    return serde_json::json!({"error": format!("worktree inventory task failed: {error}")});
+                }
             };
-            // Same source as the sidebar's lifecycleStatus (get_repo_summary /
-            // get_repo_diff_stats): inspect_workspace_lifecycle, fanned out per
-            // worktree on the blocking pool so the async worker isn't parked on
-            // the git subprocesses each inspection runs.
+            // Keep full, fresh checkout safety fields, but share the sidebar's
+            // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
-            for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
+            for (workspace_id, workspace) in &wts {
+                let workspace_id = workspace_id.clone();
+                let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
-                    let lifecycle = crate::worktree::inspect_workspace_lifecycle(
-                        &proof_state,
+                    let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
-                        &workspace_id,
+                        &workspace,
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
@@ -689,8 +722,12 @@ fn handle_repo_listing(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                     entry["group"] = serde_json::json!(group_name);
                 }
                 super::mcp_transport_catalogue::tag_repo_connection(&mut entry, repo_entry);
-                if !worktrees.is_empty() {
-                    entry["worktrees"] = to_json_or_error(&worktrees);
+                match worktrees {
+                    Ok(worktrees) if !worktrees.is_empty() => {
+                        entry["worktrees"] = to_json_or_error(&worktrees)
+                    }
+                    Err(error) => entry["worktree_error"] = serde_json::json!(error),
+                    _ => {}
                 }
                 results.push(entry);
             }
@@ -942,6 +979,71 @@ pub(super) fn handle_voice(
     })
 }
 
+/// The grouped wire contract reuses the service inputs and their owners.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkflowAction {
+    Story {
+        input: crate::stories::StoryAction,
+    },
+    Run {
+        input: Box<crate::workflows::RunAction>,
+    },
+    ProposalCreate {
+        input: WorkflowStoryCreateInput,
+    },
+    Report {
+        input: crate::workflows::AttemptReport,
+    },
+    Launch {
+        input: WorkflowLaunchInput,
+    },
+}
+
+pub(super) fn workflow_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema = serde_json::to_value(generator.into_root_schema_for::<WorkflowAction>())
+        .expect("workflow input schema");
+    schema.as_object_mut().unwrap().remove("$schema");
+    schema
+}
+
+pub(super) fn handle_workflow(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let action: WorkflowAction = match serde_json::from_value(args.clone()) {
+        Ok(action) => action,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow action: {error}")});
+        }
+    };
+    match action {
+        WorkflowAction::Story { input } => {
+            handle_story(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Run { input } => {
+            handle_workflow_run(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::ProposalCreate { input } => {
+            handle_workflow_story_create(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Report { input } => {
+            handle_workflow_report(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Launch { input } => handle_workflow_launch(
+            state,
+            addr,
+            &serde_json::json!({"input":input}),
+            mcp_session_id,
+        ),
+    }
+}
+
 pub(super) fn handle_story(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -987,7 +1089,7 @@ pub(super) fn handle_workflow_run(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowStoryCreateInput {
     pub(super) run_id: String,
@@ -1174,7 +1276,7 @@ pub(crate) fn queue_peer_notice(
     true
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowLaunchInput {
     pub(super) run_id: String,
@@ -1975,12 +2077,11 @@ pub(super) async fn handle_confirm(
         let Some(connection) = mcp_session_id else {
             return serde_json::json!({"error": "settings confirmation requires a server-issued connection"});
         };
-        let enabled = !state
+        let enabled = state
             .config
             .read()
-            .disabled_native_tools
-            .iter()
-            .any(|tool| tool == "settings")
+            .mcp_capabilities
+            .allows("settings", None)
             && state.config.read().settings_mcp_enabled;
         let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
         return super::confirm_settings(state, &caller, id, mcp_session_id).await;
@@ -2177,12 +2278,11 @@ pub(super) async fn handle_repo_with_caller(
             let state = Arc::clone(state);
             run_blocking_handler(move || {
                 let register = || -> Result<serde_json::Value, String> {
-                    let path = std::fs::canonicalize(&path)
+                    let path = registered_spelling(&path)
                         .map_err(|error| format!("Cannot open repository directory: {error}"))?;
-                    if !path.is_dir() {
+                    if !std::path::Path::new(&path).is_dir() {
                         return Err("Repository path must be a directory".into());
                     }
-                    let path = tuic_core::path_spelling::portable_spelling(&path.to_string_lossy());
                     let info = crate::git::get_repo_info_impl(&path);
                     let changed = crate::config::register_repository(&info)?;
                     if changed {

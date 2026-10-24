@@ -750,6 +750,7 @@ export async function initApp(deps: AppInitDeps) {
 		const id = terminalsStore.add(
 			{
 				sessionId: session_id,
+				tuicSession: tuic_session ?? null,
 				fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
 				name:
 					display_name ||

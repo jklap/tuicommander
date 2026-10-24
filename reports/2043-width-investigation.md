@@ -3,7 +3,7 @@
 ## Status
 
 The reported narrow agent layout is not reproduced. No production code changed.
-The story must remain open. The new test passes on production revision
+Boss closed the story as not reproducible on 2026-10-19; reopen on a fresh occurrence with a screenshot and session name. The diagnostic test passes on production revision
 `96338d2199888df6f8126bd919a7b76c5e0d9705`; it is not a RED reproduction.
 
 ## Observations

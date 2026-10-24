@@ -49,6 +49,7 @@ function remoteIO(connectionId: string): AgentConfigIO {
 
 interface AgentConfigsState {
 	hibernate_idle_minutes: number;
+	abandoned_shell_hours: number;
 	hibernate_scope: "background_only" | "always";
 	agents: Record<
 		string,
@@ -94,6 +95,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
 		hibernate_idle_minutes: 60,
+		abandoned_shell_hours: 0,
 		hibernate_scope: "background_only",
 		headless_agent: null,
 		launch_instructions: null,
@@ -108,6 +110,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 		return {
 			agents: clone(state.agents),
 			hibernate_idle_minutes: state.hibernate_idle_minutes,
+			abandoned_shell_hours: state.abandoned_shell_hours,
 			hibernate_scope: state.hibernate_scope,
 			headless_agent: state.headless_agent ?? undefined,
 			launch_instructions: state.launch_instructions ?? undefined,
@@ -122,6 +125,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 			produce((s) => {
 				s.agents = config.agents ?? {};
 				s.hibernate_idle_minutes = config.hibernate_idle_minutes ?? 60;
+				s.abandoned_shell_hours = config.abandoned_shell_hours ?? 0;
 				s.hibernate_scope = config.hibernate_scope ?? "background_only";
 				s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
 				s.launch_instructions = config.launch_instructions ?? null;
@@ -181,6 +185,11 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 					reportSettingsConflicts(merged.conflicts);
 				},
 			});
+		},
+		async setAbandonedShellHours(hours: number): Promise<void> {
+			if (!Number.isInteger(hours) || hours < 0 || hours > 65535) return;
+			setState({ abandoned_shell_hours: hours });
+			await saveToDisk();
 		},
 		async setHibernate(minutes: number, scope: "background_only" | "always"): Promise<void> {
 			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) return;

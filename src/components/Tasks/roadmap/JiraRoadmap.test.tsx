@@ -39,7 +39,7 @@ describe("Jira due dates on the Tasks roadmap", () => {
 		expect(timeline.getByRole("button", { name: /LAN-22579/ })).toHaveTextContent("2026-10-04 – 2026-10-04");
 		const side = within(screen.getByRole("complementary", { name: "Tasks without usable dates" }));
 		expect(side.getByRole("button", { name: /LAN-23350/ })).toBeInTheDocument();
-		expect(screen.getByText(/Start: Due date/)).toBeInTheDocument();
+		expect(screen.queryByText(/Start: Due date/)).not.toBeInTheDocument();
 	});
 
 	// Catches: the mapping applied to page one only, or lost when the list is refreshed.
