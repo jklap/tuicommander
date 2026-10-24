@@ -682,6 +682,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			refresh();
 		} catch (err) {
 			appLogger.error("app", "Failed to delete", err);
+			toastsStore.add(t("fileBrowser.deleteFailed", "Delete failed"), String(err), "error");
 		}
 	};
 

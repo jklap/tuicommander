@@ -816,6 +816,36 @@ fn the_progress_obligation_and_the_progress_tool_appear_and_vanish_together() {
 
 // search_tools
 
+// Catches required name terms becoming optional BM25 description boosts, before and after limit.
+#[test]
+fn required_name_terms_do_not_fall_back_to_description_matches() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/tool-search-2300.json")).unwrap();
+    let tools = fixture["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "quill__get_file"));
+    let state = test_state();
+    *state.mcp.tool_search_index.write() = crate::tool_search::ToolSearchIndex::build(tools);
+    let mut failures = Vec::new();
+    for query in ["+repo", "+repo status"] {
+        for limit in [1, 100] {
+            let response = handle_search_tools(
+                &state,
+                &serde_json::json!({"query":query,"limit":limit,"schema_byte_budget":65536}),
+            );
+            let names: Vec<_> = response["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            if names != ["repo"] || response["top_schema"]["name"] != "repo" {
+                failures.push(format!("query={query:?}, limit={limit}: {response}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn search_tools_requires_query() {
     let state = test_state();

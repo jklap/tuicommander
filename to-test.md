@@ -1,3 +1,7 @@
+## Required MCP tool search names (2300-6355) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, call `search_tools` with `+repo` and `+repo status` at limit 1. Confirm only `repo` is returned with its schema, `+missing_name status` returns nothing, and `select:repo` selects the exact tool. The peer did not restart the daily app; Rust changes do not hot-reload.
+
 ## Mobile log after agent exit (2178-24da) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, exit an inline agent normally and with SIGTERM, then run a shell command. Confirm mobile CLI shows its output and prompt without restoring the old agent input. This Rust change does not hot-reload; the peer does not restart the daily app.
@@ -2917,3 +2921,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] MCP Settings domain grouping (#2297-28c1): after a manual `make dev` restart or release rebuild, check the three visible sections, nested child permissions and conditional configuration text. Rust status metadata does not hot-reload.
 
 - [ ] MCP Call audit (#2299-07d3): after a manual backend restart or release rebuild, make session list/rename calls and check Read-only/Completed, known target name/id and explanatory effect tooltips. With a private secret form open, refused native/direct/wrapped inspection calls must show Not started. The existing daily backend does not hot-reload Rust.
+## Planner Ideas (#2295-abd3)
+
+- [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.
+- [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.

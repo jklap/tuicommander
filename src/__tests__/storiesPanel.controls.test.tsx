@@ -41,10 +41,10 @@ it("catches losing filters and Kanban when crossing the detached WebView paramet
 	const status = await ui.findByLabelText("Status");
 	expect((status as HTMLSelectElement).value).toBe("open");
 	expect((ui.getByLabelText("Story type") as HTMLSelectElement).value).toBe("feature");
-	expect(ui.getByRole("button", { name: /^Kanban$/ }).getAttribute("aria-pressed")).toBe("true");
+	expect(ui.getByRole("tab", { name: /^Kanban$/ }).getAttribute("aria-selected")).toBe("true");
 	fireEvent.change(status, { target: { value: "closed" } });
 	fireEvent.change(ui.getByLabelText("Story type"), { target: { value: "untyped" } });
-	fireEvent.click(ui.getByRole("button", { name: /^List$/ }));
+	fireEvent.click(ui.getByRole("tab", { name: /^List$/ }));
 	const returned = { visibility: "closed", storyType: "untyped", view: "list" };
 	await waitFor(() =>
 		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
