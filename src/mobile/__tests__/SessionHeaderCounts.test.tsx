@@ -49,16 +49,16 @@ it("matches Working, Idle and Awaiting row badges and excludes finished and exit
 			onSelectSession={onSelect}
 		/>
 	));
-	expect(header(view)).toEqual(["2Working", "1Idle", "1Awaiting"]);
+	expect(header(view)).toEqual(["3Working", "1Idle", "1Awaiting"]);
 	const badges = Array.from(view.container.querySelectorAll("span"), (element) => element.textContent);
 	expect(badges.filter((label) => label === "Working")).toHaveLength(3);
 	expect(badges.filter((label) => label === "Idle")).toHaveLength(2);
 	expect(badges.filter((label) => label === "Input")).toHaveLength(1);
-	await fireEvent.click(view.getByRole("button", { name: "1 Awaiting" }));
+	await fireEvent.click(view.getByRole("button", { name: "1Awaiting" }));
 	expect(onSelect).toHaveBeenCalledWith("question");
 	// Exited sessions leave the live snapshot; they must also leave the counts.
 	setSessions((current) => current.filter((item) => item.session_id !== "working"));
-	expect(header(view)).toEqual(["1Working", "1Idle", "1Awaiting"]);
+	expect(header(view)).toEqual(["2Working", "1Idle", "1Awaiting"]);
 });
 
 // Catches: the header switches to Idle while the row still holds its Working badge.
@@ -116,6 +116,27 @@ it("keeps Working for the hold window when reconcileSessions replaces the sessio
 	vi.advanceTimersByTime(500);
 	const numbers = view.getAllByTestId("metric-number").map((n) => n.textContent);
 	expect(numbers.slice(0, 2)).toEqual(["1", "0"]);
-	vi.useRealTimers();
-	view.unmount();
+	expect(view.getByRole("button", { name: "Open session S1" }).textContent).toContain("Working");
+	vi.advanceTimersByTime(1500);
+	expect(header(view)).toEqual(["0Working", "1Idle", "0Awaiting"]);
+	expect(view.getByRole("button", { name: "Open session S1" }).textContent).toContain("Idle");
+});
+
+// Catches: an agent running delegated work is omitted from the Working total.
+it("counts Sub-tasks rows as Working and stops when delegated work ends", () => {
+	const [sessions, setSessions] = createSignal([session("parent", { active_sub_tasks: 2 })]);
+	const view = render(() => (
+		<SessionsScreen
+			sessions={sessions()}
+			loading={false}
+			refreshing={false}
+			error={null}
+			onRefresh={() => {}}
+			onSelectSession={() => {}}
+		/>
+	));
+	expect(view.getByText("Sub-tasks")).toBeTruthy();
+	expect(header(view)).toEqual(["1Working", "0Idle", "0Awaiting"]);
+	setSessions((previous) => reconcileSessions(previous, [session("parent", { active_sub_tasks: 0 })]));
+	expect(header(view)).toEqual(["0Working", "1Idle", "0Awaiting"]);
 });

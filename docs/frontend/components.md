@@ -250,7 +250,9 @@ deep link), keeping its terminal and attachment controls out of the Sessions
 entry graph.
 
 `SessionsScreen` shares one debounced status accessor per session between its card badge
-and the Working, Idle and Awaiting header counts. Finished and other badge states
+and the Working, Idle and Awaiting header counts. Accessors are keyed by session id
+so the Working hold survives replacement snapshots. Sub-tasks counts as Working.
+Finished and other badge states
 are excluded from these totals; exited sessions leave the live snapshot. The counts
 cover the full snapshot even while search is open. Working and Idle are read-only.
 `SessionsScreen` filters its existing session snapshot locally while search is open;

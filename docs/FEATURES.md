@@ -2199,7 +2199,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - SSE endpoint (`/events`) and WebSocket JSON framing for real-time updates
 
 ### 18.2 Sessions Screen
-- Hero metrics header: Working, Idle and Awaiting counts with large tabular-nums display. Counts share the row badge state and Working hold; Finished, Error, Rate Limited and Sub-tasks rows count in none of these totals. Exited sessions leave the live list.
+- Hero metrics header: Working, Idle and Awaiting counts with large tabular-nums display. Counts share the row badge state and Working hold across poll updates. Sub-tasks rows count as Working; Finished, Error and Rate Limited rows count in none of these totals. Exited sessions leave the live list.
 - Search button at the top right filters the live session list by name, repository path, worktree path, branch, or agent type; closing search restores the full list
 - Waiting sessions appear first; the list preserves order within waiting, idle-agent, and shell groups. Session names keep their original casing, and busy state reads "Working".
 - The new-session sheet selects Claude Code, Codex, or Gemini, searches repositories, and opens the created agent session. Its close button and backdrop dismiss the sheet.

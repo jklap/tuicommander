@@ -29,19 +29,19 @@ interface SessionsScreenProps {
 const PULL_THRESHOLD = 60;
 
 export function SessionsScreen(props: SessionsScreenProps) {
-	// Own one status accessor per row: metrics and badges share the same busy hold.
+	// Key by session id: polling replaces session objects, but must not reset the busy hold.
+	const sessionsById = createMemo(() => new Map(props.sessions.map((session) => [session.session_id, session])));
 	const sessionStatuses = mapArray(
-		() => props.sessions,
-		(session) => ({ session, status: useDebouncedStatus(() => session) }),
+		() => [...sessionsById().keys()],
+		(sessionId) => ({ sessionId, status: useDebouncedStatus(() => sessionsById().get(sessionId)!) }),
 	);
-	const statusById = createMemo(
-		() => new Map(sessionStatuses().map(({ session, status }) => [session.session_id, status])),
-	);
+	const statusById = createMemo(() => new Map(sessionStatuses().map(({ sessionId, status }) => [sessionId, status])));
 	const counts = createMemo(() => {
 		const totals = { busy: 0, idle: 0, question: 0 };
 		for (const { status } of sessionStatuses()) {
 			const value = status();
-			if (value === "busy" || value === "idle" || value === "question") totals[value]++;
+			if (value === "sub-tasks") totals.busy++;
+			else if (value === "busy" || value === "idle" || value === "question") totals[value]++;
 		}
 		return totals;
 	});
