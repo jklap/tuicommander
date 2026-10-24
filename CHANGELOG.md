@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Replace the mobile Sessions Active total with Working, Idle and Awaiting counts that share each row badge state, including the Working hold. Finished sessions are not counted (#2181-c98f).
+
 - Keep mobile CLI output at the bottom when the keyboard or viewport resizes, without moving a reader who scrolled up (#2179-e598).
 
 - Deliver queued user commands when an idle agent is waiting on a blocked progress report, without bypassing native questions or permission dialogs (#2177-053d).

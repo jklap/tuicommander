@@ -249,6 +249,10 @@ The session detail screen loads after a session is selected (or opened from a
 deep link), keeping its terminal and attachment controls out of the Sessions
 entry graph.
 
+`SessionsScreen` shares one debounced status accessor per session between its card badge
+and the Working, Idle and Awaiting header counts. Finished and other badge states
+are excluded from these totals; exited sessions leave the live snapshot. The counts
+cover the full snapshot even while search is open. Working and Idle are read-only.
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
 Waiting sessions sort above idle agents and shells without changing order within each

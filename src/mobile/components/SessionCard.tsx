@@ -7,10 +7,12 @@ import type { SessionInfo } from "../useSessions";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
 import styles from "./SessionCard.module.css";
-import { StatusBadge } from "./StatusBadge";
+import { type SessionStatus, StatusBadge } from "./StatusBadge";
 
 interface SessionCardProps {
 	session: SessionInfo;
+	/** Shared with the list header so its counts include the same busy hold. */
+	status?: () => SessionStatus;
 	/** Nesting level under the spawning agent; 0 or absent for a top-level row. */
 	depth?: number;
 	/** Last row of its sibling group: the left guide line ends here. */
@@ -58,7 +60,7 @@ function TerminalIcon() {
 }
 
 export function SessionCard(props: SessionCardProps) {
-	const status = useDebouncedStatus(() => props.session);
+	const status = props.status ?? useDebouncedStatus(() => props.session);
 	const agentType = () => props.session.state?.agent_type;
 	const task = () => displayTask(props.session.state?.current_task, agentType());
 	const agentColor = () => {
