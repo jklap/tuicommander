@@ -682,14 +682,6 @@
     ]
   },
   {
-    "file": "src/components/Tasks/board/board.module.css",
-    "story": "2246-eaa0",
-    "rules": [
-      "[[],\".key\",[\"padding: 0\",\"border: 0\"]]",
-      "[[],\".moveTrigger, .more, .moveMenu button\",[\"min-height: 28px\",\"padding: 4px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/Tasks/create/TasksCreate.module.css",
     "story": "2247-4444",
     "rules": [
