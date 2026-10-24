@@ -696,3 +696,14 @@ arrange the wrapping picker but must not resize its swatches.
 - Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
   is 36px desktop or 44px touch, and the maximum is three control heights.
   Remove consumer auto-resize callbacks and height caps when adopting it.
+
+### Shared validation and removable toggles
+
+- Use native `aria-invalid="true"` on `Input`, `Select` and `Textarea` for an
+  error-token border. Link existing validation text with `aria-describedby`.
+  The shared keyboard focus outline remains visible and unchanged.
+- Use `Button variant="removalToggle"` only for an on/off action where clicking
+  the pressed state removes or uninstalls the active integration. Set native
+  `aria-pressed` from owner state. Pressed uses the success border; enabled
+  pressed hover uses the danger tone. Disabled actions keep their state tone.
+  Ordinary selection buttons retain their existing accent styling.

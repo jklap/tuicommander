@@ -974,3 +974,8 @@ scrolling. It recalculates after native input, controlled value updates and
 width changes. Remove caller height caps and auto-resize handlers when adopting
 it; the shared CSS is the single owner of the bounds. Default Textarea keeps
 its existing three-control-height minimum and manual vertical resize.
+
+Shared fields style native `aria-invalid="true"` with the error border token
+without replacing the focus outline. `Button variant="removalToggle"` supports
+installed/removal toggles via native `aria-pressed`; see the Style Guide for
+state and hover semantics. Consumers retain validation messages and callbacks.

@@ -74,7 +74,22 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         assert.ok(textarea.narrow.height>textarea.wide.height,'Width-only wrapping must resize without input');
         for(const name of ['initial','replaced'])assert.ok(textarea[name].height>minimum && textarea[name].height<maximum,JSON.stringify({name,textarea}));
       }
-      measurements.push({width,...result,stretch,joined,textarea});
+      await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:0,y:0},sessionId);
+      const states = await evaluate('window.controlStateGeometry ? window.controlStateGeometry() : null');
+      if(states) {
+        for(const control of states.invalid)assert.equal(control.border,'rgb(200, 10, 20)','Native invalid field must use error token');
+        for(const control of states.focused) {assert.equal(control.border,'rgb(200, 10, 20)');assert.equal(control.outline,'rgb(10, 20, 200)');assert.equal(control.outlineStyle,'solid');}
+        for(const control of states.valid)assert.equal(control.border,'rgb(80, 80, 80)','False invalid state must reset border');
+        assert.equal(states.off.border,'rgb(80, 80, 80)');assert.equal(states.on.border,'rgb(10, 200, 20)');
+        assert.equal(states.disabled.border,'rgb(10, 200, 20)');assert.equal(states.selection.border,'rgb(10, 20, 200)','Ordinary selected actions retain accent');
+        for(const [selector,expected] of [['[data-remove-toggle]','rgb(200, 10, 20)'],['[data-disabled-toggle]','rgb(10, 200, 20)']]) {
+          const box=await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+          await send('Input.dispatchMouseEvent',{type:'mouseMoved',...box},sessionId);
+          const color=await evaluate(`getComputedStyle(document.querySelector('${selector}')).borderColor`);
+          assert.equal(color,expected,'Enabled removal hover only must use danger token');
+        }
+      }
+      measurements.push({width,...result,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
