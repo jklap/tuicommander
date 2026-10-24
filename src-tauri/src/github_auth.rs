@@ -22,7 +22,7 @@ const CLIENT_ID: &str = "Ov23liN95BHKQDboVFRl";
 /// `repo` covers repository REST/GraphQL operations; `read:project` permits
 /// Projects v2 reads. Existing logins must authorize again to gain that scope.
 /// SAML-SSO access still requires the user's per-org token authorization.
-const OAUTH_SCOPES: &str = "repo read:project";
+const OAUTH_SCOPES: &str = include_str!("../../src/data/github-oauth-scopes.txt");
 
 // ---------------------------------------------------------------------------
 // Device Flow types
@@ -56,7 +56,7 @@ fn device_flow_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
     client
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
-        .form(&[("client_id", CLIENT_ID), ("scope", OAUTH_SCOPES)])
+        .form(&[("client_id", CLIENT_ID), ("scope", OAUTH_SCOPES.trim())])
 }
 
 /// Start the Device Flow by requesting a device code from GitHub.
@@ -1335,6 +1335,11 @@ mod device_scope_tests {
             .and_then(reqwest::Body::as_bytes)
             .expect("form body");
         let form: std::collections::HashMap<_, _> = url::form_urlencoded::parse(bytes).collect();
+        // Catches: the backend request diverges from the scope value rendered by Settings.
+        assert_eq!(
+            form["scope"],
+            include_str!("../../src/data/github-oauth-scopes.txt").trim()
+        );
         let scopes: std::collections::HashSet<_> = form["scope"].split_whitespace().collect();
         assert!(
             scopes.contains("repo"),

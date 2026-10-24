@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).
 
 - Identify Activity Dashboard sessions by repository name and linked-worktree branch, including detached dashboards; keep folder names for sessions outside repositories (#2180-5105).
