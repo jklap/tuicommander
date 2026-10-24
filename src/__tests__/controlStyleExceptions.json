@@ -750,23 +750,6 @@
     ]
   },
   {
-    "file": "src/components/Toolbar/Toolbar.module.css",
-    "story": "2257-ebf1",
-    "rules": [
-      "[[],\".sidebarToggle, .filterToggle\",[\"height: 26px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".densityToggle\",[\"padding: 0 6px\"]]",
-      "[[],\".branch\",[\"height: 26px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".bell, .watcherBtn\",[\"height: 26px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".dismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".notifClose\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".activityDismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".pluginToggle\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".activityItemDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".lastItemBtn\",[\"height: 26px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".bell.storiesPillBtn\",[\"padding: 0 7px\"]]"
-    ]
-  },
-  {
     "file": "src/components/TunnelsPanel/TunnelsPanel.module.css",
     "story": "2258-a504",
     "rules": [
