@@ -538,11 +538,13 @@
   text-overflow: ellipsis;
 }
 
-/* Windows/Linux: slightly shorter toolbar */
-:global(.platform-windows) .toolbar,
-:global(.platform-linux) .toolbar {
-  height: 32px;
-  min-height: 32px;
+/* Windows/Linux: slightly shorter toolbar on desktop only. */
+@media (width > 600px) {
+  :global(.platform-windows) .toolbar,
+  :global(.platform-linux) .toolbar {
+    height: 32px;
+    min-height: 32px;
+  }
 }
 
 /* Plans and Stories button: widens from the bare 26px square into a pill while plans are active. */
