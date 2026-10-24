@@ -5673,7 +5673,6 @@ pub(crate) mod tests_support {
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.
-    #[cfg(unix)]
     pub fn insert_dummy_session(state: &AppState, session_id: &str) {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         let pair = native_pty_system()
@@ -5684,8 +5683,9 @@ pub(crate) mod tests_support {
                 pixel_height: 0,
             })
             .expect("openpty");
-        let mut command = CommandBuilder::new("/bin/sh");
-        command.args(["-c", "sleep 30"]);
+        let (shell, flag) = crate::test_support::host_shell();
+        let mut command = CommandBuilder::new(shell);
+        command.args([flag, &tuic_test_support::wait_for_stdin_script()]);
         let child = pair.slave.spawn_command(command).expect("spawn shell");
         let writer = pair.master.take_writer().expect("writer");
         state.session_maps.sessions.insert(
@@ -5703,7 +5703,7 @@ pub(crate) mod tests_support {
                 display_name_is_custom: false,
                 display_name_from_spawn: false,
                 is_remote: false,
-                shell: "/bin/sh".to_string(),
+                shell: shell.to_string(),
             }),
         );
     }
