@@ -1,4 +1,5 @@
 import { Match, Switch } from "solid-js";
+import { StatusBadge } from "../../components/ui/StatusBadge";
 import styles from "./ConnectionBanner.module.css";
 
 interface ConnectionBannerProps {
@@ -7,9 +8,11 @@ interface ConnectionBannerProps {
 	/** The server refused this client (401/403). */
 	authError: boolean;
 	onRetry: () => void;
+	error?: string | null;
+	testing?: boolean;
 }
 
-/** One strip for every way the phone can lose the server; the screens below keep their last data. */
+/** Connection-test surface for a running app; mounted views retain their data and drafts. */
 export function ConnectionBanner(props: ConnectionBannerProps) {
 	return (
 		<Switch>
@@ -22,12 +25,18 @@ export function ConnectionBanner(props: ConnectionBannerProps) {
 				</div>
 			</Match>
 			<Match when={props.offline}>
-				<div class={styles.banner} role="status">
-					<span>Server unreachable — showing last known data, retrying…</span>
+				<section class={styles.landing} data-connection-landing aria-label="Connection test">
+					<h1>Server unreachable</h1>
+					<p class={styles.server}>{location.origin}</p>
+					<StatusBadge label={props.testing ? "Testing connection…" : "Unreachable"} variant="warning" />
+					<p>Reconnecting automatically. Your views and drafts are retained.</p>
+					<p class={styles.server}>
+						Last error: <span>{props.error ?? "Could not connect to the server."}</span>
+					</p>
 					<button type="button" class={styles.action} onClick={props.onRetry}>
 						Retry now
 					</button>
-				</div>
+				</section>
 			</Match>
 		</Switch>
 	);

@@ -204,7 +204,9 @@ Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. I
 
 ### Connection loss and recovery
 
-If the server cannot be reached, the mobile app shows one connection banner with **Retry now**. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
+If navigation cannot reach the server within five seconds, the service worker shows its cached connection-test landing instead of the cached app shell. The landing shows the server address, test state and last error. **Retry Now** tests immediately; automatic probes back off from five to 30 seconds. A successful version probe reopens the original mobile address, including its session deep link. No network assets are needed to render this landing.
+
+Inside the running app, a failed API read or a terminal stream that stays disconnected for five seconds shows a visible connection-test card with **Retry now**. Session health reads have a five-second deadline; other RPC calls keep their own deadlines. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
 
 ### Automatic mobile resume diagnostics
 

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show the cached mobile connection-test landing when the server is unreachable, even with a cached app shell; show an actionable in-app outage state and recover automatically after a resumed or stalled connection (#2294-078f).
+
 - GitHub Settings now shows every requested OAuth scope from the same value used by login (#2293-8674).
 - Align the Stories List/Kanban switch with the shared select height on desktop and touch layouts; guard feature CSS against new control-size overrides (#2182-ef2c).
 

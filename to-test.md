@@ -1,3 +1,7 @@
+## Mobile unreachable landing (2294-078f)
+
+- [ ] Complete the isolated `agent-test-2294` browser check at a mobile viewport: stop its server, reload and resume, capture only `[data-connection-landing]`, restore the server and confirm automatic return. <!-- DEFERRED (2026-10-24) — the native instance unexpectedly selected ~/.tuicommander-dev/instances/agent-test-2294/credentials.json outside the managed write allowlist; stopped it and requested narrow authority before further live work. No landing screenshot or live recovery pass is claimed. -->
+
 ## Mobile log after agent exit (2178-24da) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, exit an inline agent normally and with SIGTERM, then run a shell command. Confirm mobile CLI shows its output and prompt without restoring the old agent input. This Rust change does not hot-reload; the peer does not restart the daily app.
