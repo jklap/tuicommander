@@ -9,7 +9,7 @@
 .table tbody tr:hover { background: var(--bg-tertiary); }
 .clip { overflow: hidden; text-overflow: ellipsis; }
 .colTime { width: 72px; }
-.colTarget { width: 72px; }
+.colTarget { width: 160px; }
 .colOutcome { width: 88px; }
 .colBytes { width: 48px; }
 .colEffect { width: 100px; }

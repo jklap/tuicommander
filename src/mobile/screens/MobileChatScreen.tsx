@@ -52,7 +52,7 @@ export function MobileChatScreen(props: {
 		if (sharedKey && /^[a-zA-Z0-9-]+$/.test(sharedKey)) {
 			void (async () => {
 				try {
-					const cache = await caches.open("tuic-shell-v1");
+					const cache = await caches.open("tuic-shell-v2");
 					const key = `/_shared/${sharedKey}`;
 					const response = await cache.match(key);
 					if (!response) throw new Error("Shared file is no longer available.");
