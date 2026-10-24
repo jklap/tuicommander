@@ -1,5 +1,7 @@
 # MCP & HTTP Server
 
+Planner Ideas use the same `StoryAction` envelope as plans and stories: `add_idea {text,source?}`, `list_ideas`, and `update_idea {idea_id,text}`. IPC `story_action_command`, HTTP `POST /stories/action?path=<project>` (`{action:<StoryAction>,sessionId?:string}`), CLI `tuic story`, and MCP `workflow action=story input=<StoryAction>` share the Rust owner. Add/update return `{type:"idea",value:<camelCase Idea>}`; list returns `{type:"ideas",value:[...]}`. The project sets `repoPath`; list also includes global Ideas, while update requires project ownership. Source defaults to the bound session id or `local-api`. Text is trimmed to a nonblank maximum of 16000 characters; source is nonblank with a maximum of 256. Writes use the strict locked `notes.json` owner and publish payload-free `ideas-changed` on desktop and `/events` SSE. UI `save_notes(base,config)` / `PUT /config/notes` applies per-id and per-field intent instead of replacing stale arrays. See [Ideas through the planner](../user-guide/native-stories.md#ideas-through-the-planner).
+
 Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
 
 The compact `ui` description includes `design_start`, `design_stop`, `design_status`,
@@ -746,6 +748,8 @@ When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools
 | `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/summary pairs, an opaque `catalogue_generation`, and an optional complete `top_schema` |
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
+
+Search grammar is server-owned. Plain words rank names and descriptions with BM25. Each `+term` is a required, case-insensitive substring of the tool name (including any upstream or server alias prefix); several required terms use AND. Remaining plain words rank the matching names but do not exclude them. Filtering happens before the result limit, and a required term with no name match returns no results. `select:<name>` selects one exact catalogue name without ranked fallback.
 
 Rationale, measured 2026-09-13 on the running desktop instance with 190 tools connected (see [Measuring the surfaces](#measuring-the-surfaces) for the method): the full list is 154,117 bytes / 35,104 tokens in every agent turn, against 2,810 bytes / 615 tokens for the collapsed surface — which does not grow with the upstream count, because the upstream tools are no longer in the list. The agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
@@ -2745,9 +2749,9 @@ both enter `mcp_post`, so a collapsed call is one runtime ingress record, not an
 extra inferred hop. Existing inbox-read audit records are unchanged.
 
 Each row has a server `call_id`, optional UUID `client_call_id` and
-`parent_operation_id`, catalogue-recognized native `operation`, optional SHA-256
-`target_digest`, start time, `response_text_bytes`, `application_error`,
-`transport_error` and `effect`. Unknown/upstream tool names are digested. Arguments,
+`parent_operation_id`, catalogue-recognized native, discovery or connected-upstream `operation`, optional resolved
+`target` (`kind`, `id`, `name`), optional SHA-256 `target_digest`, start time, `response_text_bytes`, `application_error`,
+`transport_error` and `effect`. Unrecognized tool names are digested. Known runtime session/peer identities may be retained; arbitrary target arguments are not. Arguments,
 response bodies, arbitrary metadata and error messages are never retained.
 The target digest covers the first string target among `to`, `session_id`, `path`,
 `worktree_path`, `id`, including the field name and a NUL separator. It is a grouping
@@ -2763,8 +2767,15 @@ Text cost is the sum of UTF-8 byte lengths of top-level MCP `content` blocks who
 `type` is `text`, after response formatting. It excludes JSON escaping, envelopes,
 resources, images and transport overhead. A native `error:null` is not an
 application error; upstream `isError` is preserved. Error text is not copied.
-Only explicit native `effect=not_started|completed` is retained; other effects
-remain `unknown`, including application refusals without an effect contract.
+Effects classify the handler observation: `read_only` for a recognized read-only action,
+`completed` for a successful handler return, `failed` for an application-error reply,
+and `not_started` for an explicit preflight refusal, including private-secret-form
+inspection refusals on native, direct-upstream and wrapped-upstream calls. Explicit handler effect contracts
+remain authoritative. `completed` does not mean a submitted command finished, queued
+speech was heard, a remote job finished, or the client received the reply. Native
+handler interruption and upstream failures after dispatch remain `unknown`; the
+proxy carries a typed effect so pre-send policy/configuration refusals are not confused
+with a lost upstream reply. No classification parses error prose.
 A cancelled dispatch has unknown application outcome, no observed response bytes,
 `transport_error=cancelled_before_reply` and unknown effect. A constructed reply
 has `transport_error=unobserved_after_reply_construction`: this does not prove

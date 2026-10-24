@@ -560,6 +560,18 @@ fn progress_mark_viewed(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+fn save_notes(
+    state: State<'_, Arc<AppState>>,
+    base: serde_json::Value,
+    config: serde_json::Value,
+) -> Result<(), String> {
+    config::save_notes(base, config)?;
+    state.notify_ideas_changed();
+    Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 fn story_capabilities() -> bool {
     true
 }
@@ -1144,7 +1156,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
     Ok(serde_json::json!({
         "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
-        "native_capabilities": mcp_capabilities::catalog(),
+        "native_capabilities": mcp_http::mcp_transport::native_capability_catalog(&state),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
@@ -2485,7 +2497,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             boot_commands::load_prompt_library_async,
             settings::legacy::save_prompt_library,
             boot_commands::load_notes_async,
-            config::save_notes,
+            save_notes,
             config::save_note_image,
             config::delete_note_assets,
             config::delete_note_assets_batch,

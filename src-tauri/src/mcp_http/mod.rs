@@ -3997,6 +3997,77 @@ mod tests {
         assert_eq!(reply["value"]["title"], "Route plan");
     }
 
+    /// Catches: planner/UI HTTP writes not notifying clients, or stale UI writes losing Ideas.
+    #[tokio::test]
+    async fn planner_ideas_http_writes_publish_reload_and_preserve_stale_ui_intent() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = format!("/stories/action?path={}", project.path().display());
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let app = build_router(state, false, true);
+        let response = app.clone().oneshot(mcp_post_from(&path,
+            &serde_json::json!({"action":{"action":"add_idea","text":"From CLI","source":"ego"}}), local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["type"], "idea");
+        assert_eq!(body["value"]["source"], "ego");
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            crate::state::AppEvent::IdeasChanged
+        ));
+        let mut request = mcp_post_from(
+            "/config/notes",
+            &serde_json::json!({"base":{"notes":[]},"config":{"notes":[{"id":"panel","text":"UI idea"}]}}),
+            local,
+        );
+        *request.method_mut() = axum::http::Method::PUT;
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            crate::state::AppEvent::IdeasChanged
+        ));
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(
+                &path,
+                &serde_json::json!({"action":{"action":"list_ideas"}}),
+                local,
+            ))
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["type"], "ideas");
+        assert_eq!(body["value"].as_array().unwrap().len(), 2);
+        assert!(events.try_recv().is_err(), "reads do not publish writes");
+        let response = app
+            .oneshot(mcp_post_from(
+                &path,
+                &serde_json::json!({"action":{"action":"add_idea","text":" "}}),
+                local,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            events.try_recv().is_err(),
+            "failed writes do not publish changes"
+        );
+    }
+
     async fn story_error_body(
         app: &axum::Router,
         path: &str,

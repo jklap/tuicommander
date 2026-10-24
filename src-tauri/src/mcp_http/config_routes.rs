@@ -457,6 +457,7 @@ pub(super) async fn get_notes() -> impl IntoResponse {
 }
 
 pub(super) async fn put_notes(
+    State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
@@ -465,7 +466,10 @@ pub(super) async fn put_notes(
         return resp;
     }
     match crate::config::save_notes(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            state.notify_ideas_changed();
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -624,7 +628,7 @@ pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> i
     let running = false;
     Json(serde_json::json!({
         "native_tools": super::mcp_transport::native_tool_catalog(),
-        "native_capabilities": crate::mcp_capabilities::catalog(),
+        "native_capabilities": super::mcp_transport::native_capability_catalog(&state),
         "enabled": true,
         "running": running,
         "active_sessions": state.session_maps.sessions.len(),
