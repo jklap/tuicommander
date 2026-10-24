@@ -26,7 +26,9 @@ normalized into each other.
 In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
 
 When the viewed agent exits, the mobile session returns to the shell: question
-controls close, Chat returns to CLI, and the composer sends shell input. Fresh
+controls close, Chat returns to CLI, and the composer sends shell input. The CLI
+view shows new shell output even when the terminal retains the old agent screen;
+the old agent input is not restored into the composer. Fresh
 session polling also clears stale agent controls if the output socket pauses or
 reconnects. If the PTY ends, **Session ended** offers **Back** to the session list.
 

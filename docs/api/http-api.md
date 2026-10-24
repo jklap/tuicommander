@@ -534,6 +534,10 @@ Returns recent output. Format controls what is returned:
 
 `format=log` reads from `VtLogBuffer` — a VT100-aware buffer that extracts only scrolled-off lines, suppressing alternate-screen TUI apps (vim, htop, claude). Ideal for mobile clients.
 
+The HTTP log response and log-WebSocket screen use the shared active agent identity.
+After agent exit, they keep the shell prompt and subsequent output even if old
+agent chrome remains on screen, and omit the historical agent `input_line`.
+
 `format=text` is a point-in-time canonical grid view. It does not concatenate
 the finalized log cursor with the visible screen, because growing a viewport can
 move history rows back onto the screen and make that concatenation overlap.

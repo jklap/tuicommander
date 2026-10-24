@@ -69,6 +69,12 @@ HTTP terminal-line reads use the restored grid without a mounted desktop view.
 No recovery sequence is written to PTY stdin. A stale foreground observation,
 an unobserved startup preset, or a temporary helper does not trigger cleanup.
 
+HTTP log snapshots and log-WebSocket polls apply agent screen trimming and
+`input_line` extraction only while the shared session state has an active agent
+identity. After confirmed shell return, retained agent rows are history: they
+cannot hide newer shell output or populate the mobile composer. Both transports
+use the same screen projection; no second terminal emulator is involved.
+
 ## Session Lifecycle
 
 ```

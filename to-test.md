@@ -1,3 +1,6 @@
+## Mobile log after agent exit (2178-24da) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, exit an inline agent normally and with SIGTERM, then run a shell command. Confirm mobile CLI shows its output and prompt without restoring the old agent input. This Rust change does not hot-reload; the peer does not restart the daily app.
 ## Queued replies to blocked progress (2177-053d) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, queue three follow-ups while an agent reports blocked progress. Confirm one reaches the idle agent per turn, in order, and the progress-owned wait clears. Native questions and permission dialogs must still hold the queue. The peer did not restart the daily app; critic/GREEN validation is pending.
