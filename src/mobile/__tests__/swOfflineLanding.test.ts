@@ -51,6 +51,12 @@ async function navigate(listeners: Record<string, Listener>) {
 }
 
 describe("offline connection landing", () => {
+	// Catches: successful navigation keeps writing a shell that offline recovery never reads.
+	it("does not cache the mobile shell after successful navigation", async () => {
+		const { listeners, stored } = worker(false, new Response("APP SHELL"));
+		expect(await navigate(listeners)).toBe("APP SHELL");
+		expect(stored.has("/mobile.html")).toBe(false);
+	});
 	// Catches: an installed cached shell wins over the self-contained landing and boots into a blank SPA.
 	it("serves the connection landing instead of a cached shell on failed navigation", async () => {
 		const { listeners } = worker();

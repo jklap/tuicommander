@@ -99,11 +99,12 @@ describe("offline splash connection test", () => {
 					}),
 			)
 			.mockResolvedValue({ ok: true, json: async () => ({ version: "test" }) });
-		splash(fetch);
+		const { replace, href } = splash(fetch);
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(document.getElementById("state")!.textContent).toBe("Server unreachable");
 		expect(document.getElementById("error")!.textContent).toContain("Connection timed out");
 		await vi.advanceTimersByTimeAsync(5_000);
-		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(fetch).toHaveBeenCalledTimes(3);
+		expect(replace).toHaveBeenCalledWith(href);
 	});
 });

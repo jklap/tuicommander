@@ -379,6 +379,10 @@ export function OutputView(props: OutputViewProps) {
 			} else recordMobileSocketState(props.sessionId, "open");
 		} catch (err) {
 			if (disposed || generation !== streamGeneration) return;
+			if (props.sessionExists === false) {
+				connected();
+				return;
+			}
 			recordMobileSocketState(props.sessionId, "failed");
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("terminal", "Failed to subscribe to PTY output", { error: msg });

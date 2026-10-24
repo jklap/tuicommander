@@ -44,8 +44,7 @@ self.addEventListener("fetch", (event) => {
     })());
     return;
   }
-  // Built assets: without them an offline cold start gets the cached shell but
-  // no JS, and the page stays blank.
+  // Keep hashed assets available across interrupted connections.
   if (event.request.method === "GET" && url.pathname.startsWith("/assets/") && url.origin === self.location.origin) {
     event.respondWith(cacheFirstAsset(event.request));
     return;
@@ -57,19 +56,6 @@ self.addEventListener("fetch", (event) => {
     fetchNavigation(event.request)
       .then((response) => {
         if (response.status >= 500) throw new Error(`HTTP ${response.status}`);
-        // Cache mobile.html on successful navigation for offline use. Only
-        // the app shell: the login page (story 1359) would otherwise replace
-        // the shell, and offline the app would open on a form that cannot
-        // log in. `response.ok` already keeps a 401 or a redirect out.
-        if (response.ok) {
-          const url = new URL(event.request.url);
-          if (url.pathname !== "/mobile/login"
-              && (url.pathname === "/mobile" || url.pathname === "/mobile.html"
-                  || url.pathname.startsWith("/mobile/"))) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put("/mobile.html", clone));
-          }
-        }
         return response;
       })
       .catch(() =>
@@ -268,6 +254,8 @@ const OFFLINE_SPLASH_HTML = `<!DOCTYPE html>
       if (!response.ok) throw new Error("HTTP " + response.status);
       const version = await response.json();
       if (typeof version.version !== "string") throw new Error("Invalid server response");
+      const destination = await fetch(location.href, { cache: "no-store", signal: controller.signal });
+      if (!destination.ok) throw new Error("HTTP " + destination.status);
       state.textContent = "Reachable — opening the app…";
       // Keep the original deep link and query. The splash is the navigation
       // response, not another offline URL to lose the user's destination.
