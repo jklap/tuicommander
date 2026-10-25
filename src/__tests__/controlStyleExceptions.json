@@ -553,16 +553,6 @@
     "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
   },
   {
-    "file": "src/mobile/screens/FilesScreen.module.css",
-    "story": "2287-5984",
-    "rules": [
-      "[[],\".back, .action\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 8px 10px\"]]",
-      "[[],\".row\",[\"padding: 14px 16px\",\"border: 0\",\"border-bottom: 1px solid var(--border)\"]]",
-      "[[],\".search input\",[\"min-height: 44px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".viewer, .editor\",[\"min-height: 0\",\"padding: 16px\",\"border: 0\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/screens/SessionsScreen.module.css",
     "story": "2290-8629",
     "rules": [
@@ -587,6 +577,13 @@
     "rules": [
       "[[],\".input\",[\"min-height: 38px\",\"max-height: 120px\",\"padding: 8px 2px 8px 4px\",\"border: none\"]]",
       "[[],\".input:focus\",[\"border-color: var(--accent)\"]]"
+    ]
+  },
+  {
+    "file": "src/mobile/screens/FilesScreen.module.css",
+    "reason": "Native full-pane source editor (data-control-layout=editor), not a form field; preserves flex sizing, soft wrap and selection.",
+    "rules": [
+      "[[],\".viewer, .editor\",[\"min-height: 0\",\"padding: 16px\",\"border: 0\"]]"
     ]
   }
 ]

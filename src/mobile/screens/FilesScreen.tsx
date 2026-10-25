@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { Select } from "../../components/ui/Select";
+import { Button, Input, Select } from "../../components/ui";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
@@ -471,9 +471,9 @@ export function FilesScreen(props: FilesScreenProps) {
 		<div class={styles.screen}>
 			<header class={styles.header}>
 				<Show when={repo() !== null || props.onExit}>
-					<button class={styles.back} onClick={goBack} aria-label={props.onExit ? "Back to session" : "Back"}>
+					<Button class={styles.back} onClick={goBack} aria-label={props.onExit ? "Back to session" : "Back"}>
 						‹ Back
-					</button>
+					</Button>
 				</Show>
 				<strong class={styles.title} title={file() || dir() || repo() || "Files"}>
 					<bdi dir="ltr">{file() ? repoName(file()!) : dir() || repoName(repo() ?? "") || "Files"}</bdi>
@@ -482,7 +482,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					<Show
 						when={editing()}
 						fallback={
-							<button
+							<Button
 								class={styles.action}
 								onClick={() => {
 									setDraft(content());
@@ -490,10 +490,10 @@ export function FilesScreen(props: FilesScreenProps) {
 								}}
 							>
 								Edit
-							</button>
+							</Button>
 						}
 					>
-						<button
+						<Button
 							class={styles.action}
 							onClick={() => {
 								setEditing(false);
@@ -501,10 +501,10 @@ export function FilesScreen(props: FilesScreenProps) {
 							}}
 						>
 							Cancel
-						</button>
-						<button class={styles.action} disabled={busy()} onClick={() => void save()}>
+						</Button>
+						<Button class={styles.action} disabled={busy()} onClick={() => void save()}>
 							Save
-						</button>
+						</Button>
 					</Show>
 				</Show>
 			</header>
@@ -512,7 +512,7 @@ export function FilesScreen(props: FilesScreenProps) {
 				<div class={styles.pathPreviewBackdrop}>
 					<div class={styles.pathPreview} role="dialog" aria-label="Repository path">
 						<p>{previewPath()}</p>
-						<button
+						<Button
 							class={styles.action}
 							onClick={() => {
 								suppressRepoOpen = false;
@@ -520,7 +520,7 @@ export function FilesScreen(props: FilesScreenProps) {
 							}}
 						>
 							Close
-						</button>
+						</Button>
 					</div>
 				</div>
 			</Show>
@@ -542,6 +542,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					<For each={repos()}>
 						{(path) => (
 							<button
+								data-control-layout="row"
 								class={styles.row}
 								title={path}
 								onTouchStart={() => startPathPreview(path)}
@@ -570,7 +571,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			</Show>
 			<Show when={repo() !== null && file() === null}>
 				<label class={styles.search}>
-					<input
+					<Input
 						type="search"
 						aria-label="Search files"
 						placeholder="Search files"
@@ -584,6 +585,7 @@ export function FilesScreen(props: FilesScreenProps) {
 				<For each={visibleEntries()}>
 					{(entry) => (
 						<button
+							data-control-layout="row"
 							class={styles.row}
 							onClick={() => (entry.is_dir ? void openDirectory(repo()!, entry.path) : void openFile(entry))}
 						>
@@ -621,7 +623,7 @@ export function FilesScreen(props: FilesScreenProps) {
 												{(agent) => <option value={agent.session_id}>{agent.display_name || agent.session_id}</option>}
 											</For>
 										</Select>
-										<button
+										<Button
 											class={styles.action}
 											data-ready={selectedAgentSession() && !sendingChanges() && !writing() ? "true" : undefined}
 											disabled={!selectedAgentSession() || sendingChanges() || writing()}
@@ -630,7 +632,7 @@ export function FilesScreen(props: FilesScreenProps) {
 											onClick={() => void sendChanges()}
 										>
 											{sendingChanges() ? t("markdownTab.sending", "Sending…") : t("markdownTab.send", "Send")}
-										</button>
+										</Button>
 									</div>
 								</Show>
 								<div class={styles.markdownView}>
@@ -648,6 +650,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					}
 				>
 					<textarea
+						data-control-layout="editor"
 						ref={editorEl}
 						class={styles.editor}
 						aria-label="File content"
