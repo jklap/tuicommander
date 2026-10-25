@@ -10,7 +10,7 @@
   font-weight: 500;
 }
 
-.action {
+.signIn {
   flex-shrink: 0;
   padding: 4px 12px;
   border: 1px solid currentColor;

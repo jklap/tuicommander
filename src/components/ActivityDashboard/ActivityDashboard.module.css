@@ -88,7 +88,7 @@
  * including padding, measured in Chrome); the name column absorbs the difference. */
 .rowMain {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 60px 112px 60px 20px;
+  grid-template-columns: minmax(0, 1fr) 60px 112px 60px auto;
   align-items: center;
   gap: 8px;
 }
@@ -135,7 +135,7 @@
 
 @media (max-width: 540px) {
   .rowMain {
-    grid-template-columns: minmax(0, 1fr) 112px 20px;
+    grid-template-columns: minmax(0, 1fr) 112px auto;
   }
 
   .project,
@@ -199,11 +199,8 @@
   align-items: center;
   justify-content: center;
   background: none;
-  border: none;
   color: var(--fg-muted);
   cursor: pointer;
-  padding: 2px;
-  border-radius: var(--radius-sm);
   opacity: 0.4;
   transition: opacity 0.15s, color 0.15s;
 }

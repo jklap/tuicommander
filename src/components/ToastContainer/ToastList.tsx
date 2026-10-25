@@ -1,6 +1,7 @@
 import { type Component, For, Show } from "solid-js";
 import { type Toast, toastsStore } from "../../stores/toasts";
 import { onClickKeyDown } from "../../utils/a11y";
+import { Button } from "../ui";
 import styles from "./ToastContainer.module.css";
 
 /** "Go to repo": `onClick` returns false when it could not navigate, and the toast stays. */
@@ -52,8 +53,8 @@ export const ToastList: Component<ToastListProps> = (props) => {
 							<span class={styles.actions}>
 								<For each={toastActions(toast)}>
 									{(action) => (
-										<button
-											class={action === toast.action ? styles.action : `${styles.action} ${styles.repoAction}`}
+										<Button
+											variant={action === toast.action ? "primary" : "secondary"}
 											onClick={(event) => {
 												event.stopPropagation();
 												// A toast's own action always dismisses it; only the repo action reports failure.
@@ -62,7 +63,7 @@ export const ToastList: Component<ToastListProps> = (props) => {
 											}}
 										>
 											{action.label}
-										</button>
+										</Button>
 									)}
 								</For>
 							</span>

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Align plugin settings actions and documentation icons with shared control targets.
+
+- Add shared icon-only button targets with optional circular presentation.
+
+- Align GitHub settings actions with shared desktop and touch button geometry.
+
+- Align agent settings and launch-editor controls with shared desktop/touch geometry and native validation states.
+
+- Share native invalid-field borders and installed/removal toggle states across UI controls.
+
 - Add a shared compact auto-grow textarea with bounded growth and native scrolling.
 
 - Add shared connected button groups for split actions with one divider.
@@ -26,6 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add, list and update Ideas through the planner API, CLI and workflow MCP tool, with source tracking and race-safe panel synchronization (#2295-abd3).
 
 ### Fixed
+
+- Pass canonical Windows worktree destinations to Git without the verbatim prefix, and remove expired attachment grants from resumed agent commands across configuration-path aliases (#2310-6e76).
 
 - Read Android shared files from the active service worker cache so they reach the mobile chat draft after a cache version update (#2304-48f8).
 

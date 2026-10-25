@@ -20,6 +20,11 @@ use super::mcp_transport_session_agent::handle_session;
 use super::mcp_transport_session_agent::require_action;
 use super::mcp_transport_session_agent::require_path;
 
+#[cfg(test)]
+pub(super) static WORKTREE_LIST_TIMINGS: std::sync::LazyLock<
+    dashmap::DashMap<String, Vec<(String, std::time::Duration)>>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
 pub(super) async fn handle_remote_update(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -252,6 +257,8 @@ async fn handle_worktree_with_caller(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
+            #[cfg(test)]
+            let inventory_started = std::time::Instant::now();
             let inventory_path = path.clone();
             let mut wts = match tokio::task::spawn_blocking(move || {
                 crate::worktree::get_worktree_paths(inventory_path)
@@ -264,6 +271,11 @@ async fn handle_worktree_with_caller(
                     return serde_json::json!({"error": format!("worktree inventory task failed: {error}")});
                 }
             };
+            #[cfg(test)]
+            WORKTREE_LIST_TIMINGS
+                .entry(path.clone())
+                .or_default()
+                .push(("inventory".into(), inventory_started.elapsed()));
             // Keep full, fresh checkout safety fields, but share the sidebar's
             // ref-keyed merge proofs instead of rerunning every integration read.
             // GitHub evidence is cache-only here; monitoring fills it separately.
@@ -272,12 +284,30 @@ async fn handle_worktree_with_caller(
                 let workspace_id = workspace_id.clone();
                 let workspace = workspace.clone();
                 let base_repo = path.clone();
+                #[cfg(test)]
+                let queued = std::time::Instant::now();
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    let started = std::time::Instant::now();
                     let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
                         &workspace,
                         crate::worktree::merged_github_pr_proves_tip_cached,
                     );
+                    #[cfg(test)]
+                    WORKTREE_LIST_TIMINGS
+                        .entry(base_repo.clone())
+                        .or_default()
+                        .extend([
+                            (
+                                format!("{workspace_id}: queue"),
+                                started.duration_since(queued),
+                            ),
+                            (
+                                format!("{workspace_id}: inspect {:?}", workspace.path),
+                                started.elapsed(),
+                            ),
+                        ]);
                     (workspace_id, lifecycle)
                 }));
             }

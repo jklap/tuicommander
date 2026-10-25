@@ -31,6 +31,10 @@
   z-index: 3;
 }
 
+@media (max-width: 600px) {
+  .header { height: auto; }
+}
+
 .headerTitle {
   font-weight: 600;
   color: var(--fg-primary);
@@ -120,31 +124,6 @@
   align-items: center;
   gap: 2px;
   margin-left: auto;
-}
-
-.modeBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 18px;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.1s, background 0.1s;
-}
-
-.modeBtn:hover {
-  color: var(--fg-secondary);
-  background: var(--bg-highlight);
-}
-
-.modeBtnActive {
-  color: var(--accent);
-  background: var(--bg-highlight);
-  border-color: var(--accent);
 }
 
 .emptyState {

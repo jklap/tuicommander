@@ -10,6 +10,8 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { formatRelativeTime } from "../../utils/time";
 import d from "../shared/dialog.module.css";
+import { Button } from "../ui/Button";
+import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import s from "./ProgressDialog.module.css";
 import { ProgressFlow } from "./ProgressFlow";
@@ -140,7 +142,6 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 				</div>
 				<Show when={showProjectSelector()}>
 					<Select
-						compact
 						class={s.terminalSelect}
 						aria-label="Progress project"
 						value={project() ?? ""}
@@ -152,7 +153,6 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					</Select>
 				</Show>
 				<Select
-					compact
 					class={s.terminalSelect}
 					aria-label="Progress terminal"
 					onChange={(event) => progressStore.selectPty(event.currentTarget.value || null)}
@@ -168,14 +168,16 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 						)}
 					</For>
 				</Select>
-				<div class={s.viewToggle} role="group" aria-label="Progress view">
-					<button type="button" aria-pressed={!isFlow()} onClick={() => progressStore.setView("list")}>
-						List
-					</button>
-					<button type="button" aria-pressed={isFlow()} onClick={() => progressStore.setView("flow")}>
-						Flow
-					</button>
-				</div>
+				<SegmentedControl
+					class={s.viewToggle}
+					aria-label="Progress view"
+					options={[
+						{ id: "list", label: "List" },
+						{ id: "flow", label: "Flow" },
+					]}
+					value={isFlow() ? "flow" : "list"}
+					onChange={(view) => progressStore.setView(view)}
+				/>
 				<Show when={!isFlow()}>
 					<label class={s.filter}>
 						<input
@@ -187,7 +189,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					</label>
 				</Show>
 				<Show when={!props.embedded}>
-					<button type="button" class={s.iconButton} aria-label="Close" onClick={() => void progressStore.close()}>
+					<Button type="button" variant="ghost" aria-label="Close" onClick={() => void progressStore.close()}>
 						<svg
 							width="16"
 							height="16"
@@ -200,7 +202,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 						>
 							<path d="M18 6 6 18M6 6l12 12" />
 						</svg>
-					</button>
+					</Button>
 				</Show>
 			</div>
 
@@ -272,14 +274,15 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 											{entry.text}
 										</p>
 										<Show when={props.embedded && isLong(entry.text)}>
-											<button
+											<Button
 												type="button"
+												variant="ghost"
 												class={s.more}
 												aria-expanded={expandedEntries().includes(entry.id)}
 												onClick={() => toggleExpanded(entry.id)}
 											>
 												{expandedEntries().includes(entry.id) ? "Less" : "More"}
-											</button>
+											</Button>
 										</Show>
 										<div class={s.meta}>
 											<Show when={entry.type === "intent"}>
@@ -309,8 +312,9 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 											</Show>
 										</div>
 									</div>
-									<button
+									<Button
 										type="button"
+										variant="ghost"
 										class={s.delete}
 										aria-label="Delete entry"
 										onClick={() => {
@@ -330,21 +334,21 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 										>
 											<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14" />
 										</svg>
-									</button>
+									</Button>
 								</div>
 							</>
 						)}
 					</For>
 				</Show>
 				<Show when={projectState()?.nextCursor != null}>
-					<button
+					<Button
 						type="button"
 						class={s.loadOlder}
 						disabled={projectState()?.loading}
 						onClick={() => void progressStore.loadOlder()}
 					>
 						{projectState()?.loading ? "Loading…" : "Load older"}
-					</button>
+					</Button>
 				</Show>
 			</div>
 		</div>

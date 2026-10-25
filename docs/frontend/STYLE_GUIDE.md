@@ -424,7 +424,7 @@ All follow the same structure:
 **Primary button**: `background: var(--accent); color: var(--text-on-accent); padding: 8px 16px; border-radius: var(--radius-lg);`
 **Secondary button**: `background: var(--bg-tertiary); color: var(--fg-secondary); same padding/radius.`
 **Danger button**: `background: var(--error); color: var(--text-on-error);`
-**Ready action** (Send, Save): set `data-ready="true"` on the button while it can act (unsaved changes, agent selected). `global.css` gives `button[data-ready]:not(:disabled)` the accent border, text and a faint accent tint; clean or disabled stays neutral. Never hand-roll a per-component "dirty" colour.
+**Ready action** (Send, Save): set `data-ready="true"` on the button while it can act (unsaved changes, agent selected). `styles/ready-actions.css`, imported by desktop `global.css` and PWA `mobile.css`, gives `button[data-ready]:not(:disabled)` the accent border, text and a faint accent tint; clean or disabled stays neutral. Never hand-roll a per-component "dirty" colour.
 
 ### Form Controls
 
@@ -446,6 +446,16 @@ Clickable list rows/cards retain native buttons with `data-control-layout="row"`
 or `data-control-layout="card"`. Their geometry selectors must include both the
 `button` tag and the exact marker. This exception is for content layout, never
 form, toolbar or dialog actions.
+
+AI Chat retains native full-frame conversation pickers and native session
+`details`/`summary` disclosures. Mark these controls with
+`data-control-layout="overlay-picker"` or `"disclosure"` and retain only their
+exact, reasoned geometry exceptions. The visible picker frame and disclosures
+use the shared 36px/44px control tokens. Its shared `Textarea` retains the tested
+panel-relative editor cap and one-line reset with a narrow `composer-editor`
+exception; this does not exempt other actions or fields. Keep desktop editor
+resize and overflow rules scoped to the non-mobile composer. The phone editor
+keeps its native scrollable surface for drafts beyond its height cap.
 
 `SegmentedControl` is the shared view switch. It uses a named tablist, one
 keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an
@@ -696,3 +706,24 @@ arrange the wrapping picker but must not resize its swatches.
 - Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
   is 36px desktop or 44px touch, and the maximum is three control heights.
   Remove consumer auto-resize callbacks and height caps when adopting it.
+
+### Shared validation and removable toggles
+
+- Use native `aria-invalid="true"` on `Input`, `Select` and `Textarea` for an
+  error-token border. Link existing validation text with `aria-describedby`.
+  The shared keyboard focus outline remains visible and unchanged.
+- Use `Button variant="removalToggle"` only for an on/off action where clicking
+  the pressed state removes or uninstalls the active integration. Set native
+  `aria-pressed` from owner state. Pressed uses the success border; enabled
+  pressed hover uses the danger tone. Disabled actions keep their state tone.
+  Ordinary selection buttons retain their existing accent styling.
+
+### Icon-only actions
+
+Use `Button shape="icon" aria-label="Describe the action"` for an icon-only action.
+Use `circular` when the action needs a circular visual. The native hit region stays
+square at 36 × 36px on desktop and 44 × 44px at touch widths; only the inner
+surface is circular. `size="compact"` does not shrink an icon target. Icon mode
+cannot combine with stretch geometry. Supply one icon or glyph and a nonempty,
+descriptive `aria-label` (required by the TypeScript API); a tooltip alone is not
+an accessible name. Do not add feature-level sizing or rounding rules.

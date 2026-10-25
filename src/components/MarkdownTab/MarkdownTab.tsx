@@ -34,6 +34,7 @@ import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
+import { Button } from "../ui/Button";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import { Select } from "../ui/Select";
 import { CommentOverlay } from "./CommentOverlay";
@@ -618,15 +619,16 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					{displayPath()}
 				</span>
 				<Show when={props.tab.type === "file"}>
-					<button class={e.btn} onClick={handleEdit} title={t("markdownTab.edit", "Edit file")}>
+					<Button class={e.btn} onClick={handleEdit} title={t("markdownTab.edit", "Edit file")}>
 						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M11.13 1.47a1.5 1.5 0 0 1 2.12 0l1.28 1.28a1.5 1.5 0 0 1 0 2.12L5.9 13.5a1 1 0 0 1-.5.27l-3.5.87a.5.5 0 0 1-.6-.6l.87-3.5a1 1 0 0 1 .27-.5L11.13 1.47ZM12.2 2.53l-8.46 8.47-.58 2.34 2.34-.58 8.47-8.46-1.77-1.77Z" />
 						</svg>
 						{t("markdownTab.editBtn", "Edit")}
-					</button>
-					<button
+					</Button>
+					<Button
 						class={e.btn}
-						classList={{ [e.active]: liveMode() }}
+						aria-pressed={liveMode()}
+						variant={liveMode() ? "primary" : "secondary"}
 						disabled={!liveMode() && !liveAvailable()}
 						onClick={toggleLive}
 						title={
@@ -640,9 +642,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					>
 						{t("markdownTab.liveBtn", "Live")}
 						<Show when={liveDirty()}> ●</Show>
-					</button>
+					</Button>
 					<Show when={(props.tab as FileTab).repoPath}>
-						<button
+						<Button
 							class={e.btn}
 							onClick={() => {
 								const ft = props.tab as FileTab;
@@ -662,7 +664,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 								<path d="M12 12l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
 							</svg>
 							{t("markdownTab.diffBtn", "Diff")}
-						</button>
+						</Button>
 					</Show>
 					<Show when={hasReviewChanges()}>
 						<div class={s.agentActions}>
@@ -683,7 +685,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 								</Show>
 								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
 							</Select>
-							<button
+							<Button
 								class={e.btn}
 								disabled={!canSend()}
 								data-ready={canSend() ? "true" : undefined}
@@ -695,7 +697,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 									<path d="M1.5 2.25 14.75 8 1.5 13.75l1.35-5L9.5 8 2.85 7.25l-1.35-5Z" />
 								</svg>
 								{sendingChanges() ? t("markdownTab.sending", "Sending…") : t("markdownTab.send", "Send")}
-							</button>
+							</Button>
 						</div>
 					</Show>
 				</Show>

@@ -1,4 +1,5 @@
 import { Match, Switch } from "solid-js";
+import { Button } from "../../components/ui";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import styles from "./ConnectionBanner.module.css";
 
@@ -19,7 +20,7 @@ export function ConnectionBanner(props: ConnectionBannerProps) {
 			<Match when={props.authError}>
 				<div class={styles.banner} role="alert">
 					<span>Access refused — sign in again</span>
-					<a class={styles.action} href={`/mobile/login?next=${encodeURIComponent(location.pathname)}`}>
+					<a class={styles.signIn} href={`/mobile/login?next=${encodeURIComponent(location.pathname)}`}>
 						Sign in
 					</a>
 				</div>
@@ -33,9 +34,7 @@ export function ConnectionBanner(props: ConnectionBannerProps) {
 					<p class={styles.server}>
 						Last error: <span>{props.error ?? "Could not connect to the server."}</span>
 					</p>
-					<button type="button" class={styles.action} onClick={props.onRetry}>
-						Retry now
-					</button>
+					<Button onClick={props.onRetry}>Retry now</Button>
 				</section>
 			</Match>
 		</Switch>
