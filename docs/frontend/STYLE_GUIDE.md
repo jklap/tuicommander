@@ -272,7 +272,7 @@ Branch item anatomy (left to right):
 - **PR marker** (optional): a 7px square plus `#N`, both in the state color, no fill or border. A conflict rotates the square into a diamond so it does not rely on color. Draft and Review outline the square instead of filling it, as their pills did (Review vs Changes requested differ only by fill). Motion matches the pill form: the conflict marker pulses at 1.5s, Checking and CI Running at 2s; the number never moves. The UI Legend renders this same component The state word (Review, Conflicts, …) and any uncommitted-file count live in the `data-tooltip`
 - **Unmerged mark** (optional): a 7px outlined square in `--fg-secondary`, centered in a 14px target with no pill background. It marks a worktree with commits outside the default branch even when its working tree is clean; hover or focus explains why branch deletion is blocked.
 - **Diff numbers** (optional): plain `+N -N` in `--font-2xs`, `--success` / `--diff-del`, no chip. Always shown beside the PR marker, never alternating with it
-- **Actions** (on hover only): `max-width: 0 → 44px`, two 20×20px buttons (+, ×)
+- **Actions** (on hover only): reveal the natural width of shared compact `Button` controls (+, ×), without reserving space while idle. Compact actions are 22px high on desktop and at least 44px high at touch widths. Swipe-tray actions use shared stretch geometry; the open tray grows with its controls.
 
 ### Tab Bar
 
