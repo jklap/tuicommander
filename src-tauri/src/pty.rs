@@ -737,14 +737,14 @@ fn spawn_silence_timer(
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
-                } else if transition.screen_confirms_idle
-                    && !shell_is_busy
-                    && queued_command_count(&state, &session_id) > 0
-                {
+                } else if transition.screen_confirms_idle && !shell_is_busy {
                     // Silence can mark the shell idle before the Ready screen
                     // stabilizes. That later confirmation has no second shell
                     // edge, so it must retry the existing self-guarded flush.
-                    flush_pending_injections(&state, &session_id);
+                    reevaluate_orchestrator_mail_wake(&state, &session_id);
+                    if queued_command_count(&state, &session_id) > 0 {
+                        flush_pending_injections(&state, &session_id);
+                    }
                 }
             }
 

@@ -1048,6 +1048,13 @@ fn handle_session_unpaged(
                         "agent_state",
                         agent_state.map(serde_json::Value::String),
                     );
+                    let queued = crate::pty::queued_command_count(state, &id);
+                    if queued > 0 {
+                        session["queued_commands"] = serde_json::json!(queued);
+                        if let Some(reason) = crate::pty::queued_submission_blocker(state, &id) {
+                            session["queue_blocker"] = serde_json::json!(reason);
+                        }
+                    }
                     if let Some(snapshot) = session_state
                         .as_ref()
                         .filter(|snapshot| snapshot.last_activity_ms > 0)

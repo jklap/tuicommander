@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Recover queued ego wakes after a fresh empty composer supersedes stale tracked input; report parked entries and their blocker in session inventory (#2313-dd6d).
+
 - Align shortcut Rebind and global-hotkey Clear actions with shared desktop and touch targets.
 
 - Use shared control geometry for Telegram settings without panel-level sizing overrides.

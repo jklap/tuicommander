@@ -786,13 +786,22 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 Queued confirmation waits run per session so a silent agent does not block other sessions or ordered lifecycle notices on the global injection worker. Each idle edge with a nonempty queue can start a worker; there is no global thread cap. A blocked claim returns promptly, and an active acknowledgement wait lasts at most six seconds for Codex or Claude or one second for other agents. The HTTP queue handler runs the blocking delivery on Tokio's blocking pool. If an agent remains silent with no human input after uncertain delivery, the uncertainty flag and later queued entries remain held until activity or a human submission supplies new evidence.
 
 **Atomic MCP submission reuses the same claim:** `session action=submit` first
-requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
+requires a confirmed-idle managed agent, an empty composer, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
 spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
 gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
+
+For ego, a native empty-composer repaint can supersede stale write-side text.
+The repaint must follow the last input and remain quiet for 1.5 seconds. A
+retained or wrapped draft, a screen from before a new edit, an unknown screen,
+and selector controls fail closed. The tracked editor resets only if its input
+stamp is unchanged while holding its mutex; each claim rechecks the screen. Other agents keep the tracked
+editor gate. Already accepted commands and wakes retry on confirmed idle,
+including stable Ready observations after the idle edge. A rejected `submit`
+is not queued and must be retried by its caller only when `retry_safe` is true.
 
 Foreground detection warns once per session when a non-shell process has no
 recognized agent type or run-config fallback. Such a session retains the safe
@@ -818,8 +827,8 @@ ahead of any accepted peer message or user command would reorder delivery. Each
 flush pops one entry and leaves the session BUSY, so the queue drains one item per
 idle window in global acceptance order. `state.queued_commands`,
 `list_queued_agent_commands`, `remove_queued_agent_command` and
-`clear_queued_agent_commands` select only user-command entries; clear retains all
-peer/orchestrator entries in their original relative order. Each user command
+`clear_queued_agent_commands` cover every parked entry, including server wakes;
+clear removes the whole pending queue. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 

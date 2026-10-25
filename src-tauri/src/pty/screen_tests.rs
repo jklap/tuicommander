@@ -1813,3 +1813,131 @@ fn newer_shell_observation_does_not_cancel_pending_exit_screen_recovery() {
         "newer shell sample cancelled exit recovery; terminal still shows: {lines:?}"
     );
 }
+
+/// Catches: a discarded busy-turn edit remains authoritative after ego repaints
+/// its empty composer, starving an already parked background wake.
+#[cfg(unix)]
+#[test]
+fn ego_empty_composer_releases_phantom_draft_and_queued_wake() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "ego-phantom-composer";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let bytes = insert_recording_session(&state, sid);
+    crate::mcp_http::session::apply_input_bookkeeping(&state, sid, "discarded busy edit");
+    enqueue_user_command(&state, sid, "BG DONE exit=0 log=phantom-test", None).unwrap();
+    assert!(bytes.lock().unwrap().is_empty());
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-composer-1957.tcap"))
+            .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+        }
+    }
+    assert_eq!(
+        detect_agent_screen_activity(Some("ego"), &vt.screen_rows()),
+        AgentScreenActivity::Ready
+    );
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    // Input precedes the recorded empty repaint; age the observation rather
+    // than making setup depend on how quickly the host schedules this test.
+    state
+        .session_maps
+        .last_input_ms
+        .get(sid)
+        .unwrap()
+        .store(now_epoch_ms() - 4000, Ordering::Release);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.last_chunk_at = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        sl.confirm_idle();
+    }
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, Ordering::Release);
+    assert!(
+        !has_partial_user_input(&state, sid),
+        "native empty repaint must supersede discarded write-side text"
+    );
+    flush_pending_injections_blocking(&state, sid);
+    let written = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        written.matches("BG DONE exit=0 log=phantom-test").count(),
+        1
+    );
+    assert!(written.ends_with('\r'));
+    assert_eq!(queued_command_count(&state, sid), 0);
+}
+
+/// Catches: trusting an empty screen from before a fresh edit, clearing a
+/// retained native draft, or failing open when no native composer is visible.
+#[cfg(unix)]
+#[test]
+fn ego_composer_keeps_retained_drafts_and_unpainted_edits_protected() {
+    for scenario in ["retained", "unpainted", "unknown"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "ego-protected-composer";
+        agent_session(&state, sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("ego".into());
+        let bytes = insert_recording_session(&state, sid);
+        crate::mcp_http::session::apply_input_bookkeeping(&state, sid, "captured draft");
+        let capture =
+            crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-composer-1957.tcap"))
+                .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        if scenario != "unknown" {
+            for record in capture.records {
+                if record.direction == crate::pty_capture::CaptureDirection::Input
+                    && record.data == b"\r"
+                    && scenario == "retained"
+                {
+                    break;
+                }
+                if record.direction == crate::pty_capture::CaptureDirection::Output {
+                    vt.process(&record.data);
+                }
+            }
+        }
+        state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+        state.session_maps.last_input_ms.get(sid).unwrap().store(
+            now_epoch_ms() - if scenario == "unpainted" { 1000 } else { 4000 },
+            Ordering::Release,
+        );
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .last_chunk_at = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert!(
+            matches!(
+                write_agent_submission_to_pty(&state, sid, "must not overwrite"),
+                AgentSubmissionWrite::Rejected {
+                    reason: "partial_composer",
+                    ..
+                }
+            ),
+            "{scenario}"
+        );
+        assert!(bytes.lock().unwrap().is_empty(), "{scenario}");
+    }
+}

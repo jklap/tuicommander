@@ -5168,3 +5168,35 @@ async fn action_validation_description_only_updates_without_pty_input() {
         assert!(bytes.lock().unwrap().is_empty());
     }
 }
+
+/// Catches: a parked server wake is absent from the MCP inventory, leaving an
+/// idle-looking recipient with no visible explanation for a blocked queue.
+#[cfg(unix)]
+#[test]
+fn session_list_reports_queued_wake_and_composer_blocker() {
+    let state = test_state();
+    let sid = "listed-queued-wake";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    crate::mcp_http::session::apply_input_bookkeeping(&state, sid, "real draft");
+    state
+        .pending_injections
+        .entry(sid.into())
+        .or_default()
+        .push_back(crate::state::PendingInjection::notice(
+            "BG DONE exit=0 log=listed-test",
+        ));
+    let result = handle_session(
+        &state,
+        &serde_json::json!({"action": "list", "session_id": sid}),
+        None,
+    );
+    let row = result
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == sid)
+        .unwrap();
+    assert_eq!(row["queued_commands"], 1);
+    assert_eq!(row["queue_blocker"], "partial_composer");
+    assert!(bytes.lock().unwrap().is_empty());
+}

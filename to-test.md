@@ -1,3 +1,7 @@
+## Ego phantom composer (2313-dd6d) — Rust restart required
+
+- [ ] After an authorized rebuild/restart or in an isolated agent-test instance, type input during a busy ego turn and let ego clear it. Queue a BG wake and a user command. Confirm both drain once in successive idle windows without Ctrl+U, real drafts remain untouched, and full MCP session inventory reports parked entries and their blocker. A busy `submit` still rejects without queueing; retry only after idle when `retry_safe` is true. The peer did not restart or access the daily instance.
+
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required
 
 - [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. Windows cache counters, cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.

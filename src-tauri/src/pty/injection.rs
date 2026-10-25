@@ -438,11 +438,81 @@ fn submission_ready(
 /// True while the user has characters sitting in the composer. Injecting then
 /// would splice our text into what they are typing.
 pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
-    state
+    let tracked_draft = state
         .session_maps
         .input_buffers
         .get(session_id)
-        .is_some_and(|buffer| !buffer.lock().content().is_empty())
+        .is_some_and(|buffer| !buffer.lock().is_empty());
+    if !tracked_draft {
+        return false;
+    }
+    let observed_input = state
+        .session_maps
+        .last_input_ms
+        .get(session_id)
+        .map(|last| last.load(Ordering::Acquire));
+    if ego_has_fresh_empty_composer(state, session_id)
+        && let Some(buffer) = state.session_maps.input_buffers.get(session_id)
+    {
+        let mut buffer = buffer.lock();
+        // Raw writers stamp before feeding this editor. If one started since
+        // the screen check, retain its edit; if it starts after this check, its
+        // feed follows this reset under the same editor mutex.
+        let current_input = state
+            .session_maps
+            .last_input_ms
+            .get(session_id)
+            .map(|last| last.load(Ordering::Acquire));
+        if current_input == observed_input {
+            *buffer = InputLineBuffer::new();
+        }
+        return !buffer.is_empty();
+    }
+    true
+}
+
+/// The write-side editor cannot observe text discarded by an agent. Only ego's
+/// native adapter proves an empty composer (including wrapped-draft rejection).
+/// Reconcile the tracked editor only while its input stamp is unchanged, so
+/// bookkeeping for the next accepted command cannot inherit discarded text.
+/// Re-derive the answer at the post-CAS claim check as well.
+fn ego_has_fresh_empty_composer(state: &AppState, session_id: &str) -> bool {
+    if !state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            session.agent_type.as_deref() == Some("ego") && session.choice_prompt.is_none()
+        })
+    {
+        return false;
+    }
+    let Some(input_age_ms) = state
+        .session_maps
+        .last_input_ms
+        .get(session_id)
+        .map(|last| now_epoch_ms().saturating_sub(last.load(Ordering::Acquire)))
+    else {
+        return false;
+    };
+    let Some(output_age) = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().last_chunk_at.elapsed())
+    else {
+        return false;
+    };
+    // Strict ordering fails closed for same-millisecond writes/repaints. Require
+    // the repaint itself to settle, not merely silence over a pre-input screen.
+    if output_age < AGENT_READY_CONFIRM || input_age_ms <= output_age.as_millis() as u64 {
+        return false;
+    }
+    state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
+        let vt = vt.lock();
+        detect_agent_screen_activity_at(Some("ego"), &vt.screen_rows(), Some(vt.grid_columns()))
+            == AgentScreenActivity::Ready
+    })
 }
 
 /// Reserve an idle agent composer for one injected command.
@@ -639,6 +709,14 @@ pub(crate) struct PendingInjectionSummary {
     /// First line, truncated. Enough to recognise the entry; the full text is on
     /// the Compose queue listing.
     pub preview: String,
+}
+
+/// Read-only queue diagnosis for session inventory, including server wake entries.
+pub(crate) fn queued_submission_blocker(
+    state: &AppState,
+    session_id: &str,
+) -> Option<&'static str> {
+    agent_composer_rejection(state, session_id, false).map(|(reason, _)| reason)
 }
 
 const PENDING_PREVIEW_MAX_CHARS: usize = 80;

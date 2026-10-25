@@ -1310,6 +1310,13 @@ text it treats as a paste and then refuses the Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
 
+An ego empty composer painted after the last edit and quiet for 1.5 seconds
+supersedes stale tracked input. Retained drafts and pre-edit screens still block.
+Full local `session action=list` rows include `queued_commands` when entries
+are parked, including server wakes, and `queue_blocker` when a current composer
+gate prevents delivery. Ready observations retry existing queues and mail wakes;
+rejected submits are never silently added to a queue.
+
 `session action=suspend session_id=<id>` asks the UI to end a tab's PTY and agent
 while keeping the tab restorable like after a restart (the user resumes it from
 the tab). It is refused with `Cannot suspend: <reason>` while the agent is
@@ -1336,7 +1343,7 @@ immediately before Enter. One response returns:
 | `acknowledged` | Child terminal output moved after Enter |
 | `retry_safe` | True only when no byte was written |
 | `turn_epoch` | Epoch advanced by the shared input FSM |
-| `composer_state` | Tracked `InputLineBuffer`: `cleared`, `partial`, `empty`, or `unknown`; not the application's semantic state |
+| `composer_state` | Composer safety verdict: `cleared`, `partial`, `empty`, or `unknown`; normally from `InputLineBuffer`, with fresh, settled native ego empty-screen reconciliation |
 | `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
 | `detail` | For pre-write rejections, a human-readable cause and corrective action; unknown agent identity includes the current foreground process |
 
