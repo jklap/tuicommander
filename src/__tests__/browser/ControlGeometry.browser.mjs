@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import solid from 'vite-plugin-solid';
 
 // Real browser layout, not happy-dom's zero-size boxes. Screenshots clip only the fixture element.
-it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async () => {
+it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async (context) => {
   const directory = resolve(process.env.TUIC_GEOMETRY_EVIDENCE ?? '.tmp/control-geometry');
   await mkdir(directory, {recursive: true});
   const {version} = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
@@ -116,6 +116,14 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           const color=await evaluate(`getComputedStyle(document.querySelector('${selector}')).borderColor`);
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
+      }
+      // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
+        const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
+        await context.test(`catches queue review clipping the composing draft at ${width}px`, () => {
+          assert.ok(draft.lineTop >= draft.viewportTop && draft.lineBottom <= draft.viewportBottom,
+            `Queue review must leave a complete draft line visible: ${JSON.stringify(draft)}`);
+        });
       }
       result.containment = [];
       measurements.push({width,...result,icons,stretch,joined,textarea,states});
