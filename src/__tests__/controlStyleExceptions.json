@@ -42,14 +42,6 @@
     ]
   },
   {
-    "file": "src/components/DictationToast/DictationToast.module.css",
-    "story": "2192-8e3f",
-    "rules": [
-      "[[],\".control\",[\"height: 24px\",\"padding: 0\",\"border: 0\",\"border-radius: var(--radius-sm, 4px)\"]]",
-      "[[\"@media (pointer: coarse)\"],\".control\",[\"height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/DiffTab/DiffTab.module.css",
     "story": "2193-759f",
     "rules": [
