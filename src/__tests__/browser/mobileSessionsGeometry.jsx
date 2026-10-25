@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web';
 import { SessionsScreen } from '../../mobile/screens/SessionsScreen';
-import '../../global.css';
+import '../../mobile/mobile.css';
 window.fetch=async(input)=>{
  const url=typeof input==='string'?input:input.url;
  if(url.includes('/config/repositories'))return Response.json({repos:{}});

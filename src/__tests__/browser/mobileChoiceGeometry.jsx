@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { ChoicePromptOverlay } from '../../mobile/components/ChoicePromptOverlay';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 const answers=[];
 const prompt={title:'Choose an answer',selection_mode:'toggle-enter',options:[{key:'1',label:'A long answer that may wrap when the viewport is narrow',highlighted:true},{key:'2',label:'No',destructive:true,hint:'Escape'}]};
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">

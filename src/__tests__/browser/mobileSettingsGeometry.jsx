@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 localStorage.clear();
 const { SettingsScreen } = await import('../../mobile/screens/SettingsScreen');
-import '../../global.css';
+import '../../mobile/mobile.css';
 // Offline voice and unsupported push avoid device prompts; push gesture behavior has its own component test.
 delete window.PushManager;
 const chrome={bg_primary:'#1e1e1e',bg_secondary:'#252526',bg_tertiary:'#2d2d30',bg_highlight:'#37373d',fg_primary:'#cccccc',fg_secondary:'#aaaaaa',fg_muted:'#999999',accent:'#59a8dd',accent_hover:'#7abde5',border:'#444444',success:'#00aa00',warning:'#aaaa00',error:'#cc0000',text_on_accent:'#000000',text_on_error:'#ffffff',text_on_success:'#ffffff'};

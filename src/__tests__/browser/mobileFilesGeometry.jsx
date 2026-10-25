@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web';
 import { FilesScreen } from '../../mobile/screens/FilesScreen';
-import '../../global.css';
+import '../../mobile/mobile.css';
 const entry={name:'example.txt',path:'example.txt',is_dir:false,size:12};
 let saved='Original source\n';
 window.fetch=async(input,init)=>{

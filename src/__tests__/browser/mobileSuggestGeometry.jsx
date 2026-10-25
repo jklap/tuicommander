@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { SuggestChips } from '../../mobile/components/SuggestChips';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 // Catches compressed suggestion targets and a long list widening its host.
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

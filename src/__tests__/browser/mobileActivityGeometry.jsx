@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { ActivityItem } from '../../mobile/components/ActivityItem';
 import { Button, Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 const item = {id:'geometry',pluginId:'core',sectionId:'messages',title:'Agent completed work',subtitle:'ran for 2343s · 1 blocks',icon:'<svg/>',createdAt:1000,dismissible:true};
 let tapped;
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">

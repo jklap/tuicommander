@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { SessionCard } from '../../mobile/components/SessionCard';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let selected=[],killed=[];
 const session={session_id:'fixture',display_name:'Agent',cwd:'/work/project',worktree_path:null,worktree_branch:null,state:{awaiting_input:false,rate_limited:false,last_activity_ms:Date.now(),agent_intent:'Keep this long intent contained inside its navigation row'}};
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">

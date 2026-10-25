@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { ConnectionBanner } from '../../mobile/components/ConnectionBanner';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let retried=0;
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">
   <ConnectionBanner offline authError={false} onRetry={()=>{retried++;}}/>

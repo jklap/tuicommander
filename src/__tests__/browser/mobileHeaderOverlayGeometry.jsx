@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { SessionHeaderOverlay } from '../../mobile/components/SessionHeaderOverlay';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let closed=0;
 render(() => <section id="geometry" style="position:relative;height:420px;padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

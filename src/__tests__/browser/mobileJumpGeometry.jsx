@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { MobileJumpBottom } from '../../mobile/components/MobileJumpBottom';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let jumped=0;
 render(() => <section id="geometry" style="position:relative;height:220px;padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

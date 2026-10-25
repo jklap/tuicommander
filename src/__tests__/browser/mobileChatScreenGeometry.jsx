@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { MobileChatScreen } from '../../mobile/screens/MobileChatScreen';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 window.fetch=async(input,init)=>{
   const url=typeof input==='string'?input:input.url;
   if(url.endsWith('/config'))return Response.json({ego_executable:'/fixture/ego'});

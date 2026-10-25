@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { BottomTabs } from '../../mobile/components/BottomTabs';
 import { Button, Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let selected;
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">
   <div data-stretch-case="55"><BottomTabs active="sessions" aiChatAvailable onSelect={value=>{selected=value;}}/></div>

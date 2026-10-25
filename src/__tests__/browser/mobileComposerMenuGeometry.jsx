@@ -2,7 +2,7 @@ import { render } from 'solid-js/web';
 import { MobileComposerMenu } from '../../mobile/components/MobileComposerMenu';
 import { CommandInput } from '../../mobile/components/CommandInput';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let queued=0;
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

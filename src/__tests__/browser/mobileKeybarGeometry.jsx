@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { TerminalKeybar } from '../../mobile/components/TerminalKeybar';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let slashes=0,keys=[];
 render(() => <section id="geometry" style="padding:16px;padding-top:260px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

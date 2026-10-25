@@ -2,7 +2,7 @@ import { render } from 'solid-js/web';
 import { createSignal } from 'solid-js';
 import { useSessionChatView } from '../../mobile/components/useSessionChatView';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let chat,setAgent;
 render(() => {
   const [agent,update]=createSignal('claude');setAgent=update;

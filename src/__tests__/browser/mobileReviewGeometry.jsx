@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { ReviewableMarkdown } from '../../mobile/components/ReviewableMarkdown';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let saved=[];
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

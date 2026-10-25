@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { CommandInput } from '../../mobile/components/CommandInput';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 // Expose the speech capability for layout only; never start recognition or a live PTY.
 window.SpeechRecognition ??= class {};
 window.fetch = async () => Response.json({});

@@ -2,7 +2,7 @@ import { render } from 'solid-js/web';
 import { IdeasOverlay } from '../../mobile/components/IdeasOverlay';
 import { ideasStore } from '../../stores/ideas';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 
 // Internal HTTP fixture only: never read or mutate the running app's notes.
 const fetchOriginal = window.fetch.bind(window);

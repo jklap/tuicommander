@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web';
 import { SessionDetailScreen } from '../../mobile/screens/SessionDetailScreen';
-import '../../global.css';
+import '../../mobile/mobile.css';
 window.fetch=async(input)=>{
  const url=typeof input==='string'?input:input.url;
  if(url.includes('markdown'))return Response.json([]);

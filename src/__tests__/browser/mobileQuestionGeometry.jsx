@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { QuestionBanner } from '../../mobile/components/QuestionBanner';
 import { Button, Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let navigated;
 const waiting={session_id:'waiting',display_name:'Wiz-Pr',cwd:'/work/project',state:{awaiting_input:true,question_text:'Which implementation should I use? '.repeat(6)}};
 render(() => <section id="geometry" style="padding:16px;background:var(--bg-secondary)">

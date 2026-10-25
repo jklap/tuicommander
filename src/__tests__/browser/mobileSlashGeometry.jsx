@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { SlashMenuOverlay } from '../../mobile/components/SlashMenuOverlay';
 import { Select } from '../../components/ui';
-import '../../global.css';
+import '../../mobile/mobile.css';
 let selected=[],closed=0;
 render(() => <section id="geometry" style="height:480px;padding:16px;background:var(--bg-secondary)">
   <Select aria-label="Reference status"><option>Ready</option></Select>

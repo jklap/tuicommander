@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web';
 import { NewSessionSheet } from '../../mobile/components/NewSessionSheet';
-import '../../global.css';
+import '../../mobile/mobile.css';
 const original=window.fetch.bind(window);
 window.fetch=(input,init)=>{
   const url=typeof input==='string'?input:input.url;

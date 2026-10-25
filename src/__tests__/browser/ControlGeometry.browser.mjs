@@ -35,7 +35,9 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
     await send('Page.enable',{},sessionId);
     const measurements=[];
     for(const width of (process.env.TUIC_GEOMETRY_WIDTHS ?? "1400,390").split(",").map(Number)) {
-      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},sessionId);
+      const touch=(process.env.TUIC_GEOMETRY_FIXTURE ?? '').startsWith('mobile') && width<=600;
+      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:touch},sessionId);
+      await send('Emulation.setTouchEmulationEnabled',{enabled:touch},sessionId);
       const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
@@ -119,7 +121,8 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       }
       result.containment = [];
       const composer=await evaluate("window.composerGeometry ?? null");
-      measurements.push({width,...result,icons,stretch,joined,textarea,states,composer});
+      const targets=await evaluate(`[...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.getAttribute('aria-label')||button.title||button.textContent.trim(),width:r.width,height:r.height,iconOnly:button.hasAttribute('data-form-control') && (!button.textContent.trim() || /^[+−×✕]$/.test(button.textContent.trim()))};})`);
+      measurements.push({width,...result,icons,stretch,joined,textarea,states,composer,targets});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
