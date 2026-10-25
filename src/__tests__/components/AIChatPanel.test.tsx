@@ -2469,26 +2469,38 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
-	// Catches: the conversation picker left at the 36px default beside the 19px settings button in the control bar.
-	it("keeps the full-frame conversation picker native over its visible label — catches loss of the OS picker overlay", async () => {
+	// Catches: migrating the native picker drops its session selection handler or sends a prompt.
+	it("loads the selected conversation through the native picker without sending", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
-				{
-					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
-					cwd: CHAT_ROOT,
-					title: null,
-					updatedAt: "2026-09-26T09:00:00Z",
-				},
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First conversation", updatedAt: "2026-09-27T09:00:00Z" },
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Second conversation", updatedAt: "2026-09-26T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: session })] }));
+			feed(
+				{
+					kind: "sessionUpdate",
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						content: { type: "text", text: "Selected conversation history" },
+					},
+				},
+				session,
+			);
+		});
 		const { container } = await renderPanel();
 		await settle();
-		const picker = container.querySelector('select[title="Conversation"]')!;
-		expect(picker.getAttribute("data-control-layout")).toBe("overlay-picker");
-		expect(picker.previousElementSibling?.getAttribute("aria-hidden")).toBe("true");
-		expect(picker.getAttribute("aria-label")).toBe("Conversation");
+		const picker = container.querySelector<HTMLSelectElement>('select[title="Conversation"]')!;
+		picker.value = SECOND_SESSION;
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(picker.value).toBe(SECOND_SESSION);
+		expect(container.textContent).toContain("Selected conversation history");
+		expect(client.prompt).not.toHaveBeenCalled();
 	});
 
 	it("labels untitled conversations without exposing an id as the option text", async () => {
