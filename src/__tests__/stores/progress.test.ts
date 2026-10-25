@@ -23,6 +23,7 @@ vi.mock("../../stores/repositories", () => ({
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		state: { activeId: "tab-a", terminals: { "tab-a": { sessionId: "pty-a", repoPath: "/repo", name: "Agent A" } } },
+		get: () => undefined,
 	},
 }));
 

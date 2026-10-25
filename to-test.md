@@ -1,3 +1,7 @@
+## Subagent notification silence (2341-be90)
+
+- [ ] After the batch integrator runs the targeted notification suites, verify the desktop Notifications control with a parent and a spawned child: on mutes child question/error/completion/attention sounds and OS alerts, off restores them; parent/user tabs remain unchanged. Activity, bell entries and urgent cards must remain visible. Mobile/PWA sounds and push are a separate story by coordinator decision. The Rust edit is comment-only; this change does not require a backend restart.
+
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
 - [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.

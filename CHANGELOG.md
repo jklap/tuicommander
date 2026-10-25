@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Extend the existing orchestration silence control to all sounds and OS notifications from agent-spawned sessions, while preserving Activity, bell entries and urgent user cards (#2341-be90).
+
 - Default Markdown reviews to the agent that opened the document on desktop and mobile, while preserving an explicit review-agent choice (#2329-dc53).
 
 - Keep Markdown list comment actions outside the full list so nested bullets, numbers and task checkboxes stay unobstructed (#2330-6ef8).
