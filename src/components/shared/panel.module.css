@@ -79,41 +79,6 @@
   border-bottom: 1px solid var(--border);
 }
 
-.searchInput {
-  flex: 1;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  font-family: var(--font-mono);
-  padding: 3px 6px;
-  outline: none;
-}
-
-.searchInput:focus {
-  border-color: var(--accent);
-}
-
-.searchInput::placeholder {
-  color: var(--fg-muted);
-  opacity: 0.5;
-}
-
-.searchClear {
-  background: none;
-  border: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-md);
-  cursor: pointer;
-  padding: 0 4px;
-  margin-left: 4px;
-}
-
-.searchClear:hover {
-  color: var(--fg-primary);
-}
-
 .fileCountBadge {
   display: inline-flex;
   align-items: center;

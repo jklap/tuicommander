@@ -1,4 +1,5 @@
 {
+	"markdownPanel.clearSearch": "Clear search",
 	"common.back": "Back",
 	"stories.notes.managed": "Managed session {id}",
 	"stories.notes.localApi": "Local API",

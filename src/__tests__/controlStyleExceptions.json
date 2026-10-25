@@ -42,16 +42,6 @@
     ]
   },
   {
-    "file": "src/components/MarkdownPanel/MarkdownPanel.module.css",
-    "story": "2208-c0f2",
-    "rules": [
-      "[[],\".modeToggle\",[\"height: 22px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeToggleActive, .modeToggleActive:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".sortTrigger\",[\"height: 22px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".sortTrigger:hover\",[\"border-color: var(--border)\"]]"
-    ]
-  },
-  {
     "file": "src/components/MarkdownTab/LiveMarkdownEditor.module.css",
     "story": "2209-c060",
     "rules": [
@@ -391,10 +381,7 @@
     "story": "2266-a950",
     "rules": [
       "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 3px 6px\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchClear\",[\"border: none\",\"padding: 0 4px\"]]"
+      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]"
     ]
   },
   {
