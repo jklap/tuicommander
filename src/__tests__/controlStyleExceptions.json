@@ -391,55 +391,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/ActivityItem.module.css",
-    "story": "2267-9367",
-    "rules": [
-      "[[],\".item\",[\"padding: 10px 16px\",\"border: none\",\"border-bottom: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/BottomTabs.module.css",
-    "story": "2268-d1df",
-    "rules": [
-      "[[],\".tab\",[\"min-height: 44px\",\"border: none\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/ChoicePromptOverlay.module.css",
-    "story": "2269-922b",
-    "rules": [
-      "[[],\".item\",[\"padding: 14px 16px\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/CommandInput.module.css",
-    "story": "2270-5848",
-    "rules": [
-      "[[],\".input\",[\"min-height: 38px\",\"max-height: 120px\",\"padding: 8px 2px 8px 4px\",\"border: none\"]]",
-      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".send, .dictate\",[\"height: 28px\",\"border-radius: var(--radius-full)\",\"border: none\"]]",
-      "[[],\".send\",[\"height: 36px\"]]",
-      "[[],\".dictate\",[\"height: 38px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dictate[data-failed=\\\"true\\\"]\",[\"padding-inline: 4px\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/CommandWidget.module.css",
-    "story": "2271-d8f6",
-    "rules": [
-      "[[],\".chip\",[\"padding: 6px 14px\",\"border-radius: var(--radius-pill)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".modelChip\",[\"border-color: var(--accent)\"]]",
-      "[[],\".permissionChip\",[\"border-color: var(--warning)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/ConnectionBanner.module.css",
-    "story": "2272-185c",
-    "rules": [
-      "[[],\".action\",[\"padding: 4px 12px\",\"border: 1px solid currentColor\",\"border-radius: 6px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/HeroMetrics.module.css",
     "rules": [
       "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
@@ -447,162 +398,18 @@
     "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
   },
   {
-    "file": "src/mobile/components/IdeasOverlay.module.css",
-    "story": "2274-7cc9",
+    "file": "src/mobile/components/CommandInput.module.css",
+    "reason": "Native embedded composer layout (data-control-layout=composer), not a standalone form field; preserves content sizing and draft selection.",
     "rules": [
-      "[[],\".closeBtn\",[\"height: 28px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".actionBtn\",[\"height: 30px\",\"border: none\",\"padding: 0\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".input\",[\"min-height: 36px\",\"max-height: 80px\",\"padding: 8px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".submitBtn\",[\"height: 36px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/MobileComposerMenu.module.css",
-    "story": "2275-be2a",
-    "rules": [
-      "[[],\".trigger\",[\"height: 44px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".menu button\",[\"min-height: 44px\",\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/MobileJumpBottom.module.css",
-    "story": "2276-25f7",
-    "rules": [
-      "[[],\".jumpBottom\",[\"height: 44px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/NewSessionSheet.module.css",
-    "story": "2277-e95e",
-    "rules": [
-      "[[],\".close\",[\"height: 44px\",\"border: 0\"]]",
-      "[[],\".repoItem\",[\"padding: 12px 16px\",\"border: none\",\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/QuestionBanner.module.css",
-    "story": "2278-e8ba",
-    "rules": [
-      "[[],\".banner\",[\"padding: 8px 16px\",\"border-bottom: 1px solid rgba(255, 215, 0, 0.2)\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/QuickActions.module.css",
-    "story": "2279-d251",
-    "rules": [
-      "[[],\".chip\",[\"padding: 6px 14px\",\"border-radius: var(--radius-pill)\",\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/ReviewableMarkdown.module.css",
-    "story": "2280-e777",
-    "rules": [
-      "[[],\".input\",[\"min-height: 88px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".button\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 8px 10px\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/SessionCard.module.css",
-    "story": "2281-41fb",
-    "rules": [
-      "[[],\".cardMain\",[\"min-height: 44px\",\"padding: 0\",\"border: 0\"]]",
-      "[[],\".killBtn\",[\"height: 44px\",\"border: none\",\"border-radius: var(--radius-md)\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/SessionChatView.module.css",
-    "story": "2282-132f",
-    "rules": [
-      "[[],\".toggle button\",[\"min-height: 44px\",\"padding: 0 7px\",\"border: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/SessionHeaderOverlay.module.css",
-    "story": "2283-7f32",
-    "rules": [
-      "[[],\".close\",[\"height: 44px\",\"border: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/SlashMenuOverlay.module.css",
-    "story": "2284-48a3",
-    "rules": [
-      "[[],\".close\",[\"height: 44px\",\"border: none\"]]",
-      "[[],\".item\",[\"padding: 10px 16px\",\"border: none\"]]",
-      "[[],\".navBtn\",[\"height: 32px\",\"border: 1px solid var(--border)\",\"border-radius: 6px\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/TerminalKeybar.module.css",
-    "story": "2285-bbb6",
-    "rules": [
-      "[[],\".key\",[\"height: 44px\",\"padding: 0 10px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".key[aria-expanded=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".confirm\",[\"border-color: var(--accent)\"]]",
-      "[[],\".danger\",[\"border-color: var(--error)\"]]",
-      "[[],\".accent\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/components/TopBar.module.css",
-    "story": "2286-b215",
-    "rules": [
-      "[[],\".more\",[\"height: 44px\",\"border: 0\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".menuItem\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 0\"]]"
+      "[[],\".input\",[\"min-height: 38px\",\"max-height: 120px\",\"padding: 8px 2px 8px 4px\",\"border: none\"]]",
+      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
     "file": "src/mobile/screens/FilesScreen.module.css",
-    "story": "2287-5984",
+    "reason": "Native full-pane source editor (data-control-layout=editor), not a form field; preserves flex sizing, soft wrap and selection.",
     "rules": [
-      "[[],\".back, .action\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 8px 10px\"]]",
-      "[[],\".row\",[\"padding: 14px 16px\",\"border: 0\",\"border-bottom: 1px solid var(--border)\"]]",
-      "[[],\".search input\",[\"min-height: 44px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".viewer, .editor\",[\"min-height: 0\",\"padding: 16px\",\"border: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/screens/MobileChatScreen.module.css",
-    "story": "2288-ba94",
-    "rules": [
-      "[[],\".controls button, .banner button\",[\"padding: 6px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".tableDocument button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/screens/SessionDetailScreen.module.css",
-    "story": "2289-7662",
-    "rules": [
-      "[[],\".backBtn\",[\"height: 44px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".headerInfo\",[\"height: 44px\",\"padding: 0\",\"border: 0\"]]",
-      "[[],\".headerAction\",[\"height: 44px\",\"padding: 0\",\"border: 0\"]]",
-      "[[],\".overflow button, .overflowInfo\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 0\"]]",
-      "[[],\".endedBackBtn\",[\"padding: 10px 28px\",\"border: 1px solid var(--border)\",\"border-radius: 8px\"]]",
-      "[[],\".searchInput\",[\"height: 32px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchClear\",[\"height: 28px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".overflow .markdownEntry\",[\"padding-block: 8px\"]]",
-      "[[],\".markdownTrigger\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/screens/SessionsScreen.module.css",
-    "story": "2290-8629",
-    "rules": [
-      "[[],\".sortOption\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 0\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".searchToggle\",[\"height: 44px\",\"border: 0\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchField input\",[\"padding: 10px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".fab\",[\"height: 52px\",\"border-radius: 50%\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/mobile/screens/SettingsScreen.module.css",
-    "story": "2291-08d6",
-    "rules": [
-      "[[],\".select:not([data-form-control])\",[\"min-height: 44px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".toggle\",[\"height: 24px\",\"border-radius: 12px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".fontSizeControl button\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
     ]
   }
 ]
