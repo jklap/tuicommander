@@ -142,6 +142,13 @@ and issues for the rest of the session. Named accounts cache their own login in
 | `github_set_issue_filter` | `(filter: String) -> ()` | Change the issue filter mode live |
 | `github_set_pr_hide_drafts` | `(hide: bool) -> ()` | Toggle draft-PR filtering live |
 
+The diagnostics `repos_monitored` gauge counts repository paths with successful
+PR snapshots in the running poller's transition history, including empty snapshots.
+It does not count entries in the TTL query cache. Cache expiry and failed poll ticks
+do not remove monitoring identity. Removing a configured path drops its transition
+and change-detection history; stopping the poller resets the gauge to zero. A new
+poller starts with no successful snapshots, even if old query payloads remain cached.
+
 ## Data Types
 
 ### GitHubStatus
