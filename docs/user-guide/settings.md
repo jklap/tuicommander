@@ -492,6 +492,8 @@ Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `
 
 User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`, and the Dev Server URL) are intentionally excluded from `.tuic.json`.
 
+Repository-local config reads are independent. If a repository is unavailable, its last successful values stay in use while other repositories refresh. A successful read that finds no `.tuic.json` clears the cached local values. A later successful read adopts the recovered repository's current values.
+
 ### Telegram
 
 Settings → Telegram configures the current machine. Bot setup, Chat access, Agent registration and Recent messages have separate cards. Authorized chats use named list rows with a Remove action, and Reload status refreshes the polling summary. Telegram setup is available only in desktop Settings, not in mobile Settings. Use it on the host running the desktop app or `tuic-remote`. Both share one polling owner on that machine.
