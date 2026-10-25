@@ -186,8 +186,14 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					</Show>
 				</div>
 				<div class={p.headerRight}>
-					<button
-						class={cx(p.headerBtn, showAllRepos() && s.headerBtnPressed)}
+					<Button
+						shape="icon"
+						variant="ghost"
+						aria-label={
+							showAllRepos()
+								? t("ideasPanel.showThisRepo", "Show this repository only")
+								: t("ideasPanel.showAllRepos", "Show ideas from all repositories")
+						}
 						onClick={() => setShowAllRepos((v) => !v)}
 						aria-pressed={showAllRepos()}
 						title={
@@ -199,17 +205,19 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M8 1 .5 4.5 8 8l7.5-3.5L8 1zm-6.1 7.3L.5 9l7.5 3.5L15.5 9l-1.4-.7L8 11.2 1.9 8.3zm0 3.5L.5 12.5 8 16l7.5-3.5-1.4-.7L8 14.7l-6.1-2.9z" />
 						</svg>
-					</button>
+					</Button>
 					<Show when={hasCompleted()}>
-						<button
-							class={p.headerBtn}
+						<Button
+							shape="icon"
+							variant="ghost"
+							aria-label={t("ideasPanel.clearCompleted", "Clear completed ideas")}
 							onClick={() => ideasStore.clearCompleted(listRepo())}
 							title={t("ideasPanel.clearCompleted", "Clear completed ideas")}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 								<path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5V1.5A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zm1.958 1l-.846 10.58a1 1 0 0 1-.997.92h-6.23a1 1 0 0 1-.997-.92L3.042 3.5h9.916z" />
 							</svg>
-						</button>
+						</Button>
 					</Show>
 					<PanelWindowControls panelId="notes" mode={mode()} onInlineClose={props.onClose} />
 				</div>

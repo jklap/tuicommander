@@ -21,22 +21,6 @@
   gap: 4px;
 }
 
-.headerBtn {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-}
-
-.headerBtn:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-}
-
 .title {
   color: var(--fg-secondary);
   font-weight: 500;
@@ -50,22 +34,6 @@
   background: var(--fg-muted);
   opacity: 0.4;
   flex-shrink: 0;
-}
-
-/* DEFERRED (2026-10-25) — remove legacy panel controls after desk-a 2195/2207/2208 and integrated GitPanel land. */
-.close:not([data-form-control]) {
-  background: none;
-  border: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-xl);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-md);
-}
-
-.close:not([data-form-control]):hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
 }
 
 .content {
