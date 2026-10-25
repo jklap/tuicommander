@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Extend the existing orchestration silence control to all sounds and OS notifications from agent-spawned sessions, while preserving Activity, bell entries and urgent user cards (#2341-be90).
 - Keep the GitHub monitored-repository count independent of expiring query results, and prevent queued or late poll requests from restoring retired monitoring entries (#2336-da0a).
 
 - Isolate repository-local settings read failures so healthy repositories refresh and unavailable repositories retain their last successful values (#2336-da0a).

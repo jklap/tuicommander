@@ -1,3 +1,6 @@
+## Subagent notification silence (2341-be90)
+
+- [ ] After the batch integrator runs the targeted notification suites, verify the desktop Notifications control with a parent and a spawned child: on mutes child question/error/completion/attention sounds and OS alerts, off restores them; parent/user tabs remain unchanged. Activity, bell entries and urgent cards must remain visible. Mobile/PWA sounds and push are a separate story by coordinator decision. The Rust edit is comment-only; this change does not require a backend restart.
 ## GitHub monitoring retirement (2336-da0a) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, remove a monitored repository while a GitHub action is outstanding. Confirm GitHub Status no longer counts it after the action finishes. Queued and late requests are covered by the targeted command-loop regression; the historical empty-sidebar cause remains unproven. This peer did not restart the daily app.

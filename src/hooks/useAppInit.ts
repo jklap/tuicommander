@@ -697,7 +697,8 @@ export async function initApp(deps: AppInitDeps) {
 				origin_session_id,
 				false,
 			);
-		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
+		if (noticeId !== -1 && isNotificationSound(sound))
+			void notificationsStore.play(sound, { originSessionId: origin_session_id });
 	});
 
 	const savedTabs = repositoriesStore
