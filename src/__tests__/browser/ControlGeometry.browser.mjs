@@ -125,6 +125,35 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: a migrated variable trigger loses native keyboard activation or leaves its popup latched.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'smartPromptSettingsGeometry') {
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Insert variable...')).focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length`),0,'Space closes variable rows');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length>10`),'Space opens the native variable list');
+      }
+      // Catches: a migrated repository switch loses native Space activation or an action loses Enter.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'repositoryGeometry') {
+        await evaluate(`document.querySelector('#geometry input[role="switch"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),true,'Space enables consolidation through its owner');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),false,'Space disables consolidation through its owner');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Copy settings')).focus()`);
+        assert.ok(await evaluate(`document.activeElement.textContent.includes('Copy settings')`),'Export action receives keyboard focus');
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId);
+        assert.deepEqual(await evaluate('window.repositoryActions'),{exports:1,resets:0},'Export activates only the existing export callback');
+      }
+      // Catches: removing Telegram's panel sizing changes disabled or native keyboard behavior.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'telegramGeometry') {
+        assert.deepEqual(await evaluate(`[...document.querySelectorAll('#geometry button:disabled')].map(button=>button.textContent.trim()).sort()`),['Add chat ID','Save and check bot']);
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Reload status')).focus()`);
+        const reads=await evaluate('window.telegramReads');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate('window.telegramReads')>reads,'Space reloads status through the existing owner');
+      }
       // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
       const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
       if (aiChat) {
@@ -178,6 +207,21 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
       console.log(path);
+      // Catches: shared Rebind/Clear lose native activation or cancellation changes a binding.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'workspaceGeometry') {
+        const binding=await evaluate(`document.querySelector('#geometry tr kbd').textContent`);
+        await evaluate(`document.querySelector('#geometry button[title="Edit shortcut"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').textContent`),'Press a key...','Space enters the real shortcut recorder');
+        // Drive cancellation explicitly; automatic recorder focus is not asserted by this geometry fixture.
+        await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr kbd').textContent`),binding,'Escape retains the existing binding');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.trim()==='Clear').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.deepEqual(await evaluate('window.workspaceHotkeys'),['Super+Shift+Y',null],'Clear calls the settings owner with null');
+        assert.equal(await evaluate(`[...document.querySelectorAll('#geometry button')].some(button=>button.textContent.trim()==='Clear')`),false,'Cleared hotkey removes its conditional action');
+      }
       // Catches: platform-specific desktop height wins over wrapped touch rows.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
         for (const platform of ['linux', 'windows']) {

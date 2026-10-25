@@ -178,9 +178,8 @@ const VariableDropdown: Component<{
 
 	return (
 		<div class={sp.varDropdownWrap}>
-			<button
+			<Button
 				data-non-setting="Open or close a structured Smart Prompt editor"
-				class={sp.varDropdownBtn}
 				onClick={() => setOpen(!open())}
 				type="button"
 			>
@@ -188,7 +187,7 @@ const VariableDropdown: Component<{
 				<span class={sp.varChevron} classList={{ [sp.varChevronOpen]: open() }}>
 					&#9660;
 				</span>
-			</button>
+			</Button>
 			<Show when={open()}>
 				<div class={sp.varDropdownList}>
 					<For each={Array.from(groups().entries())}>
@@ -200,6 +199,7 @@ const VariableDropdown: Component<{
 										<button
 											data-setting-id="prompts.prompts.{id}.text"
 											class={sp.varItem}
+											data-control-layout="row"
 											type="button"
 											onClick={() => {
 												props.onInsert(v.name);
@@ -575,13 +575,12 @@ const PromptEditor: Component<{
 				{/* Actions */}
 				<div class={sp.editorActions}>
 					<Show when={isBuiltIn() && isOverridden()}>
-						<button
+						<Button
 							data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
-							class={sp.smallBtn}
 							onClick={handleReset}
 						>
 							Reset to Default
-						</button>
+						</Button>
 					</Show>
 				</div>
 			</SectionCard>

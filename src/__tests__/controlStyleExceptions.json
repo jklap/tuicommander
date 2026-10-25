@@ -32,45 +32,6 @@
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
-    "file": "src/components/SettingsPanel/tabs/RepositoryTabs.module.css",
-    "story": "2229-cf50",
-    "rules": [
-      "[[],\".teamActions button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 6px 14px\"]]",
-      "[[],\".rowSwitch\",[\"height: 18px\",\"border: 1px solid var(--border)\",\"border-radius: 999px\"]]",
-      "[[],\".rowSwitch::after\",[\"height: 12px\",\"border-radius: 50%\"]]",
-      "[[],\".rowSwitch:checked\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/SmartPromptsTab.module.css",
-    "story": "2230-953d",
-    "rules": [
-      "[[],\".varDropdownBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]",
-      "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/TelegramTab.module.css",
-    "story": "2231-3d00",
-    "rules": [
-      "[[],\".panel button\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".panel input:not([type=\\\"checkbox\\\"]), .panel select, .panel button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/WorkspaceTabs.module.css",
-    "story": "2232-885d",
-    "rules": [
-      "[[],\".page .secondaryButton\",[\"min-height: 36px\",\"height: 36px\",\"padding: 6px 14px\"]]",
-      "[[],\".rebindButton\",[\"min-height: 36px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[],\".rebindButton:hover\",[\"border-color: var(--accent)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".rebindButton\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/WorkflowDesigner/WorkflowDesigner.module.css",
     "story": "2259-9345",
     "rules": [
