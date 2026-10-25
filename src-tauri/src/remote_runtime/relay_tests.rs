@@ -343,13 +343,25 @@ async fn relay_loss_and_daemon_restart_recover_without_duplicate_sessions() {
         .unwrap();
     assert_eq!(daemon.pty_count(), 1);
 
+    // Observe the transition, not a later mutable snapshot: a supervisor retry
+    // can legitimately replace link_lost with relay_unreachable before a poll.
+    let mut events = state.event_bus.subscribe();
     relay.stop().await;
-    until("typed link loss", WAIT, || {
-        let status = snap(&state, &id);
-        status.status == RemoteStatus::Error && status.relay_failure.is_some()
+    let loss = tokio::time::timeout(WAIT, async {
+        loop {
+            if let AppEvent::RemoteConnectionStatusChanged { payload } =
+                events.recv().await.expect("remote status event")
+                && payload["id"] == id
+                && payload["status"] == "error"
+                && payload["relay_failure"].is_string()
+            {
+                break payload;
+            }
+        }
     })
-    .await;
-    assert_eq!(snap(&state, &id).relay_failure, Some("link_lost"));
+    .await
+    .expect("typed link loss");
+    assert_eq!(loss["relay_failure"], "link_lost", "{loss}");
 
     relay.spawn().await;
     until("reconnect after relay loss", WAIT, || {
