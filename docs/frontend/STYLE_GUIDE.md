@@ -433,7 +433,10 @@ There are two shared densities: **form** (36px, 8px horizontal padding) and
 22px panel close/detach controls and fits inside the 32px app toolbar. Compose
 `toolbar` from `ui/FormControls.module.css` on header, filter, tab and toolbar
 rows. Do not apply it to a whole panel with configuration forms. Compose `form`
-on a nested form or settings popover to reset inherited toolbar tokens.
+on a nested form to reset inherited toolbar tokens. Shared dialog popovers, native
+dialogs, `[role="dialog"]` and native `[popover]` roots reset to form density, including when
+mounted inside a toolbar. Mark custom modal roots with their dialog role and
+accessible name; do not add a per-dialog density override.
 Shared icon actions and segmented switches follow the row density. Settings and
 configuration forms keep form density. Both densities retain the 44px touch
 minimum at viewport widths up to 600px.

@@ -22,6 +22,7 @@
 }
 
 .popover {
+  composes: form from "../ui/FormControls.module.css";
   /* Fixed 320px on any desktop viewport. The clamp only bites on a phone, which
      these dialogs now reach: McpConfirmHost renders one in the mobile shell, and
      at 320px CSS px the old fixed width sat edge-to-edge with no margin. */

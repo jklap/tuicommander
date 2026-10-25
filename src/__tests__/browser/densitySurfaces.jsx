@@ -13,6 +13,18 @@ if(surface==='terminal'){
  const [{TabBar},{ViewModeToggle},{terminalsStore}]=await Promise.all([import('../../components/TabBar/TabBar'),import('../../components/Terminal/TerminalChatView'),import('../../stores/terminals')]);
  const id=terminalsStore.add({name:'Density example',sessionId:null,fontSize:14,cwd:null,agentType:'claude'});
  render(()=><section id="geometry" style="background:var(--bg-secondary);padding:16px;width:1000px"><div id="tab-neighbour"><TabBar onTabSelect={()=>{}} onTabClose={()=>{}} onCloseOthers={()=>{}} onCloseToRight={()=>{}} onNewTab={()=>{}}/></div><div style="position:relative;height:100px"><ViewModeToggle terminalId={id}/></div></section>,root);
+}else if(surface==='session-dialog'){
+ const [{SessionControls},{default:s}]=await Promise.all([import('../../components/AIChatPanel/SessionControls'),import('../../components/AIChatPanel/AIChatPanel.module.css')]);
+ const done=async()=>{};
+ const chat={sessionId:()=> 'density-chat',title:()=> 'Density conversation',phase:()=> 'live',busy:()=> false,held:()=> false,capabilities:()=> ({}),sessions:()=> [],configOptions:()=> [{id:'model',name:'Model',type:'select',currentValue:'fixture',options:[{value:'fixture',name:'Fixture model'}]}],operatingRepo:()=> '/density/example',pinnedRepo:()=> null,launch:()=> null,error:()=> null,clearError:()=> {},startSession:done,selectSession:done,setOption:done,toggleRepoPin:()=> {}};
+ render(()=><section id="geometry" style="height:850px;background:var(--bg-secondary)"><div class={s.tidyHeader}><SessionControls chat={chat} onNewOptions={()=>{}}/></div></section>,root);
+ document.querySelector('details').open=true;
+ document.querySelector('[aria-label="Session settings"]').click();
+}else if(surface==='variable-dialog'){
+ const [{Toolbar},{VariableInputDialog}]=await Promise.all([import('../../components/Toolbar/Toolbar'),import('../../components/SmartPromptsDropdown/VariableInputDialog')]);
+ render(()=><section id="geometry" style="height:850px;background:var(--bg-secondary)"><Toolbar repoPath="/density/example"/></section>,root);
+ // Same DOM ownership as SmartPromptsDropdown: the real dialog is inside the app toolbar.
+ render(()=><VariableInputDialog variables={['branch_name']} promptName="Density prompt" onSubmit={()=>{}} onCancel={()=>{}}/>,document.querySelector('#toolbar'));
 }else if(surface==='stories'){
  const {StoriesDialog}=await import('../../components/StoriesDialog/StoriesDialog');
  render(()=><section id="geometry" style="width:1100px;height:650px"><StoriesDialog project="/density/example" mode="detached" onClose={()=>{}}/></section>,root);
@@ -29,10 +41,11 @@ if(surface==='terminal'){
 await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 window.controlGeometryReady=true;
 
-// Catches: missing toolbar opt-in on a real surface, or toolbar tokens leaking into Settings.
+// Catches: missing toolbar opt-in, or inherited toolbar tokens shrinking Settings and nested dialogs.
 window.controlGeometryRows=()=>{
  const root=document.querySelector('#geometry');
- const controls=surface==='terminal'?[...root.querySelectorAll('#tab-neighbour [data-form-control], [role="tablist"]')]:[...root.querySelectorAll('[data-form-control]:not([type="checkbox"]):not([type="range"]), [role="tablist"]')];
+ const dialog=surface==='session-dialog'?root.querySelector('[role="dialog"]'):surface==='variable-dialog'?root.querySelector('form'):null;
+ const controls=dialog?[...dialog.querySelectorAll('[data-form-control]')]:surface==='terminal'?[...root.querySelectorAll('#tab-neighbour [data-form-control], [role="tablist"]')]:[...root.querySelectorAll('[data-form-control]:not([type="checkbox"]):not([type="range"]), [role="tablist"]')];
  if(controls.length<2)throw new Error('Density fixture must mount real controls');
- return [{size:surface==='settings'?'default':'compact',heights:controls.map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}];
+ return [{size:surface==='settings'||dialog?'default':'compact',heights:controls.map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}];
 };

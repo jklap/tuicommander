@@ -13,9 +13,9 @@
 	line-height: 1.4;
 	user-select: text;
 }
-/* Form density is the default: Settings and configuration fields stay 36px.
-   Compose this reset on a form/popover nested inside a toolbar. */
-.form {
+/* Dialog and popover boundaries isolate form controls from an owning toolbar.
+   Nested headers may opt back into toolbar density. */
+.form, :global(dialog), :global([role="dialog"]), :global([popover]) {
  --control-height: 36px;
  --control-padding-x: 8px;
  --control-font-size: var(--font-md, 13px);
