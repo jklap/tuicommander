@@ -80,3 +80,9 @@ The follow-up adds test-only evidence; it does not resolve the six open rows or 
 - Row 23: warm listing records inventory time and each checkout's blocking-queue and inspection time. The existing three-second assertion includes those measurements.
 
 Diagnostic state and capture operations are guarded by `cfg(test)`. The native Mac touched-filter run is authorized explicitly for this follow-up; rb must not be retried. Windows classification and the Windows CI completion criterion remain open until the next authorized CI run supplies evidence.
+
+### Follow-up validation
+
+Native macOS validation of the diagnostic source in `354bcc86fa0c1737b52000e37d5322bbbbec9279` passed all six touched tests across the `tuicommander` and `tuic-git` lib test binaries. Command: `scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml -p tuicommander -p tuic-git --lib -E '<the six test names in rows 6, 9, 12, 17, 18 and 23>'`, through `tuic-bg.sh`, native `build-slot.sh` and the mbx cargo shim, with the required test TMPDIR. Full command and output: `~/Gits/.tmp/results/ci-win-diagnostics-native.log`. Build: 4m49s; test summary: 11.988s, six passed. The forty-worktree test's 11.882s total includes setup; its unchanged three-second warm-operation assertion passed. The linker emitted the existing compact-unwind size warning; mbx reported cache bypass/miss and automatic low-disk GC messages. No cache deletion or target override was requested by the agent.
+
+`git diff --check` and `fmt-changed.sh <worktree> main...HEAD` passed. The story closure check still refuses criterion 1 (complete product-versus-fixture classification); native Mac success cannot resolve the six Windows evidence gaps or satisfy the Windows CI criterion. No rb retry, push, desktop launch, deadline increase or assertion relaxation was performed.
