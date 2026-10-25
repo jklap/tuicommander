@@ -732,19 +732,19 @@ fn spawn_silence_timer(
                         emit_active_subtasks(&state, &session_id, 0, "");
                     }
                     if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
-                        vt.lock().process(b"\x1b[?25h");
+                        vt.lock().process_local(b"\x1b[?25h");
                     }
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
-                } else if transition.screen_confirms_idle
-                    && !shell_is_busy
-                    && queued_command_count(&state, &session_id) > 0
-                {
+                } else if transition.screen_confirms_idle && !shell_is_busy {
                     // Silence can mark the shell idle before the Ready screen
                     // stabilizes. That later confirmation has no second shell
                     // edge, so it must retry the existing self-guarded flush.
-                    flush_pending_injections(&state, &session_id);
+                    reevaluate_orchestrator_mail_wake(&state, &session_id);
+                    if queued_command_count(&state, &session_id) > 0 {
+                        flush_pending_injections(&state, &session_id);
+                    }
                 }
             }
 
@@ -3674,6 +3674,9 @@ pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
 /// Timestamp-only bookkeeping after successful writes, including automated input.
 /// It must not re-arm priority after the reader already applied a fast echo.
 pub(crate) fn record_input_ms(state: &AppState, session_id: &str) {
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+        silence.lock().last_input_at = Some(std::time::Instant::now());
+    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

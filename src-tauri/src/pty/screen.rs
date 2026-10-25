@@ -1726,7 +1726,7 @@ pub(super) fn apply_foreground_agent_observation(
                 // Display-only recovery: never send these sequences to shell
                 // stdin. This must not depend on a mounted desktop terminal.
                 vt.force_stop_sync_if_buffered();
-                vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
+                vt.process_local(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
                 if let Some(dirty) = state.grid.frame_dirty.get(session_id) {
                     dirty.store(true, Ordering::Relaxed);
                 }

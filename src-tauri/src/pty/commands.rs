@@ -893,7 +893,7 @@ pub(crate) fn terminal_exit_alt_screen(
             if !vt.is_alternate_screen() {
                 return false;
             }
-            vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
+            vt.process_local(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
             (true, vt.serialize_dirty_rows())
         };
         if was_alt {
