@@ -661,6 +661,11 @@ Repository state is persisted by the Rust backend in `repositories.json`, in
 the single platform config directory shared by debug and release builds,
 written through the locked/atomic `ConfigFile` path.
 
+The desktop and headless HTTP routers share GitHub poller controls and repository
+status, PR and issue reads. Poller startup and event delivery do not require a
+WebView; TCP authentication and the trusted local Unix transport are unchanged.
+GitHub account/auth and mutation routes are not part of this shared surface.
+
 At bootstrap, `tuic-remote` may select one immutable named application instance
 with `--instance <id>`. Omitting it preserves the existing platform config path,
 keyring tuple (`tuicommander`/`vault`), and migrations. A named ID is a lowercase

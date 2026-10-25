@@ -49,6 +49,7 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/test-headless-github.py
 !scripts/agent-test.py
 !scripts/agent-test-visible.py
 !scripts/agent-test-tests.py

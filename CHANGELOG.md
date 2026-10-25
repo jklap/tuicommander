@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Serve shared GitHub poller controls and repository status, PR and issue reads from headless `tuic-remote`, with the existing transport authentication (#2345-49f0).
+
 - Keep final agent API failures red through idle and failed auto-retry; detect wrapped Claude connection loss/auth/JSON errors, Codex native and legacy final errors, and ego provider-failure receipts (#2335-9c03).
 
 - Remove inherited rustup proxy state from new terminals so repository toolchain pins apply; preserve explicit run-config toolchain overrides (#2318-4b44).
