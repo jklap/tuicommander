@@ -698,14 +698,6 @@
     ]
   },
   {
-    "file": "src/mobile/screens/MobileChatScreen.module.css",
-    "story": "2288-ba94",
-    "rules": [
-      "[[],\".controls button, .banner button\",[\"padding: 6px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".tableDocument button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/screens/SessionDetailScreen.module.css",
     "story": "2289-7662",
     "rules": [
