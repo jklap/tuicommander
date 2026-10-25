@@ -208,6 +208,35 @@ or equivalent native differential output from the CI environment, is required
 before rows 6 and 12 can be classified definitively. No speculative code fix
 was made from the repeated diagnostics.
 
+### CI-native failure-only probes
+
+After the lab connection failed, the coordinator selected CI as the Windows
+runner. The two owner tests now attach differential results only when their
+original tracking-ref or persisted-stdout check has already failed. Successful
+probes cannot replace the original result or make the test pass. No production
+code, assertion expectation, removal guard or normal-path execution changes.
+
+- Row 6 captures the actual cleanup PATH and cwd under `cfg(test)` on Windows.
+  The failure probe selects the first `git.exe` in that PATH, then compares
+  direct `git fetch --prune origin` with the original `cmd /C` form, both using
+  the captured PATH and cwd. Each probe starts with the same stale tracking
+  ref restored inside this test's disposable repository. The panic includes
+  invocation, signed exit code, native status and both streams. Each of the
+  two resets and two subprocess probes has a ten-second execution deadline.
+- Row 12 calls the real `run_precheck` entry point for the original IF chain,
+  grouped IF/ELSE and plain file read under both the original verbatim cwd and
+  its native spelling. All six cases retain the same clean-environment,
+  cmd-flag, process-ownership and stream-capture policy as the failed precheck.
+  Each has a two-second execution budget; existing stream cleanup may take
+  another two seconds. Setup is outside that execution budget. The panic
+  includes each cwd, command and complete precheck result (termination, exit
+  code, streams and truncation), plus the fixture input file read by Rust.
+
+These are diagnostic probes, not fixes or new test oracles. Formatting and
+static diff checks apply locally. Native compilation and execution of the
+Windows-only branches remain for the next main CI run; neither classification
+nor Windows GREEN is claimed before that evidence exists.
+
 ## EGO-DEFECTS
 
 The admitted adversarial-tdd skill requests its README, but resource retrieval failed with the exact line: `/Users/stefano.straus/.ego/skills/adversarial-tdd: no such file or directory`. No README contents were invented.
