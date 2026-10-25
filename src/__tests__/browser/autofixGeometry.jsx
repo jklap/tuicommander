@@ -12,3 +12,5 @@ const ready=()=>{
  window.controlGeometryReady=true;
 };
 requestAnimationFrame(ready);
+
+window.geometryIconLabels=["Close"];
