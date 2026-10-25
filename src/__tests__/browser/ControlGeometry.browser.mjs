@@ -42,7 +42,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryError){clearTimeout(stop);reject(new Error(window.controlGeometryError));return;}if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:window.controlGeometryRows?window.controlGeometryRows():document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       // Catches: content-width icons, compact shrinking targets, rounded corner misses or lost native activation.
       const icons = await evaluate(`window.iconClicks === undefined ? [] : [...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label'),width:r.width,height:r.height,x:r.x+1,y:r.y+1,corner:button.contains(document.elementFromPoint(r.x+1,r.y+1)),radius:getComputedStyle(button).borderRadius,circle:button.hasAttribute('data-circle')?(button.firstElementChild?getComputedStyle(button.firstElementChild).borderRadius:'none'):null,disabled:button.disabled};})`);
       for(const icon of icons) {
@@ -125,6 +125,64 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: a migrated variable trigger loses native keyboard activation or leaves its popup latched.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'smartPromptSettingsGeometry') {
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Insert variable...')).focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length`),0,'Space closes variable rows');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length>10`),'Space opens the native variable list');
+      }
+      // Catches: a migrated repository switch loses native Space activation or an action loses Enter.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'repositoryGeometry') {
+        await evaluate(`document.querySelector('#geometry input[role="switch"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),true,'Space enables consolidation through its owner');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),false,'Space disables consolidation through its owner');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Copy settings')).focus()`);
+        assert.ok(await evaluate(`document.activeElement.textContent.includes('Copy settings')`),'Export action receives keyboard focus');
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId);
+        assert.deepEqual(await evaluate('window.repositoryActions'),{exports:1,resets:0},'Export activates only the existing export callback');
+      }
+      // Catches: removing Telegram's panel sizing changes disabled or native keyboard behavior.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'telegramGeometry') {
+        assert.deepEqual(await evaluate(`[...document.querySelectorAll('#geometry button:disabled')].map(button=>button.textContent.trim()).sort()`),['Add chat ID','Save and check bot']);
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Reload status')).focus()`);
+        const reads=await evaluate('window.telegramReads');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate('window.telegramReads')>reads,'Space reloads status through the existing owner');
+      }
+      // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
+      const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
+      if (aiChat) {
+        const target = width <= 600 ? 44 : 36;
+        assert.deepEqual(aiChat.rawActions, [], 'AI Chat actions and text fields must use shared primitives');
+        assert.equal(aiChat.visible.height, target, 'Visible picker frame owns shared target height');
+        assert.deepEqual(aiChat.picker, aiChat.visible, 'Invisible native picker must cover the complete visible frame');
+        assert.equal(aiChat.summaries.length, 2, 'Both native SessionControls disclosures must mount');
+        for (const summary of aiChat.summaries) assert.equal(summary.height, target, JSON.stringify(summary));
+        assert.equal(aiChat.summaries[0].width, target, 'Icon disclosure target stays square');
+        assert.ok(aiChat.summaries[0].top >= aiChat.header.top && aiChat.summaries[0].bottom <= aiChat.header.bottom,
+          'Header must contain the shared-height disclosure');
+        assert.ok(aiChat.editor.height >= target, 'Composer must retain a complete editable line');
+        assert.equal(aiChat.editorText, 'A complete composing line');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true; document.querySelectorAll('summary[data-control-layout="disclosure"]')[1].focus()`);
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open`),false,'Escape from nested disclosure must close the actions menu');
+        assert.equal(await evaluate(`document.activeElement === document.querySelector('summary[data-control-layout="disclosure"]')`),true,'Escape must return focus to the native actions summary');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true`);
+      }
+      // Catches: desktop composer overflow hiding the phone editor's long draft from touch scrolling.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'mobileChatScreenGeometry' && width <= 600) {
+        const editor = await evaluate(`(async()=>{const field=document.querySelector('textarea');field.value=Array.from({length:20},(_,i)=>'Draft line '+i).join('\\n');field.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const style=getComputedStyle(field);return {scroll:field.scrollHeight,client:field.clientHeight,overflow:style.overflowY};})()`);
+        await context.test('catches long phone AI Chat drafts losing native scrolling', () => {
+          assert.ok(editor.scroll > editor.client, 'The draft must exceed the phone editor cap');
+          assert.equal(editor.overflow, 'auto', 'Long phone drafts must remain natively scrollable');
+        });
+      }
       // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
         const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
@@ -143,12 +201,27 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(target.height,44,JSON.stringify({width,target}));
         }
       }
-      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets});
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets,aiChat});
 
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
       console.log(path);
+      // Catches: shared Rebind/Clear lose native activation or cancellation changes a binding.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'workspaceGeometry') {
+        const binding=await evaluate(`document.querySelector('#geometry tr kbd').textContent`);
+        await evaluate(`document.querySelector('#geometry button[title="Edit shortcut"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').textContent`),'Press a key...','Space enters the real shortcut recorder');
+        // Drive cancellation explicitly; automatic recorder focus is not asserted by this geometry fixture.
+        await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr kbd').textContent`),binding,'Escape retains the existing binding');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.trim()==='Clear').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.deepEqual(await evaluate('window.workspaceHotkeys'),['Super+Shift+Y',null],'Clear calls the settings owner with null');
+        assert.equal(await evaluate(`[...document.querySelectorAll('#geometry button')].some(button=>button.textContent.trim()==='Clear')`),false,'Cleared hotkey removes its conditional action');
+      }
       // Catches: platform-specific desktop height wins over wrapped touch rows.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
         for (const platform of ['linux', 'windows']) {

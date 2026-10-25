@@ -23,12 +23,12 @@ export function RepositoryActions(props: {
 						)}
 					</p>
 					<div class={r.teamActions}>
-						<button
+						<Button
 							data-non-setting="Export the current repository preferences through the existing team-config workflow"
 							onClick={props.onExport}
 						>
 							{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
-						</button>
+						</Button>
 					</div>
 				</SectionCard>
 			</Show>

@@ -272,7 +272,7 @@ Branch item anatomy (left to right):
 - **PR marker** (optional): a 7px square plus `#N`, both in the state color, no fill or border. A conflict rotates the square into a diamond so it does not rely on color. Draft and Review outline the square instead of filling it, as their pills did (Review vs Changes requested differ only by fill). Motion matches the pill form: the conflict marker pulses at 1.5s, Checking and CI Running at 2s; the number never moves. The UI Legend renders this same component The state word (Review, Conflicts, …) and any uncommitted-file count live in the `data-tooltip`
 - **Unmerged mark** (optional): a 7px outlined square in `--fg-secondary`, centered in a 14px target with no pill background. It marks a worktree with commits outside the default branch even when its working tree is clean; hover or focus explains why branch deletion is blocked.
 - **Diff numbers** (optional): plain `+N -N` in `--font-2xs`, `--success` / `--diff-del`, no chip. Always shown beside the PR marker, never alternating with it
-- **Actions** (on hover only): `max-width: 0 → 44px`, two 20×20px buttons (+, ×)
+- **Actions** (on hover only): reveal the natural width of shared compact `Button` controls (+, ×), without reserving space while idle. Compact actions are 22px high on desktop and at least 44px high at touch widths. Swipe-tray actions use shared stretch geometry; the open tray grows with its controls.
 
 ### Tab Bar
 
@@ -309,7 +309,7 @@ Located inside `#toolbar`, center section. Background matches toolbar (`--bg-pri
 Tab anatomy: `[agent badge?] [name, truncated] [close × on hover]`
 - Agent badge: small colored prefix (e.g. `C claude`, `G gemini`)
 - Close button: invisible by default, `opacity: 1` on tab hover
-- New tab button `[+]`: 28px circle, `--accent` color
+- New-tab and scroll actions use shared stretch `Button` geometry with square edges (36px desktop minimum, 44px at touch widths). The tab-bar container grows with these controls. Close and global-workspace actions use shared compact Buttons; inline rename uses a shared compact Input.
 
 ### Status Bar
 
@@ -446,6 +446,16 @@ Clickable list rows/cards retain native buttons with `data-control-layout="row"`
 or `data-control-layout="card"`. Their geometry selectors must include both the
 `button` tag and the exact marker. This exception is for content layout, never
 form, toolbar or dialog actions.
+
+AI Chat retains native full-frame conversation pickers and native session
+`details`/`summary` disclosures. Mark these controls with
+`data-control-layout="overlay-picker"` or `"disclosure"` and retain only their
+exact, reasoned geometry exceptions. The visible picker frame and disclosures
+use the shared 36px/44px control tokens. Its shared `Textarea` retains the tested
+panel-relative editor cap and one-line reset with a narrow `composer-editor`
+exception; this does not exempt other actions or fields. Keep desktop editor
+resize and overflow rules scoped to the non-mobile composer. The phone editor
+keeps its native scrollable surface for drafts beyond its height cap.
 
 `SegmentedControl` is the shared view switch. It uses a named tablist, one
 keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an

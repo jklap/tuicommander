@@ -10,6 +10,7 @@ import { getSessionConnection } from "../../transportRuntime";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
+import { Button } from "../ui/Button";
 
 export { effectiveMergeMethod };
 
@@ -311,9 +312,15 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 				<Show
 					when={!folded()}
 					fallback={
-						<button class={s.subagentFold} onClick={() => setOpen(true)} aria-expanded="false">
+						<Button
+							size="compact"
+							variant="ghost"
+							class={s.subagentFold}
+							onClick={() => setOpen(true)}
+							aria-expanded="false"
+						>
 							{t("sidebar.subagentCount", "{count} subagents", { count: String(running().length) })}
-						</button>
+						</Button>
 					}
 				>
 					<For each={[...running(), ...(returnedOpen() ? returned() : [])]}>
@@ -331,13 +338,21 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 						)}
 					</For>
 					<Show when={running().length > SUBAGENT_COLLAPSE_AFTER}>
-						<button class={s.subagentFold} onClick={() => setOpen(false)} aria-expanded="true">
+						<Button
+							size="compact"
+							variant="ghost"
+							class={s.subagentFold}
+							onClick={() => setOpen(false)}
+							aria-expanded="true"
+						>
 							{t("sidebar.subagentCollapse", "Collapse")}
-						</button>
+						</Button>
 					</Show>
 				</Show>
 				<Show when={returned().length > 0}>
-					<button
+					<Button
+						size="compact"
+						variant="ghost"
 						class={s.subagentFold}
 						data-testid="returned-subagent-fold"
 						aria-expanded={returnedOpen()}
@@ -348,7 +363,7 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 					>
 						<ChevronIcon />
 						{t("sidebar.returnedCount", "{count} returned", { count: String(returned().length) })}
-					</button>
+					</Button>
 				</Show>
 			</div>
 		</Show>
@@ -384,7 +399,9 @@ const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> 
 	return (
 		<For each={targets()}>
 			{(target) => (
-				<button
+				<Button
+					size="compact"
+					variant="ghost"
 					class={s.crossRepoChildren}
 					data-testid="cross-repo-child-link"
 					data-tooltip={target.repo.displayName}
@@ -402,7 +419,7 @@ const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> 
 						)}
 					</span>
 					<ChevronIcon />
-				</button>
+				</Button>
 			)}
 		</For>
 	);
@@ -628,6 +645,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 				{(t) => (
 					<>
 						<button
+							data-control-layout="row"
 							class={cx(
 								s.branchTabItem,
 								isActive() && s.active,
@@ -718,7 +736,9 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 			/>
 			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
 			<Show when={idleIds().length > 0}>
-				<button
+				<Button
+					size="compact"
+					variant="ghost"
 					class={s.subagentFold}
 					data-testid="idle-session-fold"
 					aria-expanded={idleExpanded()}
@@ -726,7 +746,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 				>
 					<ChevronIcon />
 					{t("sidebar.idleSessionCount", "{count} idle sessions", { count: String(idleIds().length) })}
-				</button>
+				</Button>
 			</Show>
 		</div>
 	);
@@ -1059,7 +1079,10 @@ export const BranchItem: Component<{
 			class={tray ? s.branchSwipeActions : s.branchActions}
 			style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}
 		>
-			<button
+			<Button
+				size="compact"
+				variant="ghost"
+				geometry={tray ? "stretch" : "default"}
 				class={s.branchMoreBtn}
 				onClick={(e) => {
 					e.stopPropagation();
@@ -1073,8 +1096,11 @@ export const BranchItem: Component<{
 				data-tooltip-align="right"
 			>
 				{tray ? t("sidebar.more", "More") : "⋯"}
-			</button>
-			<button
+			</Button>
+			<Button
+				size="compact"
+				variant="primary"
+				geometry={tray ? "stretch" : "default"}
 				class={s.branchAddBtn}
 				onClick={(e) => {
 					e.stopPropagation();
@@ -1089,7 +1115,7 @@ export const BranchItem: Component<{
 				data-tooltip-align="right"
 			>
 				+
-			</button>
+			</Button>
 			{/* Only linked worktrees can be removed — never the main checkout, whose
 					    worktreePath IS the repo root. `isMain` is name-based (main/master/
 					    develop) so it misses a main checkout sitting on a differently-named
@@ -1103,7 +1129,10 @@ export const BranchItem: Component<{
 					props.canRemove
 				}
 			>
-				<button
+				<Button
+					size="compact"
+					variant="danger"
+					geometry={tray ? "stretch" : "default"}
 					class={cx(s.branchRemoveBtn, tray && s.branchSwipeDelete)}
 					disabled={props.isRemoving}
 					onClick={(e) => {
@@ -1125,7 +1154,7 @@ export const BranchItem: Component<{
 					data-tooltip-align="right"
 				>
 					{props.isRemoving ? "…" : "×"}
-				</button>
+				</Button>
 			</Show>
 		</div>
 	);
@@ -1191,7 +1220,9 @@ export const BranchItem: Component<{
 				>
 					{branchIcon()}
 					<Show when={getBranchTabsAvailable(props.branch)}>
-						<button
+						<Button
+							size="compact"
+							variant="ghost"
 							type="button"
 							class={cx(s.branchIconToggle, !props.branch.tabsCollapsed && s.expanded)}
 							aria-expanded={!props.branch.tabsCollapsed}
@@ -1209,7 +1240,7 @@ export const BranchItem: Component<{
 									{props.branch.terminals.length}
 								</span>
 							</Show>
-						</button>
+						</Button>
 					</Show>
 					<div class={s.branchContent}>
 						<span
@@ -1342,7 +1373,9 @@ export const BranchItem: Component<{
 								{t("sidebar.uncommittedCount", "{count} uncommitted", { count: String(lifecycle()?.dirtyFiles) })}
 							</span>
 							<Show when={props.canRemove}>
-								<button
+								<Button
+									size="compact"
+									variant="ghost"
 									class={s.mergedCleanup}
 									disabled={props.isRemoving}
 									onClick={(e) => {
@@ -1351,7 +1384,7 @@ export const BranchItem: Component<{
 									}}
 								>
 									{props.isRemoving ? t("sidebar.removingWorktree", "Removing…") : t("sidebar.cleanUp", "Clean up")}
-								</button>
+								</Button>
 							</Show>
 						</span>
 					</Show>
@@ -1768,7 +1801,9 @@ export const RepoSection: Component<{
 					</Show>
 
 					<div class={cx(s.repoActions, ghBadgeCount() > 0 && s.repoActionsWithBadge)}>
-						<button
+						<Button
+							size="compact"
+							variant="ghost"
 							class={s.repoActionBtn}
 							onClick={handleMenuToggle}
 							aria-label={t("sidebar.repoOptions", "Repository options")}
@@ -1777,16 +1812,29 @@ export const RepoSection: Component<{
 							data-tooltip-align="right"
 						>
 							⋯
-						</button>
+						</Button>
 						{/* Non-git repos have no worktrees, so the add button is absent. The
 						    fallback keeps its slot occupied — without it the whole trailing
 						    cluster (⋯ + chevron) would shift right and stop lining up with
 						    the git-repo headers above and below it. */}
 						<Show
 							when={props.repo.isGitRepo !== false}
-							fallback={<span class={cx(s.repoActionBtn, s.addBtn, s.repoActionSlot)} aria-hidden="true" />}
+							fallback={
+								<Button
+									size="compact"
+									variant="ghost"
+									class={cx(s.repoActionBtn, s.addBtn, s.repoActionSlot)}
+									disabled
+									tabIndex={-1}
+									aria-hidden="true"
+								>
+									+
+								</Button>
+							}
 						>
-							<button
+							<Button
+								size="compact"
+								variant="ghost"
 								class={cx(s.repoActionBtn, s.addBtn)}
 								disabled={props.isCreatingWorktree}
 								onClick={(e) => {
@@ -1807,12 +1855,14 @@ export const RepoSection: Component<{
 								data-tooltip-align="right"
 							>
 								{props.isCreatingWorktree ? "…" : "+"}
-							</button>
+							</Button>
 						</Show>
 						{/* Last in the cluster, next to the chevron: the hover-only ⋯ and + keep
 						    their boxes while invisible, so a badge ahead of them floated in a gap. */}
 						<Show when={ghBadgeCount() > 0}>
-							<button
+							<Button
+								size="compact"
+								variant="ghost"
 								class={cx(s.repoActionBtn, s.ghBadgeBtn)}
 								data-gh-panel-trigger
 								onClick={(e) => {
@@ -1837,7 +1887,7 @@ export const RepoSection: Component<{
 								</Show>
 								<Show when={myPrsCount() > 0 && otherCount() === 0}>{myPrsCount()}</Show>
 								<Show when={myPrsCount() === 0}>{otherCount()}</Show>
-							</button>
+							</Button>
 						</Show>
 					</div>
 					<span class={cx(s.repoChevron, expanded() && s.expanded)}>
