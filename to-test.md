@@ -1,3 +1,7 @@
+## Windows workspace and resume paths (2310-6e76) — Rust restart required
+
+- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. Windows cache counters, cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
+
 ## Windows Clippy platform gates (2306-0b3b)
 
 - [x] rb Windows GNU cross-target Clippy with default desktop features and all targets passes with warnings denied; rb Linux Clippy with dictation and all targets also passes. Unix-only items follow their consumers; standby grace remains available to Windows unit tests. Full Windows dictation CI remains unverified because the rb MinGW headers cannot compile whisper.cpp thread power throttling types. These compile-only Rust changes do not hot-reload into the daily backend; Boss can rebuild/restart when ready, but no runtime behavior change is expected.
