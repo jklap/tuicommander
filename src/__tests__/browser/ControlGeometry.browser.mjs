@@ -121,7 +121,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       }
       result.containment = [];
       const composer=await evaluate("window.composerGeometry ?? null");
-      const targets=await evaluate(`[...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.getAttribute('aria-label')||button.title||button.textContent.trim(),width:r.width,height:r.height,iconOnly:button.hasAttribute('data-form-control') && (!button.textContent.trim() || /^[+−×✕]$/.test(button.textContent.trim()))};})`);
+      const targets=await evaluate(`[...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.getAttribute('aria-label')||button.title||button.textContent.trim(),width:r.width,height:r.height,borderColor:getComputedStyle(button).borderTopColor,ready:button.hasAttribute('data-ready'),disabled:button.disabled,iconOnly:button.hasAttribute('data-form-control') && (!button.textContent.trim() || /^[+−×✕]$/.test(button.textContent.trim()))};})`);
       // Catches: a default content-width Button leaves mobile icon actions narrower than44px.
       if((process.env.TUIC_GEOMETRY_FIXTURE ?? '').startsWith('mobile') && width<=600) {
         for(const target of targets.filter(target=>target.iconOnly && target.width>0 && target.height>0)) {

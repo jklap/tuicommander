@@ -17,4 +17,15 @@ if(ctrl.getAttribute('aria-expanded')!=='true'||document.querySelectorAll('[role
 document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
 if(document.querySelector('[role="menu"]'))throw new Error('Escape did not dismiss menu');
 if(buttons.filter(button=>button.disabled).length!==9)throw new Error('Ended controls must remain disabled');
+// Catches: keybar readiness depends on desktop-only CSS, leaving PWA borders neutral.
+const ready=[...document.querySelectorAll('button[data-ready]')];
+const enabled=ready.filter(button=>!button.disabled);
+const accent='rgb(89, 168, 221)';
+const fail=message=>{window.controlGeometryError=message;throw new Error(message);};
+if(enabled.length<2)fail('Fixture must include slash and confirmation readiness');
+for(const button of ready){
+ const border=getComputedStyle(button).borderTopColor;
+ if(!button.disabled && border!==accent)fail(`Ready ${button.textContent} border ${border} is not ${accent}`);
+ if(button.disabled && border===accent)fail('Disabled key retains ready accent border');
+}
 window.controlGeometryReady=true;
