@@ -309,7 +309,7 @@ Located inside `#toolbar`, center section. Background matches toolbar (`--bg-pri
 Tab anatomy: `[agent badge?] [name, truncated] [close × on hover]`
 - Agent badge: small colored prefix (e.g. `C claude`, `G gemini`)
 - Close button: invisible by default, `opacity: 1` on tab hover
-- New-tab and scroll actions use shared stretch `Button` geometry with square edges (36px desktop minimum, 44px at touch widths). The tab-bar container grows with these controls. Close and global-workspace actions use shared compact Buttons; inline rename uses a shared compact Input.
+- New-tab and scroll actions use shared stretch `Button` geometry with square edges (22px toolbar density, 44px at touch widths). The tab-bar container grows with these controls. Close and global-workspace actions use shared compact Buttons; inline rename uses a shared compact Input.
 
 ### Status Bar
 
@@ -427,6 +427,19 @@ All follow the same structure:
 **Ready action** (Send, Save): set `data-ready="true"` on the button while it can act (unsaved changes, agent selected). `styles/ready-actions.css`, imported by desktop `global.css` and PWA `mobile.css`, gives `button[data-ready]:not(:disabled)` the accent border, text and a faint accent tint; clean or disabled stays neutral. Never hand-roll a per-component "dirty" colour.
 
 ### Form Controls
+
+There are two shared densities: **form** (36px, 8px horizontal padding) and
+**toolbar** (22px, 6px horizontal padding). The toolbar size matches the measured
+22px panel close/detach controls and fits inside the 32px app toolbar. Compose
+`toolbar` from `ui/FormControls.module.css` on header, filter, tab and toolbar
+rows. Do not apply it to a whole panel with configuration forms. Compose `form`
+on a nested form to reset inherited toolbar tokens. Shared dialog popovers, native
+dialogs, `[role="dialog"]` and native `[popover]` roots reset to form density, including when
+mounted inside a toolbar. Mark custom modal roots with their dialog role and
+accessible name; do not add a per-dialog density override.
+Shared icon actions and segmented switches follow the row density. Settings and
+configuration forms keep form density. Both densities retain the 44px touch
+minimum at viewport widths up to 600px.
 
 Use `Button`, `Select`, `Input` and `Textarea` from `src/components/ui` for form fields.
 They forward native attributes, refs, options and events. `Input` is for text,
@@ -722,8 +735,8 @@ arrange the wrapping picker but must not resize its swatches.
 
 Use `Button shape="icon" aria-label="Describe the action"` for an icon-only action.
 Use `circular` when the action needs a circular visual. The native hit region stays
-square at 36 × 36px on desktop and 44 × 44px at touch widths; only the inner
-surface is circular. `size="compact"` does not shrink an icon target. Icon mode
+square at 36 × 36px in forms, 22 × 22px in toolbar rows, and 44 × 44px at touch widths; only the inner
+surface is circular. `size="compact"` alone does not shrink a standalone icon target; a toolbar row selects toolbar density for all its controls. Icon mode
 cannot combine with stretch geometry. Supply one icon or glyph and a nonempty,
 descriptive `aria-label` (required by the TypeScript API); a tooltip alone is not
 an accessible name. Do not add feature-level sizing or rounding rules.

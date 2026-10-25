@@ -83,6 +83,7 @@
 }
 
 .chatTabs {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   gap: 2px;
   overflow-x: auto;
@@ -162,6 +163,7 @@
 }
 
 .findBar {
+  composes: toolbar from "../ui/FormControls.module.css";
   flex-wrap: wrap;
   position: sticky;
   top: 0;
@@ -837,6 +839,7 @@
 }
 
 .queueHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 6px;
@@ -998,6 +1001,7 @@
    the agent's plan, an elicitation form, and the row of session controls. */
 
 .controlBar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1278,7 +1282,8 @@
 
 
 /* The header contains shared desktop/touch targets without clipping. */
-.tidyHeader { display: flex; align-items: center; gap: 4px; flex-shrink: 0; box-sizing: border-box; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.tidyHeader {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: center; gap: 4px; flex-shrink: 0; box-sizing: border-box; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .sessionHeader { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; }
 .conversationSwitcher { position: relative; flex: 1; min-width: 0; }
 .conversationLabel { box-sizing: border-box; height: var(--control-height, 36px); padding: 0 var(--control-padding-x, 8px); display: flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12px; min-width: 0; }
@@ -1290,7 +1295,8 @@
 .actionsMenu { position: relative; flex-shrink: 0; }
 .actionsMenu > summary { list-style: none; font-size: 18px; }
 .actionsMenu > summary::-webkit-details-marker { display: none; }
-.actionsMenuItems { position: absolute; top: 100%; right: 0; z-index: 20; min-width: 230px; max-height: 65vh; overflow-y: auto; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-dropdown); }
+.actionsMenuItems {
+  composes: form from "../ui/FormControls.module.css"; position: absolute; top: 100%; right: 0; z-index: 20; min-width: 230px; max-height: 65vh; overflow-y: auto; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-dropdown); }
 .actionsMenuItems > .headerBtn, .actionsMenuItems > .conversationList > summary {
   justify-content: flex-start;
   gap: 8px;

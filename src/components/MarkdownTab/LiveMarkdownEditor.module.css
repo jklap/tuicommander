@@ -32,6 +32,7 @@
 }
 
 .toolbar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

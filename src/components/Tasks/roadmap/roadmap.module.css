@@ -1,5 +1,6 @@
 .roadmap { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; color: var(--fg-primary); background: var(--bg-primary); font: var(--font-md) var(--font-ui); }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.toolbar {
+  composes: toolbar from "../../ui/FormControls.module.css"; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .roadmap :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .toolbar label, .navigation { display: flex; align-items: center; gap: 8px; }
 .navigation { flex: 1; }

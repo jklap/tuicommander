@@ -16,6 +16,7 @@ Application Settings tabs opt into `SettingFields` row presentation. The default
 `ui/Button` provides primary, secondary, ghost and danger actions in default or compact size.
 `ui/Switch`, `ui/Slider` and `ui/ColorInput` forward native checkbox, range and colour input attributes/events. Switch and ColorInput wrap decorative visuals but forward refs, IDs and labels to the native input; ColorInput also accepts `selected` and decorative children.
 All shared form controls use `ui/FormControls.module.css`; screen CSS owns layout only. Settings field wrappers retain labels, hints and owner callbacks.
+Compose the shared `toolbar` density on header, tab, filter and toolbar rows: 22px height and 6px horizontal padding. Form density stays 36px with 8px padding. Nested configuration menus compose `form` to reset inherited toolbar tokens. Both densities retain 44px touch targets. CSS module compositions can export multiple class names; DOM selectors must join them as a compound selector, not a descendant selector.
 Native list-row/card buttons use the explicit `data-control-layout` marker described in the style guide.
 The native-select guard in `src/__tests__/nativeSelect.test.ts` rejects new raw
 selects outside `ui/` and requires the explicit pending-migration list to shrink.

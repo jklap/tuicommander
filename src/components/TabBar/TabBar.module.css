@@ -5,6 +5,7 @@
 
 /* TabBar wrapper — flex row with scroll region + new-tab button */
 .tabBarWrapper {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   flex: 1;
   align-items: stretch;

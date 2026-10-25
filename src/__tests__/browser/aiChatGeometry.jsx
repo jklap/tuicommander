@@ -58,7 +58,7 @@ window.aiChatGeometry = () => {
   const picker = document.querySelector('[data-control-layout="overlay-picker"]');
   return {
     picker: box(picker), visible: box(picker.previousElementSibling),
-    header: box(document.querySelector('.' + s.tidyHeader)),
+    header: box(document.querySelector('.' + s.tidyHeader.split(' ').join('.'))),
     summaries: [...document.querySelectorAll('summary[data-control-layout="disclosure"]')].map(box),
     editor: box(document.querySelector('textarea')), editorText: document.querySelector('textarea').value,
     rawActions: [...document.querySelectorAll('#geometry button, #geometry input:not([type="checkbox"]), #geometry select:not([data-control-layout="overlay-picker"]), #geometry textarea')].filter(element => !element.hasAttribute('data-form-control')).map(element => element.outerHTML),

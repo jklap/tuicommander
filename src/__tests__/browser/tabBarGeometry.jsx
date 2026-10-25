@@ -24,7 +24,7 @@ window.controlGeometryRows = () => {
     const tabs = document.querySelector(`.${s.tabs}`);
     if (tabs.scrollWidth <= tabs.clientWidth) throw new Error('Fixture must exercise real overflow');
   }
-  const measure = element => ({tag:element.tagName, name:element.title || element.value, height:element.getBoundingClientRect().height});
-  return [{size:'compact', heights:compact.map(measure)}, {size:'default', heights:edge.map(measure)}];
+  const measure = element => ({size:window.controlGeometryDensity(element),tag:element.tagName, name:element.title || element.value, height:element.getBoundingClientRect().height});
+  return [{size:'compact', heights:compact.map(measure)}, {size:'stretch', containerHeight:document.querySelector('#tab-bar').firstElementChild.getBoundingClientRect().height, heights:edge.map(measure)}];
 };
 window.controlGeometryReady = true;

@@ -45,6 +45,7 @@
 }
 
 .header {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 8px;
@@ -380,6 +381,7 @@
 }
 
 .aiReviewHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   justify-content: space-between;

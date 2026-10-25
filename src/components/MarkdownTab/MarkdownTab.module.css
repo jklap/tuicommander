@@ -44,6 +44,7 @@
 }
 
 .agentActions {
+  composes: toolbar from "../ui/FormControls.module.css";
   margin-left: auto;
   display: inline-flex;
   align-items: center;

@@ -23,6 +23,7 @@
 }
 
 .tabs {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   gap: 0;
   overflow-x: auto;

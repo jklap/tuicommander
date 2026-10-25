@@ -28,6 +28,7 @@
 
 /* Toolbar: breadcrumb + sort control */
 .toolbar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 4px;
@@ -230,6 +231,7 @@
 }
 
 .searchBar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   flex-wrap: wrap;
   align-items: center;
