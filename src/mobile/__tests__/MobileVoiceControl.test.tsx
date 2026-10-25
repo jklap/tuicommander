@@ -141,7 +141,7 @@ it("keeps Spoken replies out of the session screen when voice is available", asy
 	// catches: the redundant Spoken replies row returning beneath the session header.
 	mount();
 	await screen.findByRole("button", { name: "Start voice call" });
-	expect(screen.queryByRole("checkbox", { name: "Spoken replies" })).toBeNull();
+	expect(screen.queryByRole("switch", { name: "Spoken replies" })).toBeNull();
 	expect(screen.queryByText("Spoken replies")).toBeNull();
 });
 

@@ -553,15 +553,6 @@
     "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
   },
   {
-    "file": "src/mobile/screens/SettingsScreen.module.css",
-    "story": "2291-08d6",
-    "rules": [
-      "[[],\".select:not([data-form-control])\",[\"min-height: 44px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".toggle\",[\"height: 24px\",\"border-radius: 12px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".fontSizeControl button\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/CommandInput.module.css",
     "reason": "Native embedded composer layout (data-control-layout=composer), not a standalone form field; preserves content sizing and draft selection.",
     "rules": [
