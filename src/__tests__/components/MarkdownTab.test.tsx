@@ -171,6 +171,40 @@ describe("MarkdownTab agent review actions", () => {
 		return id;
 	}
 
+	// Catches: the first candidate receives a review instead of the MCP tab opener.
+	it("preselects the MCP opener rather than the first review candidate and preserves a user choice", async () => {
+		addAgent("First", "pty-a", "/repo");
+		const opener = addAgent("Opener", "pty-b", "/repo");
+		terminalsStore.update(opener, { tuicSession: "tuic-b" });
+		const id = mdTabsStore.addMcpFile("review-b", "/repo", "review.md", false, false, "tuic-b");
+		render(() => <MarkdownTab tab={mdTabsStore.get(id) as FileTab} />);
+		const select = await screen.findByRole("combobox", { name: "Review agent" });
+		expect(select).toHaveValue("pty-b");
+		fireEvent.change(select, { target: { value: "pty-a" } });
+		terminalsStore.update(opener, { name: "Renamed opener" });
+		expect(select).toHaveValue("pty-a");
+		fireEvent.click(screen.getByRole("button", { name: "Send changes to agent" }));
+		await waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("enqueue_agent_command", expect.objectContaining({ sessionId: "pty-a" })),
+		);
+	});
+
+	// Catches: an automatic fallback is treated as a user choice before session inventory arrives.
+	it("adopts a late opener but falls back when the opener is not an eligible repository agent", async () => {
+		addAgent("Fallback", "pty-a", "/repo");
+		const id = mdTabsStore.addMcpFile("review-b", "/repo", "review.md", false, false, "tuic-b");
+		render(() => <MarkdownTab tab={mdTabsStore.get(id) as FileTab} />);
+		const select = await screen.findByRole("combobox", { name: "Review agent" });
+		expect(select).toHaveValue("pty-a");
+		const opener = addAgent("Opener", "pty-b", "/other");
+		terminalsStore.update(opener, { tuicSession: "tuic-b" });
+		expect(select).toHaveValue("pty-a");
+		terminalsStore.update(opener, { repoPath: "/repo" });
+		expect(select).toHaveValue("pty-b");
+		terminalsStore.update(opener, { agentType: null });
+		expect(select).toHaveValue("pty-a");
+	});
+
 	it("queues the marked-up file for the selected agent in the same repository", async () => {
 		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
 		addAgent("Other repo", "session-other", "/other");

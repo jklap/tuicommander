@@ -134,6 +134,8 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 | Progress bar | Operation in progress (OSC 9;4) |
 | Amber gradient | Session created via HTTP/MCP (remote session) |
 
+Final API failures keep the red Error dot even when the agent prints a completion summary or returns to idle. Optional auto-retry sends up to three `continue` commands (after 5, 15 and 30 seconds); an idle agent that does not resume stays red. Native provider retry countdowns do not count as final failures. Actual resumed work clears the error, and the next successful idle turn returns to Done.
+
 Sidebar branch icons also show purple when they contain unseen terminals.
 The mobile session list and session header use the same status colors: blue for
 working, green for idle, orange for input, and purple for a completion not yet
@@ -212,7 +214,7 @@ Per-terminal font size control:
 | Zoom out | `Cmd+-` | -2px font size |
 | Reset | `Cmd+0` | Back to default size |
 
-Range: 8px to 32px. Each terminal has its own zoom level. The current zoom is shown in the status bar.
+Range: 8px to 32px. Each terminal has its own zoom level, shared by its CLI and Chat views. Zoom shortcuts work in either view; the all-terminals variants update both views too. The current zoom is shown in the status bar.
 
 ## Split Panes
 

@@ -92,7 +92,7 @@ TUICommander is a multi-agent terminal orchestrator designed to manage supported
 
 1. **Parallel Agent Orchestration** - Run 50+ coding agents simultaneously
 2. **Git Worktree Isolation** - Each task gets its own isolated workspace
-3. **Per-Pane Font Control** - Independent zoom levels for each terminal
+3. **Per-Pane Font Control** - Independent zoom levels for each terminal, shared by its CLI and Chat views
 4. **Rate Limit Resilience** - Detection and countdown display when agents hit rate limits
 5. **Productivity Features** - Prompt library, keyboard shortcuts, IDE integration
 
@@ -717,6 +717,7 @@ Some frontend-only stores persist to localStorage:
 - [x] GitHub integration
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
+- [x] Optional subagent sounds and OS notifications through the existing silence control; preserve Activity, bell entries and urgent user cards
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
 - [x] Agent task_get/task_cancel share the existing task service, spawning-owner checks and immutable outcomes; task cancellation leaves the PTY alive. The current task tool stays until catalogue cutover (#2064-6385).
 - [x] Page retained MCP terminal output through text/byte offsets, with continuation instructions and eviction-gap reporting

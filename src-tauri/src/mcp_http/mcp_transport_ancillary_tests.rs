@@ -1449,6 +1449,7 @@ fn ui_tab_emits_event() {
             pinned,
             focus,
             origin_repo_path,
+            ..
         } => {
             assert_eq!(id, "test-panel");
             assert_eq!(title, "Test");
@@ -1697,6 +1698,31 @@ fn ui_tab_falls_back_to_mcp_session_repo_path() {
         }
         other => panic!("Expected UiTab, got {:?}", other),
     }
+}
+
+// Catches: desktop receives opener metadata but the browser/mobile SSE payload drops it.
+#[test]
+fn ui_tab_carries_opener_identity_on_both_transports() {
+    let state = test_state();
+    state.mcp.to_session.insert("mcp-b".into(), "tuic-b".into());
+    let mut rx = state.event_bus.subscribe();
+    let result = handle_ui(
+        &state,
+        &serde_json::json!({
+            "action": "tab", "id": "review", "title": "Review", "url": "tuic://open/review.md"
+        }),
+        Some("mcp-b"),
+    );
+    assert_eq!(result["ok"], true);
+    let event = rx.try_recv().expect("ui-tab event");
+    assert_eq!(
+        serde_json::to_value(&event).unwrap()["payload"]["opener_tuic_session"],
+        "tuic-b"
+    );
+    assert_eq!(
+        super::super::sse_routes::event_payload_for_test(&event)["opener_tuic_session"],
+        "tuic-b"
+    );
 }
 
 #[test]
