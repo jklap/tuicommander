@@ -146,6 +146,14 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         assert.equal(await evaluate(`document.activeElement === document.querySelector('summary[data-control-layout="disclosure"]')`),true,'Escape must return focus to the native actions summary');
         await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true`);
       }
+      // Catches: desktop composer overflow hiding the phone editor's long draft from touch scrolling.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'mobileChatScreenGeometry' && width <= 600) {
+        const editor = await evaluate(`(async()=>{const field=document.querySelector('textarea');field.value=Array.from({length:20},(_,i)=>'Draft line '+i).join('\\n');field.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const style=getComputedStyle(field);return {scroll:field.scrollHeight,client:field.clientHeight,overflow:style.overflowY};})()`);
+        await context.test('catches long phone AI Chat drafts losing native scrolling', () => {
+          assert.ok(editor.scroll > editor.client, 'The draft must exceed the phone editor cap');
+          assert.equal(editor.overflow, 'auto', 'Long phone drafts must remain natively scrollable');
+        });
+      }
       // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
         const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
