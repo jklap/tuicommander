@@ -5378,3 +5378,52 @@ async fn ego_conversational_submit_still_requires_idle() {
         }
     }
 }
+
+/// Catches: queue inventory diagnoses a parked automated wake using the direct
+/// human-command permission, hiding the progress wait that actually blocks it.
+#[cfg(unix)]
+#[test]
+fn session_list_reports_progress_wait_blocking_automated_wake() {
+    let state = test_state();
+    let sid = "listed-progress-wake";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    crate::state::tests_support::apply_replay_event(
+        &state,
+        &crate::state::AppEvent::PtyParsed {
+            session_id: sid.into(),
+            parsed: serde_json::json!({"type": "question", "confident": true,
+            "source": "progress-blocked", "prompt_text": "Which configuration should I use?"})
+            .into(),
+        },
+    );
+    state
+        .pending_injections
+        .entry(sid.into())
+        .or_default()
+        .push_back(crate::state::PendingInjection::notice(
+            "BG DONE exit=0 log=progress-test",
+        ));
+    let result = handle_session(
+        &state,
+        &serde_json::json!({"action": "list", "session_id": sid}),
+        None,
+    );
+    let row = result
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == sid)
+        .unwrap();
+    assert_eq!(row["queued_commands"], 1);
+    assert_eq!(
+        row["queue_blocker"], "awaiting_input",
+        "an automated wake cannot answer the conversational wait: {row}"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+}

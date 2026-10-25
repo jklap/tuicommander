@@ -1941,3 +1941,71 @@ fn ego_composer_keeps_retained_drafts_and_unpainted_edits_protected() {
         assert!(bytes.lock().unwrap().is_empty(), "{scenario}");
     }
 }
+
+/// Catches: sleep/wake timestamp repair masquerades as post-input output and
+/// authorizes Ctrl-U over a real draft whose echo has not reached the reader.
+#[cfg(unix)]
+#[test]
+fn ego_sleep_clock_reset_is_not_a_composer_repaint() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "ego-sleep-real-draft";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let bytes = insert_recording_session(&state, sid);
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-composer-1957.tcap"))
+            .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+        }
+    }
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    // The Ready screen precedes this real input. No output is processed below.
+    crate::mcp_http::session::apply_input_bookkeeping(&state, sid, "keep my real draft");
+    state
+        .session_maps
+        .last_input_ms
+        .get(sid)
+        .unwrap()
+        .store(now_epoch_ms() - 4000, Ordering::Release);
+    {
+        let silence = state.session_maps.silence_states.get(sid).unwrap();
+        let mut silence = silence.lock();
+        silence.confirm_idle();
+        // spawn_silence_timer resets both clocks on wake without a PTY read.
+        // Model the first settled check two seconds after that repair.
+        let repaired = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        silence.last_output_at = repaired;
+        silence.last_chunk_at = repaired;
+    }
+    let result = write_agent_submission_to_pty(&state, sid, "must not replace draft");
+    assert!(
+        matches!(
+            result,
+            AgentSubmissionWrite::Rejected {
+                reason: "partial_composer",
+                ..
+            }
+        ),
+        "a clock reset is not a native repaint: {result:?}"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .content(),
+        "keep my real draft"
+    );
+}
