@@ -990,7 +990,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Structural tokens stripped from log lines served to PWA/REST consumers via `LogLine::strip_structural_tokens()`
 - Structured `Intent` events emitted for LLM-declared work phase tracking
 - Centralized debounced busy signal with completion notifications for accurate idle/active status
-- HTTP/MCP session origin survives frontend reconnects, keeping orchestration completion chimes muted when configured; BUSY→IDLE and exit share one notification per busy cycle
+- One Notifications control mutes sounds and OS notices for agent-spawned sessions, using backend parentage; Activity, bell entries and urgent cards remain. Parent/user sessions are unaffected, and unparented HTTP/MCP sessions retain the completion-chime-only mute. HTTP/MCP origin survives reconnects; BUSY→IDLE and exit share one notification per busy cycle
 
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
@@ -1398,6 +1398,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 ---
 
 ## 9. Voice Dictation
+
+Voice settings retain the resolved speech engine when saved. Inactive external commands do not implicitly replace the selected Italian voice. Authorized isolated agent-test builds can enable speech output while microphone capture remains disabled.
 
 The `tuic-dictation` Rust crate implements audio, transcription and speech; the desktop application retains the commands, browser transport and event emission.
 

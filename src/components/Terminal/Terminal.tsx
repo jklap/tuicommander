@@ -475,7 +475,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							"terminal",
 							`[Notify] ${props.id} warning — rate-limit pattern=${parsed.pattern_name} matched="${parsed.matched_text}"`,
 						);
-						notificationsStore.playWarning();
+						notificationsStore.play("warning", { originSessionId: props.id });
 					}
 					break;
 				}
@@ -506,7 +506,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					if (terminalsStore.state.activeId !== props.id && !planFileNotified) {
 						planFileNotified = true;
 						appLogger.info("terminal", `[Notify] ${props.id} info — plan-file path="${parsed.path}" (background tab)`);
-						notificationsStore.playInfo();
+						notificationsStore.play("info", { originSessionId: props.id });
 					}
 					break;
 				case "user-input":
@@ -672,7 +672,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						`[ChoicePrompt] ${props.id} title="${parsed.title}" options=${parsed.options.length}${isActive ? "" : " (background)"}`,
 					);
 					if (!isActive) {
-						notificationsStore.playWarning();
+						notificationsStore.play("warning", { originSessionId: props.id });
 					}
 					break;
 				}
@@ -1272,7 +1272,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			setTimeout(() => containerRef?.classList.remove("bell-flash"), 150);
 		}
 		if (style === "sound" || style === "both") {
-			notificationsStore.play("info").catch((err) => {
+			notificationsStore.play("info", { originSessionId: props.id }).catch((err) => {
 				appLogger.warn("terminal", "Bell audio playback failed", err);
 			});
 		}

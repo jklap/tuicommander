@@ -281,12 +281,12 @@ export const NotificationsTab: Component = () => {
 							row
 							checked={notificationsStore.state.config.silence_remote_completions}
 							onChange={(value) => notificationsStore.setSilenceRemoteCompletions(value)}
-							label={t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}
+							label={t("notifications.label.silenceRemoteCompletions", "Silence subagent sounds and notifications")}
 						/>
 						<p class={s.hint} style={{ "margin-top": "6px" }}>
 							{t(
 								"notifications.hint.silenceRemoteCompletions",
-								"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+								"Mute agent-spawned sessions; keep Activity, bell entries and urgent cards.",
 							)}
 						</p>
 					</div>

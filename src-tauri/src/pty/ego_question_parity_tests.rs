@@ -449,3 +449,98 @@ async fn captured_ego_provider_recovery_2335_clears_error_on_native_work() {
         "exercise the recorded failure and successful subsequent turn"
     );
 }
+
+/// Catches: ego's pre-634 provider-failure emitter latching a completed turn as awaiting.
+#[tokio::test]
+async fn ego_2317_captured_provider_failure_releases_composer() {
+    let mut completions = 0;
+    let mut stopped_receipts = 0;
+    replay_native_question(
+        "ego-provider-failed-idle-2317.tcap",
+        "ego",
+        |record, session| {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                return;
+            }
+            let text = String::from_utf8_lossy(&record.data);
+            if text.contains("7770;state=idle") {
+                completions += 1;
+                assert!(
+                    !session.awaiting_input && session.choice_prompt.is_none(),
+                    "a failed turn is complete, not an approval: {:?}",
+                    session.question_text,
+                );
+            }
+            if text.contains("stopped 11:08 PM") {
+                stopped_receipts += 1;
+                assert!(!session.awaiting_input);
+            }
+        },
+    );
+    assert_eq!(
+        completions, 3,
+        "initial failure, submitted retry and mail wake"
+    );
+    assert_eq!(
+        stopped_receipts, 3,
+        "each recorded failed turn has its receipt"
+    );
+}
+
+/// Catches: a stopped-turn workaround swallowing the same native awaiting marker approvals use.
+#[tokio::test]
+async fn ego_2317_old_emitter_awaiting_remains_authoritative() {
+    let sid = "ego-2317-old-emitter";
+    let (state, silence) = chunk_trace_state(sid);
+    state.config.write().progress_tracking = false;
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    // Exact old Announce::signal TurnCompleted state sequence from ego 870b20c85e.
+    // The failing producer, not TUIC's handling of this authoritative marker, changed in 634-bcab.
+    processor.process_chunk(
+        "\x1b]7770;state=busy\x07\x1b]7770;state=awaiting\x07",
+        &silence,
+        sid,
+        &state,
+    );
+    while let Ok(event) = rx.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(session.awaiting_input && session.question_confident);
+}
+
+/// Catches: releasing failed turns also releasing a real native exec permission prompt.
+#[tokio::test]
+async fn ego_2317_captured_approval_still_owns_composer() {
+    let mut approval = false;
+    replay_native_question(
+        "ego-provider-failure-approval-2317.tcap",
+        "ego",
+        |_, session| {
+            if let Some(prompt) = &session.choice_prompt {
+                assert_eq!(prompt.title, "Allow run sh -c 'printf APPROVAL_2317'?");
+                assert!(session.awaiting_input && session.question_confident);
+                assert_eq!(
+                    prompt
+                        .options
+                        .iter()
+                        .map(|option| option.key.as_str())
+                        .collect::<Vec<_>>(),
+                    ["y", "a", "n", "e", "d"],
+                );
+                approval = true;
+            }
+        },
+    );
+    assert!(
+        approval,
+        "the real default-mode approval must reach session state"
+    );
+}

@@ -142,6 +142,15 @@ and issues for the rest of the session. Named accounts cache their own login in
 | `github_set_issue_filter` | `(filter: String) -> ()` | Change the issue filter mode live |
 | `github_set_pr_hide_drafts` | `(hide: bool) -> ()` | Toggle draft-PR filtering live |
 
+The diagnostics `repos_monitored` gauge counts repository paths with successful
+PR snapshots in the running poller's transition history, including empty snapshots.
+It does not count entries in the TTL query cache. Cache expiry and failed poll ticks
+do not remove monitoring identity. Removing a configured path drops its transition
+and change-detection history and queued on-demand requests. Late on-demand requests
+for unconfigured paths are ignored, so completed asynchronous actions cannot restore
+a retired monitor. Stopping the poller resets the gauge to zero. A new
+poller starts with no successful snapshots, even if old query payloads remain cached.
+
 ## Data Types
 
 ### GitHubStatus
@@ -557,3 +566,16 @@ Settings renders these backend groups without reclassifying them. Refresh status
 explicit mutation, then reads diagnostics. Opening Settings and ordinary GET
 diagnostics remain read-only. Refresh does not log in, grant access, reset rate
 limits or bypass the monitoring cadence; the next poll retries the repositories.
+
+### Partial-response regression evidence
+
+BatchPoll does not select Projects fields. Routine PR and issue monitoring does
+not require Projects access. The generated-query regression checks this boundary
+for every issue filter and PR visibility combination.
+
+`fixtures/github-partial-monitoring-2336.json` records a real GitHub GraphQL
+response with an accessible repository and a `NOT_FOUND` sibling. The replay
+passes through `graphql_request` and the same response-adoption function used by
+`poll_one_account`, and checks both PR and issue output. The fixture records its
+request, timestamp and source; it contains no headers or credentials. It is not
+a recorded missing-scope or organization-policy response.

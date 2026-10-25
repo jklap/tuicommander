@@ -431,6 +431,8 @@ pub enum AppEvent {
         /// is working in, not to whichever repo has focus in the frontend.
         #[serde(skip_serializing_if = "Option::is_none")]
         origin_repo_path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        opener_tuic_session: Option<String>,
     },
     /// GitHub PR statuses updated for a repo (from Rust poller)
     #[serde(rename = "github-pr-update")]
