@@ -481,8 +481,8 @@
     "file": "src/components/shared/editor-header.module.css",
     "story": "2265-b217",
     "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".btn.active\",[\"border-color: var(--accent)\"]]"
+      "[[],\".btn:not([data-form-control])\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
+      "[[],\".btn.active:not([data-form-control])\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
