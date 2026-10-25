@@ -43,7 +43,8 @@ it("local config refresh isolates failed repositories and later recovers", async
 		repos: Object.fromEntries(paths.map((path) => [path, { path, display_name: path }])),
 	});
 	await repoSettingsStore.hydrate();
-	mockInvoke.mockResolvedValue({ base_branch: "before" });
+	// IPC deserializes each read independently; do not share one mutable object across repositories.
+	mockInvoke.mockImplementation(async () => ({ base_branch: "before" }));
 	for (const path of paths) await repoSettingsStore.loadLocalConfig(path);
 	let read: (() => Promise<unknown>) | undefined;
 	let apply: ((value: unknown) => void) | undefined;
@@ -69,7 +70,7 @@ it("local config refresh isolates failed repositories and later recovers", async
 			path: "/unreachable",
 			err: expect.any(Error),
 		});
-		mockInvoke.mockResolvedValue({ base_branch: "recovered" });
+		mockInvoke.mockImplementation(async () => ({ base_branch: "recovered" }));
 		apply!(await read!());
 		expect(repoSettingsStore.getEffective("/unreachable")?.baseBranch).toBe("recovered");
 	} finally {
@@ -86,7 +87,7 @@ it("partial local config refresh retries without another settings event", async 
 	vi.spyOn(settingsRefresh, "register").mockImplementation((reader) =>
 		reader.section === "repo_local" ? coordinator.register(reader) : () => {},
 	);
-	mockInvoke.mockReset().mockResolvedValue({ base_branch: "before-retry" });
+	mockInvoke.mockReset().mockImplementation(async () => ({ base_branch: "before-retry" }));
 	await repoSettingsStore.loadLocalConfig("/retry-healthy");
 	await repoSettingsStore.loadLocalConfig("/retry-unreachable");
 	mockInvoke.mockImplementation(async (_command, args) => {
@@ -102,7 +103,7 @@ it("partial local config refresh retries without another settings event", async 
 			path: "/retry-unreachable",
 			err: expect.any(Error),
 		});
-		mockInvoke.mockResolvedValue({ base_branch: "recovered-automatically" });
+		mockInvoke.mockImplementation(async () => ({ base_branch: "recovered-automatically" }));
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(repoSettingsStore.state.localConfigs["/retry-unreachable"]?.base_branch).toBe("recovered-automatically");
 	} finally {
