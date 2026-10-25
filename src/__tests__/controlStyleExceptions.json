@@ -246,23 +246,6 @@
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
-    "file": "src/components/PromptDrawer/PromptDrawer.module.css",
-    "story": "2218-18d1",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".categoryBtn\",[\"padding: 3px 10px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".empty button\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".itemActions button\",[\"border: none\",\"padding: 3px 5px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".footer button\",[\"padding: 4px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".variableActions button\",[\"padding: 6px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".editorActions button\",[\"padding: 6px 14px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".resetBtn\",[\"border: 1px solid var(--warning) !important\"]]",
-      "[[],\".varDropdownBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]"
-    ]
-  },
-  {
     "file": "src/components/QuitDialog/QuitDialog.module.css",
     "story": "2219-48dc",
     "rules": [
