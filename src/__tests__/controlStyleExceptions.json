@@ -42,18 +42,6 @@
     ]
   },
   {
-    "file": "src/components/MarkdownTab/MarkdownTab.module.css",
-    "story": "2210-4f25",
-    "rules": [
-      "[[],\".commentBtn\",[\"height: 28px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".popoverTextarea\",[\"min-height: 110px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 10px\"]]",
-      "[[],\".popoverTextarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".popoverBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".popoverBtnPrimary\",[\"border-color: var(--accent)\"]]",
-      "[[],\".popoverBtnDanger\",[\"border-color: color-mix(in srgb, var(--error) 40%, transparent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/McpPopup/McpPopup.module.css",
     "story": "2211-0aa0",
     "rules": [
