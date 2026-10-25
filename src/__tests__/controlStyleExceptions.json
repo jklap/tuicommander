@@ -1,240 +1,26 @@
 [
   {
     "file": "src/components/AIChatPanel/AIChatPanel.module.css",
-    "story": "2183-6337",
+    "reason": "Native full-frame conversation picker retains OS activation over the shared-height visible frame.",
     "rules": [
-      "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 4px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".chatTab button, .newChatTab\",[\"border: 0\",\"padding: 4px 7px\"]]",
-      "[[],\".newTextBadge\",[\"padding: 4px 8px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".findBar input\",[\"border: 1px solid var(--border)\"]]",
-      "[[],\".findBar button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyAction\",[\"border: 0\"]]",
-      "[[],\".messageList :global(pre[data-raw-code] button[data-copy-code])\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".suggestedReplies button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 6px\"]]",
-      "[[],\".retryBtn\",[\"border: 1px solid var(--error)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".filePreview button\",[\"border: 0\"]]",
-      "[[],\".imagePreview button\",[\"border: 0\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 12px\",\"min-height: 36px\"]]",
-      "[[],\".textarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".stopBtn\",[\"padding: 0 8px\",\"height: 32px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".approvalBtn\",[\"border: none\",\"border-radius: var(--radius-md)\",\"padding: 3px 12px\"]]",
-      "[[],\".queueCancel\",[\"padding: 4px\",\"border: 0\"]]",
-      "[[],\".noticeAction\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 8px\"]]",
-      "[[],\".setupActions button\",[\"border: none\",\"border-radius: var(--radius-lg)\",\"padding: 8px 16px\"]]",
-      "[[],\".inputArea:not(.mobileComposer) > button, .inputArea:not(.mobileComposer) > .composerActions > button\",[\"height: 36px\"]]",
-      "[[],\".conversationName\",[\"border: none\",\"padding: 6px\"]]",
-      "[[],\".repoContext button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 2px 6px\"]]",
-      "[[],\".repoContext button[aria-pressed=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".conversationSwitcher > select\",[\"height: 100%\"]]",
-      "[[],\".actionsMenuItems > .headerBtn, .actionsMenuItems > .conversationList > summary\",[\"padding: 6px 8px\"]]",
-      "[[],\".composerMeta .repoContext button\",[\"border: none\",\"padding: 0\"]]"
+      "[[],\".conversationSwitcher > select[data-control-layout=\\\"overlay-picker\\\"]\",[\"height: 100%\"]]"
     ]
   },
   {
-    "file": "src/components/ActivityDashboard/ActivityDashboard.module.css",
-    "story": "2184-646e",
+    "file": "src/components/AIChatPanel/AIChatPanel.module.css",
+    "reason": "Native details/summary retains activation and Escape focus return with shared 36/44 control tokens.",
     "rules": [
-      "[[],\".promoteBtn\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]"
+      "[[],\"summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"height: var(--control-height, 36px)\",\"padding: 0 var(--control-padding-x, 8px)\",\"border: 1px solid transparent\",\"border-radius: var(--radius-lg)\"]]",
+      "[[],\".actionsMenu > summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"padding: 0\"]]",
+      "[[\"@media (max-width: 600px)\"],\"summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"height: max(44px, var(--control-height, 36px))\"]]"
     ]
   },
   {
-    "file": "src/components/AutofixDialog/AutofixDialog.module.css",
-    "story": "2185-74aa",
+    "file": "src/components/AIChatPanel/AIChatPanel.module.css",
+    "reason": "Shared Textarea retains the tested panel-relative 40% resize cap and one-line reset instead of the generic three-row minimum.",
     "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".textarea\",[\"min-height: 220px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 10px\"]]",
-      "[[],\".textarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".btnPrimary\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/AutomationsDialog/AutomationsDialog.module.css",
-    "story": "2186-3abf",
-    "rules": [
-      "[[],\".dialog button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[],\".dialog button.item\",[\"padding: 12px\"]]",
-      "[[],\".dialog .item[aria-pressed=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".dialog .tabs button\",[\"border: 0\",\"border-radius: 0\",\"border-bottom: 2px solid transparent\",\"padding: 12px\"]]",
-      "[[],\".dialog .tabs button[aria-selected=\\\"true\\\"]\",[\"border-bottom-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ChangelogModal/ChangelogModal.module.css",
-    "story": "2187-1cca",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".btn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ClaudeUsageDashboard/ClaudeUsageDashboard.module.css",
-    "story": "2188-225d",
-    "rules": [
-      "[[],\".retryButton\",[\"padding: 3px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ComposePanel/ComposePanel.module.css",
-    "story": "2189-4dca",
-    "rules": [
-      "[[],\".queueBadge\",[\"height: 20px\",\"padding: 0 6px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".queueBadge:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".queueBadgeOpen\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".queueClearAll\",[\"border: none\",\"padding: 0\"]]",
-      "[[],\".queueItemRemove\",[\"height: 16px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".queueButton\",[\"height: 20px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".queueButton:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".closeButton\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ContextMenu/ContextMenu.module.css",
-    "story": "2190-41dd",
-    "rules": [
-      "[[],\".item\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/CreateWorktreeDialog/CreateWorktreeDialog.module.css",
-    "story": "2191-c683",
-    "rules": [
-      "[[],\".generateBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dropdownTrigger\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dropdownTrigger:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".dropdownTrigger:focus\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/DictationToast/DictationToast.module.css",
-    "story": "2192-8e3f",
-    "rules": [
-      "[[],\".control\",[\"height: 24px\",\"padding: 0\",\"border: 0\",\"border-radius: var(--radius-sm, 4px)\"]]",
-      "[[\"@media (pointer: coarse)\"],\".control\",[\"height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/DiffTab/DiffTab.module.css",
-    "story": "2193-759f",
-    "rules": [
-      "[[],\".modeBtn\",[\"height: 22px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeBtnActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".revertBtn\",[\"height: 22px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".revertBtn:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".restoreSelectedBtn\",[\"padding: 4px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".commentBtn\",[\"padding: 4px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".clearSelectionBtn\",[\"height: 22px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".commentTextarea\",[\"padding: 6px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"min-height: 60px\"]]",
-      "[[],\".commentTextarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".commentCancelBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".commentSendBtn\",[\"padding: 4px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".largeDiffBtn\",[\"padding: 4px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ErrorLogPanel/ErrorLogPanel.module.css",
-    "story": "2194-f7b8",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".levelBtn\",[\"border: 1px solid transparent\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".levelBtnActive\",[\"border-color: var(--border)\"]]",
-      "[[],\".clearBtn\",[\"border: 1px solid var(--border)\",\"padding: 3px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn\",[\"border: none\",\"padding: 1px 4px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/FileBrowserPanel/FileBrowserPanel.module.css",
-    "story": "2195-7c15",
-    "rules": [
-      "[[],\".sortTrigger\",[\"height: 22px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".sortTrigger:hover\",[\"border-color: var(--border)\"]]",
-      "[[],\".viewModeBtn\",[\"height: 18px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".viewModeBtnActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".modeToggle\",[\"height: 22px\",\"padding: 0 4px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeToggleActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleBtn\",[\"height: 22px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GeneratorsModal/GeneratorsModal.module.css",
-    "story": "2196-9098",
-    "rules": [
-      "[[],\".tab\",[\"padding: 7px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".optionRow input[type=\\\"number\\\"]\",[\"padding: 3px 6px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".output\",[\"min-height: 72px\",\"padding: 10px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".output:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button\",[\"padding: 7px 14px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
-    "story": "2204-4f62",
-    "rules": [
-      "[[],\".scanButton, .issueButton\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".scanButton\",[\"padding: 5px 7px\"]]",
-      "[[],\".issueButton\",[\"padding: 5px 7px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/HelpPanel/HelpPanel.module.css",
-    "story": "2205-7cc6",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".backButton\",[\"border: none\",\"padding: 4px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".copyVersionBtn\",[\"padding: 2px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".linkButton\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/IdeLauncher/IdeLauncher.module.css",
-    "story": "2206-f340",
-    "rules": [
-      "[[],\".btn\",[\"height: 26px\",\"padding: 0 6px\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".main\",[\"border-radius: var(--radius-md) 0 0 var(--radius-md)\",\"border-right: none\"]]",
-      "[[],\".arrowBtn\",[\"border-radius: 0 var(--radius-md) var(--radius-md) 0\",\"padding: 0 5px\",\"border-left: 1px solid var(--border)\"]]",
-      "[[],\".split:hover .btn:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".item\",[\"padding: 5px 10px\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/components/IdeasPanel/IdeasPanel.module.css",
-    "story": "2207-8a6e",
-    "rules": [
-      "[[],\".projectLabel\",[\"padding: 1px 6px\",\"border-radius: var(--radius-md)\",\"border: none\"]]",
-      "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".input\",[\"padding-right: 40px\"]]",
-      "[[],\".submitBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".thumbnailRemove\",[\"height: 16px\",\"border: none\",\"border-radius: 50%\"]]"
-    ]
-  },
-  {
-    "file": "src/components/MarkdownPanel/MarkdownPanel.module.css",
-    "story": "2208-c0f2",
-    "rules": [
-      "[[],\".modeToggle\",[\"height: 22px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeToggleActive, .modeToggleActive:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".sortTrigger\",[\"height: 22px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".sortTrigger:hover\",[\"border-color: var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/MarkdownTab/LiveMarkdownEditor.module.css",
-    "story": "2209-c060",
-    "rules": [
-      "[[],\".input\",[\"padding: 3px 6px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]",
-      "[[],\".btn\",[\"padding: 2px 8px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/MarkdownTab/MarkdownTab.module.css",
-    "story": "2210-4f25",
-    "rules": [
-      "[[],\".commentBtn\",[\"height: 28px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".popoverTextarea\",[\"min-height: 110px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 10px\"]]",
-      "[[],\".popoverTextarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".popoverBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".popoverBtnPrimary\",[\"border-color: var(--accent)\"]]",
-      "[[],\".popoverBtnDanger\",[\"border-color: color-mix(in srgb, var(--error) 40%, transparent)\"]]"
+      "[[],\".textarea[data-control-layout=\\\"composer-editor\\\"]\",[\"min-height: var(--control-height, 36px)\"]]",
+      "[[\"@media (max-width: 600px)\"],\".textarea[data-control-layout=\\\"composer-editor\\\"]\",[\"min-height: max(44px, var(--control-height, 36px))\"]]"
     ]
   },
   {
@@ -360,34 +146,6 @@
       "[[],\".draft\",[\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\",\"padding: 8px\"]]",
       "[[],\".draft[aria-current=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
       "[[],\".node\",[\"min-height: 82px\",\"border: 1px solid var(--border)\",\"border-left: 3px solid var(--accent)\",\"border-radius: var(--radius-md)\",\"padding: 10px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/dialog.module.css",
-    "story": "2264-9b73",
-    "rules": [
-      "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button:not([data-form-control])\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/editor-header.module.css",
-    "story": "2265-b217",
-    "rules": [
-      "[[],\".btn:not([data-form-control])\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".btn.active:not([data-form-control])\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/panel.module.css",
-    "story": "2266-a950",
-    "rules": [
-      "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".close:not([data-form-control])\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 3px 6px\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchClear\",[\"border: none\",\"padding: 0 4px\"]]"
     ]
   },
   {
