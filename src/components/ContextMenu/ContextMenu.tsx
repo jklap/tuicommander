@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { cx } from "../../utils";
+import { Button } from "../ui/Button";
 import s from "./ContextMenu.module.css";
 
 export interface ContextMenuItem {
@@ -122,7 +123,7 @@ const MenuItem: Component<{
 			}
 		>
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
-				<button
+				<Button variant="ghost"
 					class={cx(s.item, props.item.disabled && s.disabled)}
 					title={props.item.title}
 					onClick={() => {
@@ -147,7 +148,7 @@ const MenuItem: Component<{
 					<Show when={hasChildren()}>
 						<span class={s.arrow}>{"\u203A"}</span>
 					</Show>
-				</button>
+				</Button>
 				<Show when={submenuOpen() && props.item.children}>
 					<div ref={submenuRef} class={s.submenu}>
 						<For each={props.item.children}>

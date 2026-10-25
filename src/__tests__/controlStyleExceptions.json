@@ -42,13 +42,6 @@
     ]
   },
   {
-    "file": "src/components/ContextMenu/ContextMenu.module.css",
-    "story": "2190-41dd",
-    "rules": [
-      "[[],\".item\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/CreateWorktreeDialog/CreateWorktreeDialog.module.css",
     "story": "2191-c683",
     "rules": [
