@@ -67,7 +67,13 @@ export const ChangelogModal: Component<{ repoPath: string; onClose: () => void }
 						<path d="M4 1.5A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9.5 1.5H4Zm5 1.06L12.44 6H9.5a.5.5 0 0 1-.5-.5V2.56ZM5 8h6v1H5V8Zm0 2.5h6v1H5v-1ZM5 5.5h2v1H5v-1Z" />
 					</svg>
 					<span class={s.title}>{t("github.changelog", "Changelog")}</span>
-					<Button variant="ghost" onClick={props.onClose} title={t("common.close", "Close")}>
+					<Button
+						variant="ghost"
+						onClick={props.onClose}
+						shape="icon"
+						aria-label={t("common.close", "Close")}
+						title={t("common.close", "Close")}
+					>
 						&times;
 					</Button>
 				</div>
