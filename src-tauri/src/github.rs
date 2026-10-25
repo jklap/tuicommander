@@ -1138,6 +1138,35 @@ async fn poll_one_account(
     )
     .await?;
 
+    adopt_batch_response(
+        state,
+        account,
+        repos,
+        &aliases,
+        include_merged,
+        include_issues,
+        &viewer,
+        &response,
+        pr_results,
+        issue_results,
+    )
+    .await
+}
+
+/// Adopt each accessible alias independently; a denied alias must not erase its siblings.
+#[allow(clippy::too_many_arguments)] // The poll response carries the request's alias and filter context.
+async fn adopt_batch_response(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repos: &[(String, String, String)],
+    aliases: &[(String, String)],
+    include_merged: bool,
+    include_issues: bool,
+    viewer: &str,
+    response: &serde_json::Value,
+    pr_results: &mut std::collections::HashMap<String, Vec<BranchPrStatus>>,
+    issue_results: &mut std::collections::HashMap<String, Vec<GitHubIssue>>,
+) -> Result<(), String> {
     // Store rate-limit budget for proactive throttling in the poller.
     if let Some(remaining) = response["data"]["rateLimit"]["remaining"].as_u64() {
         let budget = remaining as u32;
@@ -1163,11 +1192,11 @@ async fn poll_one_account(
         .map(|(i, (_path, owner, name))| (aliases[i].0.as_str(), (owner.as_str(), name.as_str())))
         .collect();
 
-    for (alias, path) in &aliases {
+    for (alias, path) in aliases {
         let repo_json = &response["data"][alias];
 
         if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
-            record_repo_access(state, account, owner, name, &response, alias);
+            record_repo_access(state, account, owner, name, response, alias);
         }
         if repo_json.is_null() {
             continue;
@@ -3332,6 +3361,10 @@ pub(crate) async fn get_pr_diff(
 #[cfg(test)]
 #[path = "github_writes_tests.rs"]
 mod write_tests;
+
+#[cfg(test)]
+#[path = "github_partial_tests.rs"]
+mod partial_tests;
 
 #[cfg(test)]
 mod tests {

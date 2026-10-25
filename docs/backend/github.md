@@ -564,3 +564,16 @@ Settings renders these backend groups without reclassifying them. Refresh status
 explicit mutation, then reads diagnostics. Opening Settings and ordinary GET
 diagnostics remain read-only. Refresh does not log in, grant access, reset rate
 limits or bypass the monitoring cadence; the next poll retries the repositories.
+
+### Partial-response regression evidence
+
+BatchPoll does not select Projects fields. Routine PR and issue monitoring does
+not require Projects access. The generated-query regression checks this boundary
+for every issue filter and PR visibility combination.
+
+`fixtures/github-partial-monitoring-2336.json` records a real GitHub GraphQL
+response with an accessible repository and a `NOT_FOUND` sibling. The replay
+passes through `graphql_request` and the same response-adoption function used by
+`poll_one_account`, and checks both PR and issue output. The fixture records its
+request, timestamp and source; it contains no headers or credentials. It is not
+a recorded missing-scope or organization-policy response.
