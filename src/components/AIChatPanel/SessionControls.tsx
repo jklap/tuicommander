@@ -167,7 +167,7 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 					</svg>
 				</span>
 				{/* Keep the native picker over the visible frame; both share its full hit region. */}
-				<select
+				<Select
 					data-control-layout="overlay-picker"
 					class={s.modelPicker}
 					title="Conversation"
@@ -196,7 +196,7 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 			</div>
 
 			<Button
