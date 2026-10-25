@@ -42,16 +42,6 @@
     ]
   },
   {
-    "file": "src/components/HelpPanel/HelpPanel.module.css",
-    "story": "2205-7cc6",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".backButton\",[\"border: none\",\"padding: 4px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".copyVersionBtn\",[\"padding: 2px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".linkButton\",[\"padding: 8px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/IdeLauncher/IdeLauncher.module.css",
     "story": "2206-f340",
     "rules": [
