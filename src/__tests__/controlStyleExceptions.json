@@ -42,19 +42,6 @@
     ]
   },
   {
-    "file": "src/components/FileBrowserPanel/FileBrowserPanel.module.css",
-    "story": "2195-7c15",
-    "rules": [
-      "[[],\".sortTrigger\",[\"height: 22px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".sortTrigger:hover\",[\"border-color: var(--border)\"]]",
-      "[[],\".viewModeBtn\",[\"height: 18px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".viewModeBtnActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".modeToggle\",[\"height: 22px\",\"padding: 0 4px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeToggleActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleBtn\",[\"height: 22px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
     "story": "2204-4f62",
     "rules": [
