@@ -238,18 +238,6 @@
     ]
   },
   {
-    "file": "src/components/ProgressDialog/ProgressDialog.module.css",
-    "story": "2216-e56b",
-    "rules": [
-      "[[],\".viewToggle button\",[\"border: 0\",\"padding: 4px 10px\"]]",
-      "[[],\".viewToggle button + button\",[\"border-left: 1px solid var(--border)\"]]",
-      "[[],\".iconButton\",[\"border: 0\",\"padding: 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".more\",[\"padding: 4px 0\",\"border: 0\"]]",
-      "[[],\".delete\",[\"border: 0\",\"padding: 2px 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".loadOlder\",[\"min-height: 44px\",\"padding: 8px 16px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ProgressDialog/ProgressFlow.module.css",
     "rules": [
       "[[],\".label\",[\"padding: 0 6px\",\"border: 0\"]]",
