@@ -1007,3 +1007,6 @@ Variable choices remain native list-row buttons with name and description;
 
 Telegram settings inherit target sizing and touch typography from shared Button,
 Input, and Switch controls. Feature styles only format the chat-list heading.
+
+Keyboard Shortcuts uses shared Button for the built-in Rebind actions and the
+global-hotkey Clear action. Workspace styles retain binding-column layout only.

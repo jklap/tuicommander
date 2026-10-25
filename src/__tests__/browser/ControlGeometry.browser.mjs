@@ -152,6 +152,21 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
       console.log(path);
+      // Catches: shared Rebind/Clear lose native activation or cancellation changes a binding.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'workspaceGeometry') {
+        const binding=await evaluate(`document.querySelector('#geometry tr kbd').textContent`);
+        await evaluate(`document.querySelector('#geometry button[title="Edit shortcut"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').textContent`),'Press a key...','Space enters the real shortcut recorder');
+        // Drive cancellation explicitly; automatic recorder focus is not asserted by this geometry fixture.
+        await evaluate(`document.querySelector('#geometry tr [tabindex="0"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry tr kbd').textContent`),binding,'Escape retains the existing binding');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.trim()==='Clear').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.deepEqual(await evaluate('window.workspaceHotkeys'),['Super+Shift+Y',null],'Clear calls the settings owner with null');
+        assert.equal(await evaluate(`[...document.querySelectorAll('#geometry button')].some(button=>button.textContent.trim()==='Clear')`),false,'Cleared hotkey removes its conditional action');
+      }
       // Catches: platform-specific desktop height wins over wrapped touch rows.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
         for (const platform of ['linux', 'windows']) {
