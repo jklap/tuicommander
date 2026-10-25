@@ -1448,10 +1448,9 @@ pub(crate) struct NotificationConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates audio device for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("x-choice-resolver" = "audio_outputs"))]
     pub(crate) audio_device: Option<String>,
-    /// Drop the completion chime for sessions created over MCP/HTTP (`session
-    /// create`, `agent spawn`). An orchestration of many agents otherwise turns
-    /// every finished worker into a beep. Visual signals (activity item, badge,
-    /// OS notification) are unaffected.
+    /// Mute sounds and native notices for parented sessions; retain the legacy
+    /// completion-chime mute for unparented MCP/HTTP-created sessions. Activity,
+    /// bell entries and urgent cards are unaffected.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates silence remote completions for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) silence_remote_completions: bool,

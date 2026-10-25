@@ -216,18 +216,18 @@ fn diagnostics_reports_cooldown_and_monitored_repos() {
         "octocat/expired".to_string(),
         std::time::Instant::now() - std::time::Duration::from_secs(1),
     );
-    // A cached status counts as a monitored repo.
+    // Cached query payloads alone do not register a running monitor.
     state
         .git_cache
         .github_status
         .insert("/path/zero".to_string(), std::sync::Arc::new(vec![]));
-    // moka's entry_count() is eventually consistent; flush pending tasks so the
-    // insert is counted before compute_diagnostics reads it.
+    // Flush cache maintenance so this also checks that a populated cache is not
+    // mistaken for a running poller.
     state.git_cache.github_status.run_pending_tasks();
 
     let diag = github_auth::compute_diagnostics(&state);
     assert_eq!(diag.repos_not_found, vec!["octocat/hello".to_string()]);
-    assert_eq!(diag.repos_monitored, 1);
+    assert_eq!(diag.repos_monitored, 0);
 }
 
 // ---------------------------------------------------------------------------
