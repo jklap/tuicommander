@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
+import { Button } from "../../components/ui";
 import { AgentIcon } from "../../components/ui/AgentIcon";
 import { SubAgentIcon } from "../../components/ui/SubAgentIcon";
 import { displayTask } from "../../utils/displayTask";
@@ -81,6 +82,7 @@ export function SessionCard(props: SessionCardProps) {
 			data-testid={(props.depth ?? 0) > 0 ? "subagent-row" : undefined}
 		>
 			<button
+				data-control-layout="row"
 				class={styles.cardMain}
 				aria-label={`Open session ${props.session.display_name || agentType() || "Terminal"}`}
 				onClick={() => props.onSelect(props.session.session_id)}
@@ -182,7 +184,7 @@ export function SessionCard(props: SessionCardProps) {
 					{props.session.state?.last_activity_ms ? formatTime(props.session.state.last_activity_ms) : ""}
 				</span>
 				<Show when={props.onKill}>
-					<button
+					<Button variant="ghost" geometry="stretch"
 						class={styles.killBtn}
 						aria-label={`Kill session ${props.session.display_name || agentType() || "Terminal"}`}
 						data-testid="kill-btn"
@@ -192,7 +194,7 @@ export function SessionCard(props: SessionCardProps) {
 							<line x1="18" y1="6" x2="6" y2="18" />
 							<line x1="6" y1="6" x2="18" y2="18" />
 						</svg>
-					</button>
+					</Button>
 				</Show>
 			</div>
 		</div>
