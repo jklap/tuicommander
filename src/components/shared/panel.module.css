@@ -52,7 +52,8 @@
   flex-shrink: 0;
 }
 
-.close {
+/* DEFERRED (2026-10-25) — remove legacy panel controls after desk-a 2195/2207/2208 and integrated GitPanel land. */
+.close:not([data-form-control]) {
   background: none;
   border: none;
   color: var(--fg-secondary);
@@ -62,7 +63,7 @@
   border-radius: var(--radius-md);
 }
 
-.close:hover {
+.close:not([data-form-control]):hover {
   background: var(--bg-highlight);
   color: var(--fg-primary);
 }

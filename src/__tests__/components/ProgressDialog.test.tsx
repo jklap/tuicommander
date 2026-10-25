@@ -185,9 +185,9 @@ describe("ProgressDialog wiring", () => {
 
 	it("switches between the List and the Flow view", () => {
 		render(() => <ProgressDialog />);
-		fireEvent.click(screen.getByRole("button", { name: "Flow" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Flow" }));
 		expect(setView).toHaveBeenCalledWith("flow");
-		expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
+		expect(screen.getByRole("tab", { name: "List" }).getAttribute("aria-selected")).toBe("true");
 	});
 
 	it("draws the Flow view from the backend's sequence and hides the list filter", () => {

@@ -28,7 +28,8 @@
   flex-shrink: 0;
 }
 
-.btn {
+/* DEFERRED (2026-10-25) — remove legacy button geometry after MarkdownTab stories 2209/2210 land. */
+.btn:not([data-form-control]) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -42,17 +43,17 @@
   cursor: pointer;
 }
 
-.btn:hover {
+.btn:not([data-form-control]):hover {
   background: var(--bg-highlight);
   color: var(--fg-primary);
 }
 
-.btn:disabled {
+.btn:not([data-form-control]):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.btn.active {
+.btn.active:not([data-form-control]) {
   background: var(--accent);
   color: var(--text-on-accent);
   border-color: var(--accent);
