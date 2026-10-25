@@ -1,6 +1,6 @@
 # Website redesign for TUICommander 2.0: proposal
 
-- **Status:** proposal (phase 1). No site code is changed yet.
+- **Status:** proposal (phase 1), revised after the Fable review (`~/Gits/.tmp/results/consult-fable-20261025-182701-1792949369.md`) and the coordinator's decisions of 2026-10-25. No site code is changed yet.
 - **Date:** 2026-10-25. **Branch:** `feat/website-2.0`.
 - **Request (Boss, 2026-10-25):** redesign the site, put the new things in evidence, add the presentation video, restructure it and give room to more content.
 - **Sources read:** `website/` (all files), `plans/archive/marketing-website.md`, `DESIGN.md`, `PRODUCT.md`, `CHANGELOG.md` headings for `[2.0.0-beta.1]`/`[2.0.0-beta.2]`, `docs/user-guide/*`, `docs/FEATURES.md`, `src/agents.ts`, `.github/workflows/website.yml`, `tuic-presentation/script-v3.md` (as-built table) and `tuic-presentation/docs/2.0-feature-analysis.md` (a scored map of the 2.0 changelog).
@@ -41,16 +41,16 @@ Principle: the home page sells the idea in one scroll and routes to depth. Each 
 
 | URL | Purpose | Main content |
 |---|---|---|
-| `/` | Pitch + routing | Hero with the 2.0 film · agent grid (11) · "One window, one orchestrator" loop in five steps (plan → spawn → watch → review → ship), each linking to its area page · six highlight bands with a real screenshot each · "New in 2.0" strip · install · short FAQ (6) · CTA |
+| `/` | Pitch + routing | In this order (decided): hero with the film poster and a thin agent logo bar (11 logos, no grid) → before/after strip → five-step loop (plan → spawn → watch → review → ship) → **at most six bands**, one per area page → install → FAQ (6) → CTA |
 | `/2.0.html` | The 2.0 release page | Full film with chapters · what changed since 1.7, grouped by area · "Not filmed but shipped" (resume after update, hibernation, tray, native scrollback, Windows CI, secrets) · upgrade notes · link to CHANGELOG |
-| `/features/orchestration.html` | Agents and observability | `+` agent menu, rich sidebar cards, CLI \| Chat, question and rate-limit detection, Activity Dashboard, agents spawn agents, peer mail, Progress List/Flow, AI Chat (ego over ACP), resume after update |
+| `/features/orchestration.html` | Agents and observability (opens with the film's "one window" shots) | `+` agent menu, rich sidebar cards, CLI \| Chat, question and rate-limit detection, Activity Dashboard, agents spawn agents, peer mail, Progress List/Flow, AI Chat (ego over ACP), resume after update |
 | `/features/planning.html` | From idea to running work | Ideas, native Plans and Stories with List/Kanban, Workflow designer and runs, Automations (cron, templates, Run now, history) |
 | `/features/git-and-review.html` | Ship the agent's work | Worktrees and archive/merge lifecycle, Git panel (diff, stage, smart commit), PR popover with CI, CI auto-heal, PR line review threads, Tasks: GitHub Issues/Projects, Jira and GitLab |
 | `/features/workspace.html` | Everything around the terminal | File Browser (glob search, previews), Markdown panel (Edit · Live · Diff), Design Mode, editor, themes (Commander, Paper, Ink), settings search, terminal power features, keyboard-first navigation |
 | `/features/anywhere.html` | Remote, mobile, voice | Mobile companion (CLI \| Chat, question cards, push), browser/PWA mode, SSH remote machines with `tuic-remote`, Telegram, push-to-talk and hands-free voice, private secret forms |
 | `/features/extend.html` | Open platform | MCP Proxy Hub, plugins in JavaScript (and the plugins repo), HTTP API, `tuic` CLI, TUIC SDK, MDKB integration |
 | `/download.html` | Install | Per-OS buttons from the latest release, Homebrew / shell / PowerShell, system requirements, beta and nightly channels, link to release notes |
-| `/blog.html` | Unchanged content | Restyled with the shared layout; posts grouped by area tag |
+| `/blog.html` | Unchanged content | Restyled with the shared layout only (no area tagging) |
 | `/docs/` | Unchanged | mdBook |
 
 Six area pages instead of one page per feature: about 40 features would give 40 thin pages to keep current. If one area grows too big later (Tasks is the likely one), it splits then.
@@ -70,23 +70,22 @@ The nav and footer move into two partial files, injected at build time by a smal
 
 The site tells the film's story, in the film's order, with its captions as headlines. The outlook is **"TUICommander gives you superpowers"**: one person runs ten projects and dozens of agents and only follows one orchestrator. Each band reuses a film still where it reads better than a new screenshot (stills from the 1080p master at caption-free frames, or stage stills of the same shot).
 
-| Site section (home band → area page) | Film beat (time, caption) |
-|---|---|
-| Hero: "10 projects. Dozens of agents. **One** of you." → "Meet TUICommander 2.0" + film | 1.1–2.1 (0:00–0:14), lockup 12.2 |
-| Before / after strip: twelve loose windows vs "All ten. **One window.**" | 1.2, 2.2 (0:04–0:18) |
-| **One window** → `/features/one-window.html`: "The sidebar tells you **everything**." · "Any agent. **One gesture.**" · "Read it like a **chat**." | 3.1–3.3 (0:14–0:30) |
-| **Plan** → `/features/planning.html`: Ideas · "Plan your day **out loud**." · "Ideas become **stories**." · "Your pipeline, as a **graph**." · "Agents on a **schedule**." | 4.1–4.5 (0:30–1:07) |
-| **Orchestrate** → `/features/orchestration.html`: "You ask **one** agent." · "Agents spawn **agents**." · "Agents talk to **each other**." · "See **who said what**." | 5.1–5.5 (1:07–1:25) |
-| **Your tools** → `/features/workspace.html`: Files · "Your own tools, in **JavaScript**." · Markdown · Design Mode · memory | 6.1–6.5 (1:25–1:52) |
-| **You just watch** (orchestration page, second half): "It knows **which** agent." · "What it's **doing**. How much **credit** is left." · "50 agents. One Mac. **No sweat.**" | 7.1–7.3 (1:52–2:04) |
-| **Ship** → `/features/git-and-review.html`: "Your tracker, **next to your agents**." · "CI breaks. **The agent fixes it.**" · "Review the PR **in place**." · "From idea to **PR**." | 8.1–8.5, 10.3 (2:04–2:45, 3:07–3:19) |
-| **Anywhere** → `/features/anywhere.html`: "Even when you're **out**." · "It pings you only when it **matters**." · voice | 9.1–9.2 (2:45–2:57), 4.2 |
-| AI Chat band: "What shipped today?" + ego session settings | 10.1–10.2 (2:57–3:07) |
-| "In **one day**." recap: the five-step loop (plan → spawn → watch → review → ship) | 10.4 (3:19–3:23) |
-| **Extend** → `/features/extend.html`: "**MCP.** **Remote.** **Themes.** **Search.** **Plugins.**" | 11 (3:23–3:29) |
-| Closing CTA: "Run ten projects. **Follow one orchestrator.**" · "Open source · macOS · Linux · Windows" · `brew install sstraus/tap/tuicommander` | 12.2 (3:29–3:37) |
+Decided (coordinator, 2026-10-25): **six area pages**, no `one-window` page. "One window" is the promise of the hero and the before/after strip; its sidebar, `+` menu and CLI \| Chat shots open the orchestration page. Home carries at most six bands; the full sequence of film beats lives only in the `/2.0.html` chapters. Times below are from the 4:43 cut (`script-v3.md` as-built table, 282.7 s); they move again with the coming re-render.
 
-Consequences for the rest of this document: the area pages follow the film acts (one-window, planning, orchestration, workspace, git-and-review, anywhere, extend: seven, not six); the hero line in section 6 is the film's opening and lockup; the highlight word in each headline is styled in Observation Blue bold (the film uses violet; the site keeps the app accent). Features the film does not show (resume after update, hibernation, tray, secrets, Telegram, Windows CI) go under "Shipped, not filmed" on `/2.0.html` and in the matching area page, never in a headline.
+| Site section | Film beat (time, caption) |
+|---|---|
+| Hero (copy is an open decision, section 9) + film poster + agent logo bar | 1.1–2.1 (0:00–0:16), lockup 12.2 |
+| Before/after strip: twelve loose windows vs "All ten. **One window.**" | 1.2, 2.2 (0:04–0:16) |
+| Five-step loop: plan → spawn → watch → review → ship ("In **one day**.") | 10.4 (4:25–4:29) |
+| Band 1 **Orchestrate** → `/features/orchestration.html`: "The sidebar tells you **everything**." · "Any agent. **One gesture.**" · "Read it like a **chat**." · "Agents spawn **agents**." · "Agents talk to **each other**." · "See **who said what**." · "It knows **which** agent." · AI Chat | 3.1–3.3 (0:16–0:32), 5.1–5.5 (1:29–1:54), 7.1–7.3 (2:36–2:55), 10.1–10.2 (3:55–4:10) |
+| Band 2 **Plan** → `/features/planning.html`: "Ideas become **stories**." · "Your pipeline, as a **graph**." · "Agents on a **schedule**." | 4.1, 4.3–4.5 (0:32–0:42, 1:00–1:29) |
+| Band 3 **Ship** → `/features/git-and-review.html`: "Your tracker, **next to your agents**." · "CI breaks. **The agent fixes it.**" · "Review the PR **in place**." · "From idea to **PR**." | 8.1–8.5 (2:55–3:43), 10.3 (4:10–4:25) |
+| Band 4 **Your tools** → `/features/workspace.html`: Files · Markdown · Design Mode · themes · search | 6.1, 6.3, 6.4 (1:54–2:06, 2:14–2:27), 11 |
+| Band 5 **Anywhere** → `/features/anywhere.html`: "Even when you're **out**." · "It pings you only when it **matters**." · "Plan your day **out loud**." | 9.1–9.2 (3:43–3:55), 4.2 (0:42–1:00) |
+| Band 6 **Extend** → `/features/extend.html`: "Your own tools, in **JavaScript**." · "**MCP.** **Remote.** **Plugins.**" · memory | 6.2, 6.5 (2:06–2:14, 2:27–2:36), 11 (4:29–4:35) |
+| Closing CTA: "Open source · macOS · Linux · Windows" · `brew install sstraus/tap/tuicommander` | 12.2 (4:35–4:43) |
+
+Rules: the highlight word of each headline is bold Observation Blue (the film uses violet; the site keeps the app accent). **Never headline "50 agents. One Mac. No sweat."**: `PRODUCT.md` promises 5+ agents, and the film's number is staged. Features the film does not show (resume after update, hibernation, tray, secrets, Telegram, Windows CI) go under "Shipped, not filmed" on `/2.0.html` and in the matching area page, never in a headline. Keep the caveats of section 4 (Edge voices by default, Jira/GitLab as plugin providers, `tuic-remote` Beta).
 
 ## 3. The video
 
@@ -96,44 +95,53 @@ Consequences for the rest of this document: the area pages follow the film acts 
 - **`/2.0.html`:** the same film with a chapter list. Each chapter seeks the video and links to the area page.
 - **Optional, not proposed:** a silent 10–15 s loop for the hero. It adds a second asset to maintain; skip unless Fable or Boss want it.
 
-### Chapters (from the as-built table in `script-v3.md`)
+### Chapters (4:43 cut, from the as-built table in `script-v3.md`)
+
+Provisional: the film gets one more render (unmeasured numbers removed, maybe new music). Re-read the as-built table after it.
 
 | Time | Chapter | Area page |
 |---|---|---|
-| 0:00 | One window for ten projects | home |
-| 0:14 | Sidebar cards, `+` agent menu, CLI \| Chat | orchestration |
-| 0:30 | Ideas and voice | planning / anywhere |
-| 0:49 | Stories, Kanban, Workflow designer, Automations | planning |
-| 1:07 | Agents spawn agents, mail, Progress Flow | orchestration |
-| 1:25 | Files, plugins, Markdown, Design Mode, MDKB | workspace / extend |
-| 1:52 | Questions, rate limits, Activity Dashboard | orchestration |
-| 2:04 | Tasks: GitHub, Jira, GitLab | git-and-review |
-| 2:24 | PR, CI auto-heal, line review | git-and-review |
-| 2:45 | Phone | anywhere |
-| 2:57 | AI Chat, ego session settings | orchestration |
-| 3:07 | Git: diff, stage, commit | git-and-review |
-| 3:23 | MCP, Remote, Prompts, Plugins, Themes, Search | extend |
+| 0:00 | Ten projects, one window | home |
+| 0:16 | Sidebar cards, `+` agent menu, CLI \| Chat | orchestration |
+| 0:32 | Ideas | planning |
+| 0:42 | Voice: push-to-talk and hands-free | anywhere |
+| 1:00 | Stories, Kanban, Workflow designer, Automations | planning |
+| 1:29 | Agents spawn agents, mail | orchestration |
+| 1:46 | Progress Flow | orchestration |
+| 1:54 | Files, plugins, Markdown, Design Mode, MDKB | workspace / extend |
+| 2:36 | Questions, rate limits, Activity Dashboard | orchestration |
+| 2:55 | Tasks: GitHub, Jira, GitLab | git-and-review |
+| 3:22 | PR, CI auto-heal, line review | git-and-review |
+| 3:43 | Phone | anywhere |
+| 3:55 | AI Chat, ego session settings | orchestration |
+| 4:10 | Git: diff, stage, commit | git-and-review |
+| 4:29 | MCP, Remote, Prompts, Plugins, Themes, Search | extend |
 
-### Web encode (measured)
+### Web encode (measured on the 4:43 cut)
 
-Source: 1920×1080, 60 fps, H.264 4.27 Mb/s + AAC, 216.8 s, 121.6 MB. Trial encodes with `libx264 -preset slow -profile:v high -movflags +faststart`, AAC 96 kb/s, in `~/Gits/.tmp/website-video/` (not in the repo):
+Source: 1920×1080, 60 fps, H.264 + AAC, 282.7 s, 129.2 MB. Encodes with `libx264 -preset slow -profile:v high -movflags +faststart`, AAC 96 kb/s, in `~/Gits/.tmp/website-video/` (not in the repo):
 
-| Encode | Size |
-|---|---|
-| 1280×720, 30 fps, CRF 26 | **19.2 MB** |
-| 1920×1080, 30 fps, CRF 28 | 25.9 MB |
+| Encode | 3:37 cut | 4:43 cut |
+|---|---|---|
+| 1280×720, 30 fps, CRF 26 | 19.2 MB | **21.3 MB** |
+| 1920×1080, 30 fps, CRF 28 | 25.9 MB | — |
+| 1920×1080, 30 fps, CRF 29 | — | 26.3 MB |
 
-Recommendation: **720p30, 19.2 MB**. It is under the 25 MB target. 30 fps loses nothing that matters: the film's motion is UI transitions. 1080p is sharper on small UI text in full screen but is just over the target; CRF 29 would bring it under, still to be checked by eye. Poster: a JPEG of the lockup or of the wide "All ten. One window." frame, about 80–150 KB.
+Legibility, checked on two frames (3:02 Tasks board, 4:12 Git panel file list): both encodes read cleanly, because the film's camera zooms in on the panels; 720p is slightly soft on 14 px file names, 1080p is crisp.
+
+Decision rule (coordinator): 1080p CRF 29 if under 25 MB and readable, else 720p. 1080p CRF 29 is **26.3 MB, over the limit**, so the rule gives **720p30 CRF 26 (21.3 MB)**. The final encode is made only after the last render; the new length moves the size about linearly (about 75 KB per second at 720p). Poster: a JPEG of the lockup or of the wide "All ten. One window." frame, about 80–150 KB.
 
 ### Where the file lives — decision for Boss
 
 | Option | For | Against |
 |---|---|---|
-| **A. `website/public/video/` in the repo** (recommended) | Same origin, range requests and caching from Pages, no third party, no tracking, works offline in `vite preview`. One `<video>` tag. | +19 MB in git history, permanent; every re-encode adds again. Below the 50 MB GitHub warning. |
+| **A. `website/public/video/` in the repo** | Same origin, range requests and caching from Pages, no third party, no tracking, works offline in `vite preview`. One `<video>` tag. | +19 MB in git history, permanent; every re-encode adds again. Below the 50 MB GitHub warning. |
 | B. YouTube (Boss uploads) | Adaptive bitrate, zero repo weight, the site already uses a YouTube facade. | Boss must upload; third-party embed and cookies; YouTube UI and recommendations around the film. |
 | C. GitHub release asset | Zero repo weight. | The download URL redirects to `objects.githubusercontent.com` with an attachment disposition; seeking and Safari playback are not reliable for `<video>`. Not recommended. |
 
 A and B combine well: self-host for the site, YouTube for sharing.
+
+**Fable's variant (A′):** self-host same-origin but do not commit the mp4: `website.yml` downloads it from a GitHub release asset into `dist/video/` at build time. Same-origin playback, no permanent repo weight, no redirect problem at play time. The host stays an open decision for Boss.
 
 ## 4. Feature evidence
 
@@ -158,13 +166,36 @@ Items marked unverified until phase 2: the six theme names in the UI, the settin
 
 ## 5. Screenshots
 
-Every area page needs 3–6 real 2.0 images. Options, in order of preference:
+Every area page needs 3–6 real 2.0 images (20–40 in total). Fable named this the main risk, so it was tested on 2026-10-25.
 
-1. **Stills from the presentation stage** (`tuic-presentation`, `render.mjs --stills`). The stage mounts the real 2.0.0-beta.2 components with fictional Halcyon data, so it gives clean, consistent, caption-free frames at 2× with no personal data. Stage-drawn parts (terminal replica, split panes, mail packets) are avoided or named as illustrations.
-2. **`make agent-test`** for anything the stage does not cover (Design Mode, settings search, themes), with throwaway repositories.
-3. Frames from the film only as a fallback: they are 1080p and most carry captions.
+### Stage stills: tested, they work
 
-Never Boss's live instance. Images are WebP with a PNG fallback only if needed, lazy-loaded, with width and height set.
+The presentation stage (`tuic-presentation/stage`, dev server on `:5199`) mounts the real 2.0.0-beta.2 components over fictional Halcyon data. Each panel module registers a demo: `?demo=<name>` runs it on the bare seeded world, and **demo mode hides every caption and overlay** (`stage/src/Overlay.tsx:184`, `:330`). Demos: dashboards, flow, github, glance, media, mobile, montage, planning, prdetail, review, tasks, workflow; some take `&step=` (for example `tasks&step=detail`, `montage&step=voice`).
+
+- `render.mjs --stills <ms,...> --dir <abs path>` exports clean 1920×1080 PNGs: no captions, no error banners, no page errors. It pins `deviceScaleFactor: 1` and frames the whole stage, so the app window sits inset on the wallpaper.
+- For the site, a small Puppeteer script outside the presentation repo (`~/Gits/.tmp/website-stills-tool/still2x.mjs`, which uses the repo's `puppeteer-core` and Chrome read-only) seeks the same clock at `deviceScaleFactor: 2` and clips to `.stage-window`. Result: **3360×1984 window-only PNGs, crisp at 2×**, 300–900 KB before WebP. `tuic-presentation` is not edited (it belongs to promo-20b).
+- Sample, one per area, in `~/Gits/.tmp/website-stills/sample/`:
+
+| Area | Demo, time | Shows |
+|---|---|---|
+| Orchestration | `flow`, 5000 ms | Progress Flow: columns per agent, delegations, messages, done |
+| Planning | `workflow`, 4000 ms | Plans and Stories, Kanban, story detail with revision history |
+| Ship | `tasks&step=detail`, 2500 ms | Tasks board with the issue detail and comments |
+| Workspace | `review`, 7000 ms | Markdown panel with a plan file, Edit · Live · Diff |
+| Anywhere | `mobile`, 7000 ms | Phone session list (needs a full-viewport capture: the phone sits outside the app window, so the window clip cuts its top) |
+| Extend | `dashboards`, 10500 ms | Settings → MCP upstream servers with status and call counts |
+
+Other usable frames found: Activity Dashboard (`dashboards` 1400 ms), Settings → Manage plugins (`dashboards` 13500 ms; avoid it, it shows GitHub Work/GitLab/Jira as "Not listed in the plugin registry"), Paper theme (`montage`).
+
+Limits: the terminal is a stage-drawn Claude replica and is empty in demo mode; split panes and mail packets are stage-drawn. Those shots come from film frames (captioned) or `agent-test`. Stage numbers are fictional (call counts, latencies); no headline may quote them.
+
+### Order of sources
+
+1. Stage stills at 2× (above), cropped to the panel that the section talks about.
+2. Film frames for terminal-heavy and multi-pane shots (1080p, captions burnt in on most beats).
+3. `make agent-test` with throwaway repositories for what neither covers (Design Mode, settings search on the current build).
+
+Never Boss's live instance. Images ship as WebP, lazy-loaded, with width and height set.
 
 ## 6. Content to write
 
@@ -177,7 +208,7 @@ Never Boss's live instance. Images are WebP with a PNG fallback only if needed, 
 | FAQ: drop the stale entries, update the rest (Aider removed, agent count, voice engines, Windows) | 6 on home |
 | `og.png` 1200×630 from the lockup frame; meta descriptions per page; sitemap with every page and post; `robots.txt` and `og:url` on `tuicommander.com` | — |
 
-Hero line proposal, from the film's lockup: **"Run ten projects. Follow one orchestrator."** with the current line "The IDE that understands AI agents" kept as the sub-heading. Marketing copy goes through `wiz:ls-style-editor`-style review rather than STE, per the repository language rule.
+Hero line: **open decision for Boss.** Fable recommends H1 "Run ten projects. Follow one orchestrator." (the lockup) with "10 projects. Dozens of agents. One of you." as the sub-line, because the cold open reads as a complaint without its chaos animation; "The IDE that understands AI agents" then stays as meta description only. Marketing copy goes through `wiz:ls-style-editor`-style review rather than STE, per the repository language rule.
 
 ## 7. Visual direction
 
@@ -185,7 +216,7 @@ Hero line proposal, from the film's lockup: **"Run ten projects. Follow one orch
 - Fix the two rule breaks (G8): an opaque nav and no hero glow.
 - The film highlights words in violet. The site keeps Observation Blue as its one accent so the site and the app look the same; violet stays the "merged" semantic colour.
 - Marketing pages need a larger type scale than the app (the app's 12–14 px "no display sizes" rule is for the product UI). Proposal: a 16 px body, 40–56 px h1, 28 px h2, one weight step for emphasis, no gradient text.
-- Layout: alternating text/screenshot bands on area pages; screenshots framed with a 1 px border and no shadow; a sticky in-page section index on area pages at ≥ 1024 px.
+- Layout: alternating text/screenshot bands on area pages; screenshots framed with a 1 px border and no shadow.
 - Status dots and badges from the app appear in screenshots and in small inline "live state" chips, never as decoration.
 - Accessibility: WCAG AA contrast, keyboard-reachable menu and video controls, captions are not needed (the film has no voice-over) but every chapter has a text label.
 
@@ -199,10 +230,19 @@ Hero line proposal, from the film's lockup: **"Run ten projects. Follow one orch
 6. Checks: `pnpm build`; `vite preview` driven by agent-browser at 1440 px and 390 px; video plays and seeks; a link check over `dist/`; window screenshots into `website/.review/` (add it to `.gitignore`; it is not ignored today).
 7. Local Conventional Commits on `feat/website-2.0`. No push, no deploy.
 
-## 9. Decisions needed
+## 9. Decisions
 
-1. Video host: **A (repo `public/`)**, B (YouTube), or A + B.
-2. Encode: **720p30 19.2 MB** or 1080p30 CRF 29 (about 22–24 MB, to measure).
-3. Seven area pages following the film acts (section 2a), or fewer.
-4. Screenshot source: **presentation stage stills** first, `agent-test` for the rest.
-5. Hero: the film opening "10 projects. Dozens of agents. One of you." with the lockup "Run ten projects. Follow one orchestrator." as CTA (section 2a), "The IDE that understands AI agents" as meta description.
+Decided (coordinator, 2026-10-25, after the Fable review):
+
+- Six area pages; no `one-window` page.
+- Home order: hero → before/after strip → five-step loop → at most six bands → install → FAQ (6) → CTA. The agent grid becomes a thin logo bar.
+- The film beats appear in full only in the `/2.0.html` chapters.
+- Never headline "50 agents".
+- No sticky in-page index on area pages; no blog tagging; no silent hero loop.
+- Encode: 1080p CRF 29 if under 25 MB and readable, else 720p. Measured: 720p (section 3). The final encode is made after the last render.
+- Screenshots: presentation stage stills first, `agent-test` for the rest (section 5).
+
+Open, for Boss:
+
+1. Video host: A (repo `public/`), A′ (release asset fetched into `dist/` by `website.yml`, Fable's recommendation), B (YouTube), or a combination.
+2. Hero line (section 6).
