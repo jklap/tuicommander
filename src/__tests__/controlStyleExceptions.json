@@ -490,7 +490,7 @@
     "story": "2266-a950",
     "rules": [
       "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
+      "[[],\".close:not([data-form-control])\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".searchInput\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 3px 6px\"]]",
       "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
       "[[],\".searchClear\",[\"border: none\",\"padding: 0 4px\"]]"
