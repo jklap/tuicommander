@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep the GitHub monitored-repository count independent of expiring query results, and prevent queued or late poll requests from restoring retired monitoring entries (#2336-da0a).
+
+- Isolate repository-local settings read failures so healthy repositories refresh and unavailable repositories retain their last successful values (#2336-da0a).
+
 - Default Markdown reviews to the agent that opened the document on desktop and mobile, while preserving an explicit review-agent choice (#2329-dc53).
 
 - Keep Markdown list comment actions outside the full list so nested bullets, numbers and task checkboxes stay unobstructed (#2330-6ef8).
