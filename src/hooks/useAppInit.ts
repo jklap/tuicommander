@@ -852,8 +852,9 @@ export async function initApp(deps: AppInitDeps) {
 		url?: string;
 		focus?: boolean;
 		origin_repo_path?: string;
+		opener_tuic_session?: string;
 	}>("ui-tab", (event) => {
-		const { id, title, html, pinned, url, focus, origin_repo_path } = event.payload;
+		const { id, title, html, pinned, url, focus, origin_repo_path, opener_tuic_session } = event.payload;
 
 		// Intercept tuic:// protocol URLs — handle as commands, not iframe src
 		if (url?.startsWith("tuic://")) {
@@ -904,12 +905,12 @@ export async function initApp(deps: AppInitDeps) {
 				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
-					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
+					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background, opener_tuic_session);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
 					if (classifyFile(filePath) === "markdown") {
 						editorTabsStore.closeMcpFile(id);
 						mdTabsStore.closeUiTab(id);
-						mdTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, pinned, background);
+						mdTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, pinned, background, opener_tuic_session);
 					} else {
 						mdTabsStore.closeMcpFile(id);
 						mdTabsStore.closeUiTab(id);

@@ -421,6 +421,7 @@ describe("initApp", () => {
 						url: string;
 						focus: boolean;
 						origin_repo_path: string;
+						opener_tuic_session: string;
 					};
 			  }) => void)
 			| null = null;
@@ -449,12 +450,17 @@ describe("initApp", () => {
 				url: `tuic://open/${targetRepo}/reports/comparison.md`,
 				focus: true,
 				origin_repo_path: sourceRepo,
+				opener_tuic_session: "tuic-b",
 			},
 		});
 
 		expect(repositoriesStore.state.activeRepoPath).toBe(targetRepo);
 		const activeTab = mdTabsStore.getActive();
-		expect(activeTab).toMatchObject({ repoPath: targetRepo, filePath: "reports/comparison.md" });
+		expect(activeTab).toMatchObject({
+			repoPath: targetRepo,
+			filePath: "reports/comparison.md",
+			openerTuicSession: "tuic-b",
+		});
 		expect(mdTabsStore.getVisibleIds(`${targetRepo}|main`)).toContain(activeTab!.id);
 	});
 

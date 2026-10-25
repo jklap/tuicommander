@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Isolate repository-local settings read failures so healthy repositories refresh and unavailable repositories retain their last successful values (#2336-da0a).
 
+- Default Markdown reviews to the agent that opened the document on desktop and mobile, while preserving an explicit review-agent choice (#2329-dc53).
+
+- Keep Markdown list comment actions outside the full list so nested bullets, numbers and task checkboxes stay unobstructed (#2330-6ef8).
+- Align Workflow Designer actions and draggable palette controls with shared desktop and touch geometry; preserve draft rows and graph cards (#2259-9345).
+- Keep SSH discovery Probe actions separated with shared settings row spacing, and hide remote update actions when the current build clears the out-of-date warning (#2337-6a62).
+
+### Fixed
+
+- Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
 

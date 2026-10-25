@@ -36,7 +36,7 @@ interface SessionDetailScreenProps {
 	sessionExists: boolean;
 	onBack: () => void;
 	onOpenFiles: () => void;
-	onOpenFileLink?: (candidate: string, line?: number, root?: string) => void;
+	onOpenFileLink?: (candidate: string, line?: number, root?: string, openerTuicSession?: string) => void;
 }
 
 function projectName(cwd: string | null): string {
@@ -101,7 +101,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const openMarkdown: Parameters<typeof OpenMarkdownMenu>[0]["onOpen"] = (tab) => {
 		setMarkdownOpen(false);
 		setMoreOpen(false);
-		props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
+		props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root, tab.opener_tuic_session);
 	};
 
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);

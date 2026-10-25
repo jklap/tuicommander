@@ -32,16 +32,6 @@
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
-    "file": "src/components/WorkflowDesigner/WorkflowDesigner.module.css",
-    "story": "2259-9345",
-    "rules": [
-      "[[],\".actions button, .palette button, .inspector button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 5px 9px\"]]",
-      "[[],\".draft\",[\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\",\"padding: 8px\"]]",
-      "[[],\".draft[aria-current=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".node\",[\"min-height: 82px\",\"border: 1px solid var(--border)\",\"border-left: 3px solid var(--accent)\",\"border-radius: var(--radius-md)\",\"padding: 10px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/HeroMetrics.module.css",
     "rules": [
       "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
