@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { storiesUi } from "../../stores/storiesUi";
 import { cx } from "../../utils";
+import { Button } from "../ui";
 import s from "./Toolbar.module.css";
 
 /** Counts over the active plans of one project, computed by the Rust `summary` story action. */
@@ -81,7 +82,9 @@ export const StoriesButton: Component<{ repoPath: string }> = (props) => {
 	};
 
 	return (
-		<button
+		<Button
+			size="compact"
+			variant="ghost"
 			type="button"
 			class={cx(s.bell, active() && s.storiesPillBtn)}
 			title={label()}
@@ -114,6 +117,6 @@ export const StoriesButton: Component<{ repoPath: string }> = (props) => {
 					</span>
 				)}
 			</Show>
-		</button>
+		</Button>
 	);
 };

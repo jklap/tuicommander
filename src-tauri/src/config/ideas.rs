@@ -201,7 +201,13 @@ mod tests {
             panic!("idea")
         };
         assert_eq!(idea["text"], "Repo idea");
-        assert_eq!(idea["repoPath"], project);
+        assert_eq!(
+            idea["repoPath"],
+            crate::progress::resolve_owning_project(Some(project))
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        );
         assert_eq!(idea["source"], "ego");
         assert!(idea["id"].as_str().unwrap().starts_with("note-"));
         assert!(idea["createdAt"].as_i64().unwrap() > 0);
