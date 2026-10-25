@@ -492,6 +492,8 @@ Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `
 
 User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`, and the Dev Server URL) are intentionally excluded from `.tuic.json`.
 
+Repository-local config reads are independent. If a repository is unavailable, its last successful values stay in use while other repositories refresh. A successful read that finds no `.tuic.json` clears the cached local values. A later successful read adopts the recovered repository's current values.
+
 ### Telegram
 
 Settings → Telegram configures the current machine. Bot setup, Chat access, Agent registration and Recent messages have separate cards. Authorized chats use named list rows with a Remove action, and Reload status refreshes the polling summary. Telegram setup is available only in desktop Settings, not in mobile Settings. Use it on the host running the desktop app or `tuic-remote`. Both share one polling owner on that machine.
@@ -680,5 +682,7 @@ In mobile Settings, use the Terminal and Chat minus/plus controls under Appearan
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+The monitored-repository count tracks successful snapshots in the running GitHub monitor, including repositories with no open PRs. Query-cache expiry and temporary poll failures do not reset this count. Removing a repository or stopping monitoring removes its entry.
 
 Git & GitHub access diagnostics show exact per-repository messages grouped by owner and account. For github.com OAuth accounts, use the OAuth app authorization action, then select Refresh status to clear NOT_FOUND retry delays for all accounts before the next monitoring poll. Opening Settings does not clear these delays.
