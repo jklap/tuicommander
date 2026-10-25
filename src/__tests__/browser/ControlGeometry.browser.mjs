@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { it } from 'node:test';
 import { createServer } from 'vite';
@@ -10,7 +10,8 @@ import solid from 'vite-plugin-solid';
 it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async () => {
   const directory = resolve(process.env.TUIC_GEOMETRY_EVIDENCE ?? '.tmp/control-geometry');
   await mkdir(directory, {recursive: true});
-  const server = await createServer({configFile:false, plugins:[solid()], cacheDir:resolve('.tmp/control-geometry-vite'), logLevel:'error', server:{host:'127.0.0.1',port:0}});
+  const {version} = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
+  const server = await createServer({configFile:false, define:{__APP_VERSION__:JSON.stringify(version),__BUILD_GIT_HASH__:JSON.stringify('geometry-fixture')}, plugins:[solid()], cacheDir:resolve('.tmp/control-geometry-vite'), logLevel:'error', server:{host:'127.0.0.1',port:0}});
   let chrome, socket;
   try {
     await server.listen();
@@ -38,7 +39,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
-      await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
+      await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryError){clearTimeout(stop);reject(new Error(window.controlGeometryError));return;}if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
       const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       // Catches: content-width icons, compact shrinking targets, rounded corner misses or lost native activation.
       const icons = await evaluate(`window.iconClicks === undefined ? [] : [...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label'),width:r.width,height:r.height,x:r.x+1,y:r.y+1,corner:button.contains(document.elementFromPoint(r.x+1,r.y+1)),radius:getComputedStyle(button).borderRadius,circle:button.hasAttribute('data-circle')?(button.firstElementChild?getComputedStyle(button.firstElementChild).borderRadius:'none'):null,disabled:button.disabled};})`);

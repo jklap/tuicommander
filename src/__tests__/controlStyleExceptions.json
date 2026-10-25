@@ -340,24 +340,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/PluginsTab.module.css",
-    "story": "2228-a5fe",
-    "rules": [
-      "[[],\".docsLink\",[\"border: none\",\"padding: 0\"]]",
-      "[[],\".refreshBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".installBtn\",[\"border: 1px solid var(--accent)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".docsBtn\",[\"border: 1px solid var(--border)\",\"height: 22px\",\"padding: 0\",\"border-radius: 50%\"]]",
-      "[[],\".docsBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".logsBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".logsBtn.logsActive\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".dashboardBtn\",[\"border: 1px solid var(--accent)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".uninstallBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".uninstallBtn:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".installSuggestion button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".installSuggestion button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/RepositoryTabs.module.css",
     "story": "2229-cf50",
     "rules": [
