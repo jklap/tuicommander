@@ -448,15 +448,6 @@
     ]
   },
   {
-    "file": "src/components/SmartButtonStrip/SmartButtonStrip.module.css",
-    "story": "2234-c17c",
-    "rules": [
-      "[[],\".splitMain\",[\"padding: 2px 8px\",\"border: none\",\"border-right: 1px solid var(--border)\"]]",
-      "[[],\".splitArrow\",[\"padding: 2px 0\",\"border: none\"]]",
-      "[[],\".menuItem\",[\"padding: 6px 12px\",\"border: none\"]]"
-    ]
-  },
-  {
     "file": "src/components/TabBar/TabBar.module.css",
     "story": "2242-bc80",
     "rules": [
