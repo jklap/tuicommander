@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Index, mapArray, Show } from "solid-js";
-import { Button, Input } from "../../components/ui";
+import { Button } from "../../components/ui/Button";
+import { Input } from "../../components/ui/Input";
 import { appLogger } from "../../stores/appLogger";
 import { rpc } from "../../transport";
 import { HeroMetrics } from "../components/HeroMetrics";

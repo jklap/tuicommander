@@ -1,7 +1,8 @@
 import { type Component, For, Show } from "solid-js";
 import { type Toast, toastsStore } from "../../stores/toasts";
 import { onClickKeyDown } from "../../utils/a11y";
-import { Button } from "../ui";
+// Mobile shares this list; the UI barrel eagerly loads desktop renderers and stores.
+import { Button } from "../ui/Button";
 import styles from "./ToastContainer.module.css";
 
 /** "Go to repo": `onClick` returns false when it could not navigate, and the toast stays. */
