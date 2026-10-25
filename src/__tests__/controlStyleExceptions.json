@@ -698,22 +698,6 @@
     ]
   },
   {
-    "file": "src/mobile/screens/SessionDetailScreen.module.css",
-    "story": "2289-7662",
-    "rules": [
-      "[[],\".backBtn\",[\"height: 44px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".headerInfo\",[\"height: 44px\",\"padding: 0\",\"border: 0\"]]",
-      "[[],\".headerAction\",[\"height: 44px\",\"padding: 0\",\"border: 0\"]]",
-      "[[],\".overflow button, .overflowInfo\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 0\"]]",
-      "[[],\".endedBackBtn\",[\"padding: 10px 28px\",\"border: 1px solid var(--border)\",\"border-radius: 8px\"]]",
-      "[[],\".searchInput\",[\"height: 32px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchClear\",[\"height: 28px\",\"border: none\",\"padding: 0\"]]",
-      "[[],\".overflow .markdownEntry\",[\"padding-block: 8px\"]]",
-      "[[],\".markdownTrigger\",[\"min-height: 44px\",\"padding: 0 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/screens/SessionsScreen.module.css",
     "story": "2290-8629",
     "rules": [
