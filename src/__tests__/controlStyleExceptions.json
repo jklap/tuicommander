@@ -42,17 +42,6 @@
     ]
   },
   {
-    "file": "src/components/IdeasPanel/IdeasPanel.module.css",
-    "story": "2207-8a6e",
-    "rules": [
-      "[[],\".projectLabel\",[\"padding: 1px 6px\",\"border-radius: var(--radius-md)\",\"border: none\"]]",
-      "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".input\",[\"padding-right: 40px\"]]",
-      "[[],\".submitBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".thumbnailRemove\",[\"height: 16px\",\"border: none\",\"border-radius: 50%\"]]"
-    ]
-  },
-  {
     "file": "src/components/MarkdownPanel/MarkdownPanel.module.css",
     "story": "2208-c0f2",
     "rules": [

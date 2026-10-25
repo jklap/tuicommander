@@ -7,6 +7,7 @@ import { cx } from "../../utils";
 import { savePastedImage } from "../../utils/pastedImage";
 import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
+import { Button } from "../ui/Button";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { Select } from "../ui/Select";
@@ -250,17 +251,17 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 									<Show
 										when={reassigningId() === idea.id}
 										fallback={
-											<button
+											<Button
+												variant="ghost"
 												class={cx(s.projectLabel, idea.repoPath ? s.projectTagged : s.projectGlobal)}
 												onClick={() => setReassigningId(idea.id)}
 												title="Click to reassign project"
 											>
 												{idea.repoDisplayName ?? "Global"}
-											</button>
+											</Button>
 										}
 									>
 										<Select
-											compact
 											class={s.reassignSelect}
 											value={idea.repoPath ?? "__global__"}
 											onChange={(e) => handleReassign(idea.id, e.currentTarget.value)}
@@ -274,38 +275,50 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 								</div>
 							</div>
 							<div class={s.actions}>
-								<button
-									class={cx(s.actionBtn, s.editBtn)}
+								<Button
+									variant="ghost"
+									shape="icon"
+									aria-label={t("ideasPanel.edit", "Edit idea")}
+									class={s.editBtn}
 									onClick={() => handleEdit(idea.id, idea.text, idea.images)}
 									title={t("ideasPanel.edit", "Edit idea")}
 								>
 									✎
-								</button>
+								</Button>
 								<Show when={props.onQueueToTerminal}>
-									<button
-										class={cx(s.actionBtn, s.queueBtn)}
+									<Button
+										variant="ghost"
+										shape="icon"
+										aria-label={t("ideasPanel.queue", "Queue for the agent's next idle moment")}
+										class={s.queueBtn}
 										onClick={() => handleQueue(idea)}
 										title={t("ideasPanel.queue", "Queue for the agent's next idle moment")}
 									>
 										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 											<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
 										</svg>
-									</button>
+									</Button>
 								</Show>
-								<button
-									class={cx(s.actionBtn, s.sendBtn)}
+								<Button
+									variant="ghost"
+									shape="icon"
+									aria-label={t("ideasPanel.send", "Send to terminal")}
+									class={s.sendBtn}
 									onClick={() => handleSend(idea)}
 									title={t("ideasPanel.send", "Send to terminal")}
 								>
 									▶
-								</button>
-								<button
-									class={cx(s.actionBtn, s.deleteBtn)}
+								</Button>
+								<Button
+									variant="ghost"
+									shape="icon"
+									aria-label={t("ideasPanel.delete", "Delete idea")}
+									class={s.deleteBtn}
 									onClick={() => ideasStore.removeIdea(idea.id)}
 									title={t("ideasPanel.delete", "Delete idea")}
 								>
 									✕
-								</button>
+								</Button>
 							</div>
 						</div>
 					)}
@@ -327,9 +340,16 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 												e.currentTarget.parentElement)!.style.display = "none";
 										}}
 									/>
-									<button class={s.thumbnailRemove} onClick={() => removePendingImage(imgPath)} title="Remove image">
+									<Button
+										variant="danger"
+										shape="icon"
+										aria-label="Remove image"
+										class={s.thumbnailRemove}
+										onClick={() => removePendingImage(imgPath)}
+										title="Remove image"
+									>
 										✕
-									</button>
+									</Button>
 								</div>
 							)}
 						</For>
@@ -350,14 +370,16 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					onKeyDown={handleKeyDown}
 					onPaste={handlePaste}
 				/>
-				<button
-					class={s.submitBtn}
+				<Button
+					variant="primary"
+					shape="icon"
+					aria-label={t("ideasPanel.submit", "Add idea (Enter)")}
 					onClick={handleSubmit}
 					disabled={!inputText().trim() && allPendingImages().length === 0}
 					title={t("ideasPanel.submit", "Add idea (Enter)")}
 				>
 					+
-				</button>
+				</Button>
 			</div>
 		</div>
 	);
