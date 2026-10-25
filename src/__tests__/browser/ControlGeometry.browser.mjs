@@ -138,6 +138,14 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId);
         assert.deepEqual(await evaluate('window.repositoryActions'),{exports:1,resets:0},'Export activates only the existing export callback');
       }
+      // Catches: removing Telegram's panel sizing changes disabled or native keyboard behavior.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'telegramGeometry') {
+        assert.deepEqual(await evaluate(`[...document.querySelectorAll('#geometry button:disabled')].map(button=>button.textContent.trim()).sort()`),['Add chat ID','Save and check bot']);
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Reload status')).focus()`);
+        const reads=await evaluate('window.telegramReads');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate('window.telegramReads')>reads,'Space reloads status through the existing owner');
+      }
       result.containment = [];
       measurements.push({width,...result,icons,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);

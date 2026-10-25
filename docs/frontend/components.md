@@ -1004,3 +1004,6 @@ label, and repository-owned update callback; feature CSS only aligns the control
 Smart Prompt editor variable triggers and reset actions use shared Button.
 Variable choices remain native list-row buttons with name and description;
 `data-control-layout="row"` makes their intentional list geometry explicit.
+
+Telegram settings inherit target sizing and touch typography from shared Button,
+Input, and Switch controls. Feature styles only format the chat-list heading.

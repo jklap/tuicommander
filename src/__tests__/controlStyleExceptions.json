@@ -340,14 +340,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/TelegramTab.module.css",
-    "story": "2231-3d00",
-    "rules": [
-      "[[],\".panel button\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".panel input:not([type=\\\"checkbox\\\"]), .panel select, .panel button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/WorkspaceTabs.module.css",
     "story": "2232-885d",
     "rules": [
