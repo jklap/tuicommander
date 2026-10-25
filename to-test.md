@@ -2946,3 +2946,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
+
+- [ ] After the next planned backend rebuild/restart, request and submit a dummy secret, then remove it from the same MCP session and after a bridge reconnect: both removals return `removed` (including an already absent name). Old binaries return `missing` after successful deletion; MCP reconnect alone does not clear backend-owned values. Native automation was unavailable for story 1520-46b1 (`osascript` assistive access denied).

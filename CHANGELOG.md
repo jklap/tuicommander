@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
+
 - Bind session Chat text to the terminal zoom level, including active and all-terminal zoom shortcuts (#2322-c113).
 
 - Restore toolbar density in panel headers, view toggles and filters while keeping Settings forms at 36px and mobile targets at 44px (#2316-2f6b).
