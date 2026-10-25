@@ -146,7 +146,9 @@ The diagnostics `repos_monitored` gauge counts repository paths with successful
 PR snapshots in the running poller's transition history, including empty snapshots.
 It does not count entries in the TTL query cache. Cache expiry and failed poll ticks
 do not remove monitoring identity. Removing a configured path drops its transition
-and change-detection history; stopping the poller resets the gauge to zero. A new
+and change-detection history and queued on-demand requests. Late on-demand requests
+for unconfigured paths are ignored, so completed asynchronous actions cannot restore
+a retired monitor. Stopping the poller resets the gauge to zero. A new
 poller starts with no successful snapshots, even if old query payloads remain cached.
 
 ## Data Types

@@ -3364,7 +3364,7 @@ mod write_tests;
 
 #[cfg(test)]
 #[path = "github_partial_tests.rs"]
-mod partial_tests;
+pub(crate) mod partial_tests;
 
 #[cfg(test)]
 mod tests {

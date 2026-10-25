@@ -1,3 +1,7 @@
+## GitHub monitoring retirement (2336-da0a) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, remove a monitored repository while a GitHub action is outstanding. Confirm GitHub Status no longer counts it after the action finishes. Queued and late requests are covered by the targeted command-loop regression; the historical empty-sidebar cause remains unproven. This peer did not restart the daily app.
+
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
 - [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.

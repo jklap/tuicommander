@@ -237,6 +237,10 @@ async fn poll_loop(
                         }
                     }
                     Some(PollerCmd::PollRepo(path)) => {
+                        // An asynchronous action may finish after its repo was removed.
+                        if !paths.contains(&path) {
+                            continue;
+                        }
                         if !pending_poll_paths.contains(&path) {
                             pending_poll_paths.push(path);
                         }
@@ -247,6 +251,7 @@ async fn poll_loop(
                     }
                     Some(PollerCmd::UpdatePaths(new_paths)) => {
                         ps.retain_paths(&new_paths);
+                        pending_poll_paths.retain(|path| new_paths.contains(path));
                         paths = new_paths;
                     }
                     Some(PollerCmd::SetIssueFilter(filter)) => {
@@ -790,35 +795,114 @@ mod tests {
     #[tokio::test]
     async fn monitoring_count_follows_paths_and_poller_lifetime() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        ensure_polling(&state, vec![], String::new(), false);
+        ensure_polling(
+            &state,
+            vec!["/kept".into(), "/removed".into()],
+            String::new(),
+            false,
+        );
         let previous = Arc::clone(&state.github.poller.lock().as_ref().unwrap().previous_prs);
-        let mut ps = PollMutableState {
-            prev: previous,
-            ..Default::default()
-        };
         for path in ["/kept", "/removed", "/kept"] {
-            process_repo_update(&state, path, &[], &mut ps.prev.write());
+            process_repo_update(&state, path, &[], &mut previous.write());
         }
         assert_eq!(
             crate::github_auth::compute_diagnostics(&state).repos_monitored,
             2
         );
-        ps.last_pr_updated_at
-            .insert("/removed".into(), Some("old".into()));
-        ps.last_issue_updated_at
-            .insert("/removed".into(), Some("old".into()));
-        ps.retain_paths(&["/kept".into()]);
-        assert_eq!(
-            crate::github_auth::compute_diagnostics(&state).repos_monitored,
-            1
-        );
-        assert!(!ps.last_pr_updated_at.contains_key("/removed"));
-        assert!(!ps.last_issue_updated_at.contains_key("/removed"));
+        send_poller_cmd(&state, PollerCmd::UpdatePaths(vec!["/kept".into()])).unwrap();
+        // No setup-speed bound: nextest owns the outer hang limit.
+        while crate::github_auth::compute_diagnostics(&state).repos_monitored != 1 {
+            tokio::task::yield_now().await;
+        }
         stop_poller(&state).await.unwrap();
         assert_eq!(
             crate::github_auth::compute_diagnostics(&state).repos_monitored,
             0
         );
+    }
+
+    // Catches: queued or late PollRepo resurrecting a retired monitor after UpdatePaths.
+    #[tokio::test]
+    async fn removed_paths_cannot_return_through_on_demand_polls() {
+        let mut fixture = crate::github::partial_tests::PollHttpFixture::start(true).await;
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        let mut paths = Vec::new();
+        for name in ["removed", "kept"] {
+            let repo = scratch.path().join(name);
+            std::fs::create_dir(&repo).unwrap();
+            for args in [
+                vec!["init", "--quiet"],
+                vec![
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/sstraus/tuicommander.git",
+                ],
+            ] {
+                let output = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&repo)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            paths.push(repo.to_string_lossy().into_owned());
+        }
+        let mut events = fixture.state.event_bus.subscribe();
+        ensure_polling(&fixture.state, paths.clone(), "all".into(), false);
+        // Wait for a real successful snapshot, not a hand-populated history.
+        loop {
+            if matches!(
+                events.recv().await.unwrap(),
+                AppEvent::GitHubPrUpdate { .. }
+            ) && crate::github_auth::compute_diagnostics(&fixture.state).repos_monitored == 2
+            {
+                break;
+            }
+        }
+        fixture.requests.recv().await.unwrap();
+        while events.try_recv().is_ok() {}
+        for late in [false, true] {
+            if !late {
+                send_poller_cmd(&fixture.state, PollerCmd::PollRepo(paths[0].clone())).unwrap();
+                send_poller_cmd(
+                    &fixture.state,
+                    PollerCmd::UpdatePaths(vec![paths[1].clone()]),
+                )
+                .unwrap();
+            } else {
+                send_poller_cmd(&fixture.state, PollerCmd::PollRepo(paths[0].clone())).unwrap();
+            }
+            // A configured-path request gives an observable completion barrier
+            // for the same debounce batch, without sleeping or racing the network.
+            send_poller_cmd(&fixture.state, PollerCmd::PollRepo(paths[1].clone())).unwrap();
+            send_poller_cmd(
+                &fixture.state,
+                PollerCmd::SetIssueFilter(if late { "assigned" } else { "created" }.into()),
+            )
+            .unwrap();
+            loop {
+                if let AppEvent::GitHubIssuesUpdate { repo_path, .. } = events.recv().await.unwrap()
+                {
+                    if repo_path == paths[1] {
+                        break;
+                    }
+                }
+            }
+            let request = fixture.requests.recv().await.unwrap();
+            assert_eq!(
+                crate::github_auth::compute_diagnostics(&fixture.state).repos_monitored,
+                1,
+                "retired monitor returned (late={late}); request={request}"
+            );
+        }
+        stop_poller(&fixture.state).await.unwrap();
+        fixture.close().await;
     }
 
     #[tokio::test]

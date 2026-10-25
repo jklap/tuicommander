@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Keep the GitHub monitored-repository count independent of expiring query results, and clear retired monitoring entries (#2336-da0a).
+- Keep the GitHub monitored-repository count independent of expiring query results, and prevent queued or late poll requests from restoring retired monitoring entries (#2336-da0a).
 
 - Isolate repository-local settings read failures so healthy repositories refresh and unavailable repositories retain their last successful values (#2336-da0a).
 
