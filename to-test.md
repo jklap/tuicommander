@@ -1,3 +1,7 @@
+## Rustup PTY environment (2318-4b44) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, open a fresh terminal and confirm `env | grep RUSTUP_TOOLCHAIN` prints nothing, repository toolchain pins apply, and an explicit run-config `RUSTUP_TOOLCHAIN` still wins. Verified in isolated `agent-test-2318`: the parent carried `stable`, the fresh terminal had no proxy keys, and a throwaway repository selected its pinned `1.98.1`. Both targeted tests passed on macOS and rb. The isolated app was stopped; Rust changes do not hot-reload into the daily app.
+
 ## Ego conversational submit (2314-cf94) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, let ego end with a plain-text question or a blocked progress report at idle. Confirm `session submit` sends the answer without raw input, busy turns still reject, and a native approval/selector/free-text modal rejects with `prompt_kind`. The peer did not restart the daily app.
