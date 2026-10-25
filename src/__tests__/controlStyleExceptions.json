@@ -469,15 +469,6 @@
     ]
   },
   {
-    "file": "src/components/shared/KeyComboCapture.module.css",
-    "story": "2262-c9b2",
-    "rules": [
-      "[[],\".display\",[\"padding: 6px 16px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".display:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".input\",[\"padding: 6px 12px\",\"border: 2px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/SearchBar.module.css",
     "story": "2263-7f11",
     "rules": [
