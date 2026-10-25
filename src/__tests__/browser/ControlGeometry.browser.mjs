@@ -39,7 +39,34 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      // Catches: content-width icons, compact shrinking targets, rounded corner misses or lost native activation.
+      const icons = await evaluate(`window.iconClicks === undefined ? [] : [...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label'),width:r.width,height:r.height,x:r.x+1,y:r.y+1,corner:button.contains(document.elementFromPoint(r.x+1,r.y+1)),radius:getComputedStyle(button).borderRadius,circle:button.hasAttribute('data-circle')?(button.firstElementChild?getComputedStyle(button.firstElementChild).borderRadius:'none'):null,disabled:button.disabled};})`);
+      for(const icon of icons) {
+        assert.equal(icon.width,width<=600?44:36,'Icon target must be square, not content width');
+        assert.equal(icon.height,width<=600?44:36,'Compact must not shrink an icon target');
+        assert.ok(icon.corner,'Circular presentation must retain the square corner hit region');
+        if(icon.circle) {assert.equal(icon.radius,'0px');assert.equal(icon.circle,'50%');}
+      }
+      if(icons.length) {
+        for(const icon of [icons[1],icons[3]]) {
+          const before=await evaluate('window.iconClicks');
+          await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:icon.x,y:icon.y},sessionId);
+          await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:icon.x,y:icon.y},sessionId);
+          assert.equal(await evaluate('window.iconClicks'),before+(icon.disabled?0:1),'Native corner activation respects disabled');
+        }
+        await evaluate(`document.querySelector('[data-circle]').focus()`);
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate('window.iconClicks'),2,'Space must activate the native focused icon');
+        assert.equal(await evaluate(`getComputedStyle(document.activeElement).outlineStyle`),'solid','Native focus remains visible');
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Primary help"]').firstElementChild).backgroundColor`),'rgb(10, 20, 200)','Circle retains primary palette');
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Remove help"]').firstElementChild).borderColor`),'rgb(10, 200, 20)','Circle retains pressed removal state');
+        const last=icons.at(-1);
+        await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:last.x+last.width/2-1,y:last.y+last.height/2-1},sessionId);
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Remove help"]').firstElementChild).borderColor`),'rgb(200, 10, 20)','Circle retains removal hover');
+
+      }
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
         assert.ok(row.controls.length >= 2, 'Stretch cases must exercise multiple button sizes');
@@ -89,13 +116,35 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
-      measurements.push({width,...result,stretch,joined,textarea,states});
+      result.containment = [];
+      measurements.push({width,...result,icons,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
       console.log(path);
+      // Catches: platform-specific desktop height wins over wrapped touch rows.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
+        for (const platform of ['linux', 'windows']) {
+          await evaluate(`document.documentElement.className='platform-${platform}'; new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+          const bounds = await evaluate(`(()=>{const toolbar=document.querySelector('#toolbar'); const box=toolbar.getBoundingClientRect(); const buttons=[...toolbar.querySelectorAll('button')]; return {toolbarBottom:box.bottom,actionsBottom:Math.max(...buttons.map(button=>button.getBoundingClientRect().bottom)),actions:buttons.length};})()`);
+          result.containment.push({platform,...bounds});
+          console.log('CONTAINMENT',JSON.stringify({width,platform,...bounds}));
+          const capture = await send('Page.captureScreenshot',{format:'png',clip:(await evaluate(`(()=>{const box=document.querySelector('#geometry').getBoundingClientRect(); return {x:box.x,y:box.y,width:box.width,height:Math.max(box.height,100),scale:1};})()`))},sessionId);
+          const platformPath=resolve(directory,`controls-${width}-${platform}.png`);
+          await writeFile(platformPath,Buffer.from(capture.data,'base64'));
+          console.log(platformPath);
+        }
+        await evaluate(`document.documentElement.className=''`);
+      }
     }
     await writeFile(resolve(directory,'measurements.json'),JSON.stringify(measurements,null,2));
+    if (process.env.TUIC_GEOMETRY_FIXTURE === 'toolbarGeometry') {
+      for (const result of measurements) assert.equal(result.containment.length, 2, 'Both platform containment cases must execute');
+    }
+    for (const result of measurements) for (const bounds of result.containment) {
+      assert.ok(bounds.actions >= 2, 'Containment must measure actual mounted toolbar actions');
+      assert.ok(bounds.actionsBottom <= bounds.toolbarBottom + 1, `${bounds.platform} toolbar must contain actions at ${result.width}px: ${JSON.stringify(bounds)}`);
+    }
     for(const result of measurements)for(const row of result.rows) {
       assert.ok(row.heights.length >= 2, 'The mounted fixture must contain multiple real controls');
       for(const element of row.heights)assert.equal(element.height,result.width<=600?44:row.size==='compact'?22:36,JSON.stringify({width:result.width,row}));
