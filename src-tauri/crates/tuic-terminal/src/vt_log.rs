@@ -224,6 +224,8 @@ pub struct VtLogBuffer {
     /// Caller-computed secrets of the retained log, valid while `total_pushed`
     /// and the wrap flags are unchanged.
     secret_cache: Option<(usize, Vec<String>)>,
+    /// Monotonic start of the last real byte-processing call, never a clock repair.
+    last_processed_at: Option<std::time::Instant>,
 }
 
 /// Internal scrollback capacity for the terminal grid. Must be large enough
@@ -246,7 +248,13 @@ impl VtLogBuffer {
             suppress_capture: false,
             next_head_lost: false,
             secret_cache: None,
+            last_processed_at: None,
         }
+    }
+
+    /// Last real reader processing, in the same monotonic domain as input stamps.
+    pub fn last_processed_at(&self) -> Option<std::time::Instant> {
+        self.last_processed_at
     }
 
     pub fn set_ansi_colors(&mut self, colors: &[[u8; 3]; 16]) {
@@ -276,6 +284,9 @@ impl VtLogBuffer {
     /// while mouse reporting is on the primary screen (`grok --no-alt-screen`):
     /// the app owns the viewport and its SU/line dumps are not shell output.
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+        if !data.is_empty() {
+            self.last_processed_at = Some(std::time::Instant::now());
+        }
         let is_alternate = self.grid.is_alternate_screen();
 
         // TerminalGrid::process handles changed-row detection internally,

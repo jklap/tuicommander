@@ -485,9 +485,9 @@ pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool
     }
     let observed_input = state
         .session_maps
-        .last_input_ms
+        .silence_states
         .get(session_id)
-        .map(|last| last.load(Ordering::Acquire));
+        .and_then(|silence| silence.lock().last_input_at);
     if ego_has_fresh_empty_composer(state, session_id)
         && let Some(buffer) = state.session_maps.input_buffers.get(session_id)
     {
@@ -497,9 +497,9 @@ pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool
         // feed follows this reset under the same editor mutex.
         let current_input = state
             .session_maps
-            .last_input_ms
+            .silence_states
             .get(session_id)
-            .map(|last| last.load(Ordering::Acquire));
+            .and_then(|silence| silence.lock().last_input_at);
         if current_input == observed_input {
             *buffer = InputLineBuffer::new();
         }
@@ -545,10 +545,25 @@ fn ego_has_fresh_empty_composer(state: &AppState, session_id: &str) -> bool {
     if output_age < AGENT_READY_CONFIRM || input_age_ms <= output_age.as_millis() as u64 {
         return false;
     }
+    let Some(input_at) = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .and_then(|silence| silence.lock().last_input_at)
+    else {
+        return false;
+    };
     state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
         let vt = vt.lock();
-        detect_agent_screen_activity_at(Some("ego"), &vt.screen_rows(), Some(vt.grid_columns()))
-            == AgentScreenActivity::Ready
+        // Epoch ages and repaired idle clocks can only delay recovery. Only
+        // actual VT processing after input authorizes it, in one clock domain.
+        vt.last_processed_at()
+            .is_some_and(|output_at| output_at > input_at)
+            && detect_agent_screen_activity_at(
+                Some("ego"),
+                &vt.screen_rows(),
+                Some(vt.grid_columns()),
+            ) == AgentScreenActivity::Ready
     })
 }
 

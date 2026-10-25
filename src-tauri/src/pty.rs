@@ -3674,6 +3674,9 @@ pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
 /// Timestamp-only bookkeeping after successful writes, including automated input.
 /// It must not re-arm priority after the reader already applied a fast echo.
 pub(crate) fn record_input_ms(state: &AppState, session_id: &str) {
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+        silence.lock().last_input_at = Some(std::time::Instant::now());
+    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
