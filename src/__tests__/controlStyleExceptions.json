@@ -469,20 +469,6 @@
     ]
   },
   {
-    "file": "src/components/WorktreeManager/WorktreeManager.module.css",
-    "story": "2260-0d5a",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".filterPill\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".filterPillActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".batchMergeBtn\",[\"border: 1px solid var(--success)\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".batchDeleteBtn\",[\"border: 1px solid var(--error)\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn\",[\"border: 1px solid transparent\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".actionBtn:hover:not(:disabled)\",[\"border-color: var(--border)\"]]",
-      "[[],\".pruneBtn\",[\"border: 1px solid var(--border)\",\"padding: 1px 8px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/ComposeActions.module.css",
     "story": "2261-8828",
     "rules": [
