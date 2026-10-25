@@ -42,15 +42,6 @@
     ]
   },
   {
-    "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
-    "story": "2204-4f62",
-    "rules": [
-      "[[],\".scanButton, .issueButton\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".scanButton\",[\"padding: 5px 7px\"]]",
-      "[[],\".issueButton\",[\"padding: 5px 7px\"]]"
-    ]
-  },
-  {
     "file": "src/components/HelpPanel/HelpPanel.module.css",
     "story": "2205-7cc6",
     "rules": [
