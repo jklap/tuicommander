@@ -47,7 +47,7 @@ export interface ContentRendererProps {
 	 * Called for local file, directory, and heading links (raw href passed as argument).
 	 * Resolving to `false` reports a dead target: the clicked link is replaced by its text.
 	 */
-	onLinkClick?: (href: string) => void | Promise<boolean | void>;
+	onLinkClick?: (href: string) => void | Promise<boolean | undefined> | Promise<void>;
 	/**
 	 * Called when a checkbox is clicked (source line, new mark, and — for a
 	 * whole-cell checkbox in a table — the column of its `[`, since one row can
