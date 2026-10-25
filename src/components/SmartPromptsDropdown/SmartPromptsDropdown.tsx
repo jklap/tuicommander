@@ -23,6 +23,8 @@ const CATEGORY_ORDER: Record<string, { label: string; order: number }> = {
 
 export interface SmartPromptsDropdownProps {
 	repoPath?: string;
+	/** Size of the trigger only; popup controls keep their default geometry. */
+	triggerSize?: "default" | "compact";
 	/** Opens Settings on the Smart Prompts tab. */
 	onOpenSettings?: () => void;
 }
@@ -141,6 +143,7 @@ export const SmartPromptsDropdown: Component<SmartPromptsDropdownProps> = (props
 	return (
 		<div class={s.wrapper} ref={wrapperRef}>
 			<Button
+				size={props.triggerSize}
 				variant="ghost"
 				class={cx(s.trigger, open() && s.triggerActive)}
 				aria-pressed={open()}

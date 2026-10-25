@@ -34,6 +34,7 @@ import { safeUnlisten } from "../../utils/safeUnlisten";
 import { isSuspendingOrSuspended, resumeTerminal } from "../../utils/suspendTerminal";
 import type { TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import { createSearchVisibility } from "../shared/SearchBar";
+import { Button } from "../ui";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
@@ -1375,9 +1376,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							</span>
 						)}
 					</Show>
-					<button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">
+					<Button variant="ghost" class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">
 						&times;
-					</button>
+					</Button>
 				</div>
 			</Show>
 			{/* Chat mode HIDES the grid (display:none, the background-tab path) and never
@@ -1420,9 +1421,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 													</span>
 												)}
 											</Show>
-											<button class={s.resumeButton} type="button" onClick={() => void resumeTerminal(props.id)}>
+											<Button class={s.resumeButton} type="button" onClick={() => void resumeTerminal(props.id)}>
 												{t("terminal.suspended.resume", "Resume")}
-											</button>
+											</Button>
 										</div>
 									</Show>
 									<Show when={sessionEnded()}>

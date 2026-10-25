@@ -181,24 +181,26 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 							</Button>
 						</Show>
 						<Show when={updateEntry()}>
-							<button
+							<Button
 								data-non-setting="Plugin package installation, update or removal workflow"
-								class={ps.installBtn}
+								variant="primary"
 								onClick={handleUpdate}
 								disabled={updating()}
 							>
 								{updating() ? "..." : "Update"}
-							</button>
+							</Button>
 						</Show>
 						<Show when={hasReadme()}>
-							<button
+							<Button
 								data-non-setting="Open plugin documentation"
-								class={ps.docsBtn}
+								shape="icon"
+								circular
+								aria-label="View plugin documentation"
 								onClick={handleOpenReadme}
 								title="View plugin documentation"
 							>
 								?
-							</button>
+							</Button>
 						</Show>
 						<details>
 							<summary class={s.testBtn}>Manage plugin</summary>{" "}
@@ -212,34 +214,33 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 									onChange={handleToggle}
 								/>
 							</label>
-							<button
+							<Button
 								data-non-setting="Show or hide plugin runtime logs"
-								class={ps.logsBtn}
-								classList={{ [ps.logsActive]: showLogs() }}
+								aria-pressed={showLogs()}
 								onClick={() => setShowLogs(!showLogs())}
 								title="View logs"
 							>
 								Logs
-							</button>
+							</Button>
 							<Show when={!props.plugin.builtIn}>
-								<button
+								<Button
 									data-non-setting="Plugin package installation, update or removal workflow"
-									class={ps.uninstallBtn}
+									variant="danger"
 									onClick={handleUninstall}
 									disabled={uninstalling()}
 									title="Uninstall plugin"
 								>
 									{uninstalling() ? "..." : "Uninstall"}
-								</button>
+								</Button>
 							</Show>
 						</details>
 					</div>
 					<Show when={dashboardRegistry.get(props.plugin.id)}>
 						{(entry) => (
 							<div class={ps.pluginActionsRow}>
-								<button
+								<Button
 									data-non-setting="Navigate to a plugin settings or dashboard page"
-									class={ps.dashboardBtn}
+									variant="primary"
 									onClick={async () => {
 										// Close the Settings panel first so the dashboard becomes visible
 										// in the main area instead of being hidden behind Settings.
@@ -256,7 +257,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 										<span class={ps.btnIcon} innerHTML={entry().icon} />
 									</Show>
 									{entry().label}
-								</button>
+								</Button>
 							</div>
 						)}
 					</Show>
@@ -335,14 +336,14 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 
 				<div class={ps.pluginActions}>
 					<Show when={!isInstalled() || updateAvailable()}>
-						<button
+						<Button
 							data-non-setting="Plugin package installation, update or removal workflow"
-							class={ps.installBtn}
+							variant="primary"
 							onClick={handleInstall}
 							disabled={installing()}
 						>
 							{installing() ? "..." : updateAvailable() ? "Update" : "Install"}
-						</button>
+						</Button>
 					</Show>
 				</div>
 			</div>
@@ -440,8 +441,9 @@ export const PluginsTab: Component<{
 		<div class={s.section}>
 			<div>
 				<SettingPageHeader title="Manage plugins" scope="Application defaults" breadcrumb="Plugins / Manage plugins" />
-				<button
+				<Button
 					data-non-setting="Open plugin documentation"
+					variant="ghost"
 					class={ps.docsLink}
 					onClick={() => {
 						if (isTauri()) {
@@ -453,7 +455,7 @@ export const PluginsTab: Component<{
 					title="Open plugin authoring guide"
 				>
 					Documentation
-				</button>
+				</Button>
 			</div>
 
 			<SegmentedControl
@@ -545,14 +547,13 @@ export const PluginsTab: Component<{
 						<p class={s.hint} style={{ margin: "0" }}>
 							Discover plugins from the community registry.
 						</p>
-						<button
+						<Button
 							data-non-setting="Explicit plugin-registry discovery"
-							class={ps.refreshBtn}
 							onClick={() => registryStore.refresh()}
 							disabled={registryStore.state.loading}
 						>
 							{registryStore.state.loading ? "Loading..." : "Refresh"}
-						</button>
+						</Button>
 					</div>
 
 					<Show when={registryStore.state.error}>
