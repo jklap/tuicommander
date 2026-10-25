@@ -131,12 +131,23 @@ built the fixtures with the dev profile and no default features for 18m15s.
 Dev includes debug information that the test profile disables. This second
 profile and feature graph prevent reuse of many artifacts from the test build.
 
-Both fixture setup scripts now use `cargo build --profile test`. Local lib-only
-runs keep `--no-default-features`; desktop CI sets `TUIC_FIXTURE_FEATURES=dictation`
-to match its `cargo nextest run --workspace --features dictation` build. Both
-profiles put these binaries beside the test binary's `deps` directory under
-`debug`, so consumer path resolution does not change. Setup scoping remains
-unchanged: unrelated lib tests do not build fixtures.
+Local lib-only fixture setup uses `cargo build --profile test
+--no-default-features`. Desktop CI sets `TUIC_FIXTURE_FEATURES=dictation`, which
+selects `cargo test --workspace --no-run --features dictation` instead. This
+matches nextest's workspace test selection, including dev-dependency feature
+unification. A binary-only build with `--profile test` does not activate dev
+dependencies: under resolver 2 it omits features such as `tokio/test-util` and
+`tuic-core/test-support`, so profile and top-level feature alignment alone do
+not establish graph reuse.
+
+The CI setup command runs no tests. Integration targets make Cargo build the
+normal fixture executables; setup can reuse the workspace artifacts nextest
+already built. Both paths put the executables beside the test binary's `deps`
+directory under `debug`, so consumer path resolution does not change. Setup
+scoping remains unchanged: unrelated lib tests do not build fixtures.
+`scripts/check-fixture-build-graph.py` captures each builder's actual command
+and compares its resolved package-feature graph with CI's workspace test graph.
+It does not replace a full-workspace warm-build measurement on Windows.
 
 That Windows run restored no Cargo target cache. Rust sccache reported 131 hits
 and 1291 misses (9.21% hit rate); linked binaries and proc macros were among its

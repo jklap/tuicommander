@@ -234,6 +234,7 @@ jobs:
       - name: Nextest fixture setup scope
         run: |
           bash scripts/with-test-tmp.sh bash scripts/check-fixture-build-profile.sh
+          bash scripts/with-test-tmp.sh python3 scripts/check-fixture-build-graph.py
           bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
 
       # nextest does not run doctests — run them separately so doc examples stay

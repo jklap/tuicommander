@@ -65,11 +65,14 @@ step: `test` finishes in 45m36s at line 3299; scoped fixture setup starts at lin
 Dev has line-table debug information; test disables debug information. Both
 profile differences and feature unification differences require new artifacts.
 
-The repair makes both fixture scripts use `--profile test`. Desktop CI supplies
-`TUIC_FIXTURE_FEATURES=dictation`, which includes desktop and matches nextest's
-feature set; local lib-only runs retain the headless default. Executable names
-and the `debug` output directory are unchanged. The existing nextest consumer
-filters are unchanged. Windows workspace harness optimization changes from O1
+The repair keeps local lib-only fixture builds headless with `--profile test`.
+Desktop CI supplies `TUIC_FIXTURE_FEATURES=dictation`, which selects `cargo test
+--workspace --no-run --features dictation` in both setup scripts. This retains
+nextest's dev-dependency feature unification as well as its profile/defaults.
+The first version used a binary-only build and missed that unification; see
+critic F1 below. Executable names and the `debug` output directory are unchanged.
+The existing nextest consumer filters are unchanged. Windows workspace harness
+optimization changes from O1
 to O0, as already used on macOS. Dependencies and the terminal replay crate keep
 their explicit O1 settings. No assertion, retry, test filter or deadline changes.
 
@@ -93,7 +96,11 @@ failures include the automation precheck and two Usage metadata-counter tests;
 they are not resolved by a build-profile change. A complete Windows run and
 native crash diagnosis remain required before story completion.
 
-### Native profile validation
+### Initial native profile validation (before critic F1)
+
+This validates profile selection and reuse between two identical binary-only
+builds. It does not prove reuse after CI's full workspace test graph; critic F1
+identified that missing check and the correction below replaces the CI command.
 
 `~/Gits/.tmp/results/ci-win-profile-validation.log` completed with exit 0 through
 native build-slot and mbx. `mbx doctor` reported zero failures and warnings.
@@ -122,6 +129,41 @@ The build emitted the compact-unwind size warning and mbx cache-bypass warnings
 for missing build-script declarations/output names and changed `OUT_DIR`.
 No Windows execution, complete workspace suite, runtime performance result or
 90-minute completion is inferred from this native Mac build evidence.
+
+### Critic F1: resolver-2 graph correction
+
+The independent critic found that
+`cargo build --profile test --features dictation` still omits dev-dependency unification. Its real Cargo probe showed
+`tokio/test-util` absent in the binary-only graph and present in the workspace
+test graph. The same difference affects `tuic-core/test-support` and
+`tuic-git/test-support`. Top-level features and output paths alone were
+insufficient evidence of full graph reuse.
+
+The committed graph regression captures the actual shell/PowerShell builder
+argv, resolves its package-feature graph with real `cargo tree`, and compares
+all entries with the CI workspace test selection. It also requires the three
+features above in the oracle, preventing an empty or wrong-kind comparison.
+On pre-fix `79b59184e`, it failed for the named bug: the captured command was
+`build --profile test --no-default-features --features dictation --bin ...`,
+with missing test dependencies and different Tokio/core/git feature sets.
+Evidence: `~/Gits/.tmp/results/ci-win-f1-red.log`.
+
+CI setup now selects `cargo test --workspace --no-run --features dictation`,
+the same workspace/default-feature/dev-dependency selection as nextest.
+Cargo's integration targets build the normal fixture executables. No tests
+are executed by this setup command. The scoped local headless fallback stays
+unchanged. This corrects F1 without maintaining a manual list of dependency
+features. A complete Windows workspace warm-build/runtime measurement remains
+required; graph equality is not claimed to be that measurement.
+
+Final targeted validation passed through build-slot and the mbx Cargo shim:
+`check-fixture-build-profile.sh` passed both shell/PowerShell default, CI argv
+and exit propagation cases. `check-fixture-build-graph.py` resolved the actual
+CI selection of each builder to the same 793 package-feature entries as the
+workspace test oracle in this run, including Tokio test-util and core/git
+test-support. Log: `~/Gits/.tmp/results/ci-win-f1-final.log`, exit 0. These
+commands compile and execute no Rust targets. Bash/Python syntax, workflow
+YAML and `git diff --check` also passed; `actionlint` remains unavailable.
 
 ## EGO-DEFECTS
 

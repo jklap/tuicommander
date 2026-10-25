@@ -55,6 +55,7 @@ scripts/*
 !scripts/test-agent-test.sh
 !scripts/check-desktop-embedding.sh
 !scripts/check-fixture-build-profile.sh
+!scripts/check-fixture-build-graph.py
 !scripts/github-work-live-check.mjs
 !scripts/github-work-live-check.test.mjs
 !scripts/github-work-desktop-e2e.mjs

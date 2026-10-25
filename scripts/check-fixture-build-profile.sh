@@ -16,8 +16,7 @@ export PATH="$work/bin:$PATH"
 export FIXTURE_BUILD_ARGV="$work/actual"
 
 check() {
-  printf '%s\n' build --profile test --no-default-features "$@" \
-    --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server > "$work/expected"
+  printf '%s\n' "$@" > "$work/expected"
   (cd "$root/src-tauri" && "${builder[@]}")
   diff -u "$work/expected" "$work/actual"
 }
@@ -32,9 +31,11 @@ for shell in sh pwsh; do
     builder=(sh scripts/build-fixture-bins.sh)
   fi
   unset TUIC_FIXTURE_FEATURES FIXTURE_BUILD_EXIT
-  check
+  check build --profile test --no-default-features \
+    --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server
   export TUIC_FIXTURE_FEATURES=dictation
-  check --features dictation
+  # Catches: CI selecting a binary-only graph without test dev-dependencies.
+  check test --workspace --no-run --features dictation
   # Catches: a failed fixture build being reported as successful setup.
   export FIXTURE_BUILD_EXIT=7
   set +e
