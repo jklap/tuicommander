@@ -70,21 +70,6 @@
   vertical-align: middle;
 }
 
-.close {
-  background: none;
-  border: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-2xl);
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-}
-
-.close:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-}
-
 .body {
   display: flex;
   flex: 1;
@@ -103,7 +88,7 @@
   position: relative;
 }
 
-.navItem {
+button[data-control-layout="row"].navItem {
   display: block;
   width: 100%;
   text-align: left;
@@ -139,12 +124,12 @@
   color: var(--fg-muted);
 }
 
-.navItem:hover {
+button[data-control-layout="row"].navItem:hover {
   background: var(--bg-highlight);
   color: var(--fg-primary);
 }
 
-.navItem.active {
+button[data-control-layout="row"].navItem.active {
   background: var(--bg-highlight);
   color: var(--fg-primary);
   box-shadow: inset 3px 0 0 var(--accent);
@@ -169,7 +154,7 @@
   flex-shrink: 0;
 }
 
-.navItemRepo {
+button[data-control-layout="row"].navItemRepo {
   padding-left: 24px;
 }
 
@@ -236,38 +221,6 @@
   background: var(--bg-tertiary);
 }
 
-.footerReset {
-  padding: 6px 14px;
-  background: var(--bg-highlight);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  font-size: var(--font-sm);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.footerReset:hover {
-  background: var(--border);
-  color: var(--fg-primary);
-}
-
-.footerDone {
-  padding: 6px 16px;
-  background: var(--accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-on-accent);
-  font-size: var(--font-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.footerDone:hover {
-  background: var(--accent-hover);
-}
-
 /* ── Shared Form Elements ── */
 .section {
   max-width: 100%;
@@ -297,41 +250,6 @@
   font-size: var(--font-sm);
   color: var(--fg-secondary);
   margin-bottom: 6px;
-}
-
-.group select:not([data-form-control]),
-.group input[type="text"]:not([data-form-control]),
-.group input[type="url"]:not([data-form-control]),
-.group input[type="password"]:not([data-form-control]),
-.group textarea:not([data-form-control]) {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  box-sizing: border-box;
-}
-
-.group select:not([data-form-control]),
-.group input[type="text"]:not([data-form-control]),
-.group input[type="url"]:not([data-form-control]),
-.group input[type="password"]:not([data-form-control]) {
-  height: 32px;
-}
-
-.group textarea:not([data-form-control]) {
-  font-family: var(--font-mono);
-  resize: vertical;
-  min-height: 100px;
-}
-
-.group select:not([data-form-control]):focus,
-.group input:not([data-form-control]):focus,
-.group textarea:not([data-form-control]):focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .hint {
@@ -407,39 +325,6 @@
   border-bottom: none;
 }
 
-.testBtn {
-  padding: 4px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--fg-secondary);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-
-.testBtn:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-  border-color: var(--accent);
-}
-
-.testBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.testBtnOk {
-  background: var(--success);
-  border-color: var(--success);
-  color: var(--bg-primary);
-}
-
-.testBtnFail {
-  background: var(--error);
-  border-color: var(--error);
-  color: var(--bg-primary);
-}
-
 .actions {
   display: flex;
   gap: 8px;
@@ -447,23 +332,6 @@
   margin-bottom: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.actions button {
-  padding: 6px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  font-size: var(--font-sm);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.actions button:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-  border-color: var(--accent);
 }
 
 /* ── Color Picker (shared by AppearanceTab + RepoWorktreeTab) ── */
@@ -491,26 +359,6 @@
 }
 
 .groupNameInput { flex: 1; }
-
-.groupDeleteBtn {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  color: var(--fg-secondary);
-  font-size: var(--font-md);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-
-.groupDeleteBtn:hover {
-  background: var(--error);
-  color: var(--text-on-accent);
-}
 
 .groupNameError {
   font-size: var(--font-xs);
@@ -542,38 +390,10 @@
 
 .groupsAddBtn {
   width: 100%;
-  padding: 10px;
-  background: transparent;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  font-size: var(--font-sm);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
   margin-top: 8px;
 }
 
-.groupsAddBtn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--bg-tertiary);
-}
-
 /* ── Services Tab (MCP) ── */
-.input:not([data-form-control]) {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-}
-
-.input:not([data-form-control]):focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
 .passwordRow {
   display: flex;
@@ -583,26 +403,6 @@
 
 .passwordRow .input {
   flex: 1;
-}
-
-.toggleBtn {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.toggleBtn:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
 }
 
 .inlineBtn {
@@ -620,27 +420,6 @@
 .inlineBtn:hover {
   color: var(--accent);
   border-color: var(--accent);
-}
-
-.saveBtn {
-  padding: 6px 12px;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  color: var(--text-on-accent);
-  font-size: var(--font-sm);
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-
-.saveBtn:hover {
-  opacity: 0.85;
-}
-
-.saveBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .url {
@@ -723,61 +502,7 @@
   user-select: all;
 }
 
-.copyBtn {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
 
-.copyBtn:hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-  border-color: var(--accent);
-}
-
-/*
- * The same chrome as .copyBtn, sized to its label instead of to an icon.
- *
- * .copyBtn is a 30x30 box with no padding, which is right for a glyph and wrong
- * for a word: "Connect", "Save" and "Cancel" overflowed it and overlapped the
- * buttons beside them. Reach for this one whenever the button contains text.
- */
-.textBtn {
-  height: 30px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  white-space: nowrap;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.textBtn:hover:not(:disabled) {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-  border-color: var(--accent);
-}
-
-.textBtn:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
 
 .mcpStatusRow {
   display: flex;
@@ -1025,10 +750,6 @@
   padding: 0;
 }
 
-.schedulerAdd .testBtn {
-  height: 32px;
-}
-
 .schedulerCronInput {
   width: 64px;
   height: 32px;
@@ -1072,17 +793,6 @@
 }
 
 /* Manual MCP configuration disclosure */
-.mcpDisclosure {
-  background: none;
-  border: none;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  font-size: var(--font-sm);
-  padding: 2px 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
 
 .mcpDisclosureArrow {
   font-size: var(--font-xs);
@@ -1111,13 +821,6 @@
   position: absolute;
   top: 4px;
   right: 4px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-xs);
 }
 
 .mcpCode {
@@ -1196,35 +899,15 @@
   position: relative;
   display: flex;
   align-items: center;
-  margin: 0 4px 8px;
+  margin: 0 0 8px;
   flex-shrink: 0;
+  gap: 8px;
 }
 
 .searchIcon {
-  position: absolute;
-  left: 8px;
+  flex-shrink: 0;
   color: var(--fg-muted);
   pointer-events: none;
-}
-
-.searchBox input { width: 100%; padding: 4px 4px 4px 24px; font-family: var(--font-ui); }
-
-.searchBox:has(.searchClear) input { padding-right: 22px; }
-
-.searchClear {
-  position: absolute;
-  right: 4px;
-  padding: 0 4px;
-  background: transparent;
-  border: none;
-  color: var(--fg-muted);
-  font-size: var(--font-md);
-  line-height: 1;
-  cursor: pointer;
-}
-
-.searchClear:hover {
-  color: var(--fg-primary);
 }
 
 .searchResults {
@@ -1233,7 +916,7 @@
   gap: 2px;
 }
 
-.searchResult {
+button[data-control-layout="row"].searchResult {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1247,7 +930,7 @@
   transition: background 0.1s;
 }
 
-.searchResult:hover {
+button[data-control-layout="row"].searchResult:hover {
   background: var(--bg-highlight);
 }
 
@@ -1285,7 +968,7 @@
   color: var(--fg-muted);
 }
 
-.group [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]), .input[data-form-control] { width: 100%; }
+.group [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]), .input[data-form-control] { width: 100%; }
 
 /* Shared row layout; existing field layout is retained unless opted in. */
 .settingRow { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -1295,9 +978,9 @@
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
 .settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .settingRowControl > div:not(.settingRowValue) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
-.settingRowControl > div > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
+.settingRowControl > div > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .settingRowControl > div > .hint { margin: 0; text-align: right; }
-.settingRowControl > [data-form-control]:not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
+.settingRowControl > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .fieldError { margin: 4px 0 0; color: var(--error); font-size: 12px; line-height: 1.5; }
 @media (max-width: 800px) {
   .content { padding: 20px; }
@@ -1308,7 +991,6 @@
   .panel { width: calc(100vw - 24px); }
   .body { flex-direction: column; }
   .nav { width: 100% !important; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .navItem, .close, .footerDone, .footerReset, .content button { min-height: 44px; }
   .content { padding: 16px; }
 }
 
@@ -1317,7 +999,7 @@
  .nav > :not(.compactNav):not(.navSearch) { display: none; }
  .nav { overflow: visible; padding: 8px 16px; max-height: none; }
  .compactNav { display: block; }
- .compactNav select { width: 100%; min-height: 44px; padding-inline-end: 32px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+ .compactNav select { width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
 .settingRowText .infoBadge { width: 14px; height: 14px; border: 1px solid var(--fg-muted); background: transparent; font-size: 10px; line-height: 1; }
@@ -1326,7 +1008,6 @@
 /* Application pages opt in; existing stacked consumers retain their layout. */
 .settingRowControl:has(> [data-form-control="switch"]) { flex: 0 0 auto; display: flex; justify-content: flex-end; }
 .applicationPage .hint { color: var(--fg-secondary); }
-.applicationPage .testBtn { min-height: 36px; }
 .applicationPage .soundRow { gap: 12px; flex-wrap: wrap; padding: 12px 0; }
 .applicationPage .soundRow .toggle { flex: 1; }
 .applicationPage .soundRow .toggle [data-form-control="switch"] { order: 2; margin-left: auto; }
@@ -1334,14 +1015,12 @@
 .applicationPage .groupRow { flex-wrap: wrap; }
 .applicationPage .groupNameInput { min-width: 0; }
 .applicationPage .slider input { min-width: 0; }
-@media (max-width: 600px) { .applicationPage .testBtn { min-height: 44px; } }
 
 .applicationPage .groupItem { padding: 12px 0; border-bottom: 1px solid var(--border); }
-.applicationPage .groupDeleteBtn { min-width: 36px; min-height: 36px; }
 
 @media (max-width: 600px) { .navSearch { order: -1; } }
 
-.navSearch { padding: 0 16px 8px; box-sizing: border-box; }
+.navSearch { padding: 0 0 8px; box-sizing: border-box; }
 .navSearch > [data-form-control], .compactNav > [data-form-control] { width: 100%; box-sizing: border-box; }
 @media (max-width: 600px) { .navSearch { padding: 0 0 8px; } }
 
@@ -1380,10 +1059,17 @@
 
 /* Catalogue labels wrap their controls rather than sharing a setting row. */
 .catalogueLabel { display: flex; flex-direction: column; gap: 8px; }
-.catalogueLabel select { padding-inline-end: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalogueLabel select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Reserve the badge width on the final inline label fragment, then occupy that space. */
 .helpLabel > label:has(+ .infoBadge) { padding-inline-end: 20px; }
 .helpLabel > label + .infoBadge { margin-inline-start: -14px; }
 
 .catalogueActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block-start: 8px; }
+
+.searchBox > input { flex: 1; width: 100%; }
+
+
+@media (max-width: 600px) {
+ button[data-control-layout="row"].navItem, button[data-control-layout="row"].searchResult { min-height: 44px; }
+}

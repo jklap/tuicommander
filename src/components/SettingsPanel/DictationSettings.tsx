@@ -73,25 +73,25 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 				actions={
 					<>
 						<Show when={props.model.downloaded && !isSelected()}>
-							<button
+							<Button
 								data-setting-id="voice.model"
 								title="Use model"
 								class={s.testBtn}
 								onClick={() => dictationStore.setModel(props.model.name)}
 							>
 								{t("dictation.use", "Use")}
-							</button>
+							</Button>
 						</Show>
 
 						<Show when={!props.model.downloaded && !isDownloading()}>
-							<button
+							<Button
 								data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 								title="Download model"
 								class={s.testBtn}
 								onClick={() => dictationStore.downloadModel(props.model.name)}
 							>
 								{t("dictation.download", "Download")}
-							</button>
+							</Button>
 						</Show>
 						<Show when={isDownloading()}>
 							<div class={d.downloadProgress}>
@@ -105,14 +105,14 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 							</div>
 						</Show>
 						<Show when={props.model.downloaded}>
-							<button
+							<Button
 								data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 								class={s.testBtn}
 								onClick={() => dictationStore.deleteModel(props.model.name)}
 								title={t("dictation.deleteModel", "Delete model")}
 							>
 								{t("dictation.removeModel", "Remove")}
-							</button>
+							</Button>
 						</Show>
 					</>
 				}
@@ -287,20 +287,20 @@ export const DictationSettings: Component = () => {
 				)}
 				actions={
 					<>
-						<button
+						<Button
 							data-setting-id="corrections.replacements.{from}.to"
 							class={s.testBtn}
 							onClick={handleImportCorrections}
 						>
 							{t("dictation.import", "Import")}
-						</button>
-						<button
+						</Button>
+						<Button
 							data-non-setting="Export the correction map without changing owner configuration"
 							class={s.testBtn}
 							onClick={handleExportCorrections}
 						>
 							{t("dictation.export", "Export")}
-						</button>
+						</Button>
 					</>
 				}
 			>
@@ -314,14 +314,14 @@ export const DictationSettings: Component = () => {
 						<ListRow
 							name={`${from} → ${to}`}
 							actions={
-								<button
+								<Button
 									data-setting-id="corrections.replacements.{from}.to"
 									class={s.testBtn}
 									onClick={() => handleRemoveCorrection(from)}
 									title={t("dictation.removeCorrection", "Remove correction")}
 								>
 									{t("dictation.removeCorrection", "Remove correction")}
-								</button>
+								</Button>
 							}
 						/>
 					)}
@@ -348,14 +348,14 @@ export const DictationSettings: Component = () => {
 								onInput={(e) => setNewTo(e.currentTarget.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
 							/>
-							<button
+							<Button
 								data-setting-id="corrections.replacements.{from}.to"
 								class={s.testBtn}
 								onClick={handleAddCorrection}
 								disabled={!newFrom().trim() || !newTo().trim()}
 							>
 								{t("dictation.addCorrection", "Add")}
-							</button>
+							</Button>
 						</div>
 					)}
 				</SettingRow>
@@ -442,13 +442,13 @@ const SpeechRecognition: Component = () => {
 										when={dictationStore.state.devices.length > 0}
 										fallback={
 											<div>
-												<button
+												<Button
 													data-non-setting="Explicit device discovery; does not select a device"
 													class={s.testBtn}
 													onClick={() => dictationStore.refreshDevices()}
 												>
 													{t("dictation.detectMicrophones", "Detect Microphones")}
-												</button>
+												</Button>
 											</div>
 										}
 									>
@@ -586,7 +586,7 @@ const SpeechRecognition: Component = () => {
 									</div>
 								</div>
 								<div class={d.controlRow}>
-									<button
+									<Button
 										data-non-setting="Preview audio or test recording without changing the stored preference"
 										class={s.testBtn}
 										onClick={toggleTest}
@@ -595,7 +595,7 @@ const SpeechRecognition: Component = () => {
 										{recording()
 											? t("dictation.tuningStop", "Stop test")
 											: t("dictation.tuningStart", "Start test recording")}
-									</button>
+									</Button>
 								</div>
 							</div>
 
@@ -1395,7 +1395,7 @@ const HandsFreeControls: Component = () => {
 									onChange={(e) => dictationStore.setHandsFreeStartNotice(e.currentTarget.value)}
 								/>
 								<div class={d.controlRow}>
-									<button
+									<Button
 										data-setting-id="voice.hands_free_start_notice"
 										class={s.testBtn}
 										onClick={() => {
@@ -1406,7 +1406,7 @@ const HandsFreeControls: Component = () => {
 										disabled={!dictationStore.state.handsFreeStartNotice}
 									>
 										{t("dictation.startNoticeReset", "Reset to default")}
-									</button>
+									</Button>
 								</div>
 							</div>
 						)}

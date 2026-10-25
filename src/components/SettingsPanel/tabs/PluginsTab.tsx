@@ -15,6 +15,7 @@ import { openDialog as open } from "../../../utils/nativeDialog";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { InstallWorkItemPlugin } from "../../Tasks/setup/InstallWorkItemPlugin";
+import { Button } from "../../ui/Button";
 import { SegmentedControl } from "../../ui/SegmentedControl";
 import { Switch } from "../../ui/Switch";
 import { ContextualHelp } from "../ContextualHelp";
@@ -171,13 +172,13 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 				<div class={ps.pluginActions}>
 					<div class={ps.pluginActionsRow}>
 						<Show when={props.onOpenSettings}>
-							<button
+							<Button
 								data-non-setting="Navigate to a plugin settings or dashboard page"
 								class={s.testBtn}
 								onClick={() => props.onOpenSettings?.()}
 							>
 								Settings
-							</button>
+							</Button>
 						</Show>
 						<Show when={updateEntry()}>
 							<button
@@ -513,22 +514,22 @@ export const PluginsTab: Component<{
 					<Show when={isTauri()}>
 						<div class={ps.installRow}>
 							<ContextualHelp label="Local install" />
-							<button
+							<Button
 								data-non-setting="Plugin package installation, update or removal workflow"
 								class={s.testBtn}
 								onClick={handleInstallFromFolder}
 								disabled={installing()}
 							>
 								{installing() ? "Installing..." : "Install from folder..."}
-							</button>
-							<button
+							</Button>
+							<Button
 								data-non-setting="Plugin package installation, update or removal workflow"
 								class={s.testBtn}
 								onClick={handleInstallFromZip}
 								disabled={installing()}
 							>
 								{installing() ? "Installing..." : "Install from ZIP..."}
-							</button>
+							</Button>
 							<Show when={fileInstallError()}>
 								<p class={ps.pluginError}>Installation failed: {fileInstallError()}</p>
 							</Show>

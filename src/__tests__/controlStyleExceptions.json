@@ -167,23 +167,6 @@
     ]
   },
   {
-    "file": "src/components/GitPanel/ChangesTab.module.css",
-    "story": "2198-3154",
-    "rules": [
-      "[[],\".commitTextarea\",[\"min-height: 38px\",\"max-height: 114px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 6px 8px\"]]",
-      "[[],\".commitTextarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".commitBtn\",[\"border: none\",\"border-radius: var(--radius-md)\",\"padding: 4px 12px\"]]",
-      "[[],\".generateBtn\",[\"height: 28px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".generateBtn:hover:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".generateBtnBusy\",[\"border-color: var(--accent)\"]]",
-      "[[],\".filterInput\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 24px 4px 8px\"]]",
-      "[[],\".filterInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".filterClear\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".sectionAction\",[\"border: none\",\"padding: 1px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
     "story": "2204-4f62",
     "rules": [
@@ -357,100 +340,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/Settings.module.css",
-    "story": "2223-32b2",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".navItem\",[\"padding: 3px 16px 5px\",\"border: none\"]]",
-      "[[],\".navItem.active\",[\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".navItemRepo\",[\"padding-left: 24px\"]]",
-      "[[],\".footerReset\",[\"padding: 6px 14px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".footerDone\",[\"padding: 6px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".group select:not([data-form-control]), .group input[type=\\\"text\\\"]:not([data-form-control]), .group input[type=\\\"url\\\"]:not([data-form-control]), .group input[type=\\\"password\\\"]:not([data-form-control]), .group textarea:not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".group select:not([data-form-control]), .group input[type=\\\"text\\\"]:not([data-form-control]), .group input[type=\\\"url\\\"]:not([data-form-control]), .group input[type=\\\"password\\\"]:not([data-form-control])\",[\"height: 32px\"]]",
-      "[[],\".group textarea:not([data-form-control])\",[\"min-height: 100px\"]]",
-      "[[],\".group select:not([data-form-control]):focus, .group input:not([data-form-control]):focus, .group textarea:not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".testBtn\",[\"padding: 4px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".testBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button\",[\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actions button:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".groupDeleteBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".groupsAddBtn\",[\"padding: 10px\",\"border: 1px dashed var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".groupsAddBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".input:not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".input:not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleBtn\",[\"height: 30px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".saveBtn\",[\"padding: 6px 12px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn\",[\"height: 30px\",\"padding: 0\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".textBtn\",[\"height: 30px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".textBtn:hover:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".schedulerAdd .testBtn\",[\"height: 32px\"]]",
-      "[[],\".mcpDisclosure\",[\"border: none\",\"padding: 2px 0\"]]",
-      "[[],\".mcpSnippetCopy\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".searchBox input\",[\"padding: 4px 4px 4px 24px\"]]",
-      "[[],\".searchBox:has(.searchClear) input\",[\"padding-right: 22px\"]]",
-      "[[],\".searchClear\",[\"padding: 0 4px\",\"border: none\"]]",
-      "[[],\".searchResult\",[\"padding: 6px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".navItem, .close, .footerDone, .footerReset, .content button\",[\"min-height: 44px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".compactNav select\",[\"min-height: 44px\",\"padding-inline-end: 32px\"]]",
-      "[[],\".applicationPage .testBtn\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".applicationPage .testBtn\",[\"min-height: 44px\"]]",
-      "[[],\".applicationPage .groupDeleteBtn\",[\"min-height: 36px\"]]",
-      "[[],\".catalogueLabel select\",[\"padding-inline-end: 32px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/SettingsPrimitives.module.css",
-    "story": "2224-6593",
-    "rules": [
-      "[[],\".actions button, .status button, .empty button\",[\"min-height: 36px\"]]",
-      "[[\"@media (max-width: 600px)\"],\".actions button, .status button, .empty button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/fields/fields.module.css",
-    "story": "2225-ef95",
-    "rules": [
-      "[[],\".button\",[\"min-height: var(--control-height, 36px)\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/AgentsTab.module.css",
-    "story": "2226-5941",
-    "rules": [
-      "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn.danger:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".menuItem\",[\"padding: 5px 10px\",\"border: none\"]]",
-      "[[],\".formInput.inputError\",[\"border-color: var(--error)\"]]",
-      "[[],\".actionBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actionBtn.installed\",[\"border-color: var(--success)\"]]",
-      "[[],\".actionBtn.installed:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]\",[\"width: 16px\",\"height: 16px\",\"min-width: 16px\",\"min-height: 16px\",\"border: 1px solid var(--border)\",\"border-radius: 3px\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]:checked\",[\"border-color: var(--accent)\"]]",
-      "[[],\".toggleRow input[type=\\\"checkbox\\\"]:checked::after\",[\"width: 4px\",\"height: 8px\",\"border: solid white\",\"border-width: 0 2px 2px 0\"]]",
-      "[[],\".smallBtn, .actionBtn\",[\"min-height: 32px\",\"padding: 5px 10px\"]]",
-      "[[],\".agentExpanded textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 8px\"]]",
-      "[[],\".page textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 8px\"]]",
-      "[[],\".rowSwitch\",[\"height: 18px\",\"border: 1px solid var(--border)\",\"border-radius: 999px\"]]",
-      "[[],\".rowSwitch::after\",[\"height: 12px\",\"border-radius: 50%\"]]",
-      "[[],\".rowSwitch:checked\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/GitHubTab.module.css",
-    "story": "2227-3dcb",
-    "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"padding: 6px 14px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".btn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btnPrimary\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btnDanger:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".actions .btn\",[\"min-height: 36px\",\"padding: 6px 14px\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/PluginsTab.module.css",
     "story": "2228-a5fe",
     "rules": [
@@ -486,8 +375,7 @@
       "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
       "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]",
       "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".dangerBtn:hover\",[\"border-color: var(--error)\"]]"
+      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
@@ -564,53 +452,6 @@
     ]
   },
   {
-    "file": "src/components/SmartPromptsDropdown/SmartPromptsDropdown.module.css",
-    "story": "2235-1392",
-    "rules": [
-      "[[],\".trigger\",[\"height: 26px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".triggerActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".searchInput\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".searchInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".manageLink\",[\"border: none\",\"padding: 2px 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SmartPromptsDropdown/VariableInputDialog.module.css",
-    "story": "2236-5c5b",
-    "rules": [
-      "[[],\".fieldInput\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".fieldInput:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".cancelBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".submitBtn\",[\"padding: 5px 14px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/StatusBar/ProviderRecoveryStatus.module.css",
-    "story": "2237-10c9",
-    "rules": [
-      "[[],\".retry\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 2px 6px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/StatusBar/StatusBar.module.css",
-    "story": "2238-ac3b",
-    "rules": [
-      "[[],\".tickerPopoverClose\",[\"border: none\",\"padding: 0 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".toggleBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".toggleBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".micRecording\",[\"border-color: var(--accent) !important\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SuggestOverlay/SuggestOverlay.module.css",
-    "story": "2241-2c67",
-    "rules": [
-      "[[],\".chip\",[\"padding: 8px 16px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".chip:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".closeBtn\",[\"height: 24px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/TabBar/TabBar.module.css",
     "story": "2242-bc80",
     "rules": [
@@ -630,128 +471,6 @@
       "[[],\".clearBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".closeBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".itemCancel\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/StartWorkMenu.module.css",
-    "story": "2244-d329",
-    "rules": [
-      "[[],\".trigger, .popup button, .error button\",[\"min-height: 28px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/TasksShell.module.css",
-    "story": "2245-8da3",
-    "rules": [
-      "[[],\".header > button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]",
-      "[[],\".side > .back\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 12px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/board/board.module.css",
-    "story": "2246-eaa0",
-    "rules": [
-      "[[],\".key\",[\"padding: 0\",\"border: 0\"]]",
-      "[[],\".moveTrigger, .more, .moveMenu button\",[\"min-height: 28px\",\"padding: 4px 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/create/TasksCreate.module.css",
-    "story": "2247-4444",
-    "rules": [
-      "[[],\".create button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".create .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".create button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/detail/TasksDetail.module.css",
-    "story": "2248-c8f6",
-    "rules": [
-      "[[],\".detail select[multiple]\",[\"min-height: 96px\"]]",
-      "[[],\".detail button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".detail button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/list/tasksList.module.css",
-    "story": "2249-154a",
-    "rules": [
-      "[[],\".list button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\",\"padding: 0 8px\"]]",
-      "[[],\".list .item\",[\"height: 100%\",\"border: none\",\"border-bottom: 1px solid var(--border)\",\"border-radius: 0\"]]",
-      "[[\"@container (max-width: 600px)\"],\".list button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/roadmap/roadmap.module.css",
-    "story": "2250-79c9",
-    "rules": [
-      "[[],\".roadmap button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 0 12px\"]]",
-      "[[],\".roadmap .task\",[\"height: 100%\",\"padding: 0\",\"border: 0\",\"border-bottom: 1px solid var(--border)\",\"border-radius: 0\"]]",
-      "[[\"@container (max-width: 700px)\"],\".roadmap button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Tasks/setup/TasksSetup.module.css",
-    "story": "2251-f625",
-    "rules": [
-      "[[],\".setup button\",[\"min-height: 32px\",\"padding: 6px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".setup .primary\",[\"border-color: var(--accent)\"]]",
-      "[[\"@container (max-width: 600px)\"],\".setup button\",[\"min-height: 44px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Terminal/ChatPresentation.module.css",
-    "story": "2252-5add",
-    "rules": [
-      "[[],\".paste button\",[\"border: 0\",\"padding: 4px 0 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Terminal/Terminal.module.css",
-    "story": "2253-a676",
-    "rules": [
-      "[[],\".resumeDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".resumeButton\",[\"padding: 4px 14px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Terminal/TerminalChatView.module.css",
-    "story": "2254-2a7d",
-    "rules": [
-      "[[],\".toggleButton\",[\"padding: 2px 8px\",\"border: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/TipOfTheDay/TipOfTheDay.module.css",
-    "story": "2255-54a8",
-    "rules": [
-      "[[],\".arrow\",[\"height: 28px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ToastContainer/ToastContainer.module.css",
-    "story": "2256-dd37",
-    "rules": [
-      "[[],\".action\",[\"padding: 2px 8px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".repoAction\",[\"border: 1px solid var(--border)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/Toolbar/Toolbar.module.css",
-    "story": "2257-ebf1",
-    "rules": [
-      "[[],\".sidebarToggle, .filterToggle\",[\"height: 26px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".densityToggle\",[\"padding: 0 6px\"]]",
-      "[[],\".branch\",[\"height: 26px\",\"padding: 0 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".bell, .watcherBtn\",[\"height: 26px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".dismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".notifClose\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".activityDismissAll\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".pluginToggle\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".activityItemDismiss\",[\"border: none\",\"padding: 0 4px\"]]",
-      "[[],\".lastItemBtn\",[\"height: 26px\",\"padding: 0 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".bell.storiesPillBtn\",[\"padding: 0 7px\"]]"
     ]
   },
   {

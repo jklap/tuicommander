@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { Button } from "../../components/ui/Button";
+import { ButtonGroup } from "../../components/ui/ButtonGroup";
 import { ColorInput } from "../../components/ui/ColorInput";
 import { ColorSwatch } from "../../components/ui/ColorSwatch";
 import { Input } from "../../components/ui/Input";
@@ -289,4 +290,115 @@ it("keeps preset and clear swatches native, reactive and non-submitting", () => 
 	expect(button).toHaveAttribute("aria-pressed", "false");
 	setDisabled(true);
 	expect(button).toBeDisabled();
+});
+
+// Catches: stretch geometry leaking onto the native element or swallowing caller focus/props.
+it("keeps stretch actions native and consumes the geometry prop", () => {
+	render(() => (
+		<Button geometry="stretch" aria-label="Edge action">
+			Edge
+		</Button>
+	));
+	const button = screen.getByRole("button", { name: "Edge action" });
+	expect(button).not.toHaveAttribute("geometry");
+	button.focus();
+	expect(button).toHaveFocus();
+	expect(button).toHaveAttribute("type", "button");
+});
+
+// Catches: grouping actions replacing native buttons or merging independent disabled/click state.
+it("keeps joined actions independently focusable and reactive", () => {
+	const [disabled, setDisabled] = createSignal(false);
+	const main = vi.fn(),
+		menu = vi.fn();
+	render(() => (
+		<ButtonGroup aria-label="Prompt actions">
+			<Button onClick={main} disabled={disabled()}>
+				Run
+			</Button>
+			<Button onClick={menu} aria-expanded="false">
+				Choose
+			</Button>
+		</ButtonGroup>
+	));
+	const group = screen.getByRole("group", { name: "Prompt actions" });
+	const run = screen.getByRole("button", { name: "Run" });
+	const choose = screen.getByRole("button", { name: "Choose" });
+	expect(group).toContainElement(run);
+	fireEvent.click(run);
+	fireEvent.click(choose);
+	expect(main).toHaveBeenCalledOnce();
+	expect(menu).toHaveBeenCalledOnce();
+	setDisabled(true);
+	expect(run).toBeDisabled();
+	expect(choose).not.toBeDisabled();
+	choose.focus();
+	expect(choose).toHaveFocus();
+	expect(choose).toHaveAttribute("aria-expanded", "false");
+});
+
+// Catches: auto-grow swallowing native refs, bound input handlers or controlled value updates.
+it("keeps auto-grow textarea edits and owner refs at the native boundary", () => {
+	const [value, setValue] = createSignal("draft");
+	let native: HTMLTextAreaElement | undefined;
+	const input = vi.fn();
+	render(() => (
+		<Textarea
+			autoGrow
+			aria-label="Commit"
+			ref={(node) => {
+				native = node;
+			}}
+			value={value()}
+			onInput={[
+				(_data, event) => {
+					input(event.currentTarget.value);
+					setValue(event.currentTarget.value);
+				},
+				"owner",
+			]}
+		/>
+	));
+	const field = screen.getByRole("textbox", { name: "Commit" });
+	expect(native).toBe(field);
+	expect(field).not.toHaveAttribute("autoGrow");
+	fireEvent.input(field, { target: { value: "edited" } });
+	expect(input).toHaveBeenCalledExactlyOnceWith("edited");
+	setValue("replaced");
+	expect(field).toHaveValue("replaced");
+	field.focus();
+	expect(field).toHaveFocus();
+});
+
+// Catches: state promotion freezing native validity/descriptions or losing toggle callbacks.
+it("forwards reactive invalid fields and removable toggle state", () => {
+	const [invalid, setInvalid] = createSignal(true),
+		[pressed, setPressed] = createSignal(false);
+	render(() => (
+		<>
+			<Input aria-label="Invalid input" aria-invalid={invalid()} aria-describedby="error" />
+			<Select aria-label="Invalid select" aria-invalid={invalid()} aria-describedby="error">
+				<option>One</option>
+			</Select>
+			<Textarea aria-label="Invalid textarea" aria-invalid={invalid()} aria-describedby="error" />
+			<p id="error">Existing validation error</p>
+			<Button variant="removalToggle" aria-pressed={pressed()} onClick={() => setPressed(!pressed())}>
+				Integration
+			</Button>
+		</>
+	));
+	for (const name of ["Invalid input", "Invalid select", "Invalid textarea"]) {
+		const control = screen.getByLabelText(name);
+		expect(control).toHaveAttribute("aria-invalid", "true");
+		expect(control).toHaveAccessibleDescription("Existing validation error");
+	}
+	setInvalid(false);
+	for (const name of ["Invalid input", "Invalid select", "Invalid textarea"])
+		expect(screen.getByLabelText(name)).toHaveAttribute("aria-invalid", "false");
+	const button = screen.getByRole("button", { name: "Integration" });
+	expect(button).toHaveAttribute("aria-pressed", "false");
+	fireEvent.click(button);
+	expect(button).toHaveAttribute("aria-pressed", "true");
+	fireEvent.click(button);
+	expect(button).toHaveAttribute("aria-pressed", "false");
 });

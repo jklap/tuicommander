@@ -435,7 +435,7 @@ checkbox switches, ranges and colour pickers; file pickers keep their specialise
 `--control-height` (36px), `--control-padding-x` (8px), theme colours,
 `--radius-lg` and `--font-md`. Containers own width and alignment, never
 control height, padding, borders or colours. Textareas resize vertically;
-multiple selects keep native listbox behavior. At widths up to 600px,
+multiple selects keep native listbox behavior. Shared Select reserves 32px at the inline end for its native arrow; consumers must not add feature padding for this. At widths up to 600px,
 controls have a 44px minimum height and 16px text to prevent iOS zoom.
 
 `Button` forwards native button attributes and defaults to `type="button"` (set
@@ -685,3 +685,25 @@ It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
 target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
 the dashed clear target. Give each target an accessible name. Feature CSS may
 arrange the wrapping picker but must not resize its swatches.
+
+### Shared edge actions and content-sized editors
+
+- Use `Button geometry="stretch"` for square-edged container-height actions.
+  Keep placement in the consumer; do not restore feature-owned control sizes.
+- Use `ButtonGroup` with direct shared `Button` children for connected split
+  actions. Buttons retain their own size and behavior; the shared group owns
+  corners and the single divider. Do not clip focus rings or dropdown content.
+- Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
+  is 36px desktop or 44px touch, and the maximum is three control heights.
+  Remove consumer auto-resize callbacks and height caps when adopting it.
+
+### Shared validation and removable toggles
+
+- Use native `aria-invalid="true"` on `Input`, `Select` and `Textarea` for an
+  error-token border. Link existing validation text with `aria-describedby`.
+  The shared keyboard focus outline remains visible and unchanged.
+- Use `Button variant="removalToggle"` only for an on/off action where clicking
+  the pressed state removes or uninstalls the active integration. Set native
+  `aria-pressed` from owner state. Pressed uses the success border; enabled
+  pressed hover uses the danger tone. Disabled actions keep their state tone.
+  Ordinary selection buttons retain their existing accent styling.

@@ -1,4 +1,4 @@
-import { render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeNativeQuestion from "./fixtures/native-claude-question-2079.json";
 
@@ -130,7 +130,7 @@ describe("ViewModeToggle", () => {
 	it("is absent for a plain shell tab", () => {
 		const id = addTerminal(null, null);
 		const { queryByRole } = render(() => <ViewModeToggle terminalId={id} />);
-		expect(queryByRole("group", { name: "Terminal view" })).toBeNull();
+		expect(queryByRole("tablist", { name: "Terminal view" })).toBeNull();
 	});
 
 	it("lets the backend decide Claude binding when the discovered id is missing", () => {
@@ -251,4 +251,13 @@ it("answers a recorded native Claude question with navigation keys on the same P
 		["write_pty", { sessionId: "sess-1", data: "\x1b[B" }],
 		["write_pty", { sessionId: "sess-1", data: "\r" }],
 	]);
+});
+
+// Catches: adopting the shared view switch without forwarding keyboard selection to the terminal store.
+it("selects terminal Chat with the shared switch arrow key", () => {
+	const id = addTerminal("claude", "uuid");
+	const view = render(() => <ViewModeToggle terminalId={id} />);
+	fireEvent.keyDown(view.getByRole("tab", { name: "CLI" }), { key: "ArrowRight" });
+	expect(terminalsStore.get(id)?.viewMode).toBe("chat");
+	expect(view.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
 });

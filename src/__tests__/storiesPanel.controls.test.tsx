@@ -16,6 +16,10 @@ vi.mock("@tauri-apps/api/event", () => ({ emitTo: vi.fn().mockResolvedValue(unde
 vi.mock("../hooks/initPanelWindow", () => ({ initPanelWindow: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
+// Catches: cold lazy-module setup consuming the control query's behavior deadline.
+// Keep the real lazy boundary, but load its dependency tree before the test starts.
+await import("../components/StoriesDialog/StoriesDialog");
+
 afterEach(() => {
 	cleanup();
 	storiesUi.setVisibility("all");

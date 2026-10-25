@@ -948,3 +948,42 @@ It keeps selection in the owner through `selected`/`aria-pressed`, defaults to
 target with a 44px touch minimum. Set `swatchColor` for a preset; omit it for
 the dashed clear target. Give each target an accessible name. Feature CSS may
 arrange the wrapping picker but must not resize its swatches.
+
+Settings shell and shared Settings actions use `ui/Button`; native navigation
+and search-result rows retain their layout marker and click semantics. Settings
+search lays out the icon, shared Input and clear Button as siblings. Select
+arrow clearance belongs to FormControls, not to Settings selectors.
+`SettingPageHeader`, `SectionCard`, `StatusSummary`, `ListRow`, `EmptyState`
+and `DangerZone` action slots arrange their children only. Pass shared UI
+controls into these slots; the containers do not set descendant button sizes.
+`SettingButton`, account add/retry actions and list add/remove actions also
+use `ui/Button`; field CSS owns their width and row layout only.
+
+`Button geometry="stretch"` fills a flex/grid cross-axis container with square
+edges and at least 36px desktop or 44px touch targets. Use it for edge actions
+such as swipe actions and tab scroll arrows; the container owns placement.
+
+`ButtonGroup` joins direct `Button` children with connected edges and one
+divider. Each action retains its native events, disabled state and size. Label
+the group with `aria-label` or `aria-labelledby`. Keep dropdown content outside
+the direct action children; the group does not clip focus rings or popovers.
+
+`Textarea autoGrow` is a compact content-sized editor: it starts at the shared
+36px desktop or 44px touch target and grows to three control heights before
+scrolling. It recalculates after native input, controlled value updates and
+width changes. Remove caller height caps and auto-resize handlers when adopting
+it; the shared CSS is the single owner of the bounds. Default Textarea keeps
+its existing three-control-height minimum and manual vertical resize.
+
+Shared fields style native `aria-invalid="true"` with the error border token
+without replacing the focus outline. `Button variant="removalToggle"` supports
+installed/removal toggles via native `aria-pressed`; see the Style Guide for
+state and hover semantics. Consumers retain validation messages and callbacks.
+
+Agent settings use shared Button, Switch and Textarea controls, including launch
+module and launch-addition editors. Validation fields expose native invalid and
+error descriptions; the installed MCP action uses the shared removal toggle.
+Agent feature CSS retains only layout, width and text presentation.
+
+GitHub settings actions use shared Button variants for secondary, primary and
+danger actions. Feature CSS owns only action-row layout, not button geometry.
