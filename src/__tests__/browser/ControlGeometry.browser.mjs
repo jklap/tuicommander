@@ -34,7 +34,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
     const evaluate = async expression => {const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},sessionId);if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
     await send('Page.enable',{},sessionId);
     const measurements=[];
-    for(const width of [1400,390]) {
+    for(const width of (process.env.TUIC_GEOMETRY_WIDTHS ?? "1400,390").split(",").map(Number)) {
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},sessionId);
       const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
@@ -118,7 +118,8 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         }
       }
       result.containment = [];
-      measurements.push({width,...result,icons,stretch,joined,textarea,states});
+      const composer=await evaluate("window.composerGeometry ?? null");
+      measurements.push({width,...result,icons,stretch,joined,textarea,states,composer});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

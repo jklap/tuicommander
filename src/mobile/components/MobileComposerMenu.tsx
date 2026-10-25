@@ -78,6 +78,7 @@ export function MobileComposerMenu(props: {
 				/>
 			</Show>
 			<Button
+				shape="icon"
 				variant="ghost"
 				ref={trigger}
 				type="button"

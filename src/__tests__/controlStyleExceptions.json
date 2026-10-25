@@ -546,18 +546,6 @@
     ]
   },
   {
-    "file": "src/mobile/components/CommandInput.module.css",
-    "story": "2270-5848",
-    "rules": [
-      "[[],\".input\",[\"min-height: 38px\",\"max-height: 120px\",\"padding: 8px 2px 8px 4px\",\"border: none\"]]",
-      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".send, .dictate\",[\"height: 28px\",\"border-radius: var(--radius-full)\",\"border: none\"]]",
-      "[[],\".send\",[\"height: 36px\"]]",
-      "[[],\".dictate\",[\"height: 38px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dictate[data-failed=\\\"true\\\"]\",[\"padding-inline: 4px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/HeroMetrics.module.css",
     "rules": [
       "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
@@ -591,6 +579,14 @@
       "[[],\".select:not([data-form-control])\",[\"min-height: 44px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
       "[[],\".toggle\",[\"height: 24px\",\"border-radius: 12px\",\"border: none\",\"padding: 0\"]]",
       "[[],\".fontSizeControl button\",[\"min-height: 44px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
+    ]
+  },
+  {
+    "file": "src/mobile/components/CommandInput.module.css",
+    "reason": "Native embedded composer layout (data-control-layout=composer), not a standalone form field; preserves content sizing and draft selection.",
+    "rules": [
+      "[[],\".input\",[\"min-height: 38px\",\"max-height: 120px\",\"padding: 8px 2px 8px 4px\",\"border: none\"]]",
+      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]"
     ]
   }
 ]

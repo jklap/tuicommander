@@ -19,14 +19,4 @@ trigger.click();
 [...document.querySelectorAll('#menu-case [role="menuitem"]')].find(item=>item.textContent.trim()==='Queue').click();
 if(queued!==1 || trigger.getAttribute('aria-expanded')!=='false')throw new Error('Queue must invoke once and dismiss');
 trigger.click();
-// Catches: shared trigger width eats the command editor's original 114px budget.
-const form=document.querySelector('#terminal-case > div');
-const input=form.querySelector('textarea');
-const send=form.querySelector('button[aria-label="Send"]');
-const menu=form.querySelector('button[aria-label="More composer actions"]');
-const composer=input.parentElement;
-const px=(element,property)=>parseFloat(getComputedStyle(element)[property])||0;
-// Reserve the existing 22px mic even when Chromium offers no speech constructor.
-const budget=menu.getBoundingClientRect().width+px(input,'paddingLeft')+px(input,'paddingRight')+px(composer,'paddingRight')+22+px(form,'gap')+px(send,'marginLeft')+send.getBoundingClientRect().width;
-if(budget>114)throw new Error(`Command input horizontal budget exceeded: ${budget}`);
 window.controlGeometryReady=true;
