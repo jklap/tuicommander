@@ -1669,6 +1669,9 @@ fn pty_spawn_env_child_checks_inherited_build_context() {
             "CARGO_PKG_NAME",
             "OUT_DIR",
             "RUSTDOC",
+            "RUSTUP_TOOLCHAIN",
+            "RUSTUP_TOOLCHAIN_SOURCE",
+            "RUST_RECURSION_COUNT",
             "CARGO_INCREMENTAL",
             "RUSTC_WRAPPER",
             "RUSTC_WORKSPACE_WRAPPER",
@@ -1699,6 +1702,17 @@ fn pty_spawn_env_child_checks_inherited_build_context() {
         ] {
             assert_eq!(cmd.get_env(key), None, "{key} leaked into a PTY");
         }
+        for (key, value) in [
+            ("RUSTUP_HOME", "/user/rustup"),
+            ("RUST_LOG", "warn"),
+            ("RUST_BACKTRACE", "1"),
+        ] {
+            assert_eq!(
+                cmd.get_env(key),
+                Some(std::ffi::OsStr::new(value)),
+                "{key} user preference was removed"
+            );
+        }
         assert_eq!(
             cmd.get_env("CARGO_HOME"),
             Some(std::ffi::OsStr::new("/user/cargo"))
@@ -1713,6 +1727,12 @@ fn pty_spawn_env_child_checks_inherited_build_context() {
         );
     }
     agent.env("CARGO_TARGET_DIR", "/intentional-agent-target");
+    // Catches: sanitization overriding an explicit run-config toolchain.
+    agent.env("RUSTUP_TOOLCHAIN", "nightly");
+    assert_eq!(
+        agent.get_env("RUSTUP_TOOLCHAIN"),
+        Some(std::ffi::OsStr::new("nightly"))
+    );
     agent.env("CARGO_INCREMENTAL", "1");
     agent.env("RUSTC_WRAPPER", "/intentional-agent-wrapper");
     agent.env("MBX_SOCKET", "/intentional-agent-mbx.sock");
