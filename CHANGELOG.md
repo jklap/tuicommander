@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep SSH discovery Probe actions separated with shared settings row spacing, and hide remote update actions when the current build clears the out-of-date warning (#2337-6a62).
+
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
 
