@@ -12,6 +12,8 @@ import s from "./TerminalChatView.module.css";
 export const TerminalChatTranscript: Component<{
 	sessionId: string;
 	terminalAgent?: AgentType;
+	/** Desktop session zoom; absent for hosts with their own typography. */
+	fontSize?: number;
 	mobile?: boolean;
 	subscribeWake?: ChatViewWake;
 	onUnavailable: (reason: string) => void;
@@ -56,7 +58,12 @@ export const TerminalChatTranscript: Component<{
 		unwatch?.();
 	});
 	return (
-		<div class={s.chatView} data-testid="terminal-chat-view">
+		<div
+			class={s.chatView}
+			data-testid="terminal-chat-view"
+			data-session-zoom={props.fontSize !== undefined ? "true" : undefined}
+			style={{ "--font-base": props.fontSize !== undefined ? `${props.fontSize}px` : undefined }}
+		>
 			<Transcript
 				terminalAgent={props.terminalAgent}
 				mobile={props.mobile}

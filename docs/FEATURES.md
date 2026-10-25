@@ -238,6 +238,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
+- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`
