@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
 /**
  * The knobs a session publishes, and the three verbs ego adds to a turn.
@@ -135,9 +136,7 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 					</Show>
 				</div>
 				<div class={d.actions}>
-					<button type="button" class={d.cancelBtn} onClick={props.onClose}>
-						Done
-					</button>
+					<Button onClick={props.onClose}>Done</Button>
 				</div>
 			</div>
 		</div>

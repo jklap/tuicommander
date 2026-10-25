@@ -156,15 +156,6 @@
     ]
   },
   {
-    "file": "src/components/shared/dialog.module.css",
-    "story": "2264-9b73",
-    "rules": [
-      "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button:not([data-form-control])\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/editor-header.module.css",
     "story": "2265-b217",
     "rules": [
