@@ -13259,10 +13259,41 @@ mod grid_delivery_tests {
         );
     }
 
-    /// Catches: post-input echo remaining behind the sustained/typing rate floor
-    /// even though the real reader applied it and the subscriber is caught up.
+    /// Catches: the ticker rate policy deferring ready input behind the 33/50ms
+    /// floor or ignoring its wake between periodic ticks. Use explicit instants:
+    /// wall time also includes reader, ticker and watch-task scheduling on CI.
+    #[test]
+    fn input_echo_reaches_grid_before_animation_floor() {
+        let priority = frame_priority::InputFramePriority::default();
+        let submitted = std::time::Instant::now();
+        priority.arm(submitted);
+        priority.applied(priority.generation(), submitted);
+        let now = submitted + std::time::Duration::from_millis(8);
+        let request = priority.request(now, Some(submitted)).unwrap();
+        assert_eq!(request.ready_at, now);
+        for typing in [false, true] {
+            let floor = grid_send_min_interval_ms(typing, 10);
+            let floor_pending = now.duration_since(submitted).as_millis() < floor as u128;
+            assert!(floor_pending, "the test must exercise an active rate floor");
+            for periodic in [false, true] {
+                assert!(
+                    !grid_send_must_wait(false, floor_pending, periodic, request.ready_at <= now),
+                    "ready echo was deferred: typing={typing}, periodic={periodic}"
+                );
+                assert!(grid_send_must_wait(false, floor_pending, periodic, false));
+            }
+        }
+        // Spurious wakes cannot accelerate bulk output, while a normal tick
+        // without a pending floor and a protocol expiry must still publish.
+        assert!(grid_send_must_wait(false, false, false, false));
+        assert!(!grid_send_must_wait(false, false, true, false));
+        assert!(!grid_send_must_wait(true, true, false, false));
+    }
+
+    /// Catches: the real reader/ticker losing input echo during sustained output.
+    /// The deterministic policy test above owns the floor; this owns delivery.
     #[tokio::test(flavor = "current_thread")]
-    async fn input_echo_reaches_grid_before_animation_floor() {
+    async fn reader_input_echo_reaches_grid_during_sustained_output() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let sid = "input-priority-echo";
         let mut rx = grid_session(&state, sid);
@@ -13284,26 +13315,19 @@ mod grid_delivery_tests {
             }
             // The last publication just reset last_sent. Submit a controlled
             // PTY chunk through the real reader, not by setting grid damage.
-            let submitted = std::time::Instant::now();
             stamp_input_ms(&state, sid);
             tx.send("⑤".as_bytes().to_vec()).unwrap();
             loop {
                 rx.changed().await.unwrap();
                 if carries_echo(&rx.borrow_and_update().frame) {
-                    break submitted.elapsed();
+                    break;
                 }
             }
         })
         .await;
         stop_feed.store(true, Ordering::Relaxed);
         drop(tx); // EOF stops the owned reader/ticker even when the assertion fails.
-        let elapsed = observed.expect("the real reader/ticker never delivered the echo");
-        // One 16ms tick plus 8ms scheduling tolerance, still well below the
-        // 33/50ms floor. The bound is the behavior, not a setup deadline.
-        assert!(
-            elapsed < std::time::Duration::from_millis(24),
-            "post-input echo waited {elapsed:?} for the animation/typing floor"
-        );
+        observed.expect("the real reader/ticker never delivered the echo");
     }
 
     /// Catches: a fast echo arriving before arming, or post-write bookkeeping

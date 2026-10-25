@@ -3742,6 +3742,10 @@ mod tests {
         let mut committed: HashMap<usize, String> = HashMap::new();
         let mut next_index = 0usize;
         let mut screen: Vec<String> = Vec::new();
+        // Only resize reconciliation consumes a complete before/after snapshot.
+        // Reuse the previous record's actual after-snapshot as the next before-
+        // snapshot; scrolling the viewport does not change history content.
+        let mut previous_history = Vec::new();
         let outputs = capture
             .records
             .iter()
@@ -3784,12 +3788,14 @@ mod tests {
                 committed.clear();
                 next_index = 0;
                 screen.clear();
+                previous_history = grid.read_scrollback_lines(0, grid.scrollback_count());
             }
             let origin_before = grid.screen_origin();
-            let history_before = grid.read_scrollback_lines(0, grid.scrollback_count());
+            let history_before = std::mem::take(&mut previous_history);
             grid.process(&rec.data);
             if grid.is_alternate_screen() {
                 stats.alt_records += 1;
+                previous_history.clear();
                 continue;
             }
             if k > 0 {
@@ -3797,7 +3803,11 @@ mod tests {
             }
             let history = grid.scrollback_count();
             let base = grid.screen_origin().saturating_sub(history);
-            let retained = grid.read_scrollback_lines(0, history);
+            let retained = if resize_at.is_some() {
+                grid.read_scrollback_lines(0, history)
+            } else {
+                Vec::new()
+            };
             let coordinates_changed = grid.screen_origin() < origin_before
                 || retained
                     .iter()
@@ -3890,6 +3900,7 @@ mod tests {
                 next_index = base;
             }
             committed.retain(|idx, _| *idx >= base);
+            previous_history = retained;
         }
         stats
     }
@@ -3918,21 +3929,37 @@ mod tests {
         out
     }
 
-    /// Real agent bytes, viewport held k rows up — k = 0 (tail), 1 and 3 (inside the
-    /// live region), a page, and deep history.
-    #[test]
-    fn history_rows_never_change_while_scrolled_up_over_real_captures() {
-        let mut checked = 0;
-        for (name, capture) in fixture_captures() {
-            let rows = capture.geometry.map_or(50, |(r, _)| r as usize);
-            for k in [0, 1, 3, rows / 2, rows, rows + 7] {
-                checked += replay_history_contract(&name, &capture, 10_000, k, None).committed_rows;
-            }
+    // Each parameter is its own nextest case: replaying the growing fixture
+    // corpus six times in one process exceeded CI's 120s hang bound. Keep all
+    // records and assertions, but let the harness schedule and name each case.
+    mod history_rows_never_change_while_scrolled_up_over_real_captures {
+        use super::*;
+
+        macro_rules! viewport_case {
+            ($name:ident, $offset:expr) => {
+                #[test]
+                fn $name() {
+                    let mut checked = 0;
+                    for (name, capture) in fixture_captures() {
+                        let rows = capture.geometry.map_or(50, |(r, _)| r as usize);
+                        let k = ($offset)(rows);
+                        checked += replay_history_contract(&name, &capture, 10_000, k, None)
+                            .committed_rows;
+                    }
+                    assert!(
+                        checked > 1000,
+                        "corpus too small to mean anything: {checked} rows"
+                    );
+                }
+            };
         }
-        assert!(
-            checked > 1000,
-            "corpus too small to mean anything: {checked} rows"
-        );
+
+        viewport_case!(tail, |_| 0);
+        viewport_case!(one_row, |_| 1);
+        viewport_case!(three_rows, |_| 3);
+        viewport_case!(half_page, |rows| rows / 2);
+        viewport_case!(one_page, |rows| rows);
+        viewport_case!(deep_history, |rows| rows + 7);
     }
 
     /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
@@ -3953,18 +3980,44 @@ mod tests {
         }
     }
 
-    /// A rows-only resize in the middle of a redraw keeps history intact (shrink) and
-    /// every line in order (grow).
-    #[test]
-    fn history_content_survives_a_resize_during_redraw_over_real_captures() {
-        for (name, capture) in fixture_captures() {
-            let (rows, cols) = capture.geometry.unwrap_or((50, 200));
-            for new_rows in [rows.saturating_sub(9).max(3), rows + 6] {
-                for at in [3, capture.records.len() / 2] {
-                    replay_history_contract(&name, &capture, 10_000, 4, Some((at, new_rows, cols)));
+    /// A rows-only resize in the middle of a redraw keeps history intact (shrink)
+    /// and every line in order (grow). As with viewport offsets above, each
+    /// parameter combination has its own harness budget, not a larger timeout.
+    mod history_content_survives_a_resize_during_redraw_over_real_captures {
+        use super::*;
+
+        macro_rules! resize_case {
+            ($name:ident, $height:expr, $step:expr) => {
+                #[test]
+                fn $name() {
+                    for (name, capture) in fixture_captures() {
+                        let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+                        let new_rows = ($height)(rows);
+                        let at = ($step)(capture.records.len());
+                        replay_history_contract(
+                            &name,
+                            &capture,
+                            10_000,
+                            4,
+                            Some((at, new_rows, cols)),
+                        );
+                    }
                 }
-            }
+            };
         }
+
+        resize_case!(
+            shrink_early,
+            |rows: u16| rows.saturating_sub(9).max(3),
+            |_| 3
+        );
+        resize_case!(
+            shrink_middle,
+            |rows: u16| rows.saturating_sub(9).max(3),
+            |len| len / 2
+        );
+        resize_case!(grow_early, |rows| rows + 6, |_| 3);
+        resize_case!(grow_middle, |rows| rows + 6, |len| len / 2);
     }
 
     /// Catches an oracle treating the startup banner's proven on-screen
