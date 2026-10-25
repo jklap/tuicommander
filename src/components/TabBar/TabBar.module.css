@@ -490,7 +490,7 @@
   display: none;
 }
 
-.tab.remoteTab:not(.shellBusy):not(.shellIdle):not(.shellUnseen):not(.shellExited) .tabIcon {
+.tab.remoteTab:not(.awaitingInput):not(.shellBusy):not(.shellIdle):not(.shellUnseen):not(.shellExited) .tabIcon {
   color: rgb(var(--tab-remote-rgb));
   opacity: 0.8;
 }
