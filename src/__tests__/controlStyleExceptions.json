@@ -688,15 +688,6 @@
     "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
   },
   {
-    "file": "src/mobile/components/SlashMenuOverlay.module.css",
-    "story": "2284-48a3",
-    "rules": [
-      "[[],\".close\",[\"height: 44px\",\"border: none\"]]",
-      "[[],\".item\",[\"padding: 10px 16px\",\"border: none\"]]",
-      "[[],\".navBtn\",[\"height: 32px\",\"border: 1px solid var(--border)\",\"border-radius: 6px\"]]"
-    ]
-  },
-  {
     "file": "src/mobile/components/TerminalKeybar.module.css",
     "story": "2285-bbb6",
     "rules": [
