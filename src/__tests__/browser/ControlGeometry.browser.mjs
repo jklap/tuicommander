@@ -125,6 +125,27 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
+      const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
+      if (aiChat) {
+        const target = width <= 600 ? 44 : 36;
+        assert.deepEqual(aiChat.rawActions, [], 'AI Chat actions and text fields must use shared primitives');
+        assert.equal(aiChat.visible.height, target, 'Visible picker frame owns shared target height');
+        assert.deepEqual(aiChat.picker, aiChat.visible, 'Invisible native picker must cover the complete visible frame');
+        assert.equal(aiChat.summaries.length, 2, 'Both native SessionControls disclosures must mount');
+        for (const summary of aiChat.summaries) assert.equal(summary.height, target, JSON.stringify(summary));
+        assert.equal(aiChat.summaries[0].width, target, 'Icon disclosure target stays square');
+        assert.ok(aiChat.summaries[0].top >= aiChat.header.top && aiChat.summaries[0].bottom <= aiChat.header.bottom,
+          'Header must contain the shared-height disclosure');
+        assert.ok(aiChat.editor.height >= target, 'Composer must retain a complete editable line');
+        assert.equal(aiChat.editorText, 'A complete composing line');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true; document.querySelectorAll('summary[data-control-layout="disclosure"]')[1].focus()`);
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open`),false,'Escape from nested disclosure must close the actions menu');
+        assert.equal(await evaluate(`document.activeElement === document.querySelector('summary[data-control-layout="disclosure"]')`),true,'Escape must return focus to the native actions summary');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true`);
+      }
       // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
         const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
@@ -143,7 +164,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(target.height,44,JSON.stringify({width,target}));
         }
       }
-      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets});
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets,aiChat});
 
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);

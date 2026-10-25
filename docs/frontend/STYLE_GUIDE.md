@@ -447,6 +447,14 @@ or `data-control-layout="card"`. Their geometry selectors must include both the
 `button` tag and the exact marker. This exception is for content layout, never
 form, toolbar or dialog actions.
 
+AI Chat retains native full-frame conversation pickers and native session
+`details`/`summary` disclosures. Mark these controls with
+`data-control-layout="overlay-picker"` or `"disclosure"` and retain only their
+exact, reasoned geometry exceptions. The visible picker frame and disclosures
+use the shared 36px/44px control tokens. Its shared `Textarea` retains the tested
+panel-relative editor cap and one-line reset with a narrow `composer-editor`
+exception; this does not exempt other actions or fields.
+
 `SegmentedControl` is the shared view switch. It uses a named tablist, one
 keyboard tab stop, and Arrow Left/Right, Home and End to select and focus an
 enabled choice. Tasks uses it for List, Board and Roadmap.

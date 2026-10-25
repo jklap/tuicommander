@@ -1,33 +1,26 @@
 [
   {
     "file": "src/components/AIChatPanel/AIChatPanel.module.css",
-    "story": "2183-6337",
+    "reason": "Native full-frame conversation picker retains OS activation over the shared-height visible frame.",
     "rules": [
-      "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 4px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".chatTab button, .newChatTab\",[\"border: 0\",\"padding: 4px 7px\"]]",
-      "[[],\".newTextBadge\",[\"padding: 4px 8px\",\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".findBar input\",[\"border: 1px solid var(--border)\"]]",
-      "[[],\".findBar button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyAction\",[\"border: 0\"]]",
-      "[[],\".messageList :global(pre[data-raw-code] button[data-copy-code])\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".suggestedReplies button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 2px 6px\"]]",
-      "[[],\".retryBtn\",[\"border: 1px solid var(--error)\",\"border-radius: var(--radius-md)\",\"padding: 2px 8px\"]]",
-      "[[],\".filePreview button\",[\"border: 0\"]]",
-      "[[],\".imagePreview button\",[\"border: 0\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".textarea\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 8px 12px\",\"min-height: 36px\"]]",
-      "[[],\".textarea:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".stopBtn\",[\"padding: 0 8px\",\"height: 32px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".approvalBtn\",[\"border: none\",\"border-radius: var(--radius-md)\",\"padding: 3px 12px\"]]",
-      "[[],\".queueCancel\",[\"padding: 4px\",\"border: 0\"]]",
-      "[[],\".noticeAction\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\",\"padding: 4px 8px\"]]",
-      "[[],\".setupActions button\",[\"border: none\",\"border-radius: var(--radius-lg)\",\"padding: 8px 16px\"]]",
-      "[[],\".inputArea:not(.mobileComposer) > button, .inputArea:not(.mobileComposer) > .composerActions > button\",[\"height: 36px\"]]",
-      "[[],\".conversationName\",[\"border: none\",\"padding: 6px\"]]",
-      "[[],\".repoContext button\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 2px 6px\"]]",
-      "[[],\".repoContext button[aria-pressed=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".conversationSwitcher > select\",[\"height: 100%\"]]",
-      "[[],\".actionsMenuItems > .headerBtn, .actionsMenuItems > .conversationList > summary\",[\"padding: 6px 8px\"]]",
-      "[[],\".composerMeta .repoContext button\",[\"border: none\",\"padding: 0\"]]"
+      "[[],\".conversationSwitcher > select[data-control-layout=\\\"overlay-picker\\\"]\",[\"height: 100%\"]]"
+    ]
+  },
+  {
+    "file": "src/components/AIChatPanel/AIChatPanel.module.css",
+    "reason": "Native details/summary retains activation and Escape focus return with shared 36/44 control tokens.",
+    "rules": [
+      "[[],\"summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"height: var(--control-height, 36px)\",\"padding: 0 var(--control-padding-x, 8px)\",\"border: 1px solid transparent\",\"border-radius: var(--radius-lg)\"]]",
+      "[[],\".actionsMenu > summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"padding: 0\"]]",
+      "[[\"@media (max-width: 600px)\"],\"summary.headerBtn[data-control-layout=\\\"disclosure\\\"]\",[\"height: max(44px, var(--control-height, 36px))\"]]"
+    ]
+  },
+  {
+    "file": "src/components/AIChatPanel/AIChatPanel.module.css",
+    "reason": "Shared Textarea retains the tested panel-relative 40% resize cap and one-line reset instead of the generic three-row minimum.",
+    "rules": [
+      "[[],\".textarea[data-control-layout=\\\"composer-editor\\\"]\",[\"min-height: var(--control-height, 36px)\"]]",
+      "[[\"@media (max-width: 600px)\"],\".textarea[data-control-layout=\\\"composer-editor\\\"]\",[\"min-height: max(44px, var(--control-height, 36px))\"]]"
     ]
   },
   {

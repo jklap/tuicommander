@@ -2470,7 +2470,7 @@ describe("AIChatPanel: a turn", () => {
 
 describe("AIChatPanel: durable conversations", () => {
 	// Catches: the conversation picker left at the 36px default beside the 19px settings button in the control bar.
-	it("sizes the conversation picker compact like its control bar neighbours", async () => {
+	it("keeps the full-frame conversation picker native over its visible label — catches loss of the OS picker overlay", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
 				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
@@ -2485,7 +2485,10 @@ describe("AIChatPanel: durable conversations", () => {
 		});
 		const { container } = await renderPanel();
 		await settle();
-		expect(container.querySelector('select[title="Conversation"]')?.className).toMatch(/compact/);
+		const picker = container.querySelector('select[title="Conversation"]')!;
+		expect(picker.getAttribute("data-control-layout")).toBe("overlay-picker");
+		expect(picker.previousElementSibling?.getAttribute("aria-hidden")).toBe("true");
+		expect(picker.getAttribute("aria-label")).toBe("Conversation");
 	});
 
 	it("labels untitled conversations without exposing an id as the option text", async () => {
@@ -3610,10 +3613,12 @@ describe("AIChatPanel: pause, resume and compact", () => {
 
 	it("draws an unavailable control-bar button visibly dimmed", async () => {
 		const style = document.createElement("style");
-		style.textContent = readFileSync(
-			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
-			"utf8",
-		);
+		style.textContent = [
+			"src/components/ui/FormControls.module.css",
+			"src/components/AIChatPanel/AIChatPanel.module.css",
+		]
+			.map((path) => readFileSync(resolve(process.cwd(), path), "utf8"))
+			.join("\n");
 		document.head.append(style);
 		try {
 			const { container } = await renderPanel();
