@@ -459,15 +459,6 @@
     ]
   },
   {
-    "file": "src/components/TunnelsPanel/TunnelsPanel.module.css",
-    "story": "2258-a504",
-    "rules": [
-      "[[],\".actionBtn\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".newBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".closeBtn\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/WorkflowDesigner/WorkflowDesigner.module.css",
     "story": "2259-9345",
     "rules": [
