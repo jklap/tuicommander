@@ -84,17 +84,6 @@
     ]
   },
   {
-    "file": "src/components/GeneratorsModal/GeneratorsModal.module.css",
-    "story": "2196-9098",
-    "rules": [
-      "[[],\".tab\",[\"padding: 7px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".optionRow input[type=\\\"number\\\"]\",[\"padding: 3px 6px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".output\",[\"min-height: 72px\",\"padding: 10px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".output:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button\",[\"padding: 7px 14px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/GithubOpsDashboard/GithubOpsDashboard.module.css",
     "story": "2204-4f62",
     "rules": [
