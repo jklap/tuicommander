@@ -131,7 +131,8 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 				<div ref={ctrlMenu} class={styles.ctrlMenu} role="menu" aria-label="Control keys">
 					<For each={CONTROL_KEYS}>
 						{(k) => (
-							<Button geometry="stretch"
+							<Button
+								geometry="stretch"
 								role="menuitem"
 								class={styles.key}
 								classList={{ [styles.danger]: !!k.danger }}
@@ -152,7 +153,8 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 				<Show when={props.awaitingInput && !props.choicePromptOpen}>
 					<For each={confirmKeys()}>
 						{(k) => (
-							<Button geometry="stretch"
+							<Button
+								geometry="stretch"
 								data-ready="true"
 								class={`${styles.key} ${styles.confirm}`}
 								classList={{ [styles.sending]: sending() }}
@@ -165,10 +167,17 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 					</For>
 					<div class={styles.divider} />
 				</Show>
-				<Button geometry="stretch" data-ready="true" class={`${styles.key} ${styles.accent}`} disabled={props.sessionExists === false} onClick={handleSlash}>
+				<Button
+					geometry="stretch"
+					data-ready="true"
+					class={`${styles.key} ${styles.accent}`}
+					disabled={props.sessionExists === false}
+					onClick={handleSlash}
+				>
 					/
 				</Button>
-				<Button geometry="stretch"
+				<Button
+					geometry="stretch"
 					class={styles.key}
 					ref={ctrlButton}
 					aria-haspopup="menu"
@@ -181,7 +190,8 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 				</Button>
 				<For each={STANDARD_KEYS}>
 					{(k) => (
-						<Button geometry="stretch"
+						<Button
+							geometry="stretch"
 							class={styles.key}
 							classList={{ [styles.danger]: !!k.danger }}
 							disabled={props.sessionExists === false}

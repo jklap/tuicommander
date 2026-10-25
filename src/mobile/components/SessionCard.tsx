@@ -184,7 +184,9 @@ export function SessionCard(props: SessionCardProps) {
 					{props.session.state?.last_activity_ms ? formatTime(props.session.state.last_activity_ms) : ""}
 				</span>
 				<Show when={props.onKill}>
-					<Button variant="ghost" geometry="stretch"
+					<Button
+						variant="ghost"
+						geometry="stretch"
 						class={styles.killBtn}
 						aria-label={`Kill session ${props.session.display_name || agentType() || "Terminal"}`}
 						data-testid="kill-btn"

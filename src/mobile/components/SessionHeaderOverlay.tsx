@@ -98,7 +98,13 @@ export function SessionHeaderOverlay(props: SessionHeaderOverlayProps) {
 			<section class={styles.sheet} role="dialog" aria-label={title()}>
 				<header class={styles.header}>
 					<strong>{title()}</strong>
-					<Button variant="ghost" geometry="stretch" class={styles.close} aria-label="Close session details" onClick={close}>
+					<Button
+						variant="ghost"
+						geometry="stretch"
+						class={styles.close}
+						aria-label="Close session details"
+						onClick={close}
+					>
 						×
 					</Button>
 				</header>

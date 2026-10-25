@@ -90,7 +90,8 @@ export function OpenMarkdownMenu(props: {
 				>
 					<For each={tabs()} fallback={<div class={styles.markdownStatus}>No open Markdown tabs</div>}>
 						{(tab) => (
-							<button data-control-layout="row"
+							<button
+								data-control-layout="row"
 								type="button"
 								class={styles.markdownEntry}
 								title={tab.relative_path}

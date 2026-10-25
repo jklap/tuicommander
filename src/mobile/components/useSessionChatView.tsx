@@ -1,8 +1,8 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import type { AgentType } from "../../agents";
+import { TerminalChatTranscript } from "../../components/Terminal/TerminalChatTranscript";
 import { Button } from "../../components/ui";
 import { ButtonGroup } from "../../components/ui/ButtonGroup";
-import { TerminalChatTranscript } from "../../components/Terminal/TerminalChatTranscript";
 import { type ChatViewWake, chatViewStore, supportsTerminalChatView } from "../../stores/chatView";
 import { mobileChatReadingStyle } from "../mobileFontSize";
 import styles from "./SessionChatView.module.css";

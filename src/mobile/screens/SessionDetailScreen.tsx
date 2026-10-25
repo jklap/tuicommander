@@ -317,7 +317,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</Show>
 					<span class={styles.stateDot} data-state={status()} />
 				</span>
-				<button data-control-layout="row"
+				<button
+					data-control-layout="row"
 					type="button"
 					class={styles.headerInfo}
 					aria-label={props.session.display_name || agentType() || "Terminal"}
@@ -333,7 +334,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</button>
 				<Show when={wideMarkdown()}>
 					<div class={styles.markdownDropdown}>
-						<Button variant="ghost"
+						<Button
+							variant="ghost"
 							type="button"
 							class={styles.markdownTrigger}
 							aria-expanded={markdownOpen()}
@@ -360,7 +362,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</Show>
 				<chat.Toggle />
 				<Show when={voice.available()}>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						class={`${styles.headerAction} ${styles.secondaryAction}`}
 						classList={{ [styles.voiceActive]: voice.armed() }}
@@ -372,7 +375,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<VoiceCallIcon />
 					</Button>
 				</Show>
-				<Button variant="ghost"
+				<Button
+					variant="ghost"
 					type="button"
 					class={`${styles.headerAction} ${styles.secondaryAction}`}
 					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
@@ -394,7 +398,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</Show>
 				</Button>
 				<Show when={codexQuestionWaiting() || egoQuestionWaiting()}>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						class={styles.headerAction}
 						onClick={openQuestion}
@@ -418,7 +423,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						</svg>
 					</Button>
 				</Show>
-				<Button variant="ghost"
+				<Button
+					variant="ghost"
 					type="button"
 					class={styles.headerAction}
 					aria-label="More session actions"
@@ -438,7 +444,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			<Show when={moreOpen()}>
 				<div class={styles.overflow}>
 					<Show when={voice.available()}>
-						<Button variant="ghost"
+						<Button
+							variant="ghost"
 							type="button"
 							class={styles.phoneAction}
 							aria-pressed={voice.armed()}
@@ -452,7 +459,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							{voice.armed() ? "Stop voice call" : "Start voice call"}
 						</Button>
 					</Show>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						class={styles.phoneAction}
 						aria-label={`Tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
@@ -463,7 +471,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Tasks <span>{sessionState()?.active_sub_tasks ?? 0}</span>
 					</Button>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -472,7 +481,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Progress <span>{sessionState()?.progress == null ? "—" : `${sessionState()!.progress}%`}</span>
 					</Button>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -481,7 +491,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Files
 					</Button>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -490,7 +501,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Search output
 					</Button>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -507,7 +519,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						/>
 					</Show>
 					<Show when={hasCommands()}>
-						<Button variant="ghost"
+						<Button
+							variant="ghost"
 							type="button"
 							onClick={() => {
 								setMoreOpen(false);

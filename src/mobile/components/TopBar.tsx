@@ -26,7 +26,8 @@ export function TopBar(props: TopBarProps) {
 				</Show>
 			</div>
 			<Show when={props.onOpenSettings}>
-				<Button variant="ghost"
+				<Button
+					variant="ghost"
 					type="button"
 					aria-label="More options"
 					aria-haspopup="menu"
@@ -41,7 +42,8 @@ export function TopBar(props: TopBarProps) {
 				</Button>
 				<Show when={menuOpen()}>
 					<div class={styles.menu} role="menu" aria-label="More options">
-						<Button variant="ghost"
+						<Button
+							variant="ghost"
 							type="button"
 							role="menuitem"
 							class={styles.menuItem}
