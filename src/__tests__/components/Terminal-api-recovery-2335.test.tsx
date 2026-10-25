@@ -145,6 +145,16 @@ describe("Terminal API failure recovery 2335", () => {
 		expect(terminalsStore.get(id)?.awaitingInput).toBe("error");
 	});
 
+	// Catches: a late pre-error idle snapshot cancels the first parked retry.
+	it("does not treat a no-error idle snapshot as a recovered turn", async () => {
+		failed();
+		snapshot("idle");
+		snapshot("idle", "Connection lost mid-response.");
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(sendCommand).toHaveBeenCalledExactlyOnceWith("live-session", "continue", "claude");
+		expect(terminalsStore.get(id)?.awaitingInput).toBe("error");
+	});
+
 	// Catches: each failed attempt's spinner/intent replenishes the retry budget forever.
 	it("exhausts three retries despite working rows and intent between failures", async () => {
 		for (const [index, delay] of [5_000, 15_000, 30_000].entries()) {

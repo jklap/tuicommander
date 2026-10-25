@@ -275,12 +275,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const RETRY_DELAYS = [5_000, 15_000, 30_000];
 	let retryCount = 0;
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
-	// Reset only after a recovered turn reaches idle. Spinner/intent rows can
-	// occur on every failed attempt and must not replenish the retry budget.
+	let retryWorkObserved = false;
+	// Reset only after a recovered turn reaches idle. A late pre-error idle
+	// snapshot can briefly have no last_error; it must not cancel the retry.
 	createEffect(() => {
 		const terminal = terminalsStore.get(props.id);
-		if (terminal?.shellState === "idle" && terminal.awaitingInput === null) {
+		if (!terminal || terminal.awaitingInput !== null) return;
+		if (terminal.shellState === "busy") {
+			retryWorkObserved = true;
+		} else if (terminal.shellState === "idle" && retryWorkObserved) {
 			retryCount = 0;
+			retryWorkObserved = false;
 			clearTimeout(retryTimer);
 			retryTimer = undefined;
 		}
@@ -538,6 +543,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 					// Keep failure visible until the backend observes real recovery. An
 					// injected continue that stays idle is not a successful turn.
+					retryWorkObserved = false;
 					terminalsStore.setAwaitingInput(props.id, "error");
 
 					const willAutoRetry =
