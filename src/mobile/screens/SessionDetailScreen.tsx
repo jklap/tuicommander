@@ -291,7 +291,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	return (
 		<div class={styles.screen}>
 			<header class={styles.header}>
-				<Button variant="ghost" class={styles.backBtn} onClick={props.onBack} aria-label="Back to sessions">
+				<Button
+					shape="icon"
+					variant="ghost"
+					class={styles.backBtn}
+					onClick={props.onBack}
+					aria-label="Back to sessions"
+				>
 					<svg
 						width="20"
 						height="20"
@@ -363,6 +369,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<chat.Toggle />
 				<Show when={voice.available()}>
 					<Button
+						shape="icon"
 						variant="ghost"
 						type="button"
 						class={`${styles.headerAction} ${styles.secondaryAction}`}
@@ -376,6 +383,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</Button>
 				</Show>
 				<Button
+					shape="icon"
 					variant="ghost"
 					type="button"
 					class={`${styles.headerAction} ${styles.secondaryAction}`}
@@ -399,6 +407,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</Button>
 				<Show when={codexQuestionWaiting() || egoQuestionWaiting()}>
 					<Button
+						shape="icon"
 						variant="ghost"
 						type="button"
 						class={styles.headerAction}
@@ -424,6 +433,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</Button>
 				</Show>
 				<Button
+					shape="icon"
 					variant="ghost"
 					type="button"
 					class={styles.headerAction}
@@ -551,7 +561,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						autofocus
 					/>
 					<Show when={searchQuery()}>
-						<Button variant="ghost" class={styles.searchClear} onClick={() => setSearchQuery("")}>
+						<Button
+							shape="icon"
+							aria-label="Clear output filter"
+							variant="ghost"
+							class={styles.searchClear}
+							onClick={() => setSearchQuery("")}
+						>
 							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 								<line x1="18" y1="6" x2="6" y2="18" />
 								<line x1="6" y1="6" x2="18" y2="18" />

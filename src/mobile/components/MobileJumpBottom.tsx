@@ -7,6 +7,7 @@ export function MobileJumpBottom(props: { visible: boolean; onScrollToBottom: ()
 	return (
 		<Show when={props.visible}>
 			<Button
+				shape="icon"
 				type="button"
 				class={styles.jumpBottom}
 				aria-label="Scroll to bottom"

@@ -81,7 +81,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 							<span class={styles.badge}>{notes().length}</span>
 						</Show>
 					</span>
-					<Button variant="ghost" onClick={props.onDismiss}>
+					<Button shape="icon" aria-label="Close ideas" variant="ghost" onClick={props.onDismiss}>
 						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<line x1="18" y1="6" x2="6" y2="18" />
 							<line x1="6" y1="6" x2="18" y2="18" />
@@ -115,6 +115,8 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 										variant="ghost"
 										class={styles.sendBtn}
 										onClick={() => handleSend(note)}
+										shape="icon"
+										aria-label="Send to terminal"
 										title="Send to terminal"
 									>
 										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -126,6 +128,8 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 										variant="ghost"
 										class={styles.deleteBtn}
 										onClick={() => ideasStore.removeIdea(note.id)}
+										shape="icon"
+										aria-label="Delete"
 										title="Delete"
 									>
 										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -154,7 +158,13 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 						onKeyDown={handleKeyDown}
 					/>
 					<MobileDictationButton dictation={browserDictation} disabled={props.microphoneBlocked} />
-					<Button variant="primary" onClick={handleSubmit} disabled={!inputText().trim()}>
+					<Button
+						shape="icon"
+						aria-label="Add idea"
+						variant="primary"
+						onClick={handleSubmit}
+						disabled={!inputText().trim()}
+					>
 						+
 					</Button>
 				</div>

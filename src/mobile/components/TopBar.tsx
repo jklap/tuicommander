@@ -27,6 +27,7 @@ export function TopBar(props: TopBarProps) {
 			</div>
 			<Show when={props.onOpenSettings}>
 				<Button
+					shape="icon"
 					variant="ghost"
 					type="button"
 					aria-label="More options"

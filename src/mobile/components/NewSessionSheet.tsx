@@ -83,7 +83,7 @@ export function NewSessionSheet(props: NewSessionSheetProps) {
 			<div class={styles.sheet} role="dialog" aria-label="New session">
 				<div class={styles.header}>
 					<div class={styles.title}>New Session</div>
-					<Button variant="ghost" aria-label="Close new session" onClick={props.onDismiss}>
+					<Button shape="icon" variant="ghost" aria-label="Close new session" onClick={props.onDismiss}>
 						<svg
 							width="20"
 							height="20"

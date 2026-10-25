@@ -29,7 +29,7 @@ export function SlashMenuOverlay(props: SlashMenuOverlayProps) {
 		<div class={styles.dropup} onTouchMove={(e) => e.stopPropagation()}>
 			<div class={styles.header}>
 				<span>Commands</span>
-				<Button variant="ghost" aria-label="Close slash menu" onClick={() => props.onClose?.()}>
+				<Button shape="icon" variant="ghost" aria-label="Close slash menu" onClick={() => props.onClose?.()}>
 					<svg
 						width="18"
 						height="18"
@@ -59,12 +59,12 @@ export function SlashMenuOverlay(props: SlashMenuOverlayProps) {
 				)}
 			</For>
 			<div class={styles.nav}>
-				<Button onClick={() => navigate("up")} aria-label="Previous">
+				<Button shape="icon" onClick={() => navigate("up")} aria-label="Previous">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
 						<path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
 					</svg>
 				</Button>
-				<Button onClick={() => navigate("down")} aria-label="Next">
+				<Button shape="icon" onClick={() => navigate("down")} aria-label="Next">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
 						<path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
 					</svg>
