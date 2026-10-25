@@ -311,7 +311,7 @@ impl UsageScan {
         let mut changes = self.events.lock();
         #[cfg(test)]
         {
-            self.diagnostics.extend(changes.diagnostics.drain(..));
+            self.diagnostics.append(&mut changes.diagnostics);
             self.diagnostics.push(format!(
                 "root={root:?}; watcher_available={}; rescan={}; pending_before={:?}; event_paths={:?}; reconciliation_due={}",
                 self.watcher.is_some(), changes.rescan, self.pending, changes.paths,
