@@ -225,13 +225,17 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+          TUIC_FIXTURE_FEATURES: dictation
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --features dictation --profile ci
 
 
       # This check invokes nextest and compiled Rust tests. Keep it out of the
       # frontend shell-test discovery, whose job installs neither prerequisite.
       - name: Nextest fixture setup scope
-        run: bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
+        run: |
+          bash scripts/with-test-tmp.sh bash scripts/check-fixture-build-profile.sh
+          bash scripts/with-test-tmp.sh python3 scripts/check-fixture-build-graph.py
+          bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
 
       # nextest does not run doctests — run them separately so doc examples stay
       # covered. Linux-only: doctests are platform-independent logic.
@@ -403,6 +407,9 @@ jobs:
           # rust-cache's `workspaces` input joins target with root, so it can't point at
           # an absolute path — use `cache-directories` instead.
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
+          # A failed/cancelled test run must not discard an hour of compilation.
+          # sccache cannot cache linked test/binary targets; retain C:/t too.
+          cache-on-failure: ${{ matrix.platform == 'windows-latest' }}
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -469,10 +476,12 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
           CARGO_INCREMENTAL: "0"
-          # The macOS 9a49ff1cb run spent 67m17s compiling tests before its
-          # 90-minute cancellation. Test inherits dev's opt-level 1; keep
-          # dependencies at that level, but skip optimizing workspace harnesses.
-          CARGO_PROFILE_TEST_OPT_LEVEL: ${{ matrix.label == 'macOS-ARM' && '0' || '1' }}
+          # Windows d27aa1739 spent 45m36s compiling tests before the fixture
+          # setup rebuilt dev for 18m15s. As on macOS, skip optimizing workspace
+          # harnesses; Cargo.toml keeps dependencies and tuic-terminal at O1.
+          CARGO_PROFILE_TEST_OPT_LEVEL: "0"
+          # The setup build must share nextest's profile and feature graph.
+          TUIC_FIXTURE_FEATURES: dictation
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
