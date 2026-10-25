@@ -1826,6 +1826,18 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(!agent_test::active());
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("dev-backend-identity")
+            .js_init_script(format!(
+                "window.__TUIC_DEV_BACKEND__ = {};",
+                serde_json::json!({
+                    "fingerprint": env!("TUIC_BACKEND_FINGERPRINT"),
+                    "git_hash": env!("BUILD_GIT_HASH"),
+                })
+            ))
+            .build(),
+    );
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())

@@ -220,6 +220,23 @@ agent-test alongside it, verify both listeners without mutating the daily API,
 and stop only agent-test. Until that proof is recorded, do not claim macOS TCC,
 simultaneous listeners or global-input isolation have been verified live.
 
+### Development backend restart warning
+
+`tauri dev --no-watch` keeps the Rust process running while Vite reloads the UI.
+A short, dismissible warning appears when backend build inputs differ from the
+running debug backend. It shows both source SHAs and content fingerprints, with
+`Restart tauri dev`. Frontend-only commits do not trigger it. Restart only when
+you are ready to end the current backend session. An older backend without an
+identity asks for one restart.
+
+The debug build and Vite use `scripts/backend-build-identity.mjs` to hash tracked
+Rust/native sources, Cargo files, and backend JSON configuration under
+`src-tauri/`. Test fixtures, generated files, binaries and icons are excluded.
+Dirty tracked source edits count; new files count after Git tracks them. Vite
+reads the current files at load and after HMR updates, not just at server start.
+Development builds require Node and Git for this identity. Release builds do
+not embed the debug identity or include the warning module.
+
 ### Browser Mode
 
 When the MCP server is enabled in settings, the frontend can run standalone:

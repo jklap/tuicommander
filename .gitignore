@@ -49,6 +49,8 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/backend-build-identity.mjs
+!scripts/backend-build-identity.test.mjs
 !scripts/agent-test.py
 !scripts/agent-test-visible.py
 !scripts/agent-test-tests.py

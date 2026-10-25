@@ -23,6 +23,8 @@ pub(super) struct HealthResponse {
 pub(super) struct VersionResponse {
     pub version: &'static str,
     pub git_hash: &'static str,
+    #[cfg(debug_assertions)]
+    pub backend_fingerprint: &'static str,
 }
 
 /// One row of the session list, on every transport.
