@@ -60,12 +60,13 @@ it("keeps a dismissed mismatch quiet across HMR but warns for a new backend tree
 	stop();
 });
 
-it("warns once for a pre-feature backend instead of silently treating missing identity as a match", async () => {
+it("warns for a pre-feature backend instead of silently treating missing identity as a match", async () => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn().mockResolvedValue(new Response(JSON.stringify({ fingerprint: "tree", git_hash: "sha" }))),
 	);
-	const stop = startBackendSkewWarning();
+	// Real Vite exposes off(); Vitest's default hot stub does not.
+	const stop = startBackendSkewWarning(undefined, { on: vi.fn(), off: vi.fn() });
 	await vi.waitFor(() =>
 		expect(document.querySelector('[role="alert"]')?.textContent).toContain("Backend identity unavailable"),
 	);

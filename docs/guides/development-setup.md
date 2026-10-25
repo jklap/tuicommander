@@ -230,8 +230,10 @@ you are ready to end the current backend session. An older backend without an
 identity asks for one restart.
 
 The debug build and Vite use `scripts/backend-build-identity.mjs` to hash tracked
-Rust/native sources, Cargo files, and backend JSON configuration under
-`src-tauri/`. Test fixtures, generated files, binaries and icons are excluded.
+files under `src-tauri/`, including local crates, patches, embedded scripts and
+native build inputs regardless of extension. Only known non-runtime directory
+trees are excluded: `fixtures`, `tests`, `testdata`, `test_data`, `benches`,
+`docs`, `binaries`, `gen`, `history`, `dist`, `target` and `.tmp`.
 Dirty tracked source edits count; new files count after Git tracks them. Vite
 reads the current files at load and after HMR updates, not just at server start.
 The identity requires Node and a Git index. Rust-only builds and source archives

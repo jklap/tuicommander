@@ -8,11 +8,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Shared by the debug Rust build and Vite: HEAD alone also changes for UI-only landings. */
 export function backendBuildIdentity(cwd = root) {
+	// Backend inputs include embedded scripts and native build files with arbitrary
+	// extensions. Exclude known non-runtime trees, never allowlist source suffixes.
 	const files = execFileSync("git", ["ls-files", "-z", "--", "src-tauri", "scripts/backend-build-identity.mjs"], { cwd })
 		.toString().split("\0").filter((file) =>
-			file === "scripts/backend-build-identity.mjs" ||
-			(!/(?:^|\/)(?:fixtures|tests|benches|binaries|icons|gen|history)\//.test(file) &&
-				/\.(?:rs|m|mm|c|h|cpp|toml|lock|json)$/.test(file)))
+			file && !/(?:^|\/)(?:fixtures|tests|testdata|test_data|benches|docs|binaries|gen|history|dist|target|\.tmp)\//.test(file))
 		.sort();
 	const hash = createHash("sha256");
 	const inputs = [];
