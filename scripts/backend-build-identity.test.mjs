@@ -71,3 +71,28 @@ test("embedded extraction scripts and native build inputs change the backend fin
 		assert.equal(backendBuildIdentity(root).fingerprint, previous, "excluded non-runtime trees must remain quiet");
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
+// Catches: directory exclusions hide compiled fallback help, or known test/docs
+// inputs produce a restart warning despite unchanged runtime code.
+for (const [name, file, runtime] of [
+	["catches silent skew when compiled Claude fallback help changes", "src-tauri/tests/fixtures/agent-help/claude-2026-10-04.txt", true],
+	["catches false restart warning after test-only catalogue changes", "src-tauri/src/settings/catalogue_tests.rs", false],
+	["catches false restart warning after patch README changes", "src-tauri/patches/alacritty_terminal/README.md", false],
+]) {
+	test(name, () => {
+		const root = mkdtempSync(join(tmpdir(), "backend-runtime-boundary-"));
+		const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
+		try {
+			mkdirSync(join(root, file, ".."), { recursive: true });
+			writeFileSync(join(root, "src-tauri/Cargo.toml"), "[package]\nname='fixture'\n");
+			writeFileSync(join(root, file), "original input\n");
+			git("init", "--quiet");
+			git("add", ".");
+			git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "test: record runtime boundary");
+			const before = backendBuildIdentity(root).fingerprint;
+			writeFileSync(join(root, file), "changed input\n");
+			const after = backendBuildIdentity(root).fingerprint;
+			if (runtime) assert.notEqual(after, before, "compiled runtime fallback help must invalidate backend identity");
+			else assert.equal(after, before, "non-runtime input must not request a restart");
+		} finally { rmSync(root, { recursive: true, force: true }); }
+	});
+}

@@ -6,13 +6,21 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+// This help is compiled into agent_hook_launch, despite its fixture location.
+const runtimeFixture = "src-tauri/tests/fixtures/agent-help/claude-2026-10-04.txt";
+const nonRuntimeFiles = new Set([
+	"src-tauri/src/settings/catalogue_tests.rs",
+	"src-tauri/patches/alacritty_terminal/README.md",
+]);
+
 /** Shared by the debug Rust build and Vite: HEAD alone also changes for UI-only landings. */
 export function backendBuildIdentity(cwd = root) {
 	// Backend inputs include embedded scripts and native build files with arbitrary
 	// extensions. Exclude known non-runtime trees, never allowlist source suffixes.
 	const files = execFileSync("git", ["ls-files", "-z", "--", "src-tauri", "scripts/backend-build-identity.mjs"], { cwd })
 		.toString().split("\0").filter((file) =>
-			file && !/(?:^|\/)(?:fixtures|tests|testdata|test_data|benches|docs|binaries|gen|history|dist|target|\.tmp)\//.test(file))
+			file && (file === runtimeFixture || (!nonRuntimeFiles.has(file) &&
+				!/(?:^|\/)(?:fixtures|tests|testdata|test_data|benches|docs|binaries|gen|history|dist|target|\.tmp)\//.test(file))))
 		.sort();
 	const hash = createHash("sha256");
 	const inputs = [];
