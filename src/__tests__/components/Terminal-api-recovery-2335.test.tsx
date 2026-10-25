@@ -42,6 +42,11 @@ vi.mock("../../transport", async (importOriginal) => ({
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn(async (cmd: string) => (cmd === "get_session_foreground_process" ? "claude" : undefined)),
 }));
+// Reconnect dynamically imports native event listeners; no WebView exists here.
+vi.mock("@tauri-apps/api/event", () => ({
+	listen: vi.fn().mockResolvedValue(() => {}),
+	emit: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../../utils/agentSession", () => ({
 	verifyAndBuildResumeCommand: (...args: unknown[]) => mockVerifyResume(...args),
 }));
@@ -133,9 +138,10 @@ describe("Terminal API failure recovery 2335", () => {
 		id = openIdleAgentTab();
 		// The eager subscription exists before resize/listener setup completes.
 		// Wait for the reconnect receipt before advancing the retry clock.
-		await waitFor(() =>
-			expect(appLogger.info).toHaveBeenCalledWith("terminal", `initSession(${id}) — reconnected to live-session`),
-		);
+		await waitFor(() => {
+			expect(vi.mocked(appLogger.error).mock.calls).toEqual([]);
+			expect(appLogger.info).toHaveBeenCalledWith("terminal", `initSession(${id}) — reconnected to live-session`);
+		});
 		expect(createSession).not.toHaveBeenCalled();
 		expect(terminalsStore.get(id)?.sessionId).toBe("live-session");
 		vi.useFakeTimers();
