@@ -2249,7 +2249,13 @@ The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop â€
 ## Secret form security boundary
 
 `secret` supports `request`, `run` and `remove`; no action reads values. The
-backend owns the zeroizing store and process spawn. Native-window bootstrap
+backend owns the zeroizing store and process spawn. Values are shared by name
+across that backend's callers, not keyed by MCP connection or TUIC session;
+MCP disconnect/reconnect leaves them intact. `remove` returns the requested
+`names` and `status: "removed"` after idempotent deletion, even for absent names.
+Older builds returned `missing` to describe the post-deletion state, not a lookup
+failure. `run` still returns `missing` when a requested value is unavailable.
+Native-window bootstrap
 privately distributes a per-form capability. Browser entry uses
 `/index.html#/secret-form?nonce=<capability>` on the existing application router,
 with the same authentication and transport policy. Requests require a desktop

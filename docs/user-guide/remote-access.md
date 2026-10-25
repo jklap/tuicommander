@@ -440,8 +440,11 @@ The manual update button is disabled while an automatic update is running. The
 backend rejects concurrent manual requests from IPC, HTTP, or MCP, and skips an
 automatic update while a manual one is in progress. A stalled transfer reports
 a timeout, after which connection checks resume.
-Select **Update & restart remote** for either Direct or SSH transport. The
-preview reports the remote target and build, selected desktop build and source,
+For a connected Direct or SSH remote, **Update & restart remote** appears only
+while the backend reports that the remote build is out of date. The action and
+the warning use the same status flag. After an update, the desktop verifies the
+selected build through `/health` and clears both without requiring a reconnect.
+The preview reports the remote target and build, selected desktop build and source,
 and the number of live PTY sessions. Confirming ends those sessions. The
 desktop uses the matching release asset first; if that asset does not exist, a
 locally built `tuic-remote` beside the desktop executable is used only when its

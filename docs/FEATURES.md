@@ -1398,6 +1398,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 
 ## 9. Voice Dictation
 
+Voice settings retain the resolved speech engine when saved. Inactive external commands do not implicitly replace the selected Italian voice. Authorized isolated agent-test builds can enable speech output while microphone capture remains disabled.
+
 The `tuic-dictation` Rust crate implements audio, transcription and speech; the desktop application retains the commands, browser transport and event emission.
 
 ### 9.1 Whisper Inference

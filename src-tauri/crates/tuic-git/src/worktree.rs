@@ -1,4 +1,5 @@
 use crate::git_cli::{FETCH_TIMEOUT, git_cmd};
+use crate::git_reads::git_reads;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1863,48 +1864,42 @@ pub fn resolve_any_workspace(
     base_repo: &Path,
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
-    let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain", "-z"])
-        .run()
-        .map_err(|error| format!("git worktree list failed: {error}"))?;
-    map_worktree_workspace_paths(&listed.stdout)
-        .remove(workspace_id)
-        .ok_or_else(|| {
-            format!(
-                "No workspace found for id '{workspace_id}' in '{}'",
-                base_repo.display()
-            )
-        })
+    let workspace = resolve_inventory_workspace(base_repo, workspace_id)?;
+    if is_archived_checkout(Path::new(&workspace.path)) {
+        return Err(format!(
+            "No workspace found for id '{workspace_id}' in '{}'",
+            base_repo.display()
+        ));
+    }
+    Ok(workspace)
 }
 
-/// A checkout parked in the recycling pool, addressed by the id of its branch.
-fn resolve_archived_workspace(
-    base_repo: &Path,
-    workspace_id: &str,
-) -> Result<WorkspaceWorktree, String> {
-    let listed = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain", "-z"])
-        .run()
-        .map_err(|error| format!("git worktree list failed: {error}"))?;
-    map_archived_workspace_paths(&listed.stdout)
-        .remove(workspace_id)
-        .ok_or_else(|| {
-            format!(
-                "No workspace found for id '{workspace_id}' in '{}'",
-                base_repo.display()
-            )
-        })
-}
-
-/// Every checkout removal and its safety inspection may act on: a live
-/// workspace, a registered one whose directory vanished, or a pooled one.
+/// Resolve fresh discovery inventory, including pooled checkouts, for removal.
+/// Sidebar discovery and preflight must not rebuild identity from porcelain:
+/// Git expands symbolic branch refs there, unlike the checkout's own HEAD.
 pub fn resolve_removable_workspace(
     base_repo: &Path,
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
-    resolve_any_workspace(base_repo, workspace_id)
+    resolve_inventory_workspace(base_repo, workspace_id)
         .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))
-        .or_else(|_| resolve_archived_workspace(base_repo, workspace_id))
+}
+
+fn resolve_inventory_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    let mut inventory = git_reads()
+        .worktree_inventory(base_repo, None)
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    if let Some(mut workspace) = inventory.worktree_paths.remove(workspace_id) {
+        workspace.warm_artifacts = None;
+        return Ok(workspace);
+    }
+    Err(format!(
+        "No workspace found for id '{workspace_id}' in '{}'",
+        base_repo.display()
+    ))
 }
 
 /// Removal alone may resolve a registered checkout whose directory disappeared.
@@ -3230,7 +3225,8 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     )?;
 
     // Compare-and-delete prevents an archive hook or another process from
-    // advancing the branch after the safety proof.
+    // advancing the branch after the safety proof. Never dereference a symbolic
+    // branch here: removing its workspace must preserve the alias target.
     if delete_branch && branch_delete_warning.is_none() {
         let deleted = require_integration_archive(
             &worktree.base_repo,
@@ -3250,6 +3246,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
+                    "--no-deref",
                     "-d",
                     &format!("refs/heads/{branch_name}"),
                     &expected_branch_oid,
@@ -3877,9 +3874,14 @@ pub(crate) fn checkout_inventory(
     archive_pool: Option<&Path>,
 ) -> WorktreeInventory {
     let mut inventory = WorktreeInventory::default();
-    // Use the same deterministic primary checkout in discovery and legacy lifecycle resolution.
+    // A pooled duplicate cannot displace the live row when removal reads inventory
+    // without the sidebar's configured pool filter. Both views use this ordering.
     let mut entries: Vec<_> = entries.into_iter().collect();
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries.sort_by(|a, b| {
+        is_archived_checkout(Path::new(&a.path))
+            .cmp(&is_archived_checkout(Path::new(&b.path)))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     for entry in entries {
         let path = Path::new(&entry.path);
@@ -3982,13 +3984,6 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
     map_checkouts(porcelain, false)
 }
 
-/// Checkouts parked in `__archived/` by archive or recycling. They stay on their
-/// branch so a later create can reuse them by rename, which makes them a pool:
-/// not a workspace the sidebar lists, but still removable by id.
-fn map_archived_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWorktree> {
-    map_checkouts(porcelain, true)
-}
-
 /// Whether a checkout sits in the recycling pool: directly inside `__archived/`.
 pub(crate) fn is_archived_checkout(path: &Path) -> bool {
     path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("__archived"))
@@ -4062,14 +4057,7 @@ pub fn resolve_workspace(
     base_repo: &Path,
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
-    let out = git_cmd(base_repo)
-        .args(["worktree", "list", "--porcelain", "-z"])
-        .run()
-        .map_err(|e| format!("git worktree list failed: {e}"))?;
-
-    map_worktree_workspace_paths(&out.stdout)
-        .remove(workspace_id)
-        .ok_or_else(|| format!("No workspace found for id '{workspace_id}'"))
+    resolve_any_workspace(base_repo, workspace_id)
 }
 
 /// Parse `git worktree list --porcelain` output and return paths of linked worktrees that are in
@@ -4897,6 +4885,282 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: sidebar discovery and removal disagree about a Git-created checkout identity.
+    #[test]
+    fn sidebar_removal_identity_2334_candidate_states() {
+        use crate::git_reads::{GitReads, GixGitReads};
+        let mut failures = Vec::new();
+        for state in [
+            "normal",
+            "detached",
+            "renamed",
+            "deleted",
+            "other_branch",
+            "locked",
+            "missing",
+            "bare",
+            "linked_base",
+            "symbolic_branch",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let repo = setup_test_repo();
+            let mut base = repo.path().to_path_buf();
+            if state == "bare" {
+                base = root.path().join("bare.git");
+                git_cmd(repo.path())
+                    .args([
+                        "clone",
+                        "--bare",
+                        &repo.path().to_string_lossy(),
+                        &base.to_string_lossy(),
+                    ])
+                    .run()
+                    .unwrap();
+            }
+            let checkout = root.path().join("different-directory");
+            git_cmd(&base)
+                .args([
+                    "worktree",
+                    "add",
+                    "-b",
+                    "feature",
+                    &checkout.to_string_lossy(),
+                ])
+                .run()
+                .unwrap();
+            match state {
+                "detached" => {
+                    git_cmd(&checkout)
+                        .args(["checkout", "--detach"])
+                        .run()
+                        .unwrap();
+                }
+                "renamed" => {
+                    git_cmd(&checkout)
+                        .args(["branch", "-m", "renamed"])
+                        .run()
+                        .unwrap();
+                }
+                "deleted" => {
+                    git_cmd(&base)
+                        .args(["update-ref", "-d", "refs/heads/feature"])
+                        .run()
+                        .unwrap();
+                }
+                "other_branch" => {
+                    git_cmd(&checkout)
+                        .args(["checkout", "-b", "other"])
+                        .run()
+                        .unwrap();
+                }
+                "locked" => {
+                    git_cmd(&base)
+                        .args(["worktree", "lock", &checkout.to_string_lossy()])
+                        .run()
+                        .unwrap();
+                }
+                "missing" => {
+                    fs::remove_dir_all(&checkout).unwrap();
+                }
+                "linked_base" => {
+                    base = checkout.clone();
+                }
+                "symbolic_branch" => {
+                    let target = base_branch_of(&base);
+                    git_cmd(&base)
+                        .args([
+                            "symbolic-ref",
+                            "refs/heads/feature",
+                            &format!("refs/heads/{target}"),
+                        ])
+                        .run()
+                        .unwrap();
+                }
+                _ => {}
+            }
+            let inventory = GixGitReads::new().worktree_inventory(&base, None).unwrap();
+            let listed = inventory.worktree_paths.iter().find(|(_, row)| {
+                Path::new(&row.path) == checkout.canonicalize().unwrap_or(checkout.clone())
+            });
+            if matches!(state, "detached" | "missing") {
+                assert!(
+                    listed.is_none(),
+                    "{state} must not be a selectable workspace"
+                );
+                if state == "detached" {
+                    assert_eq!(inventory.detached_worktrees.len(), 1);
+                } else {
+                    assert_eq!(inventory.worktree_diagnostics.len(), 1);
+                }
+            } else {
+                let (id, row) =
+                    listed.unwrap_or_else(|| panic!("{state}: checkout not listed: {inventory:?}"));
+                let resolved = resolve_removable_workspace(&base, id);
+                if resolved.as_ref().ok() != Some(row) {
+                    failures.push(format!(
+                        "{state}: listed id={id}, row={row:?}, removal={resolved:?}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    // Catches: a symlinked base selects a different checkout for removal than discovery.
+    #[cfg(unix)]
+    #[test]
+    fn sidebar_removal_identity_2334_symlinked_base() {
+        use crate::git_reads::{GitReads, GixGitReads};
+        let repo = setup_test_repo();
+        let linked = worktree_with(repo.path(), "feature", false);
+        let root = tempfile::tempdir().unwrap();
+        let alias = root.path().join("repo-link");
+        std::os::unix::fs::symlink(repo.path(), &alias).unwrap();
+        let inventory = GixGitReads::new().worktree_inventory(&alias, None).unwrap();
+        let row = &inventory.worktree_paths["feature"];
+        assert_eq!(
+            Path::new(&row.path).canonicalize().unwrap(),
+            linked.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_removable_workspace(&alias, "feature").unwrap(),
+            *row
+        );
+    }
+
+    // Catches: resolving a symbolic workspace succeeds but branch deletion follows its alias
+    // and deletes the main branch instead of just the requested branch ref.
+    #[test]
+    fn sidebar_removal_identity_2334_symbolic_removal_preserves_target() {
+        let repo = setup_test_repo();
+        let branch = base_branch_of(repo.path());
+        let tip = rev_at(repo.path(), "HEAD").unwrap();
+        let checkout = worktree_with(repo.path(), "feature-alias", false);
+        git_cmd(repo.path())
+            .args([
+                "symbolic-ref",
+                "refs/heads/feature-alias",
+                &format!("refs/heads/{branch}"),
+            ])
+            .run()
+            .unwrap();
+        let status = inspect_workspace_lifecycle(repo.path(), "feature-alias");
+        assert_eq!(status.dirty_files, Some(0), "{status:?}");
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.path().to_string_lossy(),
+            "feature-alias",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.branch, "feature-alias");
+        assert_eq!(outcome.branch_delete_warning, None);
+        assert!(!checkout.exists());
+        assert_eq!(
+            rev_at(repo.path(), &format!("refs/heads/{branch}")).unwrap(),
+            tip
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["symbolic-ref", "-q", "refs/heads/feature-alias"])
+                .run()
+                .is_err()
+        );
+    }
+
+    // Catches: the remote-containment transaction deletes an alias target rather than its workspace ref.
+    #[test]
+    fn sidebar_removal_identity_2334_remote_symbolic_removal_preserves_target() {
+        let repo = setup_test_repo();
+        let checkout = worktree_with(repo.path(), "remote-alias", true);
+        let tip = rev_at(&checkout, "HEAD").unwrap();
+        git_cmd(repo.path())
+            .args(["branch", "target", &tip])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args([
+                "symbolic-ref",
+                "refs/heads/remote-alias",
+                "refs/heads/target",
+            ])
+            .run()
+            .unwrap();
+        let _origin = add_origin(repo.path());
+        git_cmd(repo.path())
+            .args(["push", "origin", "target"])
+            .run()
+            .unwrap();
+        let status = inspect_workspace_lifecycle(repo.path(), "remote-alias");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::PushedUnmerged,
+            "{status:?}"
+        );
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.path().to_string_lossy(),
+            "remote-alias",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.branch_delete_warning, None);
+        assert!(!checkout.exists());
+        assert_eq!(rev_at(repo.path(), "refs/heads/target").unwrap(), tip);
+        assert!(
+            git_cmd(repo.path())
+                .args(["symbolic-ref", "-q", "refs/heads/remote-alias"])
+                .run()
+                .is_err()
+        );
+    }
+
+    // Catches: the removal inventory selects a pooled duplicate hidden by sidebar discovery.
+    #[test]
+    fn sidebar_removal_identity_2334_archived_duplicate_selects_live() {
+        use crate::git_reads::{GitReads, GixGitReads};
+        let repo = setup_test_repo();
+        let root = tempfile::tempdir().unwrap();
+        let pool = root.path().join("a/__archived");
+        let archived = pool.join("parked");
+        let live = root.path().join("z/live");
+        git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "duplicate",
+                &archived.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--force",
+                &live.to_string_lossy(),
+                "duplicate",
+            ])
+            .run()
+            .unwrap();
+        let sidebar = GixGitReads::new()
+            .worktree_inventory(repo.path(), Some(&pool))
+            .unwrap();
+        assert_eq!(
+            Path::new(&sidebar.worktree_paths["duplicate"].path)
+                .canonicalize()
+                .unwrap(),
+            live.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_removable_workspace(repo.path(), "duplicate").unwrap(),
+            sidebar.worktree_paths["duplicate"]
+        );
+    }
 
     // Catches: a failed rename journal strands a recycled checkout at an unpublished path.
     #[test]
