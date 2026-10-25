@@ -57,7 +57,8 @@ export function startBackendSkewWarning(
 	async function check() {
 		const request = ++generation;
 		try {
-			const response = await fetch("/__tuic_backend_identity", { cache: "no-store" });
+			const sourceOrigin = new URL(import.meta.url).origin;
+			const response = await fetch(`${sourceOrigin}/__tuic_backend_identity`, { cache: "no-store" });
 			if (!response.ok) return;
 			const tree = (await response.json()) as BuildIdentity;
 			if (stopped || request !== generation || !tree.fingerprint || !tree.git_hash) return;

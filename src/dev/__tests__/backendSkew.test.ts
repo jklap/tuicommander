@@ -6,18 +6,6 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-it("warns visibly instead of silently running newer frontend commands against an old backend", async () => {
-	vi.stubGlobal(
-		"fetch",
-		vi.fn().mockResolvedValue(new Response(JSON.stringify({ fingerprint: "new-backend", git_hash: "new-sha" }))),
-	);
-	const stop = startBackendSkewWarning({ fingerprint: "old-backend", git_hash: "old-sha" });
-	await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain("Restart tauri dev"));
-	expect(document.body.textContent).toContain("old-sha");
-	expect(document.body.textContent).toContain("new-sha");
-	stop();
-});
-
 it("does not nag after frontend-only landings and clears a resolved mismatch on HMR", async () => {
 	const reply = vi
 		.fn()

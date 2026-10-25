@@ -27,32 +27,37 @@ fn main() {
     // Development already requires Node/Vite. One implementation fingerprints
     // both sides; release builds neither run it nor embed the identity.
     if cfg!(debug_assertions) {
-        let output = std::process::Command::new("node")
+        let identity = std::process::Command::new("node")
             .arg("../scripts/backend-build-identity.mjs")
             .output()
-            .expect("Node is required for the development backend identity");
-        assert!(
-            output.status.success(),
-            "backend identity failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let identity: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("invalid backend identity");
-        for input in identity["inputs"].as_array().expect("identity inputs") {
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok());
+        // Source archives and rb replicas have no Git index; Rust-only builds
+        // may have no Node. Keep those buildable, with an explicitly unavailable
+        // identity rather than a fabricated match in a development WebView.
+        if let Some(identity) = identity {
+            for input in identity["inputs"].as_array().expect("identity inputs") {
+                println!(
+                    "cargo:rerun-if-changed=../{}",
+                    input.as_str().expect("input path")
+                );
+            }
             println!(
-                "cargo:rerun-if-changed=../{}",
-                input.as_str().expect("input path")
+                "cargo:rustc-env=TUIC_BACKEND_FINGERPRINT={}",
+                identity["fingerprint"].as_str().expect("fingerprint")
             );
+        } else {
+            println!(
+                "cargo:warning=Development backend identity unavailable (requires Node and a Git index)"
+            );
+            println!("cargo:rustc-env=TUIC_BACKEND_FINGERPRINT=");
         }
         // Track added/removed source files as well as changes to known inputs.
         println!("cargo:rerun-if-changed=src");
         println!("cargo:rerun-if-changed=crates");
         println!("cargo:rerun-if-changed=patches");
         println!("cargo:rerun-if-changed=../scripts/backend-build-identity.mjs");
-        println!(
-            "cargo:rustc-env=TUIC_BACKEND_FINGERPRINT={}",
-            identity["fingerprint"].as_str().expect("fingerprint")
-        );
     }
 
     // Expose target triple for sidecar path resolution at runtime
