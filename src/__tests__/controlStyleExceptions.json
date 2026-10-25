@@ -469,16 +469,6 @@
     ]
   },
   {
-    "file": "src/components/shared/ComposeActions.module.css",
-    "story": "2261-8828",
-    "rules": [
-      "[[],\".pinButton\",[\"height: 20px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".pinButton:hover:not(:disabled)\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".pinButtonActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".sendButton\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/KeyComboCapture.module.css",
     "story": "2262-c9b2",
     "rules": [
