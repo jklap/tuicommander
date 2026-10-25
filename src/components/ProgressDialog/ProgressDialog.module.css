@@ -8,7 +8,8 @@
 
 .embedded { width: 100%; max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
 
-.header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
+.header {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
 .title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .title h4 { margin: 0; font-size: var(--font-lg); font-weight: 600; color: var(--fg-primary); }
 .project { font-size: 11px; color: var(--fg-muted); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

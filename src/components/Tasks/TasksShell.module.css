@@ -1,5 +1,6 @@
 .shell { container-type: inline-size; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; color: var(--fg-primary); background: var(--bg-primary); font-family: var(--font-ui); font-size: var(--font-md); }
-.header { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.header {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: end; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .header label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-secondary); font-size: var(--font-sm); }
 .header :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .create { margin-left: auto; }
@@ -14,7 +15,8 @@
 	.side > .back { display: block; }
 }
 .view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.boardPicker { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--fg-secondary); font-size: var(--font-sm); }
+.boardPicker {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--fg-secondary); font-size: var(--font-sm); }
 .error { color: var(--error); padding: 8px 12px; overflow-wrap: anywhere; }
 .empty { padding: 16px; color: var(--fg-secondary); }
 .fallback { flex: 1; min-height: 0; overflow: auto; }

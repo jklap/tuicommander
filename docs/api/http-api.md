@@ -447,7 +447,10 @@ question is awaiting human input, a human reply can pass queued automated messag
 those messages remain parked until the question clears. The mobile client shows
 the returned `detail` on refusal and keeps the draft. Foreground ownership,
 unfinished drafts and uncertain prior writes still block submission. Automated
-`session action=submit` cannot answer a confident question.
+`session action=submit` may answer confirmed-idle conversational questions,
+including `progress blocked` reports, but cannot answer native dialogs. Native
+refusals include `prompt_kind`: `choice`, `approval`, `free_text`, or `question`.
+The human HTTP reply path retains its busy-question behavior.
 
 ### Write Several Inputs at Once
 

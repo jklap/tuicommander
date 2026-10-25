@@ -2,7 +2,8 @@
 .detachedHost { display: flex; width: 100%; height: 100%; min-height: 0; }
 .dialog.detached { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
 .dialog > .header, .dialog > .error, .dialog > .message { flex-shrink: 0; }
-.header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
+.header {
+  composes: toolbar from "../ui/FormControls.module.css"; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
 .header > div:first-child { min-width: 0; }
 .header h2 { margin: 0 0 2px; font-size: var(--font-xl); }
 .headerActions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
@@ -19,7 +20,8 @@
 .timeline pre { white-space: pre-wrap; overflow-wrap: anywhere; text-transform: none; font: var(--font-xs) var(--font-mono); }
 .planColumn, .storyColumn, .detail { min-width: 0; overflow-y: auto; }
 .planColumn, .storyColumn { border-right: 1px solid var(--border); }
-.columnHeader { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.columnHeader {
+  composes: toolbar from "../ui/FormControls.module.css"; position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
 .columnHeader > button { flex-shrink: 0; white-space: nowrap; }
 .columnHeader h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
 .items { display: flex; flex-direction: column; }
@@ -28,7 +30,8 @@ button.item[data-control-layout="row"]:hover { background: var(--bg-highlight); 
 button.item[data-control-layout="row"][aria-current="true"] { background: var(--bg-highlight); border-left: 2px solid var(--accent); padding-left: 10px; }
 button.item[data-control-layout="row"] small { color: var(--fg-muted); font-size: var(--font-xs); text-transform: capitalize; }
 .form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
-.sourceHeader { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--fg-secondary); font-size: var(--font-xs); }
+.sourceHeader {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .form button small { display: block; margin-top: 3px; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); overflow-wrap: anywhere; }
 .form details { color: var(--fg-secondary); font-size: var(--font-xs); }
 .form summary { cursor: pointer; }
@@ -41,7 +44,8 @@ button.item[data-control-layout="row"] small { color: var(--fg-muted); font-size
 .detail h3 { margin: 4px 0 0; font-size: var(--font-xl); }
 .detail h4 { margin: 0 0 8px; color: var(--fg-secondary); font-size: var(--font-sm); text-transform: uppercase; letter-spacing: .05em; }
 .detail ul { margin: 0; padding-left: 20px; line-height: 1.5; }
-.detailHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.detailHeader {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .eyebrow { color: var(--fg-muted); font-size: var(--font-xs); text-transform: uppercase; letter-spacing: .06em; }
 .status { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; color: var(--fg-secondary); font-size: var(--font-xs); text-transform: capitalize; white-space: nowrap; }
 .status[data-status="done"] { color: var(--success); }
@@ -82,7 +86,8 @@ button.item[data-control-layout="row"] small { color: var(--fg-muted); font-size
 	.headerActions button { white-space: nowrap; }
 }
 
-.filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.filters {
+  composes: toolbar from "../ui/FormControls.module.css"; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .filters label { display: flex; flex-direction: column; flex: 1; min-width: 100px; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .filters select { width: 100%; }
 .viewSwitch { align-self: flex-end; }

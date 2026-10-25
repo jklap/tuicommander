@@ -1,5 +1,6 @@
 /* Toolbar */
 .toolbar {
+  composes: toolbar from "../ui/FormControls.module.css";
   height: var(--toolbar-height);
   min-height: var(--toolbar-height);
   background: var(--bg-primary);
@@ -229,6 +230,7 @@
 }
 
 .popover {
+  composes: form from "../ui/FormControls.module.css";
   position: absolute;
   top: 100%;
   right: 0;
@@ -253,6 +255,7 @@
 }
 
 .notifHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -354,6 +357,7 @@
 
 /* Activity Center — generic plugin sections */
 .sectionHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   justify-content: space-between;

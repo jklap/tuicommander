@@ -4773,6 +4773,11 @@ thread_local! {
     static SHELL_SCRIPT_DIAGNOSTICS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+#[cfg(all(test, windows))]
+thread_local! {
+    static SHELL_SCRIPT_CONTEXT: std::cell::RefCell<Option<(std::ffi::OsString, PathBuf)>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -4816,6 +4821,14 @@ fn run_shell_script(
         cmd.get_args().collect::<Vec<_>>(),
         cmd.get_current_dir()
     );
+    #[cfg(all(test, windows))]
+    SHELL_SCRIPT_CONTEXT.with(|context| {
+        *context.borrow_mut() = cmd
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .and_then(|(_, value)| value)
+            .map(|path| (path.to_os_string(), cwd.to_path_buf()));
+    });
     let result = crate::git_cli::output_with_deadline(&mut cmd, timeout);
     #[cfg(test)]
     SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| {
@@ -13027,10 +13040,65 @@ branch refs/heads/feat
         origin
     }
 
+    #[cfg(windows)]
+    fn failed_cleanup_fetch_probe(repo: &Path, tip: &str) -> Vec<String> {
+        let Some((path, worktree)) = SHELL_SCRIPT_CONTEXT.with(|context| context.borrow().clone())
+        else {
+            return vec!["cleanup PATH was not captured; differential probe skipped".into()];
+        };
+        let git = std::env::split_paths(&path)
+            .map(|dir| dir.join("git.exe"))
+            .find(|git| git.is_file())
+            .unwrap_or_else(|| PathBuf::from("git"));
+        let mut diagnostics = vec![format!("same cleanup PATH={path:?}; direct git={git:?}")];
+        for shell in [false, true] {
+            // Give both probes the same stale ref. The original failure is
+            // already latched, so these fixture-only writes cannot hide it.
+            let reset = git_cmd(repo)
+                .timeout(Duration::from_secs(10))
+                .args(["update-ref", "refs/remotes/origin/integration", tip])
+                .run();
+            diagnostics.push(format!("shell={shell}; reset stale proof={reset:?}"));
+            if reset.is_err() {
+                continue;
+            }
+            let mut command = if shell {
+                let mut command = std::process::Command::new("cmd");
+                command.args(["/C", "git fetch --prune origin"]);
+                command
+            } else {
+                let mut command = std::process::Command::new(&git);
+                command.args(["fetch", "--prune", "origin"]);
+                command
+            };
+            command.current_dir(&worktree).env("PATH", &path);
+            tuic_core::cli::apply_no_window(&mut command);
+            let invocation = format!(
+                "argv={:?} {:?}; cwd={:?}",
+                command.get_program(),
+                command.get_args().collect::<Vec<_>>(),
+                command.get_current_dir()
+            );
+            diagnostics.push(
+                match crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(10)) {
+                    Ok(output) => format!(
+                        "{invocation}; exit_code={:?}; status={:?}; stdout={:?}; stderr={:?}",
+                        output.status.code(),
+                        output.status,
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                    Err(error) => format!("{invocation}; execution error={error:?}"),
+                },
+            );
+        }
+        diagnostics
+    }
+
     // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
     #[test]
     fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
-        // DEFERRED (2026-10-25) — Windows CI retains the tracking ref; inspect the cleanup outcome/stderr before attributing this to shell execution or Git pruning.
+        // DEFERRED (2026-10-25) — classify the native fault from Windows-only failure probes before changing cleanup execution.
         SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().clear());
         let (_temp, repo, _) = workspace_fixture();
         let origin = add_origin(&repo);
@@ -13053,9 +13121,14 @@ branch refs/heads/feat
             Some("git fetch --prune origin"),
             false,
         );
+        let proof_was_pruned = rev_at(&repo, "refs/remotes/origin/integration").is_err();
+        #[cfg(windows)]
+        let differential = (!proof_was_pruned).then(|| failed_cleanup_fetch_probe(&repo, &tip));
+        #[cfg(not(windows))]
+        let differential: Option<Vec<String>> = None;
         assert!(
-            rev_at(&repo, "refs/remotes/origin/integration").is_err(),
-            "tracking ref survived cleanup; outcome={outcome:?}; hook diagnostics={:?}",
+            proof_was_pruned,
+            "tracking ref survived cleanup; outcome={outcome:?}; hook diagnostics={:?}; differential={differential:?}",
             SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow().clone())
         );
         assert_eq!(

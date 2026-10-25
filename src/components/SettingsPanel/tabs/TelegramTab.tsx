@@ -111,7 +111,7 @@ export const TelegramTab: Component = () => {
 		clearInterval(timer);
 	});
 	return (
-		<div class={`${s.section} ${telegram.panel}`}>
+		<div class={s.section}>
 			<SettingPageHeader title="Telegram" scope="This machine" breadcrumb="Integrations / Telegram" />
 			<Show when={settings()}>
 				{(data) => (

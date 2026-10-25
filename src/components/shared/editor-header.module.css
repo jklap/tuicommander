@@ -1,5 +1,6 @@
 /* Shared Editor Header (CodeEditorTab, MarkdownTab) */
 .header {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 8px;
@@ -26,37 +27,6 @@
   border-radius: 50%;
   background: var(--warning);
   flex-shrink: 0;
-}
-
-/* DEFERRED (2026-10-25) — remove legacy button geometry after MarkdownTab stories 2209/2210 land. */
-.btn:not([data-form-control]) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg-secondary);
-  font-size: var(--font-sm);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.btn:not([data-form-control]):hover {
-  background: var(--bg-highlight);
-  color: var(--fg-primary);
-}
-
-.btn:not([data-form-control]):disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn.active:not([data-form-control]) {
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border-color: var(--accent);
 }
 
 .btn svg {

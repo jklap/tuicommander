@@ -1,5 +1,5 @@
 import { createSignal, Show } from "solid-js";
-import { Button } from "../../components/ui";
+import { Button } from "../../components/ui/Button";
 import styles from "./TopBar.module.css";
 
 interface TopBarProps {

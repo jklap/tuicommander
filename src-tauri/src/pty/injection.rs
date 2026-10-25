@@ -381,11 +381,53 @@ fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
         .is_some_and(|session| session.awaiting_input)
 }
 
+/// A progress report asks for another conversational turn, not native keys.
+/// The accumulator preserves native dialog ownership against later reports.
+fn waiting_on_progress_report(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"))
+}
+
+/// Native controls which make an automated submit unsafe. A prose question or
+/// a progress-tool wait owns no modal controls; confirmed idle still gates it.
+pub(crate) fn agent_submission_prompt_kind(
+    state: &AppState,
+    session_id: &str,
+) -> Option<&'static str> {
+    let (confident, choice_kind, ego) =
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|session| {
+                let ego = session.agent_type.as_deref() == Some("ego");
+                let kind = session.choice_prompt.as_ref().map(|choice| {
+                    if ego && choice.selection_mode.is_none() {
+                        "approval"
+                    } else {
+                        "choice"
+                    }
+                });
+                (session.question_confident, kind, ego)
+            })?;
+    if choice_kind.is_some() {
+        return choice_kind;
+    }
+    (confident && !waiting_on_progress_report(state, session_id)).then_some(if ego {
+        "free_text"
+    } else {
+        "question"
+    })
+}
+
 fn submission_ready(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
-    queued_user_command: bool,
+    user_command: bool,
 ) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
@@ -407,14 +449,9 @@ fn submission_ready(
         .get(session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
         .unwrap_or(false);
-    // A queued user command answers a progress-tool wait, not a native dialog.
+    // A direct or queued user command answers a progress-tool wait, not a native dialog.
     // Read the source from ranked evidence, never infer ownership from a screen.
-    let progress_reply = queued_user_command
-        && state
-            .session_maps
-            .silence_states
-            .get(session_id)
-            .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"));
+    let progress_reply = user_command && waiting_on_progress_report(state, session_id);
     let blocked_on_question = state
         .session_maps
         .session_states
@@ -438,11 +475,96 @@ fn submission_ready(
 /// True while the user has characters sitting in the composer. Injecting then
 /// would splice our text into what they are typing.
 pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
-    state
+    let tracked_draft = state
         .session_maps
         .input_buffers
         .get(session_id)
-        .is_some_and(|buffer| !buffer.lock().content().is_empty())
+        .is_some_and(|buffer| !buffer.lock().is_empty());
+    if !tracked_draft {
+        return false;
+    }
+    let observed_input = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .and_then(|silence| silence.lock().last_input_at);
+    if ego_has_fresh_empty_composer(state, session_id)
+        && let Some(buffer) = state.session_maps.input_buffers.get(session_id)
+    {
+        let mut buffer = buffer.lock();
+        // Raw writers stamp before feeding this editor. If one started since
+        // the screen check, retain its edit; if it starts after this check, its
+        // feed follows this reset under the same editor mutex.
+        let current_input = state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .and_then(|silence| silence.lock().last_input_at);
+        if current_input == observed_input {
+            *buffer = InputLineBuffer::new();
+        }
+        return !buffer.is_empty();
+    }
+    true
+}
+
+/// The write-side editor cannot observe text discarded by an agent. Only ego's
+/// native adapter proves an empty composer (including wrapped-draft rejection).
+/// Reconcile the tracked editor only while its input stamp is unchanged, so
+/// bookkeeping for the next accepted command cannot inherit discarded text.
+/// Re-derive the answer at the post-CAS claim check as well.
+fn ego_has_fresh_empty_composer(state: &AppState, session_id: &str) -> bool {
+    if !state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            session.agent_type.as_deref() == Some("ego") && session.choice_prompt.is_none()
+        })
+    {
+        return false;
+    }
+    let Some(input_age_ms) = state
+        .session_maps
+        .last_input_ms
+        .get(session_id)
+        .map(|last| now_epoch_ms().saturating_sub(last.load(Ordering::Acquire)))
+    else {
+        return false;
+    };
+    let Some(output_age) = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().last_chunk_at.elapsed())
+    else {
+        return false;
+    };
+    // Strict ordering fails closed for same-millisecond writes/repaints. Require
+    // the repaint itself to settle, not merely silence over a pre-input screen.
+    if output_age < AGENT_READY_CONFIRM || input_age_ms <= output_age.as_millis() as u64 {
+        return false;
+    }
+    let Some(input_at) = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .and_then(|silence| silence.lock().last_input_at)
+    else {
+        return false;
+    };
+    state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
+        let vt = vt.lock();
+        // Epoch ages and repaired idle clocks can only delay recovery. Only
+        // a child-painted composer row after input authorizes it.
+        vt.last_composer_paint_at()
+            .is_some_and(|output_at| output_at > input_at)
+            && detect_agent_screen_activity_at(
+                Some("ego"),
+                &vt.screen_rows(),
+                Some(vt.grid_columns()),
+            ) == AgentScreenActivity::Ready
+    })
 }
 
 /// Reserve an idle agent composer for one injected command.
@@ -471,9 +593,9 @@ fn claim_idle_for_submission(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
-    queued_user_command: bool,
+    user_command: bool,
 ) -> Option<InjectionClaim> {
-    if !submission_ready(state, session_id, human_reply, queued_user_command) {
+    if !submission_ready(state, session_id, human_reply, user_command) {
         return None;
     }
     if human_reply && human_reply_waiting(state, session_id) {
@@ -641,6 +763,19 @@ pub(crate) struct PendingInjectionSummary {
     pub preview: String,
 }
 
+/// Read-only queue diagnosis for session inventory, including server wake entries.
+pub(crate) fn queued_submission_blocker(
+    state: &AppState,
+    session_id: &str,
+) -> Option<&'static str> {
+    let user_command = state.pending_injections.get(session_id).and_then(|queue| {
+        queue
+            .front()
+            .map(|head| matches!(head, crate::state::PendingInjection::UserCommand { .. }))
+    })?;
+    agent_composer_rejection(state, session_id, false, user_command).map(|(reason, _)| reason)
+}
+
 const PENDING_PREVIEW_MAX_CHARS: usize = 80;
 
 fn summarize_pending_injections(
@@ -677,6 +812,7 @@ fn agent_composer_rejection(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
+    user_command: bool,
 ) -> Option<(&'static str, &'static str)> {
     if !state.session_maps.sessions.contains_key(session_id) {
         return Some(("session_not_found", "unknown"));
@@ -697,15 +833,12 @@ fn agent_composer_rejection(
         return Some(("selection_required", "empty"));
     }
     if !human_reply
-        && state
-            .session_maps
-            .session_states
-            .get(session_id)
-            .is_some_and(|session| session.question_confident)
+        && (agent_submission_prompt_kind(state, session_id).is_some()
+            || (!user_command && waiting_on_progress_report(state, session_id)))
     {
         return Some(("awaiting_input", "empty"));
     }
-    if !submission_ready(state, session_id, human_reply, false) {
+    if !submission_ready(state, session_id, human_reply, user_command) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -758,7 +891,7 @@ pub(crate) fn agent_submission_rejection_detail(
 
 /// Describe why a terminal could not receive an inbox wake; never drains a queue.
 pub(crate) fn agent_mail_wake_detail(state: &AppState, session_id: &str) -> String {
-    let reason = agent_composer_rejection(state, session_id, false)
+    let reason = agent_composer_rejection(state, session_id, false, false)
         .map(|(reason, _)| agent_submission_rejection_detail(state, session_id, reason))
         .unwrap_or_else(|| "The terminal wake path is unavailable. Inspect the recipient's lifecycle before retrying.".into());
     format!(
@@ -771,7 +904,7 @@ pub(super) fn agent_submission_rejection(
     session_id: &str,
     human_reply: bool,
 ) -> Option<(&'static str, &'static str)> {
-    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply) {
+    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply, true) {
         return Some(rejection);
     }
     // Readiness is checked BEFORE the queue, and the order is the fix. An agent
@@ -782,10 +915,12 @@ pub(super) fn agent_submission_rejection(
     // `agent_not_ready` is the truth, and it is the state that actually changes.
     // A confident question belongs to the human. Its parked automated entries
     // cannot drain until the answer clears the question, and must not prevent
-    // that answer from reaching the composer.
-    if !(human_reply
-        && (human_reply_waiting(state, session_id)
-            || blocked_on_confident_question(state, session_id)))
+    // that answer from reaching the composer. A direct answer to a progress-tool
+    // wait has the same priority over parked automated entries.
+    if !(waiting_on_progress_report(state, session_id)
+        || (human_reply
+            && (human_reply_waiting(state, session_id)
+                || blocked_on_confident_question(state, session_id))))
     {
         // The agent IS ready, so anything still parked can be typed right now.
         // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
@@ -808,7 +943,7 @@ pub(super) fn agent_submission_rejection(
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
-    if !submission_ready(state, session_id, human_reply, false) {
+    if !submission_ready(state, session_id, human_reply, true) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -889,7 +1024,7 @@ fn write_submission_to_pty(
             pending: summarize_pending_injections(state, session_id),
         };
     }
-    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, false) else {
+    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, true) else {
         let (reason, composer_state) = agent_submission_rejection(state, session_id, human_reply)
             .unwrap_or(("claim_lost", "unknown"));
         return AgentSubmissionWrite::Rejected {
@@ -2731,7 +2866,7 @@ fn write_pty_parts_blocking(
         && let Some(mut vt) = vt.try_lock()
         && !vt.is_cursor_visible()
     {
-        vt.process(b"\x1b[?25h");
+        vt.process_local(b"\x1b[?25h");
     }
 
     let data_len: usize = parts.iter().map(String::len).sum();

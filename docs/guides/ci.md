@@ -116,12 +116,46 @@ had only about 4m18s before cancellation, with 6483 of 7391 tests passing.
 The longest completed test took 41.268s. This log does not separate compiler
 optimization from linking, and does not measure a complete suite duration.
 
-The macOS Tests step sets `CARGO_PROFILE_TEST_OPT_LEVEL=0` to avoid optimizing
-workspace test harnesses. Non-workspace dependencies retain the inherited
-`[profile.dev.package."*"]` optimization level of 1. Windows keeps test
-optimization level 1. Test selection, retries, hang detection and the job
-budget stay the same. This does not change release builds. The next CI run
-must measure the compile-time benefit and check for runtime regressions.
+The macOS and Windows Tests steps set `CARGO_PROFILE_TEST_OPT_LEVEL=0` to avoid
+optimizing workspace test harnesses. Non-workspace dependencies retain the
+inherited `[profile.dev.package."*"]` optimization level of 1. The explicit
+`tuic-terminal` test override also stays at 1 for corpus replays. Test selection,
+retries, hang detection and the job budget stay the same. This does not change
+release builds. The next CI run must measure the compile-time benefit and check
+for runtime regressions.
+
+## Fixture build profile and Windows cache
+
+On Windows run `40150611058`, the test build took 45m36s. Nextest setup then
+built the fixtures with the dev profile and no default features for 18m15s.
+Dev includes debug information that the test profile disables. This second
+profile and feature graph prevent reuse of many artifacts from the test build.
+
+Local lib-only fixture setup uses `cargo build --profile test
+--no-default-features`. Desktop CI sets `TUIC_FIXTURE_FEATURES=dictation`, which
+selects `cargo test --workspace --no-run --features dictation` instead. This
+matches nextest's workspace test selection, including dev-dependency feature
+unification. A binary-only build with `--profile test` does not activate dev
+dependencies: under resolver 2 it omits features such as `tokio/test-util` and
+`tuic-core/test-support`, so profile and top-level feature alignment alone do
+not establish graph reuse.
+
+The CI setup command runs no tests. Integration targets make Cargo build the
+normal fixture executables; setup can reuse the workspace artifacts nextest
+already built. Both paths put the executables beside the test binary's `deps`
+directory under `debug`, so consumer path resolution does not change. Setup
+scoping remains unchanged: unrelated lib tests do not build fixtures.
+`scripts/check-fixture-build-graph.py` captures each builder's actual command
+and compares its resolved package-feature graph with CI's workspace test graph.
+It does not replace a full-workspace warm-build measurement on Windows.
+
+That Windows run restored no Cargo target cache. Rust sccache reported 131 hits
+and 1291 misses (9.21% hit rate); linked binaries and proc macros were among its
+non-cacheable calls. sccache does not replace the Cargo target cache. The Windows
+Rust cache now saves after a failed or cancelled job too, so later runs can
+restore the existing `C:/t` artifacts instead of depending only on sccache.
+These changes do not prove that Windows fits its 90-minute bound: a complete
+Windows CI run remains the required runtime evidence.
 
 ## Release notes size
 

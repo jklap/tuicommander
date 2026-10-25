@@ -49,7 +49,14 @@ export const VariableInputDialog: Component<VariableInputDialogProps> = (props) 
 
 	return (
 		<div class={s.overlay} onClick={props.onCancel}>
-			<form class={s.dialog} onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
+			<form
+				class={s.dialog}
+				role="dialog"
+				aria-modal="true"
+				aria-label={props.promptName}
+				onClick={(e) => e.stopPropagation()}
+				onSubmit={handleSubmit}
+			>
 				<div class={s.header}>
 					<span class={s.title}>{props.promptName}</span>
 				</div>

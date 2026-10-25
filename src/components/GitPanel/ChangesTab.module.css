@@ -89,6 +89,7 @@
 
 /* Filter input */
 .filterRow {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 4px;
@@ -100,6 +101,7 @@
 
 /* Section headers (STAGED, CHANGES) */
 .sectionHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 6px;
@@ -264,6 +266,7 @@
 
 /* Action buttons — overlay on hover, replacing diff stats */
 .actions {
+  composes: toolbar from "../ui/FormControls.module.css";
   position: absolute;
   right: 12px;
   top: 50%;

@@ -1200,6 +1200,8 @@ pub(crate) struct SilenceState {
     /// blocked on read()) from "only chrome-only ticks arriving". The backup
     /// timer should only fire when truly no chunks arrive.
     pub(crate) last_chunk_at: std::time::Instant,
+    /// Monotonic input stamp; unlike idle clocks, never repaired after sleep.
+    pub(crate) last_input_at: Option<std::time::Instant>,
     /// When the last StatusLine (spinner) event was seen. If recent,
     /// silence-based question detection is suppressed — spinner means the agent is working.
     pub(crate) last_status_line_at: Option<std::time::Instant>,
@@ -1374,6 +1376,7 @@ impl SilenceState {
             pending_question_line: None,
             question_already_emitted: false,
             last_chunk_at: std::time::Instant::now(),
+            last_input_at: None,
             last_resize_at: None,
             suppress_echo_until: None,
             last_status_line_at: None,

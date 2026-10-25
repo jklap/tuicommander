@@ -786,13 +786,45 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 Queued confirmation waits run per session so a silent agent does not block other sessions or ordered lifecycle notices on the global injection worker. Each idle edge with a nonempty queue can start a worker; there is no global thread cap. A blocked claim returns promptly, and an active acknowledgement wait lasts at most six seconds for Codex or Claude or one second for other agents. The HTTP queue handler runs the blocking delivery on Tokio's blocking pool. If an agent remains silent with no human input after uncertain delivery, the uncertainty flag and later queued entries remain held until activity or a human submission supplies new evidence.
 
 **Atomic MCP submission reuses the same claim:** `session action=submit` first
-requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
+requires a confirmed-idle managed agent, an empty composer, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
 spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
 gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
+
+### Ego composer recovery state map
+
+| Input or event | Composer state and authority |
+| --- | --- |
+| Desktop raw input, HTTP/WebSocket/MCP input, paste and native answer keys | Input bookkeeping stamps monotonic input time and feeds `InputLineBuffer`. Unsubmitted text blocks managed input. |
+| Direct submit, queued user command, automated notice/wake and keepalive | The shared claim checks idle, foreground ownership, dialogs, uncertainty and draft state before writing. Accepted payload plus CR advances the submitted turn. |
+| Explicit draft-to-queue transfer | Requires the expected draft and input transaction; only this explicit user operation may clear that retained draft with Ctrl-U. |
+| Reader-originated child output | Only a change to the visible native composer row counts as composer paint. Status/output rows alone do not prove the draft was consumed. |
+| Cursor-only bytes, OSC title-only bytes, local cursor restoration and local screen repair | Not composer paint. They cannot authorize recovery, even after an idle clock repair. |
+| Resize, sleep/wake repair or wall-clock step | Not child paint. Resize invalidates paint evidence; repaired clocks are rejection gates only. |
+
+For ego, recovery may reset stale write-side text only after a reader-originated
+change to the current visible native composer row, ordered strictly after the
+last input in one monotonic clock domain. The native adapter must still report
+an empty Ready composer, and output must remain quiet for 1.5 seconds. The editor
+resets only if its input stamp is unchanged under its mutex; the claim rechecks
+this gate. Retained/wrapped drafts, modal controls, unknown screens and old
+empty screens fail closed. Other agents keep their tracked-editor gate.
+
+Dropping phantom tracking without Ctrl-U is not a safe substitute: the next
+payload could append to an unpainted real draft. Recovery therefore does not
+write anything without composer paint evidence. The normal managed submission
+may send its existing Ctrl-U prefix only after the shared empty-composer claim;
+recovery itself never sends Ctrl-U. In the worst case, one unpainted character
+plus any number of cursor/title updates still blocks all managed payload bytes.
+A genuine discard that produces no visible composer-row change also stays
+blocked rather than risking a real draft.
+
+Already accepted commands and wakes retry on confirmed idle, including stable
+Ready observations after the idle edge. A rejected `submit` is not queued and
+must be retried by its caller only when `retry_safe` is true.
 
 Foreground detection warns once per session when a non-shell process has no
 recognized agent type or run-config fallback. Such a session retains the safe
@@ -807,6 +839,11 @@ that acknowledgement. Movement proves the child terminal reacted, not that the
 application understood the command. A complete or uncertain write is never
 automatically retryable; only rejection/no-byte failure is.
 
+Direct submit and queued user commands can answer an idle `progress-blocked`
+conversational wait. A direct answer does not flush automated notices into that
+wait. Ranked native dialog ownership still wins over a later progress report;
+selectors, approvals and free-text modal questions remain protected.
+
 Mobile Queue supplies `expectedDraft` to validate the live InputLineBuffer before a server-side Ctrl-U and enqueue on this same FIFO. Preflight rejections leave the draft untouched. A write failure may have cleared it already; the caller reports uncertainty and does not retry automatically. Concurrent producers are not transactionally isolated.
 
 **User-composed commands share that gate:** the Compose panel's enqueue action
@@ -818,8 +855,8 @@ ahead of any accepted peer message or user command would reorder delivery. Each
 flush pops one entry and leaves the session BUSY, so the queue drains one item per
 idle window in global acceptance order. `state.queued_commands`,
 `list_queued_agent_commands`, `remove_queued_agent_command` and
-`clear_queued_agent_commands` select only user-command entries; clear retains all
-peer/orchestrator entries in their original relative order. Each user command
+`clear_queued_agent_commands` cover every parked entry, including server wakes;
+clear removes the whole pending queue. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 
