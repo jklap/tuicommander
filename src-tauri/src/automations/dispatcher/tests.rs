@@ -154,20 +154,63 @@ impl Fixture {
     }
 }
 
+#[cfg(windows)]
+async fn failed_workspace_precheck_probe(workspace: &str) -> Vec<String> {
+    let native = tuic_core::path_spelling::portable_spelling(workspace).replace('/', "\\");
+    let print = print_file_script("input.txt");
+    let commands = [
+        (
+            "chain",
+            format!("if defined TUIC_TEST_TMP_ROOT exit /b 9 & {print}"),
+        ),
+        (
+            "grouped",
+            format!("if defined TUIC_TEST_TMP_ROOT (exit /b 9) else ({print})"),
+        ),
+        ("plain", print),
+    ];
+    let mut diagnostics = vec![format!(
+        "input file={:?}",
+        std::fs::read_to_string(std::path::Path::new(workspace).join("input.txt"))
+    )];
+    for (spelling, cwd) in [("original", workspace), ("native", native.as_str())] {
+        for (form, command) in &commands {
+            // Use the real precheck entry point so environment sanitization,
+            // cmd flags, process ownership and stream capture stay identical.
+            let outcome = crate::automations::precheck::run_precheck(
+                std::path::Path::new(cwd),
+                Some(&Precheck {
+                    command: command.clone(),
+                    timeout_secs: 2,
+                    inject_output: false,
+                }),
+                false,
+            )
+            .await;
+            diagnostics.push(format!(
+                "spelling={spelling}; cwd={cwd:?}; form={form}; command={command:?}; outcome={outcome:?}"
+            ));
+        }
+    }
+    diagnostics
+}
+
 // Catches: dispatch using the repo cwd, inheriting host environment, losing the
 // precheck record, or inserting stdout/template expansion into the literal prompt.
 #[tokio::test]
 async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() {
-    // DEFERRED (2026-10-25) — Windows precheck exits zero without file output; capture actual cmd argv, cwd and stderr before attributing it to fixture grammar or shell execution.
     assert!(std::env::var_os("TUIC_TEST_TMP_ROOT").is_some());
-    let clean = if cfg!(windows) {
-        "if defined TUIC_TEST_TMP_ROOT exit /b 9 & "
+    let print = print_file_script("input.txt");
+    let command = if cfg!(windows) {
+        // Native CI probes show the ungrouped IF chain skips TYPE when the
+        // variable is absent. Keep the read in an explicit ELSE branch.
+        format!("if defined TUIC_TEST_TMP_ROOT (exit /b 9) else ({print})")
     } else {
-        "[ -z \"${TUIC_TEST_TMP_ROOT+x}\" ] || exit 9; "
+        format!("[ -z \"${{TUIC_TEST_TMP_ROOT+x}}\" ] || exit 9; {print}")
     };
     let (fixture, id) = Fixture::new(
         Some(Precheck {
-            command: format!("{clean}{}", print_file_script("input.txt")),
+            command,
             timeout_secs: 30,
             inject_output: false,
         }),
@@ -184,6 +227,21 @@ async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() 
         "invocation={invocation:?}; saved workspace={:?}; outcome={:?}",
         saved.workspace, saved.precheck_outcome
     );
+    #[cfg(windows)]
+    let diagnostic = if let Some(workspace) = saved.workspace.as_deref()
+        && matches!(
+            &saved.precheck_outcome,
+            Some(PrecheckOutcome::Executed(result)) if result.stdout != "resolved-output"
+        ) {
+        // Never replace the saved result with a retry: even a successful probe
+        // must leave the original persisted-output assertion red.
+        format!(
+            "{diagnostic}; differential={:?}",
+            failed_workspace_precheck_probe(workspace).await
+        )
+    } else {
+        diagnostic
+    };
     assert_eq!(saved.status, RunStatus::Running, "{diagnostic}");
     assert_eq!(saved.session_id.as_deref(), Some("owned-session"));
     assert_eq!(saved.task_id.as_deref(), Some("owned-task"));

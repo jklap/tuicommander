@@ -15,13 +15,13 @@ Test names below omit their common module prefixes where the source column suppl
 | 3 | `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` | F | Both membership assertions compared portable diagnostic paths with a native fixture path. Normalize both oracles, including the negative assertion. |
 | 4 | `recycling_finished_checkout_keeps_artifacts_and_removes_stale_paths` | F | Recycled provenance path is read from portable Git inventory, while archive return contains native joined separators. Normalize the archive oracle; retain artifact and stale-path checks. |
 | 5 | `recycling_journal_failure_restores_the_original_checkout` | F | Same restored-inventory path oracle mismatch. |
-| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | U, native subprocess fault proven | Run 40150611058 reports `cmd /C "git fetch --prune origin"` from the valid worktree cwd exiting `3221225477` (`0xC0000005`, access violation), with empty stdout/stderr. Removal returns `Archive script failed`, before the proof can be pruned. This is not a path-oracle mismatch or evidence that Git successfully fetched but retained the ref. The log cannot identify whether cmd or a child crashed, or attribute that crash to product versus fixture/environment. Preserve removal safety and the test. |
+| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | U, intermittent native subprocess fault | Earlier runs report `cmd /C "git fetch --prune origin"` exiting `3221225477` (`0xC0000005`) with empty streams before proof pruning. Latest diagnostic run 40179831695 on `d12b5106e` passes the unchanged owner test in 11.812s (native log line 2553), so its failure-only differential probes do not execute. This excludes a deterministic failure on this runner attempt but does not identify the earlier crashing executable or distinguish runner environment from a product/fixture defect. Preserve the safety checks and test; do not classify a prior fault solely from a later pass. |
 | 7 | `temporary_detached_worktrees_are_never_orphan_candidates` | F | Raw porcelain uses forward slashes; registration-presence oracle used backslashes. Keep the registration and no-cleanup assertions. |
 | 8 | `attachment_resume_drops_only_generated_directory_grants` | P | `agent_session.rs`: only configured root was canonicalized. Windows verbatim/nonverbatim roots compare unequal, so a deleted generated grant survives into the resume command. Resolve the existing config root on both sides, not the expired session child. A real symlink-root reproducer fails on Linux too. |
 | 9 | `codex_warm_discovery_does_not_restat_historical_rollouts` | P, invalidation cause proven | Run 40150611058 logs an available watcher and `Modify(Any)` on `sessions/2026`, with `rescan=false`, unchanged days, and `directory_changed=true`. `CodexIndex::candidates` invalidates the cached index for a date ancestor and rescans its files; the following lookup creates an uninitialized index and scans them again. Two scans of 65 files account for the exact 130 extra metadata reads. The fixture performs no writes between its first discovery and ten repeated lookups. This is over-broad directory-event invalidation, not watcher unavailability. The source of the native event remains unknown. Preserve the zero-read assertion; this build-only follow-up does not change watcher semantics. |
 | 10 | `compose_launch_command_keeps_a_prompt_that_is_not_the_start_work_brief` | F | Host shell correctly quotes with double quotes on Windows; oracle hard-coded Unix single quotes. Use the existing shell quote policy. |
 | 11 | `native_worktree_uses_configured_base_and_existing_workspace_uses_repository` | P | Automation canonicalizes the destination; Git receives a verbatim Windows path and reports `//?/D:/...: Invalid argument`. Normalize the external Git destination argument once in `create_worktree_internal`, including its existing-branch retry. Keep native filesystem paths. |
-| 12 | `dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt` | U, exact native invocation proven | Run 40150611058 line 6990 records `C:\\Windows\\System32\\cmd.exe /D /S /C "if defined TUIC_TEST_TMP_ROOT exit /b 9 & type input.txt"`, canonical verbatim `\\\\?\\D:` worktree cwd, exit 0 and empty stdout/stderr in 46ms. The expected output is `resolved-output`. This rules out a missing executable, nonzero termination and truncation, but does not distinguish the fixture's conditional command grammar from the verbatim cwd/native shell behavior. Microsoft IF documentation does not settle the command-chain parsing. Preserve the exact stdout assertion; a native Windows probe of this same argv/cwd with the sanitized environment is needed for a definitive product-versus-fixture classification. |
+| 12 | `dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt` | F, native differential proven | Run 40179831695 on `d12b5106e`, lines 4192/4221/4262: original IF chain returns exit 0 and empty stdout for both verbatim and native cwd. Under the same real `run_precheck` entry point, grouped `if defined TUIC_TEST_TMP_ROOT (exit /b 9) else (type input.txt)` and plain `type input.txt` both return exit 0 and exact `resolved-output` for both cwd spellings. The input file also reads `Ok("resolved-output")` from Rust. The fixture command grammar, not cwd spelling or stream capture, suppresses the read. Use the verified grouped form and preserve every assertion and deadline. |
 | 13 | `cleanup_keeps_a_fresh_branch_without_merge_proof` | P | Same invalid canonical Git destination as #11; failure occurs in workspace creation, before cleanup. |
 | 14 | `cleanup_rechecks_dirty_unmerged_and_locked_worktrees_without_discarding_work` | P | Same workspace-creation failure; cleanup assertions have not run. |
 | 15 | `cleanup_requires_archive_for_content_superset_integration` | P | Same workspace-creation failure. |
@@ -35,7 +35,7 @@ Test names below omit their common module prefixes where the source column suppl
 | 23 | `native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees` | P, cause open | Warm listing takes 13.6210139s against the 3s CLI response contract. The preceding base-repo fork-budget assertion passed, so repeated base integration subprocesses are not established as the cause. Native per-checkout profiling is needed. Do not raise the bound or remove the timing assertion. |
 | 24 | `invalid_pause_publish_is_a_client_error` | F | Fixture seeds the store directly with a noncanonical project, while the HTTP API canonicalizes ownership. It fails project scope before graph validation. Seed with the API's resolved owner; keep client-error and `resume_to` assertions. |
 
-The patch addresses the proven causes in 18 rows. Six rows remain unresolved: #6, #9, #12, #17, #18 and #23. Inline dated deferrals identify their evidence gaps at the test sites. No speculative watcher or removal changes were made. The complete-classification criterion remains unchecked because #6 and #12 cannot honestly be assigned to product or fixture from this log alone.
+The patch addresses the proven causes in 18 rows. Six rows remain unresolved: #6, #9, #12, #17, #18 and #23. Inline dated deferrals identify their evidence gaps at the test sites. No speculative watcher or removal changes were made. The complete-classification criterion remains unchecked because #6 still lacks fault ownership; the later native differential proves #12 is a fixture defect (see follow-up below).
 
 ## Why the job reached 90 minutes
 
@@ -165,6 +165,78 @@ test-support. Log: `~/Gits/.tmp/results/ci-win-f1-final.log`, exit 0. These
 commands compile and execute no Rust targets. Bash/Python syntax, workflow
 YAML and `git diff --check` also passed; `actionlint` remains unavailable.
 
+## Native classification follow-up: run 40172919921 on f16be3873
+
+The complete Windows job log for job `121107564809` is saved at
+`~/Gits/.tmp/ci-f16b-win.txt`. Both requested owner tests fail on all three
+attempts. The new run confirms the earlier symptoms; it does not add a
+native differential result that identifies their cause.
+
+- Row 6 owner: `worktree::tests::removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.
+  Lines 5071–5073 report the actual cleanup command `cmd /C "git fetch --prune
+  origin"`, a portable worktree cwd, status `3221225477` (`0xC0000005`), and
+  empty stdout/stderr. The removal operation returns `Archive script failed`.
+  The assertion correctly detects that the tracking ref was not pruned; it
+  does not prove a branch-safety defect. Product versus fixture/environment
+  ownership remains unresolved because neither the crashing executable nor
+  its fault is identified. No deletion guard, Git proof check, or assertion
+  has been removed or weakened.
+- Row 12 owner: `automations::dispatcher::tests::dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt`.
+  Lines 6730–6733 report `cmd.exe /D /S /C "if defined TUIC_TEST_TMP_ROOT exit
+  /b 9 & type input.txt"`, the canonical verbatim workspace cwd, exit zero,
+  empty stdout/stderr, and no truncation. The first attempt takes 29ms. The
+  exact expected stdout remains `resolved-output`. The log does not isolate
+  conditional parsing from native shell/cwd behavior, so assigning this to
+  either the fixture or product would still be a guess. The clean-environment
+  policy and exact persisted-output assertion remain unchanged.
+
+The coordinator authorized a tiny non-build Windows lab probe. Its matrix
+compares the original IF chain with grouped IF/ELSE and plain TYPE, each with
+and without the environment sentinel and with native/verbatim cwd spellings.
+It also compares direct Git with cmd-mediated Git under the same inherited or
+synthetic bounded PATH. A synthetic PATH is not claimed to reproduce the CI
+process's actual PATH. The probe uses a throwaway local bare origin, does not
+install software, and removes its scratch tree in a finally block.
+
+The probe did **not execute**: SSH to the configured Windows lab host timed
+out on port 22 and the launcher exited 255. Evidence:
+`~/Gits/.tmp/results/ci-win-native-probe.log`. No remote files were created and
+no native Windows success or RED/GREEN result is claimed. The retained probe
+source is `~/Gits/.tmp/results/ci-win-native-probe.ps1`; it is an unexecuted
+probe, not a captured Windows fixture. A reachable authorized Windows runner,
+or equivalent native differential output from the CI environment, is required
+before rows 6 and 12 can be classified definitively. No speculative code fix
+was made from the repeated diagnostics.
+
+### CI-native failure-only probes
+
+After the lab connection failed, the coordinator selected CI as the Windows
+runner. The two owner tests now attach differential results only when their
+original tracking-ref or persisted-stdout check has already failed. Successful
+probes cannot replace the original result or make the test pass. No production
+code, assertion expectation, removal guard or normal-path execution changes.
+
+- Row 6 captures the actual cleanup PATH and cwd under `cfg(test)` on Windows.
+  The failure probe selects the first `git.exe` in that PATH, then compares
+  direct `git fetch --prune origin` with the original `cmd /C` form, both using
+  the captured PATH and cwd. Each probe starts with the same stale tracking
+  ref restored inside this test's disposable repository. The panic includes
+  invocation, signed exit code, native status and both streams. Each of the
+  two resets and two subprocess probes has a ten-second execution deadline.
+- Row 12 calls the real `run_precheck` entry point for the original IF chain,
+  grouped IF/ELSE and plain file read under both the original verbatim cwd and
+  its native spelling. All six cases retain the same clean-environment,
+  cmd-flag, process-ownership and stream-capture policy as the failed precheck.
+  Each has a two-second execution budget; existing stream cleanup may take
+  another two seconds. Setup is outside that execution budget. The panic
+  includes each cwd, command and complete precheck result (termination, exit
+  code, streams and truncation), plus the fixture input file read by Rust.
+
+These are diagnostic probes, not fixes or new test oracles. Formatting and
+static diff checks apply locally. Native compilation and execution of the
+Windows-only branches remain for the next main CI run; neither classification
+nor Windows GREEN is claimed before that evidence exists.
+
 ## EGO-DEFECTS
 
 The admitted adversarial-tdd skill requests its README, but resource retrieval failed with the exact line: `/Users/stefano.straus/.ego/skills/adversarial-tdd: no such file or directory`. No README contents were invented.
@@ -196,3 +268,48 @@ Diagnostic state and capture operations are guarded by `cfg(test)`. The native M
 Native macOS validation of the diagnostic source in `354bcc86fa0c1737b52000e37d5322bbbbec9279` passed all six touched tests across the `tuicommander` and `tuic-git` lib test binaries. Command: `scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml -p tuicommander -p tuic-git --lib -E '<the six test names in rows 6, 9, 12, 17, 18 and 23>'`, through `tuic-bg.sh`, native `build-slot.sh` and the mbx cargo shim, with the required test TMPDIR. Full command and output: `~/Gits/.tmp/results/ci-win-diagnostics-native.log`. Build: 4m49s; test summary: 11.988s, six passed. The forty-worktree test's 11.882s total includes setup; its unchanged three-second warm-operation assertion passed. The linker emitted the existing compact-unwind size warning; mbx reported cache bypass/miss and automatic low-disk GC messages. No cache deletion or target override was requested by the agent.
 
 `git diff --check` and `fmt-changed.sh <worktree> main...HEAD` passed. The story closure check still refuses criterion 1 (complete product-versus-fixture classification); native Mac success cannot resolve the six Windows evidence gaps or satisfy the Windows CI criterion. No rb retry, push, desktop launch, deadline increase or assertion relaxation was performed.
+
+## Diagnostic run 40179831695: rows 6 and 12
+
+Source: coordinator-fetched native Windows job 121128653791 log at
+`~/Gits/.tmp/ci-d12b-win.txt`, main SHA `d12b5106e79215e749090655222c07bbc809f5eb`.
+Clippy succeeded and the test job completed with failures. The initial watcher
+lost GitHub connectivity; the coordinator supplied the job log. That transient
+retrieval failure is not a test classification.
+
+Row 6, line 2553:
+
+```text
+PASS [ 11.812s] ... worktree::tests::removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof
+```
+
+The probes run only on failure, so this pass supplies no direct-versus-cmd
+comparison. The earlier access violation remains unresolved. No product change,
+retry policy, assertion change or runner attribution follows from one pass.
+
+Row 12, excerpts from line 4192 (repeated on attempts 2 and 3 at lines 4221/4262):
+
+```text
+input file=Ok("resolved-output")
+spelling=original; form=chain; ... termination: Exited(Some(0)), stdout: ""
+spelling=original; form=grouped; ... termination: Exited(Some(0)), stdout: "resolved-output"
+spelling=original; form=plain; ... termination: Exited(Some(0)), stdout: "resolved-output"
+spelling=native; form=chain; ... termination: Exited(Some(0)), stdout: ""
+spelling=native; form=grouped; ... termination: Exited(Some(0)), stdout: "resolved-output"
+spelling=native; form=plain; ... termination: Exited(Some(0)), stdout: "resolved-output"
+```
+
+These excerpts omit paths and unchanged result fields. All six recorded results
+have empty stderr and no truncation. The grouped command used by the probe is
+exactly `if defined TUIC_TEST_TMP_ROOT (exit /b 9) else (type input.txt)`.
+The repair uses that command in the fixture, leaving production execution,
+persisted-output expectations, clean-environment guard and literal-prompt
+assertions unchanged. Existing native owner-test failures provide RED on
+`d12b5106e`; grouped differential success is native boundary evidence, not a
+post-repair owner-test GREEN. Native Windows post-repair CI is still required.
+
+The final targeted Linux run on rb passed the repaired owner test: one test,
+summary 0.177s, test-profile build 5m54s. Command through `build-slot.sh --remote`:
+`scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml --lib -E 'test(dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt)'`.
+Log: `~/Gits/.tmp/results/ci-win-c-targeted.log`. This covers the unchanged Unix
+command and dispatcher consumer; it does not execute the Windows command branch.
