@@ -165,6 +165,49 @@ test-support. Log: `~/Gits/.tmp/results/ci-win-f1-final.log`, exit 0. These
 commands compile and execute no Rust targets. Bash/Python syntax, workflow
 YAML and `git diff --check` also passed; `actionlint` remains unavailable.
 
+## Native classification follow-up: run 40172919921 on f16be3873
+
+The complete Windows job log for job `121107564809` is saved at
+`~/Gits/.tmp/ci-f16b-win.txt`. Both requested owner tests fail on all three
+attempts. The new run confirms the earlier symptoms; it does not add a
+native differential result that identifies their cause.
+
+- Row 6 owner: `worktree::tests::removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof`.
+  Lines 5071–5073 report the actual cleanup command `cmd /C "git fetch --prune
+  origin"`, a portable worktree cwd, status `3221225477` (`0xC0000005`), and
+  empty stdout/stderr. The removal operation returns `Archive script failed`.
+  The assertion correctly detects that the tracking ref was not pruned; it
+  does not prove a branch-safety defect. Product versus fixture/environment
+  ownership remains unresolved because neither the crashing executable nor
+  its fault is identified. No deletion guard, Git proof check, or assertion
+  has been removed or weakened.
+- Row 12 owner: `automations::dispatcher::tests::dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt`.
+  Lines 6730–6733 report `cmd.exe /D /S /C "if defined TUIC_TEST_TMP_ROOT exit
+  /b 9 & type input.txt"`, the canonical verbatim workspace cwd, exit zero,
+  empty stdout/stderr, and no truncation. The first attempt takes 29ms. The
+  exact expected stdout remains `resolved-output`. The log does not isolate
+  conditional parsing from native shell/cwd behavior, so assigning this to
+  either the fixture or product would still be a guess. The clean-environment
+  policy and exact persisted-output assertion remain unchanged.
+
+The coordinator authorized a tiny non-build Windows lab probe. Its matrix
+compares the original IF chain with grouped IF/ELSE and plain TYPE, each with
+and without the environment sentinel and with native/verbatim cwd spellings.
+It also compares direct Git with cmd-mediated Git under the same inherited or
+synthetic bounded PATH. A synthetic PATH is not claimed to reproduce the CI
+process's actual PATH. The probe uses a throwaway local bare origin, does not
+install software, and removes its scratch tree in a finally block.
+
+The probe did **not execute**: SSH to the configured Windows lab host timed
+out on port 22 and the launcher exited 255. Evidence:
+`~/Gits/.tmp/results/ci-win-native-probe.log`. No remote files were created and
+no native Windows success or RED/GREEN result is claimed. The retained probe
+source is `~/Gits/.tmp/results/ci-win-native-probe.ps1`; it is an unexecuted
+probe, not a captured Windows fixture. A reachable authorized Windows runner,
+or equivalent native differential output from the CI environment, is required
+before rows 6 and 12 can be classified definitively. No speculative code fix
+was made from the repeated diagnostics.
+
 ## EGO-DEFECTS
 
 The admitted adversarial-tdd skill requests its README, but resource retrieval failed with the exact line: `/Users/stefano.straus/.ego/skills/adversarial-tdd: no such file or directory`. No README contents were invented.
