@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Restore toolbar density in panel headers, view toggles and filters while keeping Settings forms at 36px and mobile targets at 44px (#2316-2f6b).
+
 - Accept direct replies to idle conversational progress waits while preserving native modal guards and reporting their prompt kind (#2314-cf94).
 
 - Recover queued ego wakes after a fresh empty composer supersedes stale tracked input; report parked entries and their blocker in session inventory (#2313-dd6d).

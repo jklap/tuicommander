@@ -5,15 +5,37 @@
 	height: var(--control-height, 36px);
 	padding: 0 var(--control-padding-x, 8px);
 	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
+	border-radius: var(--control-radius, var(--radius-lg));
 	background: var(--bg-tertiary);
 	color: var(--fg-primary);
 	font-family: var(--font-ui, sans-serif);
-	font-size: var(--font-md, 13px);
+	font-size: var(--control-font-size, var(--font-md, 13px));
 	line-height: 1.4;
 	user-select: text;
 }
-/* Rows of 20-24px buttons: match their height instead of the 36px form field. */
+/* Form density is the default: Settings and configuration fields stay 36px.
+   Compose this reset on a form/popover nested inside a toolbar. */
+.form {
+ --control-height: 36px;
+ --control-padding-x: 8px;
+ --control-font-size: var(--font-md, 13px);
+ --control-radius: var(--radius-lg);
+ --control-icon-height: 36px;
+ --control-segment-padding-x: 12px;
+}
+/* Toolbar density: measured panel close/detach neighbours are 22px, and the
+   app toolbar is 32px. 22px leaves 5px per side there; a 36px form cannot fit.
+   Keep the existing compact height, with 6px horizontal padding. Compose on
+   the header/toolbar row, not a whole panel that also contains forms. */
+.toolbar {
+ --control-height: 22px;
+ --control-padding-x: 6px;
+ --control-font-size: var(--font-sm, 12px);
+ --control-radius: var(--radius-sm);
+ --control-icon-height: 22px;
+ --control-segment-padding-x: 6px;
+}
+/* Per-control spelling of toolbar density for isolated actions. */
 .compact {
 	--control-height: 22px;
 	--control-padding-x: 6px;
@@ -39,13 +61,14 @@
 	align-items: stretch;
 	max-width: 100%;
 	min-height: var(--control-height, 36px);
+	font-size: var(--control-font-size, inherit);
 	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
+	border-radius: var(--control-radius, var(--radius-lg));
 	background: var(--bg-tertiary);
 }
 .segment {
 	min-width: 0;
-	padding: 0 12px;
+	padding: 0 var(--control-segment-padding-x, 12px);
 	border: 0;
 	border-radius: var(--radius-md);
 	background: transparent;
@@ -72,7 +95,7 @@
 }
 /* Keep the native icon hit region square; only the decorative surface is circular. */
 .iconButton {
- --control-height: 36px;
+ --control-height: var(--control-icon-height, 36px);
  width: var(--control-height);
  min-width: var(--control-height);
  max-width: none;
@@ -213,7 +236,7 @@
  min-width: var(--control-height, 36px);
  border-radius: 0;
 }
-.stretchButton.compact { --control-height: 36px; }
+.stretchButton.compact { --control-height: var(--control-icon-height, 36px); }
 @media (max-width: 600px) {
  .stretchButton { min-height: max(44px, var(--control-height, 36px)); min-width: max(44px, var(--control-height, 36px)); }
 }

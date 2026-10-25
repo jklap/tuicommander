@@ -8,6 +8,7 @@
 
 /* File header at top */
 .fileHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 6px;

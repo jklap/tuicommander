@@ -39,10 +39,13 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:touch},sessionId);
       await send('Emulation.setTouchEmulationEnabled',{enabled:touch},sessionId);
       const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
-      await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
+      await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html${process.env.TUIC_GEOMETRY_SURFACE ? `?surface=${process.env.TUIC_GEOMETRY_SURFACE}` : ""}`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryError){clearTimeout(stop);reject(new Error(window.controlGeometryError));return;}if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:window.controlGeometryRows?window.controlGeometryRows():document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      // The shared named class is the density contract, not a measured CSS value.
+      // Consumer placement is separately asserted by densitySurfaces.
+      await evaluate(`(async()=>{const s=(await import('/src/components/ui/FormControls.module.css')).default;window.controlGeometryDensity=element=>{for(let node=element;node;node=node.parentElement){if(node.classList.contains(s.form))return 'default';if(node.classList.contains(s.toolbar)||node.classList.contains(s.compact))return 'compact';}return 'default';};})()`);
+      const result=await evaluate(`({rows:window.controlGeometryRows?window.controlGeometryRows():document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({size:window.controlGeometryDensity(element),tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({size:window.controlGeometryDensity(element),tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       // Catches: content-width icons, compact shrinking targets, rounded corner misses or lost native activation.
       const icons = await evaluate(`window.iconClicks === undefined ? [] : [...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label'),width:r.width,height:r.height,x:r.x+1,y:r.y+1,corner:button.contains(document.elementFromPoint(r.x+1,r.y+1)),radius:getComputedStyle(button).borderRadius,circle:button.hasAttribute('data-circle')?(button.firstElementChild?getComputedStyle(button.firstElementChild).borderRadius:'none'):null,disabled:button.disabled};})`);
       for(const icon of icons) {
@@ -71,10 +74,10 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
 
       }
       // Catches: a migrated icon action retaining a content-width hit target.
-      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>(button.getAttribute('aria-label')||button.getAttribute('title'))===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
+      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>(button.getAttribute('aria-label')||button.getAttribute('title'))===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,size:window.controlGeometryDensity(button),width:r.width,height:r.height};})`);
       for(const icon of actionIcons) {
-        assert.equal(icon.width,width<=600?44:36,JSON.stringify(icon));
-        assert.equal(icon.height,width<=600?44:36,JSON.stringify(icon));
+        assert.equal(icon.width,width<=600?44:icon.size==='compact'?22:36,JSON.stringify(icon));
+        assert.equal(icon.height,width<=600?44:icon.size==='compact'?22:36,JSON.stringify(icon));
       }
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
@@ -157,12 +160,12 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
       const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
       if (aiChat) {
-        const target = width <= 600 ? 44 : 36;
+        const target = width <= 600 ? 44 : 22;
         assert.deepEqual(aiChat.rawActions, [], 'AI Chat actions and text fields must use shared primitives');
         assert.equal(aiChat.visible.height, target, 'Visible picker frame owns shared target height');
         assert.deepEqual(aiChat.picker, aiChat.visible, 'Invisible native picker must cover the complete visible frame');
         assert.equal(aiChat.summaries.length, 2, 'Both native SessionControls disclosures must mount');
-        for (const summary of aiChat.summaries) assert.equal(summary.height, target, JSON.stringify(summary));
+        for (const [index,summary] of aiChat.summaries.entries()) assert.equal(summary.height, width <= 600 ? 44 : index === 0 ? 22 : 36, JSON.stringify(summary));
         assert.equal(aiChat.summaries[0].width, target, 'Icon disclosure target stays square');
         assert.ok(aiChat.summaries[0].top >= aiChat.header.top && aiChat.summaries[0].bottom <= aiChat.header.bottom,
           'Header must contain the shared-height disclosure');
@@ -247,7 +250,13 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
     }
     for(const result of measurements)for(const row of result.rows) {
       assert.ok(row.heights.length >= 2, 'The mounted fixture must contain multiple real controls');
-      for(const element of row.heights)assert.equal(element.height,result.width<=600?44:row.size==='compact'?22:36,JSON.stringify({width:result.width,row}));
+      for(const element of row.heights) {
+        const minimum=result.width<=600?44:(element.size ?? row.size)==='compact'?22:36;
+        if(row.size==='stretch') {
+          assert.ok(element.height>=minimum,'Stretch actions retain the row density minimum');
+          assert.equal(element.height,row.containerHeight,'Stretch actions fill the tab strip, not a third fixed density');
+        } else assert.equal(element.height,minimum,JSON.stringify({width:result.width,row}));
+      }
     }
   } finally {
     socket?.close();

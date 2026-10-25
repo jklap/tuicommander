@@ -1,5 +1,6 @@
 /* Shared Panel Styles (DiffPanel, MarkdownPanel, FileBrowserPanel, etc.) */
 .header {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -42,6 +43,7 @@
 }
 
 .search {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   padding: 4px 8px;

@@ -18,6 +18,7 @@
 
 /* Toolbar with view mode toggle */
 .toolbar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 2px;
@@ -83,6 +84,7 @@
 }
 
 .selectionBar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   gap: 4px;

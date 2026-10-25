@@ -24,6 +24,7 @@
 }
 
 .header {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -49,6 +50,7 @@
 }
 
 .toolbar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -90,6 +92,7 @@
 }
 
 .batchBar {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -138,6 +141,7 @@
 
 /* Column headers */
 .columnHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: grid;
   grid-template-columns: 20px 120px 1fr auto auto auto auto;
   align-items: center;
@@ -282,6 +286,7 @@
 }
 
 .actions {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   gap: 2px;
   justify-content: flex-end;

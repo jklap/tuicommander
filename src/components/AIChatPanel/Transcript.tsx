@@ -634,7 +634,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			) {
 				if (!disclosure.querySelector(":scope > summary")?.contains(node)) hidden = true;
 			}
-			if (hidden || parent?.closest("button, input, ." + s.findBar)) {
+			if (hidden || parent?.closest("button, input, ." + s.findBar.split(" ").join("."))) {
 				current = undefined;
 				continue;
 			}

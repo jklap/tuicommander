@@ -5,7 +5,8 @@
 .identity, .toolbar, .statusRow, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .identity { color: var(--fg-secondary); }
 .key { color: var(--accent-hover); font-family: var(--font-mono); font-weight: 600; }
-.toolbar { margin-top: 12px; }
+.toolbar {
+ composes: toolbar from "../../ui/FormControls.module.css"; margin-top: 12px; }
 .actions { margin-top: 12px; }
 .metadata { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: var(--fg-secondary); }
 .label { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; font-size: var(--font-sm, 12px); }
