@@ -199,16 +199,18 @@ async fn failed_workspace_precheck_probe(workspace: &str) -> Vec<String> {
 // precheck record, or inserting stdout/template expansion into the literal prompt.
 #[tokio::test]
 async fn dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt() {
-    // DEFERRED (2026-10-25) — classify Windows command grammar versus cwd behavior from the failure-only precheck matrix.
     assert!(std::env::var_os("TUIC_TEST_TMP_ROOT").is_some());
-    let clean = if cfg!(windows) {
-        "if defined TUIC_TEST_TMP_ROOT exit /b 9 & "
+    let print = print_file_script("input.txt");
+    let command = if cfg!(windows) {
+        // Native CI probes show the ungrouped IF chain skips TYPE when the
+        // variable is absent. Keep the read in an explicit ELSE branch.
+        format!("if defined TUIC_TEST_TMP_ROOT (exit /b 9) else ({print})")
     } else {
-        "[ -z \"${TUIC_TEST_TMP_ROOT+x}\" ] || exit 9; "
+        format!("[ -z \"${{TUIC_TEST_TMP_ROOT+x}}\" ] || exit 9; {print}")
     };
     let (fixture, id) = Fixture::new(
         Some(Precheck {
-            command: format!("{clean}{}", print_file_script("input.txt")),
+            command,
             timeout_secs: 30,
             inject_output: false,
         }),
