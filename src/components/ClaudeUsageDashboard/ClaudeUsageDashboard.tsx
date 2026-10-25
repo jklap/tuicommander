@@ -748,9 +748,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 					<Show when={apiError() && rateBuckets().length === 0}>
 						<div class={s.rateLimitHint}>
 							<span>Rate limit data unavailable</span>
-							<Button onClick={() => fetchApi(selectedSessionId())}>
-								Retry
-							</Button>
+							<Button onClick={() => fetchApi(selectedSessionId())}>Retry</Button>
 						</div>
 					</Show>
 

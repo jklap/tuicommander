@@ -124,7 +124,8 @@ export function DictationToast() {
 						<Show
 							when={playback() === "paused"}
 							fallback={
-								<Button variant="ghost"
+								<Button
+									variant="ghost"
 									type="button"
 									class={styles.control}
 									aria-label={t("dictation.pauseReply", "Pause reply")}
@@ -137,7 +138,8 @@ export function DictationToast() {
 								</Button>
 							}
 						>
-							<Button variant="ghost"
+							<Button
+								variant="ghost"
 								type="button"
 								class={styles.control}
 								aria-label={t("dictation.resumeReply", "Resume reply")}
@@ -148,7 +150,8 @@ export function DictationToast() {
 								</svg>
 							</Button>
 						</Show>
-						<Button variant="ghost"
+						<Button
+							variant="ghost"
 							type="button"
 							class={styles.control}
 							aria-label={t("dictation.stopReply", "Stop reply")}
@@ -161,7 +164,8 @@ export function DictationToast() {
 					</span>
 				</Show>
 				<Show when={handsFreeArmed()}>
-					<Button variant="ghost"
+					<Button
+						variant="ghost"
 						type="button"
 						class={styles.control}
 						classList={{ [styles.controlOff]: !spokenReplies() }}

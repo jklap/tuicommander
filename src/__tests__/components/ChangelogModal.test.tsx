@@ -16,8 +16,8 @@ vi.mock("../../utils/downloadText", () => ({
 	downloadText: mockDownloadText,
 }));
 
-import { appLogger } from "../../stores/appLogger";
 import { ChangelogModal } from "../../components/ChangelogModal/ChangelogModal";
+import { appLogger } from "../../stores/appLogger";
 
 describe("ChangelogModal", () => {
 	const defaultProps = {

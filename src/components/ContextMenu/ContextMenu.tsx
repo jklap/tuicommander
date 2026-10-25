@@ -123,7 +123,8 @@ const MenuItem: Component<{
 			}
 		>
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
-				<Button variant="ghost"
+				<Button
+					variant="ghost"
 					class={cx(s.item, props.item.disabled && s.disabled)}
 					title={props.item.title}
 					onClick={() => {

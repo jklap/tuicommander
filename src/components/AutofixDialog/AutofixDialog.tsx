@@ -95,7 +95,8 @@ export const AutofixDialog: Component<{
 									<label class={s.label} for="autofix-prompt">
 										{t("github.autofixPromptLabel", "Prompt sent to the agent")}
 									</label>
-									<Textarea rows={10}
+									<Textarea
+										rows={10}
 										id="autofix-prompt"
 										class={s.textarea}
 										value={prompt()}
@@ -116,9 +117,7 @@ export const AutofixDialog: Component<{
 						{t("github.autofixStart", "Start auto-fix")}
 					</Button>
 					<span class={s.spacer} />
-					<Button onClick={props.onClose}>
-						{t("common.cancel", "Cancel")}
-					</Button>
+					<Button onClick={props.onClose}>{t("common.cancel", "Cancel")}</Button>
 				</div>
 			</div>
 		</div>
