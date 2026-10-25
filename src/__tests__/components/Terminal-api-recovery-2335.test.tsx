@@ -42,11 +42,6 @@ vi.mock("../../transport", async (importOriginal) => ({
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn(async (cmd: string) => (cmd === "get_session_foreground_process" ? "claude" : undefined)),
 }));
-// Reconnect dynamically imports native event listeners; no WebView exists here.
-vi.mock("@tauri-apps/api/event", () => ({
-	listen: vi.fn().mockResolvedValue(() => {}),
-	emit: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock("../../utils/agentSession", () => ({
 	verifyAndBuildResumeCommand: (...args: unknown[]) => mockVerifyResume(...args),
 }));
@@ -125,6 +120,17 @@ const snapshot = (shell: string, error?: string) =>
 describe("Terminal API failure recovery 2335", () => {
 	let id: string;
 	beforeEach(async () => {
+		// The dynamic event import can load the external core.js, bypassing the
+		// static core module mock. Supply its actual WebView boundary as well.
+		vi.stubGlobal("__TAURI_INTERNALS__", {
+			transformCallback: () => 0,
+			invoke: async (cmd: string) => {
+				if (cmd === "plugin:event|listen") return 1;
+				if (cmd === "plugin:event|unlisten") return;
+				throw new Error(`Unexpected native event command: ${cmd}`);
+			},
+		});
+		vi.stubGlobal("__TAURI_EVENT_PLUGIN_INTERNALS__", { unregisterListener: () => {} });
 		vi.spyOn(appLogger, "info").mockImplementation(() => {});
 		vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
@@ -160,6 +166,7 @@ describe("Terminal API failure recovery 2335", () => {
 			expect(message).toBe("[AutoRetry] claude: exhausted 3 retries, manual intervention needed");
 		}
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 	});
 
 	// Catches: continue input erases the failure even when the harness never resumes.
