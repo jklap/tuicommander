@@ -93,6 +93,36 @@ failures include the automation precheck and two Usage metadata-counter tests;
 they are not resolved by a build-profile change. A complete Windows run and
 native crash diagnosis remain required before story completion.
 
+### Native profile validation
+
+`~/Gits/.tmp/results/ci-win-profile-validation.log` completed with exit 0 through
+native build-slot and mbx. `mbx doctor` reported zero failures and warnings.
+
+- The new argv regression failed against exact `d27aa1739` builder scripts:
+  expected `--profile test` was absent. Both current shell and PowerShell
+  builders passed the headless/default, dictation-feature and exit-7 propagation
+  cases. This protects the Cargo invocation boundary, not compilation itself.
+- `scripts/with-test-tmp.sh cargo nextest run --manifest-path
+  src-tauri/Cargo.toml --features dictation --lib --no-run -E
+  'test(=mcp_proxy::stdio_client::tests::is_alive_returns_false_after_process_exits)'`
+  compiled successfully: test profile, 7m52s. No Rust test was executed.
+- With `CARGO_PROFILE_TEST_OPT_LEVEL=0` and `TUIC_FIXTURE_FEATURES=dictation`,
+  the shell fixture builder completed in the test profile in 2m55s. A lib-only
+  compile does not build the normal library/binaries that the full workspace
+  integration build produces, so this local first fixture build is not expected
+  to be empty.
+- The PowerShell builder then reused those artifacts in the test profile in
+  1.71s. Neither fixture command selected the dev profile.
+- Bash syntax, PowerShell AST parse, workflow YAML parse, instruction-link,
+  `git diff --check` and changed-file formatting checks passed. `actionlint` was
+  not installed. The nextest setup-scope integration script was not rerun; its
+  configuration and assertions were not changed.
+
+The build emitted the compact-unwind size warning and mbx cache-bypass warnings
+for missing build-script declarations/output names and changed `OUT_DIR`.
+No Windows execution, complete workspace suite, runtime performance result or
+90-minute completion is inferred from this native Mac build evidence.
+
 ## EGO-DEFECTS
 
 The admitted adversarial-tdd skill requests its README, but resource retrieval failed with the exact line: `/Users/stefano.straus/.ego/skills/adversarial-tdd: no such file or directory`. No README contents were invented.
