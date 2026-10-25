@@ -18,3 +18,5 @@ requestAnimationFrame(async()=>{
  await Promise.all(toast.getAnimations().map(animation=>animation.finished));
  window.controlGeometryReady=true;
 });
+
+window.geometryIconLabels=["Pause reply", "Stop reply", "Spoken replies"];

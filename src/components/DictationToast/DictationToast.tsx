@@ -125,6 +125,7 @@ export function DictationToast() {
 							when={playback() === "paused"}
 							fallback={
 								<Button
+									shape="icon"
 									variant="ghost"
 									type="button"
 									class={styles.control}
@@ -139,6 +140,7 @@ export function DictationToast() {
 							}
 						>
 							<Button
+								shape="icon"
 								variant="ghost"
 								type="button"
 								class={styles.control}
@@ -151,6 +153,7 @@ export function DictationToast() {
 							</Button>
 						</Show>
 						<Button
+							shape="icon"
 							variant="ghost"
 							type="button"
 							class={styles.control}
@@ -165,6 +168,7 @@ export function DictationToast() {
 				</Show>
 				<Show when={handsFreeArmed()}>
 					<Button
+						shape="icon"
 						variant="ghost"
 						type="button"
 						class={styles.control}
