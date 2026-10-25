@@ -469,16 +469,6 @@
     ]
   },
   {
-    "file": "src/components/shared/SearchBar.module.css",
-    "story": "2263-7f11",
-    "rules": [
-      "[[],\".expandBtn\",[\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".input\",[\"height: 24px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0 6px\"]]",
-      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btn\",[\"height: 22px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/dialog.module.css",
     "story": "2264-9b73",
     "rules": [
