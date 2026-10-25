@@ -10,6 +10,8 @@
 import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { generateTweakCommentId, normalizeForMatch, type TweakComment } from "../../utils/tweakComments";
+import { Button } from "../ui/Button";
+import { Textarea } from "../ui/Textarea";
 import s from "./MarkdownTab.module.css";
 
 export interface CommentOverlayProps {
@@ -437,7 +439,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 			{/* Floating "Comment" button near selection */}
 			<Show when={btnPos() && !popover()}>
-				<button
+				<Button
+					shape="icon"
 					class={s.commentBtn}
 					style={{ left: `${btnPos()!.x}px`, top: `${btnPos()!.y}px` }}
 					onMouseDown={(e) => {
@@ -451,11 +454,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 						<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
 						<path d="M5 6h6v1H5zm0 2h4v1H5z" opacity="0.6" />
 					</svg>
-				</button>
+				</Button>
 			</Show>
 
 			<Show when={blockBtn() && !btnPos() && !popover()}>
-				<button
+				<Button
+					shape="icon"
 					class={s.commentBtn}
 					style={{ left: `${blockBtn()!.x}px`, top: `${blockBtn()!.y}px` }}
 					onMouseDown={(e) => {
@@ -469,7 +473,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 						<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
 						<path d="M5 6h6v1H5zm0 2h4v1H5z" opacity="0.6" />
 					</svg>
-				</button>
+				</Button>
 			</Show>
 
 			{/* Popover (new comment or view/edit) */}
@@ -497,7 +501,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 								"{(state().existingHighlighted ?? state().selectionText ?? "").slice(0, 60)}"
 							</div>
 
-							<textarea
+							<Textarea
 								class={s.popoverTextarea}
 								placeholder="Add your comment… (Ctrl+Enter to save)"
 								value={draft()}
@@ -508,20 +512,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 							<div class={s.popoverActions}>
 								<Show when={state().mode === "view"}>
-									<button class={`${s.popoverBtn} ${s.popoverBtnDanger}`} onClick={handleDelete}>
+									<Button variant="danger" onClick={handleDelete}>
 										Delete
-									</button>
+									</Button>
 								</Show>
-								<button class={s.popoverBtn} onClick={closePopover}>
-									Cancel
-								</button>
-								<button
-									class={`${s.popoverBtn} ${s.popoverBtnPrimary}`}
-									onClick={handleSave}
-									disabled={!draft().trim()}
-								>
+								<Button onClick={closePopover}>Cancel</Button>
+								<Button variant="primary" onClick={handleSave} disabled={!draft().trim()}>
 									Save
-								</button>
+								</Button>
 							</div>
 						</div>
 					);

@@ -1,5 +1,5 @@
 import { For } from "solid-js";
-import { Button } from "../../components/ui";
+import { Button } from "../../components/ui/Button";
 import styles from "./BottomTabs.module.css";
 
 export type TabId = "chat" | "sessions" | "files" | "progress" | "activity" | "settings";

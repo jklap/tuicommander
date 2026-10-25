@@ -1,5 +1,5 @@
 import { Match, Switch } from "solid-js";
-import { Button } from "../../components/ui";
+import { Button } from "../../components/ui/Button";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import styles from "./ConnectionBanner.module.css";
 
