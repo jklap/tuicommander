@@ -8,6 +8,7 @@ export interface OpenMarkdownTab {
 	relative_path: string;
 	absolute_path: string;
 	fs_root: string;
+	opener_tuic_session?: string;
 }
 
 export function createOpenMarkdownTabs(getCwd: () => string | null) {

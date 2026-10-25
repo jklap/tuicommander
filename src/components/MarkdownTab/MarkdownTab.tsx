@@ -99,6 +99,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [matchCount, setMatchCount] = createSignal(0);
 	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
 	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
+	const [agentChosenByUser, setAgentChosenByUser] = createSignal(false);
 	const [sendingChanges, setSendingChanges] = createSignal(false);
 	// True once this tab wrote the file (checkbox, tweak, live edit) and no agent has been told yet.
 	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
@@ -539,8 +540,17 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 
 	createEffect(() => {
 		const agents = reviewAgents();
-		if (agents.some((agent) => agent.sessionId === selectedAgentSession())) return;
-		setSelectedAgentSession(agents[0]?.sessionId ?? "");
+		if (agentChosenByUser() && agents.some((agent) => agent.sessionId === selectedAgentSession())) return;
+		const opener = props.tab.type === "file" ? props.tab.openerTuicSession : undefined;
+		const openerPty = opener
+			? terminalsStore
+					.getIds()
+					.map((id) => terminalsStore.get(id))
+					.find((terminal) => terminal?.tuicSession === opener)?.sessionId
+			: undefined;
+		setSelectedAgentSession(
+			agents.find((agent) => agent.sessionId === openerPty)?.sessionId ?? agents[0]?.sessionId ?? "",
+		);
 	});
 
 	const handleSendChanges = async () => {
@@ -678,7 +688,10 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 								aria-label={t("markdownTab.reviewAgent", "Review agent")}
 								value={selectedAgentSession()}
 								disabled={reviewAgents().length === 0 || sendingChanges()}
-								onChange={(event) => setSelectedAgentSession(event.currentTarget.value)}
+								onChange={(event) => {
+									setAgentChosenByUser(true);
+									setSelectedAgentSession(event.currentTarget.value);
+								}}
 							>
 								<Show when={reviewAgents().length === 0}>
 									<option value="">{t("markdownTab.noAgents", "No agents")}</option>

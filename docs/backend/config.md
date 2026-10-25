@@ -598,7 +598,7 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 | `sounds.error` | `bool` | `true` | Play on error |
 | `sounds.completion` | `bool` | `true` | Play on completion |
 | `sounds.warning` | `bool` | `true` | Play on warning |
-| `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
+| `silence_remote_completions` | `bool` | `true` | Mute sounds and OS notices for parented sessions; retain the completion-chime mute for unparented HTTP/MCP sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 | `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
 
@@ -1038,6 +1038,8 @@ Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation c
 | `auto_send` | `bool` | `true` | Auto-submit after transcription |
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(base, config)`
+
+Voice saves resolve legacy engine defaults on the latest locked document before applying the caller’s delta. This preserves an unchanged engine choice without clobbering another client’s explicit choice. Isolated speech-output agent-test instances force effective hands-free listening off even if the saved file enables it.
 
 ### Config Defaults (read-only, no file)
 

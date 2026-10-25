@@ -20,6 +20,7 @@ import { Textarea } from "../../../ui/Textarea";
 import { ContextualHelp } from "../../ContextualHelp";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingRow } from "../../SettingsPrimitives";
+import layout from "../../SettingsPrimitives.module.css";
 
 // ---------------------------------------------------------------------------
 // Remote Machines panel
@@ -726,7 +727,7 @@ export const RemoteMachinesPanel: Component = () => {
 						{(host) => {
 							const auth = () => discoveredHostAuth(host, sshHosts());
 							return (
-								<div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
+								<div class={layout.listRow}>
 									<Button
 										data-non-setting="Open, prefill, cancel or close the connection editor"
 										type="button"
@@ -933,7 +934,7 @@ export const RemoteMachinesPanel: Component = () => {
 									</Show>
 								</div>
 								{/* Connect / Disconnect */}
-								<Show when={connState.status === "connected"}>
+								<Show when={connState.status === "connected" && connState.outOfDate}>
 									<Button
 										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}

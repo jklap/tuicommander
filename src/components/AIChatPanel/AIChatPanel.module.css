@@ -315,7 +315,7 @@
   padding: 8px 10px;
   margin-bottom: 8px;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .assistantMsg :global(#markdown-content code) {
