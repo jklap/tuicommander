@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { HttpRpcError } from "../../transport";
+import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
@@ -288,7 +289,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 					<div class={s.palette}>
 						<For each={PALETTE.filter((item) => item.type !== "join" || draft()?.kind === "story")}>
 							{(item) => (
-								<button
+								<Button
 									type="button"
 									draggable="true"
 									onDragStart={(event) =>
@@ -297,7 +298,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 									onClick={() => addNode(item)}
 								>
 									Add {item.label}
-								</button>
+								</Button>
 							)}
 						</For>
 					</div>
