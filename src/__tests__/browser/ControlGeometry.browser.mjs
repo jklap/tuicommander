@@ -117,6 +117,14 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: a migrated variable trigger loses native keyboard activation or leaves its popup latched.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'smartPromptSettingsGeometry') {
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Insert variable...')).focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length`),0,'Space closes variable rows');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.ok(await evaluate(`document.querySelectorAll('#geometry button[data-control-layout="row"]').length>10`),'Space opens the native variable list');
+      }
       // Catches: a migrated repository switch loses native Space activation or an action loses Enter.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'repositoryGeometry') {
         await evaluate(`document.querySelector('#geometry input[role="switch"]').focus()`);

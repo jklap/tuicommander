@@ -1000,3 +1000,7 @@ action layout only.
 Repository settings use shared Button for team export and shared Switch for
 worktree consolidation. The switch retains its native checkbox, accessible row
 label, and repository-owned update callback; feature CSS only aligns the control.
+
+Smart Prompt editor variable triggers and reset actions use shared Button.
+Variable choices remain native list-row buttons with name and description;
+`data-control-layout="row"` makes their intentional list geometry explicit.

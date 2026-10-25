@@ -340,17 +340,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/SmartPromptsTab.module.css",
-    "story": "2230-953d",
-    "rules": [
-      "[[],\".varDropdownBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]",
-      "[[],\".smallBtn\",[\"border: 1px solid var(--border)\",\"padding: 4px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".smallBtn:hover\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/TelegramTab.module.css",
     "story": "2231-3d00",
     "rules": [
