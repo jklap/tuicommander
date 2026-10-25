@@ -42,17 +42,6 @@
     ]
   },
   {
-    "file": "src/components/ErrorLogPanel/ErrorLogPanel.module.css",
-    "story": "2194-f7b8",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".levelBtn\",[\"border: 1px solid transparent\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".levelBtnActive\",[\"border-color: var(--border)\"]]",
-      "[[],\".clearBtn\",[\"border: 1px solid var(--border)\",\"padding: 3px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".copyBtn\",[\"border: none\",\"padding: 1px 4px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/FileBrowserPanel/FileBrowserPanel.module.css",
     "story": "2195-7c15",
     "rules": [
