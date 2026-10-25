@@ -987,3 +987,7 @@ Agent feature CSS retains only layout, width and text presentation.
 
 GitHub settings actions use shared Button variants for secondary, primary and
 danger actions. Feature CSS owns only action-row layout, not button geometry.
+
+Shared Button supports opt-in `shape="icon"`, with required `aria-label` and
+optional `circular` presentation. Its native square target stays 36/44px even
+with compact size. Circular presentation does not remove the corner hit region.
