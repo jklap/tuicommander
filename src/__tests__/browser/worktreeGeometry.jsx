@@ -1,11 +1,10 @@
 import { render } from 'solid-js/web';
-import { WorktreeManager } from '../../components/WorktreeManager/WorktreeManager';
-import { worktreeManagerStore } from '../../stores/worktreeManager';
-import { repositoriesStore } from '../../stores/repositories';
+import { CreateWorktreeDialog } from '../../components/CreateWorktreeDialog/CreateWorktreeDialog';
 import '../../global.css';
-// Local stores and synthetic orphan read; no worktree operations or real persistence.
-window.__TAURI_INTERNALS__={invoke:async command=>command==='detect_orphan_worktrees'?['/fixture/orphan']:null};
-for(const path of ['/fixture/a','/fixture/b']){repositoriesStore.add({path,displayName:path.endsWith('a')?'Alpha':'Beta'});repositoriesStore.setWorkspace(path,'feat',{worktreePath:path+'/feat'});}
-worktreeManagerStore.open();worktreeManagerStore.toggleSelect('/fixture/a::feat');
-render(()=><WorktreeManager actions={{onOpenTerminal:()=>{},onDelete:()=>{},onMergeAndArchive:()=>{}}}/>,document.getElementById('root'));
-requestAnimationFrame(()=>{document.querySelector('[class*="panel"]').id='geometry';window.controlGeometryReady=true;});
+render(()=><section id="geometry"><CreateWorktreeDialog visible={true} suggestedName="" existingBranches={['main']} worktreeBranches={['main']} worktreesDir="/fixture" baseRefs={[{name:'main',kind:'local',is_default:true},{name:'origin/main',kind:'remote',is_default:false}]} onGenerateName={async()=>'feature/name'} onClose={()=>{}} onCreate={()=>{}}/></section>,document.getElementById('root'));
+requestAnimationFrame(()=>{
+ document.querySelector('[class*="overlay"]').style.position='static';
+ window.controlGeometryReady=true;
+});
+
+window.geometryIconLabels=["Generate random name"];

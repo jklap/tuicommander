@@ -206,3 +206,59 @@ describe("CommentOverlay block gutter", () => {
 		);
 	});
 });
+
+describe("CommentOverlay edit actions", () => {
+	function mountComment() {
+		const content = document.createElement("div");
+		const highlight = document.createElement("span");
+		highlight.className = "tweak-highlight";
+		highlight.textContent = "Selected text";
+		highlight.dataset.tweakId = "c_edit";
+		highlight.dataset.tweakComment = "Original note";
+		highlight.dataset.tweakAt = "2026-09-27T12:00:00.000Z";
+		content.append(highlight);
+		document.body.append(content);
+		const onSave = vi.fn().mockResolvedValue(false);
+		const onDelete = vi.fn().mockResolvedValue(false);
+		render(() => <CommentOverlay contentRef={content} onSave={onSave} onDelete={onDelete} />);
+		window.getSelection()!.removeAllRanges();
+		fireEvent.click(highlight);
+		const textarea = document.body.querySelector("textarea")!;
+		const button = (name: string) =>
+			Array.from(document.body.querySelectorAll("button")).find((el) => el.textContent === name)!;
+		return { textarea, button, onSave, onDelete };
+	}
+
+	// Catches: a primitive replacement dropping disabled forwarding or the textarea input handler.
+	it("disables blank save and restores it when the draft changes", () => {
+		const { textarea, button, onSave } = mountComment();
+		fireEvent.input(textarea, { target: { value: "   " } });
+		expect(button("Save").disabled).toBe(true);
+		button("Save").click();
+		expect(onSave).not.toHaveBeenCalled();
+		fireEvent.input(textarea, { target: { value: "Clarify" } });
+		expect(button("Save").disabled).toBe(false);
+		fireEvent.click(button("Cancel"));
+		expect(document.body.querySelector("textarea")).toBeNull();
+		expect(onSave).not.toHaveBeenCalled();
+	});
+
+	// Catches: shared controls swallowing bubbled shortcuts or closing rejected saves/deletes.
+	it("keeps a rejected edit/delete open and preserves keyboard save and Escape", async () => {
+		const { textarea, button, onSave, onDelete } = mountComment();
+		fireEvent.input(textarea, { target: { value: "Clarify" } });
+		fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+		await Promise.resolve();
+		expect(onSave).toHaveBeenCalledWith(
+			{ id: "c_edit", highlighted: "Selected text", comment: "Clarify", createdAt: "2026-09-27T12:00:00.000Z" },
+			0,
+		);
+		expect(document.body.querySelector("textarea")).toBe(textarea);
+		fireEvent.click(button("Delete"));
+		await Promise.resolve();
+		expect(onDelete).toHaveBeenCalledWith("c_edit");
+		expect(document.body.querySelector("textarea")).toBe(textarea);
+		fireEvent.keyDown(textarea, { key: "Escape" });
+		expect(document.body.querySelector("textarea")).toBeNull();
+	});
+});

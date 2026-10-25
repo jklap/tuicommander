@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import solid from 'vite-plugin-solid';
 
 // Real browser layout, not happy-dom's zero-size boxes. Screenshots clip only the fixture element.
-it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async () => {
+it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async (context) => {
   const directory = resolve(process.env.TUIC_GEOMETRY_EVIDENCE ?? '.tmp/control-geometry');
   await mkdir(directory, {recursive: true});
   const {version} = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
@@ -70,6 +70,12 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Remove help"]').firstElementChild).borderColor`),'rgb(200, 10, 20)','Circle retains removal hover');
 
       }
+      // Catches: a migrated icon action retaining a content-width hit target.
+      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>(button.getAttribute('aria-label')||button.getAttribute('title'))===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
+      for(const icon of actionIcons) {
+        assert.equal(icon.width,width<=600?44:36,JSON.stringify(icon));
+        assert.equal(icon.height,width<=600?44:36,JSON.stringify(icon));
+      }
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
         assert.ok(row.controls.length >= 2, 'Stretch cases must exercise multiple button sizes');
@@ -119,6 +125,14 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
+        const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
+        await context.test(`catches queue review clipping the composing draft at ${width}px`, () => {
+          assert.ok(draft.lineTop >= draft.viewportTop && draft.lineBottom <= draft.viewportBottom,
+            `Queue review must leave a complete draft line visible: ${JSON.stringify(draft)}`);
+        });
+      }
       result.containment = [];
       const composer=await evaluate("window.composerGeometry ?? null");
       const targets=await evaluate(`[...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.getAttribute('aria-label')||button.title||button.textContent.trim(),width:r.width,height:r.height,borderColor:getComputedStyle(button).borderTopColor,ready:button.hasAttribute('data-ready'),disabled:button.disabled,iconOnly:button.hasAttribute('data-form-control') && (!button.textContent.trim() || /^[+−×✕]$/.test(button.textContent.trim()))};})`);
@@ -129,7 +143,8 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(target.height,44,JSON.stringify({width,target}));
         }
       }
-      measurements.push({width,...result,icons,stretch,joined,textarea,states,composer,targets});
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets});
+
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));
