@@ -1,5 +1,39 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Native lab prerequisite follow-up (2026-10-25, ci-win-e)
+
+The authorized Windows lab connection failed before any remote command ran.
+The launcher loaded `WINDOWS_*` credentials into its process environment only,
+used password-assisted SSH with existing host-key verification, one connection
+attempt and a 12-second connection deadline. SSH exited 255:
+
+```text
+ssh: connect to host uvmwindowsag2.dmz.lab.local port 22: Operation timed out
+```
+
+Evidence: `~/Gits/.tmp/results/ci-win-e-connect.log`. No credentials were
+written to the log. No checkout, test, Event Log query or environment comparison
+ran on Windows. This repeats the connection prerequisite failure recorded in
+the earlier native lab attempt; it does not reproduce any test failure.
+
+| Row | Classification retained | Missing native evidence |
+|---|---|---|
+| 6 | U: intermittent native Git subprocess fault; owner unknown | Owner-test reproduction on main, faulting module from Event Log/WER, and controlled comparison of successful `git_cmd` versus failing hook environment. |
+| 9 | P: over-broad date-directory event invalidation, from existing CI evidence | Requested lab reproduction and Windows RED for a repair. |
+| 17 | P: over-broad project-directory event invalidation, from existing CI evidence | Requested lab reproduction and Windows RED for a repair. |
+| 18 | P: same project-directory invalidation as row 17 | Requested lab reproduction and Windows RED for a repair. |
+| 23 | P: response-time contract violated; internal cause open | Requested lab reproduction and per-checkout internal profiling; first-attempt 120-second timeout remains unexplained. |
+
+No production code, tests, assertions or deadlines changed. No speculative fix,
+Rust build, GREEN claim, push or merge was made. A reachable authorized Windows
+machine with this task's checkout/toolchain is required to continue.
+`story-close.sh --check` refused criterion 1: each of the 24 panics must be
+classified as product or fixture with code/log reasons. The classification
+criterion remains unchecked; the connection failure proves no new criterion.
+
+The repository instruction-link check passed for both instruction pairs.
+
+
 ## Scope and evidence
 
 Run 40134469538, commit `ff47f4a6788d675734b539ac331eae90a3ec1a39`, Windows-x64. Sources: `windows-failures.md`, `windows.log`, and `windows-annotations.json` under `~/Gits/.tmp/results/ci-ff47/`; current source was inspected against the failing commit. No native Windows runtime is available. Classification is not a claim that Windows GREEN has been observed.
