@@ -1,5 +1,33 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Native lab prerequisite follow-up (2026-10-26, ci-win-f)
+
+Merged local `main` into the assigned worktree as authorized; resulting HEAD
+before this report update: `a6e27481a1cbe2ab88267e7dff8aadd1cf635eb5`.
+The bounded background port check succeeded on its first attempt. Evidence:
+`~/Gits/.tmp/results/ci-win-f-port-wait.log`.
+
+The authenticated SSH prerequisite then failed before any remote command ran:
+
+```text
+No ED25519 host key is known for uvmwindowsag2.dmz.lab.local and you have requested strict checking.
+Host key verification failed.
+```
+
+SSH exited 255 with `StrictHostKeyChecking=yes`, a 12-second connection
+limit and one connection attempt. Credentials were loaded from the authorized
+environment file into process environment only; no credential was printed or
+written. Existing host verification was not disabled or bypassed. The next
+prerequisite is an operator-verified host key for this machine and authority to
+use a known-hosts file under `~/Gits`.
+
+No bundle, checkout, build, test, Event Log query or environment comparison ran
+on Windows. No remote files or processes were created, so no remote cleanup was
+needed. Rows 6, 9, 17, 18 and 23 retain the classifications and native evidence
+gaps in the preceding report: row 6 ownership remains unknown; rows 9/17/18
+still need native RED and repair; row 23 still needs native internal profiling.
+There is no new product diagnosis or Windows RED/GREEN claim.
+
 ## Native lab prerequisite follow-up (2026-10-25, ci-win-e)
 
 The authorized Windows lab connection failed before any remote command ran.
