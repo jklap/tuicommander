@@ -813,11 +813,19 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
         // === Agent-specific patterns ===
 
         // Claude Code: API Error: 5xx with JSON body
-        ae("claude-api-error", r#""type":"api_error""#, "server"),
+        // Include the native JSON heading when available: a wrapped `error`
+        // key can start its continuation with `r":`, which alone resembles
+        // a Rust raw string to the code-context guard. The heading preserves
+        // the real output context without relaxing that guard for quoted code.
+        ae(
+            "claude-api-error",
+            r#"(?:API Error: 5\d\d \{[^}]*?)?"type":"api_error""#,
+            "server",
+        ),
         // Claude Code: authentication_error in JSON body (401) — also used by OpenAI
         ae(
             "claude-auth-error",
-            r#""type":"authentication_error""#,
+            r#"(?:API Error: (?:401|403) \{[^}]*?)?"type":"authentication_error""#,
             "auth",
         ),
         // Claude Code: user-facing friendly 5xx message, no JSON body. Full UI string:
@@ -895,7 +903,7 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
         // Codex CLI: stream error with retry exhaustion (non-429 status)
         ae(
             "codex-stream-error",
-            r"stream error: exceeded retry limit, last status: [45]\d\d",
+            r"stream error: exceeded retry limit,\s+last\s+status:\s+[45]\d\d",
             "server",
         ),
         // Copilot CLI: token/auth failures

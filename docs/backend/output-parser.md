@@ -271,6 +271,12 @@ Claude's native `⏺` and `⎿` markers are accepted; Codex still requires its f
 `claude-wrapped-provider-failure-2335.tcap` records a real 40-column Claude
 connection failure, including a wrap inside `Connection to the API was lost`.
 The source-backed inventory tests also exercise 36-, 40- and 128-column rows.
+The accumulator inventory test sends those formats through the real VT,
+`ChunkProcessor` and session reducer, then checks `last_error` after native
+idle. JSON matches retain the native `API Error` heading when it precedes the
+error discriminator, so a wrapped `error` key is not mistaken for a Rust raw
+string. Legacy Codex retry-exhaustion separators accept wrapped whitespace.
+Native retry and quoted-source negatives remain separate from final failures.
 
 The inventory below quotes source literals. Braced fields are formatter
 parameters, not invented captured transcripts. Pattern names refer to

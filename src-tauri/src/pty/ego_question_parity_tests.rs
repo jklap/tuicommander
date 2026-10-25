@@ -544,3 +544,172 @@ async fn ego_2317_captured_approval_still_owns_composer() {
         "the real default-mode approval must reach session state"
     );
 }
+
+/// Catches: a matched inventory failure is lost between PTY bytes and client state,
+/// or a native intermediate retry is promoted to a terminal session error.
+#[tokio::test]
+async fn api_error_2335_inventory_reaches_session_error() {
+    // Source-format cases, not captured transcripts: literals and formatter
+    // parameter instances from docs/backend/output-parser.md's 2335 inventory.
+    // The VT renders physical wrapping; the test never injects parsed events.
+    let mut cases: Vec<(&str, String, bool)> = Vec::new();
+    for line in [
+        "API Error: Connection lost mid-response. The response above may be incomplete.",
+        "API Error: Connection lost before a response was produced. Try again.",
+        "API Error: The response stopped arriving. The response above may be incomplete.",
+        "API Error: The response stalled before a response was produced. Try again.",
+        "API Error: Server error mid-response. The response above may be incomplete.",
+        "API Error: Part of the response never arrived. The response above may be incomplete.",
+        "API Error: Part of the response never arrived and no response was produced. Try again.",
+        "API Error: The response stream was malformed. The response above may be incomplete.",
+        "API Error: The response stream was malformed and no response was produced. Try again.",
+        "API Error: Request timed out",
+        "API Error: Request timed out. Check your internet connection and proxy settings",
+        "API Error: Connection dropped (ECONNRESET)",
+        "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)",
+        "API Error: Unable to connect to API. Check your internet connection",
+        "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.",
+        r#"API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"},"request_id":"req_011CYV92oEFMbcz45mjVYssM"}"#,
+        "Invalid API key · Fix external API key",
+        "Invalid auth token · Fix external auth token",
+        "Authentication required · Sign in again to continue",
+        r#"API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}"#,
+    ] {
+        cases.push(("claude", format!("{line}\r\n"), true));
+    }
+    for line in [
+        "■ stream disconnected before completion: HTTP response body failed",
+        "■ request timed out",
+        "■ exceeded retry limit, last status: 503 Service Unavailable",
+        "■ unexpected status 500 Internal Server Error: upstream unavailable",
+        "■ unexpected status 401 Unauthorized: invalid credential",
+        "■ unexpected status 403 Forbidden: invalid credential",
+        "■ exceeded retry limit, last status: 401 Unauthorized",
+        "■ exceeded retry limit, last status: 403 Forbidden",
+        "stream error: exceeded retry limit, last status: 500 Internal Server Error",
+    ] {
+        cases.push(("codex", format!("{line}\r\n"), true));
+    }
+    for status in [401, 403] {
+        cases.push((
+            "ego",
+            format!("εgo: the provider returned HTTP {status}: authentication refusal\r\n"),
+            true,
+        ));
+    }
+    // Parameter instances of the source-backed final receipt; unlike the two
+    // real captures below, these are not evidence of live timeout/HTTP failures.
+    for cause in [
+        "the response stream failed: HTTP response body failed",
+        "request timed out",
+        "the provider returned HTTP 500: Internal Server Error",
+        "the provider returned HTTP 503: Service Unavailable",
+        "the provider returned HTTP 401: Unauthorized",
+        "the provider returned HTTP 403: Forbidden",
+    ] {
+        cases.push((
+            "ego",
+            format!("\x1b]777;notify;εgo;{cause}; review the output, then send a new prompt to continue\x07"),
+            true,
+        ));
+    }
+    cases.push((
+        "codex",
+        "Reconnecting... 1/5 (stream disconnected before completion: request timed out)\r\n".into(),
+        false,
+    ));
+    for frame in [
+        "\x1b]7770;ego-recovery={\"phase\":\"waiting\",\"next_attempt_ms\":1792100000000,\"attempt\":3}\x07",
+        "\x1b]7770;ego-recovery={\"phase\":\"retrying\",\"next_attempt_ms\":null,\"attempt\":4}\x07",
+        "\x1b]7770;ego-recovery=clear\x07",
+    ] {
+        cases.push(("ego", frame.into(), false));
+    }
+    let mut replays = Vec::new();
+    for (agent, bytes, final_failure) in cases {
+        for cols in [36, 40, 128] {
+            replays.push((
+                agent,
+                41,
+                cols,
+                format!("source-format {bytes:?} at {cols} columns"),
+                vec![bytes.as_bytes().to_vec()],
+                final_failure,
+            ));
+        }
+    }
+    // Preserve real bytes, original chunk boundaries and recorded geometry.
+    for (agent, fixture) in [
+        ("claude", "claude-wrapped-provider-failure-2335.tcap"),
+        ("ego", "ego-provider-failure-2335.tcap"),
+    ] {
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture)).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let chunks = capture
+            .records
+            .into_iter()
+            .filter(|record| record.direction == crate::pty_capture::CaptureDirection::Output)
+            .map(|record| record.data)
+            .collect();
+        replays.push((agent, rows, cols, fixture.into(), chunks, true));
+    }
+    let mut failures = Vec::new();
+    for (agent, rows, cols, label, chunks, final_failure) in replays {
+        let sid = "api-error-inventory-2335";
+        let (state, silence) = chunk_trace_state(sid);
+        // Text inventory models output in an established agent session. Startup
+        // suppression is a separate contract covered by the real ego idle test.
+        silence.lock().startup_settled = true;
+        state.config.write().progress_tracking = false;
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some(agent.into());
+        state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .resize(rows, cols);
+        let mut rx = state.event_bus.subscribe();
+        let mut processor = ChunkProcessor::new(None, None);
+        let mut utf8 = Utf8ReadBuffer::new();
+        let mut escapes = EscapeAwareBuffer::new();
+        // The native idle receipt must not erase a final error or invent one.
+        for bytes in chunks
+            .into_iter()
+            .chain([b"\x1b]7770;state=idle\x07".to_vec()])
+        {
+            let data = escapes.push(&utf8.push(&bytes));
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => crate::state::tests_support::apply_replay_event(&state, &event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(error) => panic!("{label}: replay lost events: {error}"),
+                }
+            }
+            if !final_failure
+                && state
+                    .session_state_with_shell(sid)
+                    .unwrap()
+                    .last_error
+                    .is_some()
+            {
+                failures.push(format!("intermediate retry became Error: {label}"));
+            }
+        }
+        let snapshot = state.session_state_with_shell(sid).unwrap();
+        if snapshot.last_error.is_some() != final_failure {
+            failures.push(format!(
+                "expected last_error={final_failure}, got {:?}: {label}",
+                snapshot.last_error
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
