@@ -31,17 +31,6 @@
     ]
   },
   {
-    "file": "src/components/AutomationsDialog/AutomationsDialog.module.css",
-    "story": "2186-3abf",
-    "rules": [
-      "[[],\".dialog button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[],\".dialog button.item\",[\"padding: 12px\"]]",
-      "[[],\".dialog .item[aria-pressed=\\\"true\\\"]\",[\"border-color: var(--accent)\"]]",
-      "[[],\".dialog .tabs button\",[\"border: 0\",\"border-radius: 0\",\"border-bottom: 2px solid transparent\",\"padding: 12px\"]]",
-      "[[],\".dialog .tabs button[aria-selected=\\\"true\\\"]\",[\"border-bottom-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ProgressDialog/ProgressFlow.module.css",
     "rules": [
       "[[],\".label\",[\"padding: 0 6px\",\"border: 0\"]]",
