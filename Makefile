@@ -111,8 +111,9 @@ test:
 AGENT_TEST_INSTANCE?=agent-test
 AGENT_TEST_PORT?=19876
 AGENT_TEST_DRY_RUN?=0
+AGENT_TEST_SPEECH_OUTPUT?=0
 agent-test:
-	@python3 -B scripts/agent-test.py start --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)" $(if $(filter 1,$(AGENT_TEST_DRY_RUN)),--dry-run,)
+	@python3 -B scripts/agent-test.py start --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)" $(if $(filter 1,$(AGENT_TEST_DRY_RUN)),--dry-run,) $(if $(filter 1,$(AGENT_TEST_SPEECH_OUTPUT)),--speech-output,)
 
 agent-test-stop:
 	@python3 -B scripts/agent-test.py stop --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)"
