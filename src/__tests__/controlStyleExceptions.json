@@ -340,16 +340,6 @@
     ]
   },
   {
-    "file": "src/components/SettingsPanel/tabs/RepositoryTabs.module.css",
-    "story": "2229-cf50",
-    "rules": [
-      "[[],\".teamActions button\",[\"min-height: 36px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 6px 14px\"]]",
-      "[[],\".rowSwitch\",[\"height: 18px\",\"border: 1px solid var(--border)\",\"border-radius: 999px\"]]",
-      "[[],\".rowSwitch::after\",[\"height: 12px\",\"border-radius: 50%\"]]",
-      "[[],\".rowSwitch:checked\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/SettingsPanel/tabs/SmartPromptsTab.module.css",
     "story": "2230-953d",
     "rules": [

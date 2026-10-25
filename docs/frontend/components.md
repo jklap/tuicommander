@@ -996,3 +996,7 @@ Plugin settings actions use shared Button variants and a circular icon-only
 documentation target. Log visibility uses native aria-pressed; install suggestions
 use the same shared Button as their work-item setup consumer. Feature CSS owns
 action layout only.
+
+Repository settings use shared Button for team export and shared Switch for
+worktree consolidation. The switch retains its native checkbox, accessible row
+label, and repository-owned update callback; feature CSS only aligns the control.

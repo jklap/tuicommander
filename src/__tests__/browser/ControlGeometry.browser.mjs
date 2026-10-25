@@ -117,6 +117,19 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(color,expected,'Enabled removal hover only must use danger token');
         }
       }
+      // Catches: a migrated repository switch loses native Space activation or an action loses Enter.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'repositoryGeometry') {
+        await evaluate(`document.querySelector('#geometry input[role="switch"]').focus()`);
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),true,'Space enables consolidation through its owner');
+        for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
+        assert.equal(await evaluate(`document.querySelector('#geometry input[role="switch"]').checked`),false,'Space disables consolidation through its owner');
+        await evaluate(`[...document.querySelectorAll('#geometry button')].find(button=>button.textContent.includes('Copy settings')).focus()`);
+        assert.ok(await evaluate(`document.activeElement.textContent.includes('Copy settings')`),'Export action receives keyboard focus');
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId);
+        assert.deepEqual(await evaluate('window.repositoryActions'),{exports:1,resets:0},'Export activates only the existing export callback');
+      }
       result.containment = [];
       measurements.push({width,...result,icons,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);

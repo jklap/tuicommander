@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Align repository export and consolidation controls with shared desktop and touch targets.
+
 - Align plugin settings actions and documentation icons with shared control targets.
 
 - Add shared icon-only button targets with optional circular presentation.
