@@ -15,13 +15,13 @@ Test names below omit their common module prefixes where the source column suppl
 | 3 | `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` | F | Both membership assertions compared portable diagnostic paths with a native fixture path. Normalize both oracles, including the negative assertion. |
 | 4 | `recycling_finished_checkout_keeps_artifacts_and_removes_stale_paths` | F | Recycled provenance path is read from portable Git inventory, while archive return contains native joined separators. Normalize the archive oracle; retain artifact and stale-path checks. |
 | 5 | `recycling_journal_failure_restores_the_original_checkout` | F | Same restored-inventory path oracle mismatch. |
-| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | U, intermittent native subprocess fault | Earlier runs report `cmd /C "git fetch --prune origin"` exiting `3221225477` (`0xC0000005`) with empty streams before proof pruning. Latest diagnostic run 40179831695 on `d12b5106e` passes the unchanged owner test in 11.812s (native log line 2553), so its failure-only differential probes do not execute. This excludes a deterministic failure on this runner attempt but does not identify the earlier crashing executable or distinguish runner environment from a product/fixture defect. Preserve the safety checks and test; do not classify a prior fault solely from a later pass. |
+| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | U, intermittent native Git subprocess fault | Run 40193236753 on `d3404c764` fails all three attempts. Failure probes restore the stale ref successfully, then both direct `C:\Program Files\Git\ucrt64\bin\git.exe fetch --prune origin` and the original `cmd /C` form exit `3221225477` (`0xC0000005`) with empty streams under the same captured PATH/cwd (lines 5104/5126/5149). The unchanged owner passed in run 40179831695 in 11.812s. The direct probe excludes a cmd-only parsing failure, not a native Git/runtime/environment fault. Faulting module and product-versus-runner/fixture ownership remain unproven; keep diagnostics and safety assertions. |
 | 7 | `temporary_detached_worktrees_are_never_orphan_candidates` | F | Raw porcelain uses forward slashes; registration-presence oracle used backslashes. Keep the registration and no-cleanup assertions. |
 | 8 | `attachment_resume_drops_only_generated_directory_grants` | P | `agent_session.rs`: only configured root was canonicalized. Windows verbatim/nonverbatim roots compare unequal, so a deleted generated grant survives into the resume command. Resolve the existing config root on both sides, not the expired session child. A real symlink-root reproducer fails on Linux too. |
 | 9 | `codex_warm_discovery_does_not_restat_historical_rollouts` | P, invalidation cause proven | Run 40150611058 logs an available watcher and `Modify(Any)` on `sessions/2026`, with `rescan=false`, unchanged days, and `directory_changed=true`. `CodexIndex::candidates` invalidates the cached index for a date ancestor and rescans its files; the following lookup creates an uninitialized index and scans them again. Two scans of 65 files account for the exact 130 extra metadata reads. The fixture performs no writes between its first discovery and ten repeated lookups. This is over-broad directory-event invalidation, not watcher unavailability. The source of the native event remains unknown. Preserve the zero-read assertion; this build-only follow-up does not change watcher semantics. |
 | 10 | `compose_launch_command_keeps_a_prompt_that_is_not_the_start_work_brief` | F | Host shell correctly quotes with double quotes on Windows; oracle hard-coded Unix single quotes. Use the existing shell quote policy. |
 | 11 | `native_worktree_uses_configured_base_and_existing_workspace_uses_repository` | P | Automation canonicalizes the destination; Git receives a verbatim Windows path and reports `//?/D:/...: Invalid argument`. Normalize the external Git destination argument once in `create_worktree_internal`, including its existing-branch retry. Keep native filesystem paths. |
-| 12 | `dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt` | F, native differential proven | Run 40179831695 on `d12b5106e`, lines 4192/4221/4262: original IF chain returns exit 0 and empty stdout for both verbatim and native cwd. Under the same real `run_precheck` entry point, grouped `if defined TUIC_TEST_TMP_ROOT (exit /b 9) else (type input.txt)` and plain `type input.txt` both return exit 0 and exact `resolved-output` for both cwd spellings. The input file also reads `Ok("resolved-output")` from Rust. The fixture command grammar, not cwd spelling or stream capture, suppresses the read. Use the verified grouped form and preserve every assertion and deadline. |
+| 12 | `dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt` | F, native differential proven | Run 40179831695 on `d12b5106e`, lines 4192/4221/4262: original IF chain returns exit 0 and empty stdout for both verbatim and native cwd. Under the same real `run_precheck` entry point, grouped `if defined TUIC_TEST_TMP_ROOT (exit /b 9) else (type input.txt)` and plain `type input.txt` both return exit 0 and exact `resolved-output` for both cwd spellings. The input file also reads `Ok("resolved-output")` from Rust. The fixture command grammar, not cwd spelling or stream capture, suppresses the read. Use the verified grouped form and preserve every assertion and deadline. Native post-repair owner test now passes in run 40193236753 in 0.743s (line 6760). |
 | 13 | `cleanup_keeps_a_fresh_branch_without_merge_proof` | P | Same invalid canonical Git destination as #11; failure occurs in workspace creation, before cleanup. |
 | 14 | `cleanup_rechecks_dirty_unmerged_and_locked_worktrees_without_discarding_work` | P | Same workspace-creation failure; cleanup assertions have not run. |
 | 15 | `cleanup_requires_archive_for_content_superset_integration` | P | Same workspace-creation failure. |
@@ -313,3 +313,89 @@ summary 0.177s, test-profile build 5m54s. Command through `build-slot.sh --remot
 `scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml --lib -E 'test(dispatch_persists_clean_workspace_precheck_and_launches_exact_prompt)'`.
 Log: `~/Gits/.tmp/results/ci-win-c-targeted.log`. This covers the unchanged Unix
 command and dispatcher consumer; it does not execute the Windows command branch.
+
+## Complete native run 40193236753 on d3404c764
+
+Native Windows job `121170353740` completed with failed Tests, not cancellation.
+Evidence: `~/Gits/.tmp/results/ci-win-d-d340-windows.log`; ANSI-free copy:
+`ci-win-d-d340-windows-clean.log` in the same directory. Line numbers below refer
+to both copies (escape removal does not remove lines). Job metadata is retained
+in `ci-win-d-d340-jobs.json`; the frontend log is `ci-win-d-d340-frontend.log`.
+
+Earlier watched runs `40185491370` (`9f91a82bf`) and `40186478883`
+(`44998188e`) were superseded and cancelled before an owner-test result.
+Their logs are retained as `ci-win-d-<run-id>-cancelled.log`. Run
+`40189776374` (`72c7c6823`) was superseded by the coordinator's later push;
+no owner-test result from that run is claimed here.
+
+### Row 6: what the new probes prove
+
+The owner fails all three attempts (9.146s, 8.600s, 8.748s). Each original
+cleanup returns the access-violation status. The captured PATH starts with
+`C:\Program Files\Git\ucrt64\bin`; its direct probe selects the executable
+in that directory. Both probe ref resets through `git_cmd` succeed. Direct
+Git and cmd-mediated Git then fail with the same signed code `-1073741819`,
+unsigned status `3221225477`, and empty stdout/stderr. This is actual native
+execution evidence, not a manually constructed Windows fixture.
+
+This narrows the fault to native Git execution (or a child/runtime it loads),
+not cmd conditional grammar. It does not identify the faulting module, explain
+why the different `git_cmd` setup/reset environment succeeds, or prove whether
+the hook PATH transformation causes the fault. `run_shell_script` prepends the
+inherited `which_cli("git")` directory and bounds PATH, while `git_cmd` uses
+`resolve_cli("git")`, enriched PATH and extra Git flags. Those differences are
+verified source facts, but none is independently varied by the present probe.
+Changing PATH selection, Git flags, cwd, or branch deletion from this evidence
+would choose an unproven cause. Classification remains **U: intermittent native
+Git subprocess fault**, with a narrower proven layer; no product or fixture
+repair is claimed. Native fault/module evidence or a controlled comparison of
+the successful `git_cmd` environment with the failing hook environment is still
+needed. Existing diagnostic probes and all safety checks remain unchanged.
+
+### All original rows: latest native results
+
+| Rows | Result and evidence |
+|---|---|
+| 1-5 | PASS, lines 4904-4905, 5047, 5065-5066. |
+| 6 | FAIL on all attempts; differential panics at 5104, 5126, 5149. Previous diagnostic run 40179831695 passed unchanged. |
+| 7-8 | PASS, lines 5173 and 6513. |
+| 9 | FAIL on all attempts; unchanged classification. Line 6532 again records available watcher, `Modify(Any)` date ancestors, `directory_changed=true`, and 130 extra reads (6533-6534). |
+| 10-11 | PASS, lines 6545 and 6756. |
+| 12 | **Native post-repair PASS**, 0.743s, line 6760. This closes the Windows-only verification gap for the grouped IF/ELSE fixture repair, not the whole Windows job. |
+| 13-16 | PASS, lines 6852, 6922, 7321 and 6853. |
+| 17-18 | FAIL on all attempts; unchanged classification. Lines 7005-7017 and 7037-7047 repeat directory `Modify(Any)` forcing a rescan while reconciliation is not due. |
+| 19-22 | PASS, lines 7176, 6987, 8680 and 8684. |
+| 23 | Still FAIL; attempt 1 now reaches the 120s harness timeout (11077). Attempts 2/3 report warm-operation latency 14.2819049s/14.2309158s (11299/12025). Inventory costs only 85.972ms/123.4101ms; examples of checkout inspection cost are 8.2547934s/9.2323387s and 9.3004421s. These locate substantial time inside checkout inspection, not inventory; they do not identify its internal cause. No deadline or assertion changed. |
+| 24 | PASS, line 9025. |
+
+Thus the changed verification states are row 6's renewed native failure with
+actual differential evidence, row 12's native post-repair success, and row 23's
+first-attempt harness timeout plus per-checkout latency evidence. The other
+classifications do not change. All 19 previously repaired rows pass in this run.
+Rows 6, 9, 17, 18 and 23 remain failing.
+
+The complete nextest summary (line 14225) is 8374 run: 8348 passed, 25 failed,
+one timed out, and 32 skipped; elapsed 1290.627s. The job finishes within its
+job bound but does not satisfy the zero-failure criterion. The final failure
+list at 14226-14251 also names failures outside the original 24-row inventory:
+monitoring Git-poll timeout, unchanged-draft publishing, vanished-checkout
+registration, five monitoring-status cases, repo-watcher commit classification,
+two resume-command cases, execution policy confirmation, story archive/list/note
+cases, and a relay command case. These are reported for coordinator ownership;
+this evidence-only change does not alter their code.
+
+### Other job conclusions for 2292-786b
+
+- Rust Linux-x64 job `121170353888`: success.
+- Rust macOS-ARM job `121170353919`: success.
+- Remote daemon job `121170353526`: success.
+- Frontend job `121170353647`: failure. The only failed test is
+  `src/mobile/__tests__/MobileFontSize.test.tsx` > `restores independent Terminal
+  and Chat sizes without resizing the composer`, which hits its 5000ms test
+  timeout. Summary: 912 passed/1 failed/2 skipped files; 10871 passed/1 failed/
+  3 skipped tests. This is not proof of a font-sizing product defect; diagnosis
+  belongs to the coordinator. Neither the all-platform nor frontend GREEN
+  criterion can be inferred from this run.
+
+No local Rust build, test execution, product change, assertion change, timeout
+increase, merge or push was performed for this evidence-only follow-up.
