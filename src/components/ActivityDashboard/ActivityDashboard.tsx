@@ -266,6 +266,8 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 								<span class={s.lastActivity}>{term.isWorking ? "" : formatRelativeTime(term.idleSince)}</span>
 								<Button
 									variant="ghost"
+									shape="icon"
+									aria-label={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
 									class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
 									title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
 									onClick={(e) => {

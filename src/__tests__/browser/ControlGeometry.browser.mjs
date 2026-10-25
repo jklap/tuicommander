@@ -69,7 +69,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
 
       }
       // Catches: a migrated icon action retaining a content-width hit target.
-      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>button.getAttribute('aria-label')===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
+      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>(button.getAttribute('aria-label')||button.getAttribute('title'))===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
       for(const icon of actionIcons) {
         assert.equal(icon.width,width<=600?44:36,JSON.stringify(icon));
         assert.equal(icon.height,width<=600?44:36,JSON.stringify(icon));

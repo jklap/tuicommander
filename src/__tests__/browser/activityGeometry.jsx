@@ -13,3 +13,5 @@ requestAnimationFrame(()=>{
  overlay.style.position='static'; overlay.style.paddingTop='0';
  window.controlGeometryReady=true;
 });
+
+window.geometryIconLabels=["Promote to Global Workspace", "Remove from Global Workspace"];
