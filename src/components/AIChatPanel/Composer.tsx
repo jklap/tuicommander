@@ -17,7 +17,7 @@ import { pastedImageFiles } from "../../utils/pastedImage";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoTextColor } from "../../utils/repoColor";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
-import actions from "../shared/ComposeActions.module.css";
+import { Button } from "../ui/Button";
 import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
 import { sessionSummary } from "./SessionControls";
@@ -309,12 +309,8 @@ export const Composer: Component<{
 						</button>
 					</Show>
 					<Show when={!props.mobileAttachments}>
-						<button
-							type="button"
-							class={actions.pinButton}
-							classList={{
-								[actions.pinButtonActive]: !!aiChatDraft.parked(),
-							}}
+						<Button
+							variant="ghost"
 							aria-label={parkLabel()}
 							title={parkLabel()}
 							aria-pressed={!!aiChatDraft.parked()}
@@ -322,25 +318,36 @@ export const Composer: Component<{
 							onClick={() => aiChatDraft.parkOrSwap()}
 						>
 							<ComposePinIcon />
-						</button>
+						</Button>
 					</Show>
 				</div>
-				<button
-					type="button"
-					aria-label={!props.mobileAttachments && props.chat.busy() ? "Queue" : "Send"}
-					title={props.chat.busy() ? "Queue" : "Send"}
-					class={props.mobileAttachments ? mobileInput.send : actions.sendButton}
-					disabled={(!!props.mobileAttachments && uploading()) || !hasContent()}
-					onClick={send}
+				<Show
+					when={props.mobileAttachments}
+					fallback={
+						<Button
+							variant="primary"
+							aria-label={props.chat.busy() ? "Queue" : "Send"}
+							title={props.chat.busy() ? "Queue" : "Send"}
+							disabled={!hasContent()}
+							onClick={send}
+						>
+							<ComposeSendIcon />
+						</Button>
+					}
 				>
-					{props.mobileAttachments ? (
+					<button
+						type="button"
+						aria-label="Send"
+						title={props.chat.busy() ? "Queue" : "Send"}
+						class={mobileInput.send}
+						disabled={uploading() || !hasContent()}
+						onClick={send}
+					>
 						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
 							<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 						</svg>
-					) : (
-						<ComposeSendIcon />
-					)}
-				</button>
+					</button>
+				</Show>
 			</div>
 			<div class={s.composerMeta}>
 				<Show when={props.chat.operatingRepo?.()}>

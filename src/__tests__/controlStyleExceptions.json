@@ -42,124 +42,12 @@
     ]
   },
   {
-    "file": "src/components/McpPopup/McpPopup.module.css",
-    "story": "2211-0aa0",
-    "rules": [
-      "[[],\".footerLink\",[\"border: none\",\"padding: 4px 8px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/PrDetailPopover/PrDetailPopover.module.css",
-    "story": "2212-493d",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".aiReviewBtn, .postReviewBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 4px 8px\"]]",
-      "[[],\".viewDiffBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".viewDiffBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".mergeBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--success)\"]]",
-      "[[],\".autoHealToggle input\",[\"height: 0\"]]",
-      "[[],\".requestForm textarea\",[\"min-height: 64px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 6px\"]]"
-    ]
-  },
-  {
-    "file": "src/components/PrDiffTab/PrDiffTab.module.css",
-    "story": "2213-dd22",
-    "rules": [
-      "[[],\".modeBtn\",[\"height: 18px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".modeBtnActive\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/PrDiffTab/ReviewThreads.module.css",
-    "story": "2214-430b",
-    "rules": [
-      "[[],\".composer textarea\",[\"min-height: 64px\",\"padding: 8px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[],\".action, .primary\",[\"min-height: var(--control-height, 36px)\",\"padding: 4px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ProcessManagerModal/ProcessManagerModal.module.css",
-    "story": "2215-be65",
-    "rules": [
-      "[[],\".close\",[\"padding: 0 4px\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/components/ProgressDialog/ProgressDialog.module.css",
-    "story": "2216-e56b",
-    "rules": [
-      "[[],\".viewToggle button\",[\"border: 0\",\"padding: 4px 10px\"]]",
-      "[[],\".viewToggle button + button\",[\"border-left: 1px solid var(--border)\"]]",
-      "[[],\".iconButton\",[\"border: 0\",\"padding: 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".more\",[\"padding: 4px 0\",\"border: 0\"]]",
-      "[[],\".delete\",[\"border: 0\",\"padding: 2px 4px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".loadOlder\",[\"min-height: 44px\",\"padding: 8px 16px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/ProgressDialog/ProgressFlow.module.css",
     "rules": [
       "[[],\".label\",[\"padding: 0 6px\",\"border: 0\"]]",
       "[[],\".expandable\",[\"border-radius: var(--radius-sm)\"]]"
     ],
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
-  },
-  {
-    "file": "src/components/PromptDrawer/PromptDrawer.module.css",
-    "story": "2218-18d1",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".categoryBtn\",[\"padding: 3px 10px\",\"border: 1px solid transparent\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".empty button\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".itemActions button\",[\"border: none\",\"padding: 3px 5px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".footer button\",[\"padding: 4px 10px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".variableActions button\",[\"padding: 6px 12px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".editorActions button\",[\"padding: 6px 14px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".resetBtn\",[\"border: 1px solid var(--warning) !important\"]]",
-      "[[],\".varDropdownBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".varDropdownBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".varItem\",[\"padding: 4px 10px\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/components/QuitDialog/QuitDialog.module.css",
-    "story": "2219-48dc",
-    "rules": [
-      "[[],\".actions button\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/RemoteQrDialog/RemoteQrDialog.module.css",
-    "story": "2220-d71f",
-    "rules": [
-      "[[],\".url\",[\"padding: 8px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".url:hover\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/RemoteRepoPicker/RemoteRepoPicker.module.css",
-    "story": "2221-d5ad",
-    "rules": [
-      "[[],\".row\",[\"padding: 6px 10px\",\"border: none\"]]"
-    ]
-  },
-  {
-    "file": "src/components/SettingsPanel/tabs/PluginsTab.module.css",
-    "story": "2228-a5fe",
-    "rules": [
-      "[[],\".docsLink\",[\"border: none\",\"padding: 0\"]]",
-      "[[],\".refreshBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".installBtn\",[\"border: 1px solid var(--accent)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".docsBtn\",[\"border: 1px solid var(--border)\",\"height: 22px\",\"padding: 0\",\"border-radius: 50%\"]]",
-      "[[],\".docsBtn:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".logsBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".logsBtn.logsActive\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".dashboardBtn\",[\"border: 1px solid var(--accent)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".uninstallBtn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".uninstallBtn:hover\",[\"border-color: var(--error)\"]]",
-      "[[],\".installSuggestion button\",[\"min-height: 36px\",\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-lg)\"]]",
-      "[[\"@media (max-width: 600px)\"],\".installSuggestion button\",[\"min-height: 44px\"]]"
-    ]
   },
   {
     "file": "src/components/SettingsPanel/tabs/RepositoryTabs.module.css",
@@ -269,24 +157,6 @@
     ]
   },
   {
-    "file": "src/components/TaskQueuePanel/TaskQueuePanel.module.css",
-    "story": "2243-6aa9",
-    "rules": [
-      "[[],\".clearBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".closeBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".itemCancel\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/TunnelsPanel/TunnelsPanel.module.css",
-    "story": "2258-a504",
-    "rules": [
-      "[[],\".actionBtn\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".newBtn\",[\"padding: 4px 12px\",\"border-radius: var(--radius-sm)\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".closeBtn\",[\"border: none\",\"padding: 2px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/WorkflowDesigner/WorkflowDesigner.module.css",
     "story": "2259-9345",
     "rules": [
@@ -297,63 +167,20 @@
     ]
   },
   {
-    "file": "src/components/WorktreeManager/WorktreeManager.module.css",
-    "story": "2260-0d5a",
-    "rules": [
-      "[[],\".close\",[\"border: none\",\"padding: 4px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".filterPill\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".filterPillActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".batchMergeBtn\",[\"border: 1px solid var(--success)\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".batchDeleteBtn\",[\"border: 1px solid var(--error)\",\"padding: 2px 10px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".actionBtn\",[\"border: 1px solid transparent\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".actionBtn:hover:not(:disabled)\",[\"border-color: var(--border)\"]]",
-      "[[],\".pruneBtn\",[\"border: 1px solid var(--border)\",\"padding: 1px 8px\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/ComposeActions.module.css",
-    "story": "2261-8828",
-    "rules": [
-      "[[],\".pinButton\",[\"height: 20px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]",
-      "[[],\".pinButton:hover:not(:disabled)\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".pinButtonActive\",[\"border-color: var(--accent)\"]]",
-      "[[],\".sendButton\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-sm)\",\"padding: 0\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/KeyComboCapture.module.css",
-    "story": "2262-c9b2",
-    "rules": [
-      "[[],\".display\",[\"padding: 6px 16px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".display:hover\",[\"border-color: var(--accent)\"]]",
-      "[[],\".input\",[\"padding: 6px 12px\",\"border: 2px solid var(--accent)\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
-    "file": "src/components/shared/SearchBar.module.css",
-    "story": "2263-7f11",
-    "rules": [
-      "[[],\".expandBtn\",[\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".input\",[\"height: 24px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\",\"padding: 0 6px\"]]",
-      "[[],\".input:focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".btn\",[\"height: 22px\",\"padding: 0\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
-    ]
-  },
-  {
     "file": "src/components/shared/dialog.module.css",
     "story": "2264-9b73",
     "rules": [
       "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control])\",[\"padding: 8px 12px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
       "[[],\".body input:not([type=\\\"checkbox\\\"]):not([type=\\\"radio\\\"]):not([data-form-control]):focus\",[\"border-color: var(--accent)\"]]",
-      "[[],\".actions button\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
+      "[[],\".actions button:not([data-form-control])\",[\"padding: 8px 16px\",\"border: none\",\"border-radius: var(--radius-sm)\"]]"
     ]
   },
   {
     "file": "src/components/shared/editor-header.module.css",
     "story": "2265-b217",
     "rules": [
-      "[[],\".btn\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".btn.active\",[\"border-color: var(--accent)\"]]"
+      "[[],\".btn:not([data-form-control])\",[\"border: 1px solid var(--border)\",\"padding: 2px 8px\",\"border-radius: var(--radius-sm)\"]]",
+      "[[],\".btn.active:not([data-form-control])\",[\"border-color: var(--accent)\"]]"
     ]
   },
   {
@@ -361,7 +188,7 @@
     "story": "2266-a950",
     "rules": [
       "[[],\".headerBtn\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".close\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]"
+      "[[],\".close:not([data-form-control])\",[\"border: none\",\"padding: 2px 6px\",\"border-radius: var(--radius-md)\"]]"
     ]
   },
   {

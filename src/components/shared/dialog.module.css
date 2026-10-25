@@ -115,8 +115,10 @@
   border-top: 1px solid var(--border);
 }
 
-.actions button {
-  flex: 1;
+.actions button { flex: 1; }
+
+/* DEFERRED (2026-10-25) — remove legacy geometry after 2183-6337 and 2191-c683 land. */
+.actions button:not([data-form-control]) {
   padding: 8px 16px;
   border: none;
   border-radius: var(--radius-sm);
@@ -126,27 +128,27 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.actions button:disabled {
+.actions button:not([data-form-control]):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.cancelBtn {
+.cancelBtn:not([data-form-control]) {
   background: var(--bg-highlight);
   color: var(--fg-secondary);
 }
 
-.cancelBtn:hover:not(:disabled) {
+.cancelBtn:not([data-form-control]):hover:not(:disabled) {
   background: var(--border);
   color: var(--fg-primary);
 }
 
-.primaryBtn {
+.primaryBtn:not([data-form-control]) {
   background: var(--accent);
   color: var(--text-on-accent);
 }
 
-.primaryBtn:hover:not(:disabled) {
+.primaryBtn:not([data-form-control]):hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
