@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
+import { Button, Input } from "../../components/ui";
 import { AgentIcon } from "../../components/ui/AgentIcon";
 import { appLogger } from "../../stores/appLogger";
 import type { ChatViewWake } from "../../stores/chatView";
@@ -290,7 +291,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	return (
 		<div class={styles.screen}>
 			<header class={styles.header}>
-				<button class={styles.backBtn} onClick={props.onBack} aria-label="Back to sessions">
+				<Button
+					shape="icon"
+					variant="ghost"
+					class={styles.backBtn}
+					onClick={props.onBack}
+					aria-label="Back to sessions"
+				>
 					<svg
 						width="20"
 						height="20"
@@ -302,7 +309,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						<path d="M15 18l-6-6 6-6" />
 					</svg>
-				</button>
+				</Button>
 				<span
 					class={styles.logo}
 					role="img"
@@ -317,6 +324,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					<span class={styles.stateDot} data-state={status()} />
 				</span>
 				<button
+					data-control-layout="row"
 					type="button"
 					class={styles.headerInfo}
 					aria-label={props.session.display_name || agentType() || "Terminal"}
@@ -332,7 +340,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</button>
 				<Show when={wideMarkdown()}>
 					<div class={styles.markdownDropdown}>
-						<button
+						<Button
+							variant="ghost"
 							type="button"
 							class={styles.markdownTrigger}
 							aria-expanded={markdownOpen()}
@@ -345,7 +354,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
 								<path d="m2 4 4 4 4-4z" />
 							</svg>
-						</button>
+						</Button>
 						<Show when={markdownOpen()}>
 							<div class={`${styles.overflow} ${styles.markdownPopover}`}>
 								<OpenMarkdownMenu
@@ -359,7 +368,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</Show>
 				<chat.Toggle />
 				<Show when={voice.available()}>
-					<button
+					<Button
+						shape="icon"
+						variant="ghost"
 						type="button"
 						class={`${styles.headerAction} ${styles.secondaryAction}`}
 						classList={{ [styles.voiceActive]: voice.armed() }}
@@ -369,9 +380,11 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						onClick={() => void voice.toggle()}
 					>
 						<VoiceCallIcon />
-					</button>
+					</Button>
 				</Show>
-				<button
+				<Button
+					shape="icon"
+					variant="ghost"
 					type="button"
 					class={`${styles.headerAction} ${styles.secondaryAction}`}
 					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
@@ -391,9 +404,11 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					<Show when={(sessionState()?.active_sub_tasks ?? 0) > 0}>
 						<span class={styles.taskCount}>{sessionState()!.active_sub_tasks}</span>
 					</Show>
-				</button>
+				</Button>
 				<Show when={codexQuestionWaiting() || egoQuestionWaiting()}>
-					<button
+					<Button
+						shape="icon"
+						variant="ghost"
 						type="button"
 						class={styles.headerAction}
 						onClick={openQuestion}
@@ -415,9 +430,11 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							<path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" />
 							<circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none" />
 						</svg>
-					</button>
+					</Button>
 				</Show>
-				<button
+				<Button
+					shape="icon"
+					variant="ghost"
 					type="button"
 					class={styles.headerAction}
 					aria-label="More session actions"
@@ -432,12 +449,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<circle cx="12" cy="12" r="1.8" />
 						<circle cx="12" cy="19" r="1.8" />
 					</svg>
-				</button>
+				</Button>
 			</header>
 			<Show when={moreOpen()}>
 				<div class={styles.overflow}>
 					<Show when={voice.available()}>
-						<button
+						<Button
+							variant="ghost"
 							type="button"
 							class={styles.phoneAction}
 							aria-pressed={voice.armed()}
@@ -449,9 +467,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						>
 							<VoiceCallIcon />
 							{voice.armed() ? "Stop voice call" : "Start voice call"}
-						</button>
+						</Button>
 					</Show>
-					<button
+					<Button
+						variant="ghost"
 						type="button"
 						class={styles.phoneAction}
 						aria-label={`Tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
@@ -461,8 +480,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						}}
 					>
 						Tasks <span>{sessionState()?.active_sub_tasks ?? 0}</span>
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -470,8 +490,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						}}
 					>
 						Progress <span>{sessionState()?.progress == null ? "—" : `${sessionState()!.progress}%`}</span>
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -479,8 +500,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						}}
 					>
 						Files
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -488,8 +510,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						}}
 					>
 						Search output
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="ghost"
 						type="button"
 						onClick={() => {
 							setMoreOpen(false);
@@ -497,7 +520,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						}}
 					>
 						Ideas
-					</button>
+					</Button>
 					<Show when={!wideMarkdown()}>
 						<OpenMarkdownMenu
 							cwd={props.session.worktree_path || props.session.cwd}
@@ -506,7 +529,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						/>
 					</Show>
 					<Show when={hasCommands()}>
-						<button
+						<Button
+							variant="ghost"
 							type="button"
 							onClick={() => {
 								setMoreOpen(false);
@@ -514,21 +538,21 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							}}
 						>
 							Commands
-						</button>
+						</Button>
 					</Show>
 					<SessionUsageBlock sessionId={props.session.session_id} />
-					<button type="button" onClick={() => void copySessionId()}>
+					<Button variant="ghost" type="button" onClick={() => void copySessionId()}>
 						Copy session ID
-					</button>
-					<button type="button" class={styles.dangerAction} onClick={() => void terminateSession()}>
+					</Button>
+					<Button variant="ghost" type="button" class={styles.dangerAction} onClick={() => void terminateSession()}>
 						Terminate session
-					</button>
+					</Button>
 				</div>
 			</Show>
 
 			<Show when={searchOpen()}>
 				<div class={styles.searchBar}>
-					<input
+					<Input
 						class={styles.searchInput}
 						type="text"
 						placeholder="Filter output..."
@@ -537,12 +561,18 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						autofocus
 					/>
 					<Show when={searchQuery()}>
-						<button class={styles.searchClear} onClick={() => setSearchQuery("")}>
+						<Button
+							shape="icon"
+							aria-label="Clear output filter"
+							variant="ghost"
+							class={styles.searchClear}
+							onClick={() => setSearchQuery("")}
+						>
 							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 								<line x1="18" y1="6" x2="6" y2="18" />
 								<line x1="6" y1="6" x2="18" y2="18" />
 							</svg>
-						</button>
+						</Button>
 					</Show>
 				</div>
 			</Show>
@@ -580,9 +610,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<Show when={!props.sessionExists}>
 					<div class={styles.endedOverlay}>
 						<span class={styles.endedText}>Session ended</span>
-						<button class={styles.endedBackBtn} onClick={props.onBack}>
+						<Button class={styles.endedBackBtn} onClick={props.onBack}>
 							Back
-						</button>
+						</Button>
 					</div>
 				</Show>
 				<MobileJumpBottom

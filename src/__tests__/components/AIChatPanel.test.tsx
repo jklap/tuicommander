@@ -4283,12 +4283,15 @@ describe("AI Chat clipboard precedence", () => {
 // Catches: mobile Chat retains a separate Park button or loses the shared +/mic order.
 it("mobile plus Chat shares the control order and restores its parked text", async () => {
 	vi.stubGlobal("SpeechRecognition", class {});
-	const chat = createAcpChat(
-		() => ROOT,
-		() => true,
-		client,
-	);
-	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	let chat!: ReturnType<typeof createAcpChat>;
+	const view = render(() => {
+		chat = createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+		return <Composer chat={chat} mobileAttachments />;
+	});
 	await chat.ensureStarted();
 	await settle();
 	const plus = view.getByRole("button", { name: "More composer actions" });
@@ -4317,12 +4320,15 @@ it("mobile plus Chat shares the control order and restores its parked text", asy
 // Catches: the moved Chat picker stages no image, or Queue sends through a different path.
 it("mobile plus Chat stages a captured image and queues it through ACP while busy", async () => {
 	supportsImages = true;
-	const chat = createAcpChat(
-		() => ROOT,
-		() => true,
-		client,
-	);
-	const view = render(() => <Composer chat={chat} mobileAttachments />);
+	let chat!: ReturnType<typeof createAcpChat>;
+	const view = render(() => {
+		chat = createAcpChat(
+			() => ROOT,
+			() => true,
+			client,
+		);
+		return <Composer chat={chat} mobileAttachments />;
+	});
 	await chat.ensureStarted();
 	await settle();
 	acpStore.applySnapshot(
