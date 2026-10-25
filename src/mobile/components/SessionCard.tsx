@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
-import { Button } from "../../components/ui";
 import { AgentIcon } from "../../components/ui/AgentIcon";
+import { Button } from "../../components/ui/Button";
 import { SubAgentIcon } from "../../components/ui/SubAgentIcon";
 import { displayTask } from "../../utils/displayTask";
 import type { SessionInfo } from "../useSessions";
