@@ -45,6 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Pass canonical Windows worktree destinations to Git without the verbatim prefix, and remove expired attachment grants from resumed agent commands across configuration-path aliases (#2310-6e76).
+
 - Read Android shared files from the active service worker cache so they reach the mobile chat draft after a cache version update (#2304-48f8).
 
 - Show the cached mobile connection-test landing when the server is unreachable, even with a cached app shell; show an actionable in-app outage state and recover automatically after a resumed or stalled connection (#2294-078f).

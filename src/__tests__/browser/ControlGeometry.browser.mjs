@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import solid from 'vite-plugin-solid';
 
 // Real browser layout, not happy-dom's zero-size boxes. Screenshots clip only the fixture element.
-it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async () => {
+it('catches shared control geometry drifting at desktop and touch widths', {timeout: 60000}, async (context) => {
   const directory = resolve(process.env.TUIC_GEOMETRY_EVIDENCE ?? '.tmp/control-geometry');
   await mkdir(directory, {recursive: true});
   const {version} = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
@@ -34,13 +34,15 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
     const evaluate = async expression => {const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},sessionId);if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
     await send('Page.enable',{},sessionId);
     const measurements=[];
-    for(const width of [1400,390]) {
-      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},sessionId);
+    for(const width of (process.env.TUIC_GEOMETRY_WIDTHS ?? "1400,390").split(",").map(Number)) {
+      const touch=(process.env.TUIC_GEOMETRY_FIXTURE ?? '').startsWith('mobile') && width<=600;
+      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:touch},sessionId);
+      await send('Emulation.setTouchEmulationEnabled',{enabled:touch},sessionId);
       const loaded = new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('Page load event did not arrive')),20000);const listener = event => {const message=JSON.parse(event.data);if(message.method==='Page.loadEventFired' && message.sessionId===sessionId){clearTimeout(timer);socket.removeEventListener('message',listener);resolve();}};socket.addEventListener('message',listener);});
       await send('Page.navigate',{url:`http://127.0.0.1:${server.httpServer.address().port}/src/__tests__/browser/${process.env.TUIC_GEOMETRY_FIXTURE ?? "controlGeometry"}.html`},sessionId);
       await loaded;
       await evaluate(`new Promise((resolve,reject)=>{const stop=setTimeout(()=>reject(new Error('Fixture did not mount')),15000);const check=()=>{if(window.controlGeometryError){clearTimeout(stop);reject(new Error(window.controlGeometryError));return;}if(window.controlGeometryReady){clearTimeout(stop);requestAnimationFrame(()=>requestAnimationFrame(resolve));}else requestAnimationFrame(check);};check();})`);
-      const result=await evaluate(`({rows:document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
+      const result=await evaluate(`({rows:window.controlGeometryRows?window.controlGeometryRows():document.querySelector('[data-row]')?[...document.querySelectorAll('[data-row]')].map(row=>({size:row.dataset.row,heights:[...row.children].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))})):[{size:document.querySelector('#geometry').dataset.controlSize??'default',heights:[...document.querySelectorAll('#geometry [data-form-control]:not(textarea)')].map(element=>({tag:element.tagName,name:element.getAttribute('aria-label')||element.getAttribute('title')||element.textContent?.trim(),height:element.getBoundingClientRect().height}))}],clip:(()=>{const r=document.querySelector('#geometry').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1};})()})`);
       // Catches: content-width icons, compact shrinking targets, rounded corner misses or lost native activation.
       const icons = await evaluate(`window.iconClicks === undefined ? [] : [...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {label:button.getAttribute('aria-label'),width:r.width,height:r.height,x:r.x+1,y:r.y+1,corner:button.contains(document.elementFromPoint(r.x+1,r.y+1)),radius:getComputedStyle(button).borderRadius,circle:button.hasAttribute('data-circle')?(button.firstElementChild?getComputedStyle(button.firstElementChild).borderRadius:'none'):null,disabled:button.disabled};})`);
       for(const icon of icons) {
@@ -67,6 +69,12 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:last.x+last.width/2-1,y:last.y+last.height/2-1},sessionId);
         assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Remove help"]').firstElementChild).borderColor`),'rgb(200, 10, 20)','Circle retains removal hover');
 
+      }
+      // Catches: a migrated icon action retaining a content-width hit target.
+      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>(button.getAttribute('aria-label')||button.getAttribute('title'))===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
+      for(const icon of actionIcons) {
+        assert.equal(icon.width,width<=600?44:36,JSON.stringify(icon));
+        assert.equal(icon.height,width<=600?44:36,JSON.stringify(icon));
       }
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
@@ -146,8 +154,55 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         for (const type of ['keyDown','keyUp']) await send('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId);
         assert.ok(await evaluate('window.telegramReads')>reads,'Space reloads status through the existing owner');
       }
+      // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
+      const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
+      if (aiChat) {
+        const target = width <= 600 ? 44 : 36;
+        assert.deepEqual(aiChat.rawActions, [], 'AI Chat actions and text fields must use shared primitives');
+        assert.equal(aiChat.visible.height, target, 'Visible picker frame owns shared target height');
+        assert.deepEqual(aiChat.picker, aiChat.visible, 'Invisible native picker must cover the complete visible frame');
+        assert.equal(aiChat.summaries.length, 2, 'Both native SessionControls disclosures must mount');
+        for (const summary of aiChat.summaries) assert.equal(summary.height, target, JSON.stringify(summary));
+        assert.equal(aiChat.summaries[0].width, target, 'Icon disclosure target stays square');
+        assert.ok(aiChat.summaries[0].top >= aiChat.header.top && aiChat.summaries[0].bottom <= aiChat.header.bottom,
+          'Header must contain the shared-height disclosure');
+        assert.ok(aiChat.editor.height >= target, 'Composer must retain a complete editable line');
+        assert.equal(aiChat.editorText, 'A complete composing line');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true; document.querySelectorAll('summary[data-control-layout="disclosure"]')[1].focus()`);
+        await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+        assert.equal(await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open`),false,'Escape from nested disclosure must close the actions menu');
+        assert.equal(await evaluate(`document.activeElement === document.querySelector('summary[data-control-layout="disclosure"]')`),true,'Escape must return focus to the native actions summary');
+        await evaluate(`document.querySelector('summary[data-control-layout="disclosure"]').parentElement.open=true`);
+      }
+      // Catches: desktop composer overflow hiding the phone editor's long draft from touch scrolling.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'mobileChatScreenGeometry' && width <= 600) {
+        const editor = await evaluate(`(async()=>{const field=document.querySelector('textarea');field.value=Array.from({length:20},(_,i)=>'Draft line '+i).join('\\n');field.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const style=getComputedStyle(field);return {scroll:field.scrollHeight,client:field.clientHeight,overflow:style.overflowY};})()`);
+        await context.test('catches long phone AI Chat drafts losing native scrolling', () => {
+          assert.ok(editor.scroll > editor.client, 'The draft must exceed the phone editor cap');
+          assert.equal(editor.overflow, 'auto', 'Long phone drafts must remain natively scrollable');
+        });
+      }
+      // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
+      if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
+        const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
+        await context.test(`catches queue review clipping the composing draft at ${width}px`, () => {
+          assert.ok(draft.lineTop >= draft.viewportTop && draft.lineBottom <= draft.viewportBottom,
+            `Queue review must leave a complete draft line visible: ${JSON.stringify(draft)}`);
+        });
+      }
       result.containment = [];
-      measurements.push({width,...result,icons,stretch,joined,textarea,states});
+      const composer=await evaluate("window.composerGeometry ?? null");
+      const targets=await evaluate(`[...document.querySelectorAll('#geometry button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.getAttribute('aria-label')||button.title||button.textContent.trim(),width:r.width,height:r.height,borderColor:getComputedStyle(button).borderTopColor,ready:button.hasAttribute('data-ready'),disabled:button.disabled,iconOnly:button.hasAttribute('data-form-control') && (!button.textContent.trim() || /^[+−×✕]$/.test(button.textContent.trim()))};})`);
+      // Catches: a default content-width Button leaves mobile icon actions narrower than44px.
+      if((process.env.TUIC_GEOMETRY_FIXTURE ?? '').startsWith('mobile') && width<=600) {
+        for(const target of targets.filter(target=>target.iconOnly && target.width>0 && target.height>0)) {
+          assert.equal(target.width,44,JSON.stringify({width,target}));
+          assert.equal(target.height,44,JSON.stringify({width,target}));
+        }
+      }
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets,aiChat});
+
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

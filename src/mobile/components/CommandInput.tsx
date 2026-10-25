@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { Button } from "../../components/ui";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
@@ -522,6 +523,7 @@ export function CommandInput(props: CommandInputProps) {
 
 			<div class={styles.composer}>
 				<textarea
+					data-control-layout="composer"
 					ref={textareaEl}
 					class={styles.input}
 					placeholder="Type a command..."
@@ -540,7 +542,10 @@ export function CommandInput(props: CommandInputProps) {
 					disabled={submitting() || !!props.serverVoiceRecording || props.sessionExists === false}
 				/>
 			</div>
-			<button
+			<Button
+				shape="icon"
+				variant="primary"
+				circular
 				class={styles.send}
 				type="button"
 				aria-label="Send"
@@ -567,7 +572,7 @@ export function CommandInput(props: CommandInputProps) {
 				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>
-			</button>
+			</Button>
 		</div>
 	);
 }

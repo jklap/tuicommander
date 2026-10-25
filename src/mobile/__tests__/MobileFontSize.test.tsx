@@ -1,12 +1,24 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 
 const { invoke, subscribePty } = vi.hoisted(() => ({ invoke: vi.fn(), subscribePty: vi.fn() }));
 vi.mock("../../invoke", () => ({ invoke, listen: vi.fn(async () => () => {}) }));
 vi.mock("../../transport", () => ({ subscribePty }));
 vi.mock("../useMobileVoice", () => ({ useMobileVoice: () => ({ available: () => false }) }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+
+// Cold Vite transforms belong to setup, not the font persistence deadline.
+// Each test still resets the module registry, including the real font signals.
+beforeAll(async () => {
+	invoke.mockResolvedValue(undefined);
+	await Promise.all([
+		import("../screens/SettingsScreen"),
+		import("../components/OutputView"),
+		import("../components/CommandInput"),
+		import("../components/useSessionChatView"),
+	]);
+});
 
 beforeEach(() => {
 	vi.resetModules();
