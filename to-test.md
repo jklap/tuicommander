@@ -1,3 +1,8 @@
+## Worktree removal identity (2334-ca53) — Rust restart required
+
+- [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.
+- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in `reports/2334-worktree-identity.md`. This peer did not restart or access the daily app.
+
 ## Ego conversational submit (2314-cf94) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, let ego end with a plain-text question or a blocked progress report at idle. Confirm `session submit` sends the answer without raw input, busy turns still reject, and a native approval/selector/free-text modal rejects with `prompt_kind`. The peer did not restart the daily app.
