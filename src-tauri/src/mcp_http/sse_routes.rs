@@ -535,6 +535,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             pinned,
             focus,
             origin_repo_path,
+            opener_tuic_session,
         } => {
             let mut v = serde_json::json!({ "id": id, "title": title, "html": html, "pinned": pinned, "focus": focus });
             if let Some(u) = url {
@@ -542,6 +543,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             }
             if let Some(p) = origin_repo_path {
                 v["origin_repo_path"] = serde_json::Value::String(p.clone());
+            }
+            if let Some(session) = opener_tuic_session {
+                v["opener_tuic_session"] = serde_json::Value::String(session.clone());
             }
             v
         }
