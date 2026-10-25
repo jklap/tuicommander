@@ -405,15 +405,6 @@
     ]
   },
   {
-    "file": "src/components/TaskQueuePanel/TaskQueuePanel.module.css",
-    "story": "2243-6aa9",
-    "rules": [
-      "[[],\".clearBtn\",[\"padding: 4px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".closeBtn\",[\"height: 24px\",\"border: none\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".itemCancel\",[\"height: 20px\",\"border: none\",\"border-radius: var(--radius-md)\"]]"
-    ]
-  },
-  {
     "file": "src/components/Terminal/ChatPresentation.module.css",
     "story": "2252-5add",
     "rules": [
