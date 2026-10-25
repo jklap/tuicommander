@@ -42,14 +42,6 @@
     ]
   },
   {
-    "file": "src/components/MarkdownTab/LiveMarkdownEditor.module.css",
-    "story": "2209-c060",
-    "rules": [
-      "[[],\".input\",[\"padding: 3px 6px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]",
-      "[[],\".btn\",[\"padding: 2px 8px\",\"border: 1px solid var(--border)\",\"border-radius: 4px\"]]"
-    ]
-  },
-  {
     "file": "src/components/MarkdownTab/MarkdownTab.module.css",
     "story": "2210-4f25",
     "rules": [
