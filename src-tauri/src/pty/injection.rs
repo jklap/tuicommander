@@ -556,8 +556,8 @@ fn ego_has_fresh_empty_composer(state: &AppState, session_id: &str) -> bool {
     state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
         let vt = vt.lock();
         // Epoch ages and repaired idle clocks can only delay recovery. Only
-        // actual VT processing after input authorizes it, in one clock domain.
-        vt.last_processed_at()
+        // a child-painted composer row after input authorizes it.
+        vt.last_composer_paint_at()
             .is_some_and(|output_at| output_at > input_at)
             && detect_agent_screen_activity_at(
                 Some("ego"),
@@ -2866,7 +2866,7 @@ fn write_pty_parts_blocking(
         && let Some(mut vt) = vt.try_lock()
         && !vt.is_cursor_visible()
     {
-        vt.process(b"\x1b[?25h");
+        vt.process_local(b"\x1b[?25h");
     }
 
     let data_len: usize = parts.iter().map(String::len).sum();

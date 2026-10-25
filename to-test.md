@@ -4,6 +4,8 @@
 
 ## Ego phantom composer (2313-dd6d) — Rust restart required
 
+- [ ] Round 3 after an authorized rebuild/restart: with an unpainted real draft, cursor restoration, cursor-only child output and title-only child output must not release a queued payload or send Ctrl-U. Recovery now requires a child-originated visible composer-row change; a visually unchanged discard remains blocked. No daily instance was accessed.
+
 - [ ] After an authorized rebuild/restart or in an isolated agent-test instance, type input during a busy ego turn and let ego clear it. Queue a BG wake and a user command. Confirm both drain once in successive idle windows without Ctrl+U, real drafts remain untouched, and full MCP session inventory reports parked entries and their blocker. A busy `submit` still rejects without queueing; retry only after idle when `retry_safe` is true. The peer did not restart or access the daily instance.
 
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required

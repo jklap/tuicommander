@@ -794,14 +794,37 @@ gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents)
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
 
-For ego, a native empty-composer repaint can supersede stale write-side text.
-The repaint must follow the last input and remain quiet for 1.5 seconds. A
-retained or wrapped draft, a screen from before a new edit, an unknown screen,
-and selector controls fail closed. The tracked editor resets only if its input
-stamp is unchanged while holding its mutex; each claim rechecks the screen. Other agents keep the tracked
-editor gate. Already accepted commands and wakes retry on confirmed idle,
-including stable Ready observations after the idle edge. A rejected `submit`
-is not queued and must be retried by its caller only when `retry_safe` is true.
+### Ego composer recovery state map
+
+| Input or event | Composer state and authority |
+| --- | --- |
+| Desktop raw input, HTTP/WebSocket/MCP input, paste and native answer keys | Input bookkeeping stamps monotonic input time and feeds `InputLineBuffer`. Unsubmitted text blocks managed input. |
+| Direct submit, queued user command, automated notice/wake and keepalive | The shared claim checks idle, foreground ownership, dialogs, uncertainty and draft state before writing. Accepted payload plus CR advances the submitted turn. |
+| Explicit draft-to-queue transfer | Requires the expected draft and input transaction; only this explicit user operation may clear that retained draft with Ctrl-U. |
+| Reader-originated child output | Only a change to the visible native composer row counts as composer paint. Status/output rows alone do not prove the draft was consumed. |
+| Cursor-only bytes, OSC title-only bytes, local cursor restoration and local screen repair | Not composer paint. They cannot authorize recovery, even after an idle clock repair. |
+| Resize, sleep/wake repair or wall-clock step | Not child paint. Resize invalidates paint evidence; repaired clocks are rejection gates only. |
+
+For ego, recovery may reset stale write-side text only after a reader-originated
+change to the current visible native composer row, ordered strictly after the
+last input in one monotonic clock domain. The native adapter must still report
+an empty Ready composer, and output must remain quiet for 1.5 seconds. The editor
+resets only if its input stamp is unchanged under its mutex; the claim rechecks
+this gate. Retained/wrapped drafts, modal controls, unknown screens and old
+empty screens fail closed. Other agents keep their tracked-editor gate.
+
+Dropping phantom tracking without Ctrl-U is not a safe substitute: the next
+payload could append to an unpainted real draft. Recovery therefore does not
+write anything without composer paint evidence. The normal managed submission
+may send its existing Ctrl-U prefix only after the shared empty-composer claim;
+recovery itself never sends Ctrl-U. In the worst case, one unpainted character
+plus any number of cursor/title updates still blocks all managed payload bytes.
+A genuine discard that produces no visible composer-row change also stays
+blocked rather than risking a real draft.
+
+Already accepted commands and wakes retry on confirmed idle, including stable
+Ready observations after the idle edge. A rejected `submit` is not queued and
+must be retried by its caller only when `retry_safe` is true.
 
 Foreground detection warns once per session when a non-shell process has no
 recognized agent type or run-config fallback. Such a session retains the safe

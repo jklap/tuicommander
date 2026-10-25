@@ -1947,6 +1947,39 @@ fn ego_composer_keeps_retained_drafts_and_unpainted_edits_protected() {
 #[cfg(unix)]
 #[test]
 fn ego_sleep_clock_reset_is_not_a_composer_repaint() {
+    assert_nonpaint_preserves_ego_draft(b"", false);
+}
+
+/// Catches: the silence timer's synthetic cursor restore erases an unpainted draft.
+#[cfg(unix)]
+#[test]
+fn ego_timer_cursor_restore_is_not_a_composer_repaint() {
+    assert_nonpaint_preserves_ego_draft(b"\x1b[?25h", true);
+}
+
+/// Catches: cursor-only child output erases an unpainted draft.
+#[cfg(unix)]
+#[test]
+fn ego_child_cursor_only_is_not_a_composer_repaint() {
+    assert_nonpaint_preserves_ego_draft(b"\x1b[1;1H", false);
+}
+
+/// Catches: OSC title-only child output erases an unpainted draft.
+#[cfg(unix)]
+#[test]
+fn ego_child_title_only_is_not_a_composer_repaint() {
+    assert_nonpaint_preserves_ego_draft(b"\x1b]0;updated title\x07", false);
+}
+
+/// Catches: an unrelated visible output row authorizes draft destruction.
+#[cfg(unix)]
+#[test]
+fn ego_child_other_row_is_not_a_composer_repaint() {
+    assert_nonpaint_preserves_ego_draft(b"\x1b[1;1Hupdated output", false);
+}
+
+#[cfg(unix)]
+fn assert_nonpaint_preserves_ego_draft(output: &[u8], local: bool) {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "ego-sleep-real-draft";
     agent_session(&state, sid, SHELL_IDLE);
@@ -1968,7 +2001,7 @@ fn ego_sleep_clock_reset_is_not_a_composer_repaint() {
         }
     }
     state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
-    // The Ready screen precedes this real input. No output is processed below.
+    // The Ready screen precedes this real input; any later bytes must prove paint.
     crate::mcp_http::session::apply_input_bookkeeping(&state, sid, "keep my real draft");
     state
         .session_maps
@@ -1986,6 +2019,16 @@ fn ego_sleep_clock_reset_is_not_a_composer_repaint() {
         silence.last_output_at = repaired;
         silence.last_chunk_at = repaired;
     }
+    // Use the same origin boundary as the timer and the child reader.
+    {
+        let vt = state.grid.vt_log_buffers.get(sid).unwrap();
+        let mut vt = vt.lock();
+        if local {
+            vt.process_local(output);
+        } else {
+            vt.process(output);
+        }
+    }
     let result = write_agent_submission_to_pty(&state, sid, "must not replace draft");
     assert!(
         matches!(
@@ -1995,7 +2038,7 @@ fn ego_sleep_clock_reset_is_not_a_composer_repaint() {
                 ..
             }
         ),
-        "a clock reset is not a native repaint: {result:?}"
+        "non-composer updates cannot authorize replacement: {result:?}"
     );
     assert!(bytes.lock().unwrap().is_empty());
     assert_eq!(

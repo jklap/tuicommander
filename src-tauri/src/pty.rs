@@ -732,7 +732,7 @@ fn spawn_silence_timer(
                         emit_active_subtasks(&state, &session_id, 0, "");
                     }
                     if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
-                        vt.lock().process(b"\x1b[?25h");
+                        vt.lock().process_local(b"\x1b[?25h");
                     }
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
