@@ -6473,7 +6473,7 @@ mod tests {
                 "Microphone capture is disabled in agent-test"
             );
             let mut endpoint = open_endpoint(&dictation, DESKTOP_OWNER).unwrap();
-            assert!(endpoint.drain().unwrap().is_empty());
+            assert_eq!(endpoint.drain().unwrap(), [] as [f32; 0]);
             assert!(dictation.hands_free_audio.lock().is_none());
             assert!(dictation.transcriber_arc.lock().is_none());
         });
