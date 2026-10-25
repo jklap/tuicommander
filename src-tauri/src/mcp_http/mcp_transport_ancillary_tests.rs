@@ -584,6 +584,7 @@ async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
 /// worktrees on the listing path; fresh dirt and fingerprints must still move.
 #[tokio::test]
 async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
+    // DEFERRED (2026-10-25) — Windows repeat listing takes 13.621s with the fork budget satisfied; profile per-checkout reads there, not a larger response deadline.
     let (_temp, repo, _) = branch_delete_fixture();
     crate::git_cli::git_cmd(&repo)
         .args(["checkout", "main"])
@@ -614,6 +615,7 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
         .to_owned();
     std::fs::write(checkouts[0].join("untracked.txt"), "fresh dirt\n").unwrap();
 
+    super::super::mcp_transport_ancillary::WORKTREE_LIST_TIMINGS.remove(repo.to_str().unwrap());
     let before = tuic_git::git_cli::git_cmd_forks(&repo);
     let started = std::time::Instant::now();
     let second = handle_worktree(&state, &args, false).await;
@@ -645,7 +647,10 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
     );
     assert!(
         elapsed < std::time::Duration::from_secs(3),
-        "40-worktree repeat listing exceeded the CLI response window: {elapsed:?}"
+        "40-worktree repeat listing exceeded the CLI response window: {elapsed:?}; per-checkout timings={:#?}",
+        super::super::mcp_transport_ancillary::WORKTREE_LIST_TIMINGS
+            .get(repo.to_str().unwrap())
+            .map(|entry| entry.value().clone())
     );
 
     // Changed refs must invalidate monitoring proofs, unlike a plain file save.
