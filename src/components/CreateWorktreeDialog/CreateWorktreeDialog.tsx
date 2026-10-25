@@ -242,6 +242,8 @@ export const CreateWorktreeDialog: Component<CreateWorktreeDialogProps> = (props
 							/>
 							<Show when={props.onGenerateName}>
 								<Button
+									shape="icon"
+									aria-label={t("createWorktree.generateName", "Generate random name")}
 									class={s.generateBtn}
 									onClick={handleGenerateName}
 									title={t("createWorktree.generateName", "Generate random name")}

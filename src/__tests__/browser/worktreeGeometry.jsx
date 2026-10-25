@@ -6,3 +6,5 @@ requestAnimationFrame(()=>{
  document.querySelector('[class*="overlay"]').style.position='static';
  window.controlGeometryReady=true;
 });
+
+window.geometryIconLabels=["Generate random name"];
