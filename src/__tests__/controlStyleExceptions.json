@@ -42,16 +42,6 @@
     ]
   },
   {
-    "file": "src/components/CreateWorktreeDialog/CreateWorktreeDialog.module.css",
-    "story": "2191-c683",
-    "rules": [
-      "[[],\".generateBtn\",[\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dropdownTrigger\",[\"padding: 6px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".dropdownTrigger:hover\",[\"border-color: var(--fg-muted)\"]]",
-      "[[],\".dropdownTrigger:focus\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/DictationToast/DictationToast.module.css",
     "story": "2192-8e3f",
     "rules": [
