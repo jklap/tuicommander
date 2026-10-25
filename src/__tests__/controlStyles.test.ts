@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error The source audit is a Node-only build script.
 import { auditControls, auditCss, controlClasses } from "../../scripts/audit-control-styles.mjs";
-import exceptions from "./controlStyleExceptions.json";
+import exceptionData from "./controlStyleExceptions.json";
+
+// Keep both supported entry shapes even after the last migration story is removed.
+const exceptions: ({ file: string; rules: string[] } & ({ reason: string } | { story: string }))[] = exceptionData;
 
 interface Finding {
 	file: string;

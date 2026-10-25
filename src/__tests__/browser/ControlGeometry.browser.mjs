@@ -132,6 +132,8 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       // Catches: palette Button migration dropping draggable/onDragStart or adding a node twice.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'workflowDesignerGeometry') {
         const before = await evaluate(`document.querySelectorAll('[data-node-id]').length`);
+        // The touch sidebar scrolls independently above the inspector; use its visible hit target.
+        await evaluate(`[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='Add Notify').scrollIntoView({block:'center'});new Promise(resolve=>requestAnimationFrame(resolve))`);
         const boxes = await evaluate(`(()=>{const source=[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='Add Notify').getBoundingClientRect();const target=document.querySelector('[aria-label="Workflow graph"]').getBoundingClientRect();return {source:{x:source.x+source.width/2,y:source.y+source.height/2},target:{x:target.x+target.width/2,y:target.y+target.height/2}};})()`);
         console.log('Palette drag bounds',JSON.stringify(boxes));
         await evaluate(`window.workflowDragEvents=[];for(const type of ['mousedown','dragstart','dragend'])document.addEventListener(type,event=>window.workflowDragEvents.push({type,text:event.target.textContent,draggable:event.target.draggable}),{capture:true});`);

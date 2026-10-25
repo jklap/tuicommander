@@ -242,19 +242,19 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 					<h3>Workflow designer</h3>
 				</div>
 				<div class={s.actions}>
-					<button type="button" onClick={() => void load()} disabled={busy() || dirty()}>
+					<Button type="button" onClick={() => void load()} disabled={busy() || dirty()}>
 						Refresh
-					</button>
-					<button type="button" onClick={() => void save()} disabled={busy() || !dirty()}>
+					</Button>
+					<Button type="button" onClick={() => void save()} disabled={busy() || !dirty()}>
 						Save draft
-					</button>
-					<button
+					</Button>
+					<Button
 						type="button"
 						onClick={() => void publish()}
 						disabled={busy() || dirty() || !draft() || draft()?.draftRevision === draft()?.lastPublishedDraftRevision}
 					>
 						Publish
-					</button>
+					</Button>
 				</div>
 			</header>
 			<Show when={error()}>
@@ -275,6 +275,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 							<button
 								type="button"
 								class={s.draft}
+								data-control-layout="row"
 								aria-current={draft()?.id === item.id ? "true" : undefined}
 								onClick={() => chooseDraft(item)}
 							>
@@ -331,6 +332,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 									<button
 										type="button"
 										class={s.node}
+										data-control-layout="card"
 										aria-label={`Node ${node.id}`}
 										data-node-id={node.id}
 										aria-pressed={selectedId() === node.id}
@@ -439,12 +441,12 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 										</Select>
 									</label>
 								</Show>
-								<button type="button" onClick={connect} disabled={!targetId()}>
+								<Button type="button" onClick={connect} disabled={!targetId()}>
 									Connect nodes
-								</button>
-								<button type="button" class={s.remove} onClick={removeNode} disabled={node().kind.type === "start"}>
+								</Button>
+								<Button type="button" variant="danger" onClick={removeNode} disabled={node().kind.type === "start"}>
 									Remove node
-								</button>
+								</Button>
 							</>
 						)}
 					</Show>

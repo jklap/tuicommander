@@ -11,6 +11,11 @@ window.fetch=async (input,init)=>{
 };
 const { WorkflowDesigner }=await import('../../components/WorkflowDesigner/WorkflowDesigner');
 render(()=> <section id="geometry" style="width:100%;height:880px;display:flex"><WorkflowDesigner project="/layout" /></section>,document.getElementById('root'));
+// Pin consumer density independently of whichever shared classes happen to mount.
+window.controlGeometryRows=()=>[
+ {size:'compact',heights:[...document.querySelectorAll('#geometry header button')].map(element=>({name:element.textContent.trim(),height:element.getBoundingClientRect().height}))},
+ {size:'default',heights:[...document.querySelectorAll('#geometry aside [data-form-control]:not(textarea)')].map(element=>({name:element.getAttribute('aria-label')||element.textContent.trim(),height:element.getBoundingClientRect().height}))},
+];
 const ready=()=>{
  const pause=document.querySelector('[data-node-id="pause"]');
  if(pause){pause.click();window.controlGeometryReady=true;observer.disconnect();}
