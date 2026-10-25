@@ -66,6 +66,28 @@ Six area pages instead of one page per feature: about 40 features would give 40 
 
 The nav and footer move into two partial files, injected at build time by a small `transformIndexHtml` step in `vite.config.ts` (the file already does this for `%DISCORD_URL%`). Without it, nine pages repeat the same nav and drift. Area pages are added as Vite entries like the blog posts are. Existing blog posts keep their own markup in this pass; only `style.css` changes under them.
 
+## 2a. Narrative backbone: the 2.0 film (Boss, 2026-10-25)
+
+The site tells the film's story, in the film's order, with its captions as headlines. The outlook is **"TUICommander gives you superpowers"**: one person runs ten projects and dozens of agents and only follows one orchestrator. Each band reuses a film still where it reads better than a new screenshot (stills from the 1080p master at caption-free frames, or stage stills of the same shot).
+
+| Site section (home band → area page) | Film beat (time, caption) |
+|---|---|
+| Hero: "10 projects. Dozens of agents. **One** of you." → "Meet TUICommander 2.0" + film | 1.1–2.1 (0:00–0:14), lockup 12.2 |
+| Before / after strip: twelve loose windows vs "All ten. **One window.**" | 1.2, 2.2 (0:04–0:18) |
+| **One window** → `/features/one-window.html`: "The sidebar tells you **everything**." · "Any agent. **One gesture.**" · "Read it like a **chat**." | 3.1–3.3 (0:14–0:30) |
+| **Plan** → `/features/planning.html`: Ideas · "Plan your day **out loud**." · "Ideas become **stories**." · "Your pipeline, as a **graph**." · "Agents on a **schedule**." | 4.1–4.5 (0:30–1:07) |
+| **Orchestrate** → `/features/orchestration.html`: "You ask **one** agent." · "Agents spawn **agents**." · "Agents talk to **each other**." · "See **who said what**." | 5.1–5.5 (1:07–1:25) |
+| **Your tools** → `/features/workspace.html`: Files · "Your own tools, in **JavaScript**." · Markdown · Design Mode · memory | 6.1–6.5 (1:25–1:52) |
+| **You just watch** (orchestration page, second half): "It knows **which** agent." · "What it's **doing**. How much **credit** is left." · "50 agents. One Mac. **No sweat.**" | 7.1–7.3 (1:52–2:04) |
+| **Ship** → `/features/git-and-review.html`: "Your tracker, **next to your agents**." · "CI breaks. **The agent fixes it.**" · "Review the PR **in place**." · "From idea to **PR**." | 8.1–8.5, 10.3 (2:04–2:45, 3:07–3:19) |
+| **Anywhere** → `/features/anywhere.html`: "Even when you're **out**." · "It pings you only when it **matters**." · voice | 9.1–9.2 (2:45–2:57), 4.2 |
+| AI Chat band: "What shipped today?" + ego session settings | 10.1–10.2 (2:57–3:07) |
+| "In **one day**." recap: the five-step loop (plan → spawn → watch → review → ship) | 10.4 (3:19–3:23) |
+| **Extend** → `/features/extend.html`: "**MCP.** **Remote.** **Themes.** **Search.** **Plugins.**" | 11 (3:23–3:29) |
+| Closing CTA: "Run ten projects. **Follow one orchestrator.**" · "Open source · macOS · Linux · Windows" · `brew install sstraus/tap/tuicommander` | 12.2 (3:29–3:37) |
+
+Consequences for the rest of this document: the area pages follow the film acts (one-window, planning, orchestration, workspace, git-and-review, anywhere, extend: seven, not six); the hero line in section 6 is the film's opening and lockup; the highlight word in each headline is styled in Observation Blue bold (the film uses violet; the site keeps the app accent). Features the film does not show (resume after update, hibernation, tray, secrets, Telegram, Windows CI) go under "Shipped, not filmed" on `/2.0.html` and in the matching area page, never in a headline.
+
 ## 3. The video
 
 ### Placement
@@ -181,6 +203,6 @@ Hero line proposal, from the film's lockup: **"Run ten projects. Follow one orch
 
 1. Video host: **A (repo `public/`)**, B (YouTube), or A + B.
 2. Encode: **720p30 19.2 MB** or 1080p30 CRF 29 (about 22–24 MB, to measure).
-3. Six area pages as listed, or fewer/more.
+3. Seven area pages following the film acts (section 2a), or fewer.
 4. Screenshot source: **presentation stage stills** first, `agent-test` for the rest.
-5. Hero line: "Run ten projects. Follow one orchestrator." or keep "The IDE that understands AI agents".
+5. Hero: the film opening "10 projects. Dozens of agents. One of you." with the lockup "Run ten projects. Follow one orchestrator." as CTA (section 2a), "The IDE that understands AI agents" as meta description.
