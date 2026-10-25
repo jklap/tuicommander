@@ -1,3 +1,7 @@
+## Final API failure indicator (2335-9c03) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, verify an unrecovered Claude, Codex or ego provider failure remains red in the tab and sidebar after completion output. Native provider countdowns must not mark Error. With TUIC auto-retry enabled, an ignored continue stays red; three failed attempts exhaust the budget. A later successful turn returns to Done. The peer must not restart the daily app; Rust changes do not hot-reload.
+
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
 - [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.

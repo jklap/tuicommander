@@ -593,7 +593,12 @@ impl OutputParser {
     fn parse_api_error(&mut self, text: &str) -> Option<ParsedEvent> {
         // Fast path: every api-error pattern requires at least one of these keywords.
         if !text.contains("api_error")
-            && !text.contains("API Error: 5")
+            && !text.contains("API Error:")
+            && !text.contains("■ ")
+            && !text.contains("εgo: the provider returned HTTP")
+            && !text.contains("Invalid API key")
+            && !text.contains("Invalid auth token")
+            && !text.contains("Authentication required")
             && !text.contains("authentication_error")
             && !text.contains("server_error")
             && !text.contains("UNAVAILABLE")
@@ -829,6 +834,35 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             r"API Error: 5\d\d [A-Za-z]",
             "server",
         ),
+        // Installed Claude 2.1.308 final-failure strings (not retry countdowns).
+        ae(
+            "claude-transport-error",
+            r"(?m)^\s*(?:⎿\s*)?API Error: (?:Connection lost (?:mid-response|before a response was produced)\.|Request timed out\b|The response (?:stopped arriving|stalled before a response was produced)\.|Server error mid-response\.|Part of the response never arrived(?: and no response was produced)?\.|The response stream was malformed(?: and no response was produced)?\.|Connection (?:to the API was lost|dropped|refused)\b|Unable to connect to API\b)",
+            "server",
+        ),
+        ae(
+            "claude-auth-friendly",
+            r"(?m)^\s*(?:⎿\s*)?(?:Invalid API key · Fix external API key|Invalid auth token · Fix external auth token|Authentication required · Sign in again to continue)",
+            "auth",
+        ),
+        // Codex 0.163.0 only commits non-retrying errors as a native ■ row.
+        // Retry notifications update the status indicator instead.
+        ae(
+            "codex-native-auth",
+            r"(?m)^\s*■ (?:unexpected status (?:401|403)\b|exceeded retry limit, last status: (?:401|403)\b)",
+            "auth",
+        ),
+        ae(
+            "codex-native-transport",
+            r"(?m)^\s*■ (?:stream disconnected before completion:|request timed out\b|exceeded retry limit, last status: 5\d\d\b|unexpected status 5\d\d\b)",
+            "server",
+        ),
+        // ego may refuse authentication before opening a turn (no final OSC).
+        ae(
+            "ego-startup-auth",
+            r"(?m)^εgo: the provider returned HTTP (?:401|403)\b",
+            "auth",
+        ),
         // Gemini CLI: API Error: got status: UNAVAILABLE/INTERNAL
         ae(
             "gemini-server-error",
@@ -963,6 +997,22 @@ pub fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
             let prompt_text = if body.is_empty() { title } else { body };
             if prompt_text.is_empty() {
                 return None;
+            }
+            // ProviderTurnNotices emits this suffix only for an unsuccessful
+            // Provider termination, never for a retry or a cancelled turn.
+            if title == "εgo"
+                && body.ends_with("; review the output, then send a new prompt to continue")
+            {
+                return Some(ParsedEvent::ApiError {
+                    pattern_name: "ego-provider-failure".into(),
+                    matched_text: body.into(),
+                    error_kind: if body.contains("HTTP 401") || body.contains("HTTP 403") {
+                        "auth"
+                    } else {
+                        "server"
+                    }
+                    .into(),
+                });
             }
             let normalized = prompt_text.to_ascii_lowercase();
             let confident = normalized.contains("needs your permission")
@@ -4267,6 +4317,93 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // overloaded_error is a rate limit pattern, not api-error
         assert!(!has_api_error(&parser.parse(input)));
         assert!(has_rate_limit(&parser.parse(input)));
+    }
+
+    /// Catches: Claude's final connection-loss message has no HTTP status code.
+    #[test]
+    fn api_error_2335_claude_connection_lost() {
+        let mut parser = OutputParser::new();
+        let events = parser.parse_clean_lines(
+            &[row(
+                0,
+                "API Error: Connection lost mid-response. The response above may be incomplete.",
+            )],
+            true,
+        );
+        let (_, _, kind) =
+            get_api_error(&events).expect("final connection failure must report ApiError");
+        assert_eq!(kind, "server");
+    }
+
+    /// Catches: final native failures missed, or ordinary quoted diagnostics turning red.
+    #[test]
+    fn api_error_2335_final_failures_reject_quoted_prose() {
+        let lines = [
+            "API Error: Connection lost mid-response. The response above may be incomplete.",
+            "API Error: Connection lost before a response was produced. Try again.",
+            "API Error: Request timed out. Check your internet connection and proxy settings",
+            "API Error: Request timed out",
+            "API Error: The response stopped arriving. The response above may be incomplete.",
+            "API Error: Server error mid-response. The response above may be incomplete.",
+            "API Error: Part of the response never arrived. The response above may be incomplete.",
+            "API Error: The response stream was malformed. The response above may be incomplete.",
+            "API Error: Connection dropped (ECONNRESET)",
+            "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)",
+            "API Error: Unable to connect to API. Check your internet connection",
+            "API Error: The response stalled before a response was produced. Try again.",
+            "API Error: Part of the response never arrived and no response was produced. Try again.",
+            "API Error: The response stream was malformed and no response was produced. Try again.",
+            "Invalid API key · Fix external API key",
+            "Invalid auth token · Fix external auth token",
+            "Authentication required · Sign in again to continue",
+            "■ stream disconnected before completion: HTTP response body failed",
+            "■ request timed out",
+            "■ exceeded retry limit, last status: 503 Service Unavailable",
+            "■ unexpected status 500 Internal Server Error: upstream unavailable",
+            "■ unexpected status 401 Unauthorized: invalid credential",
+            "■ exceeded retry limit, last status: 403 Forbidden",
+            "εgo: the provider returned HTTP 401: 2335 injected authentication refusal",
+        ];
+        let mut missed = Vec::new();
+        for line in lines {
+            let events = OutputParser::new().parse_clean_lines(&[row(0, line)], true);
+            if !has_api_error(&events) {
+                missed.push(format!("missed {line}"));
+            }
+            for quoted in [
+                format!("The harness printed: {line}"),
+                format!("> {line}"),
+                format!("- `{line}`"),
+            ] {
+                let events = OutputParser::new().parse_clean_lines(&[row(0, &quoted)], true);
+                if has_api_error(&events) {
+                    missed.push(format!("false positive {quoted}"));
+                }
+            }
+        }
+        assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
+    /// Catches: native provider retry or unrelated OSC notifications promoted to final failure.
+    #[test]
+    fn api_error_2335_ego_final_notification_not_retry_or_prose() {
+        let body = "the response stream failed: HTTP response body failed; review the output, then send a new prompt to continue";
+        for end in ["\x07", "\x1b\\"] {
+            let events = parse_osc777_notifies(&format!("\x1b]777;notify;εgo;{body}{end}"));
+            assert_eq!(
+                get_api_error(&events).map(|(name, _, kind)| (name, kind)),
+                Some(("ego-provider-failure", "server"))
+            );
+        }
+        for text in [
+            format!("The CLI printed {body}"),
+            format!("\x1b]777;notify;Other CLI;{body}\x07"),
+            "\x1b]7770;ego-recovery={\"phase\":\"retrying\",\"attempt\":1,\"next_attempt_ms\":null}\x07".into(),
+            "Reconnecting... 1/5 (stream disconnected before completion: request timed out)".into(),
+        ] {
+            assert!(!has_api_error(&parse_osc777_notifies(&text)), "{text:?}");
+            assert!(!has_api_error(&OutputParser::new().parse_clean_lines(&[row(0, &text)], true)), "{text:?}");
+        }
     }
 
     #[test]

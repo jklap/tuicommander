@@ -352,3 +352,98 @@ async fn captured_ego_second_mcp_approval_rearms_awaiting() {
         "the first hard-wrapped approval also needs native controls"
     );
 }
+
+/// Catches: a final native provider failure is dropped in startup grace or erased by idle.
+#[tokio::test]
+async fn captured_ego_provider_failure_2335_survives_idle() {
+    let mut saw_final = false;
+    replay_native_question(
+        "ego-provider-failure-2335.tcap",
+        "ego",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Output
+                && record
+                    .data
+                    .windows(b"send a new prompt to continue".len())
+                    .any(|bytes| bytes == b"send a new prompt to continue")
+            {
+                saw_final = true;
+                assert!(
+                    session
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|text| text.contains("HTTP response body failed"))
+                );
+                assert!(
+                    !session.awaiting_input,
+                    "a provider failure is not a human question"
+                );
+            }
+            if saw_final {
+                assert!(
+                    session.last_error.is_some(),
+                    "idle must not erase the final failure"
+                );
+            }
+        },
+    );
+    assert!(
+        saw_final,
+        "recorded native termination must reach the real accumulator"
+    );
+}
+
+/// Catches: ego has no spinner StatusLine, so a successful later turn stays red.
+#[tokio::test]
+async fn captured_ego_provider_recovery_2335_clears_error_on_native_work() {
+    let mut failed = false;
+    let mut answered = false;
+    let mut recovered = false;
+    let mut completed = false;
+    replay_native_question(
+        "ego-provider-recovered-2335.tcap",
+        "ego",
+        |record, session| {
+            let bytes = &record.data;
+            if record.direction == crate::pty_capture::CaptureDirection::Input {
+                if bytes
+                    .windows(b"Please complete".len())
+                    .any(|part| part == b"Please complete")
+                {
+                    assert!(
+                        failed && session.last_error.is_some(),
+                        "input alone must not clear failure"
+                    );
+                    answered = true;
+                }
+                return;
+            }
+            if bytes
+                .windows(b"send a new prompt to continue".len())
+                .any(|part| part == b"send a new prompt to continue")
+            {
+                assert!(session.last_error.is_some());
+                failed = true;
+            }
+            if answered
+                && bytes
+                    .windows(b"7770;state=busy".len())
+                    .any(|part| part == b"7770;state=busy")
+            {
+                assert!(
+                    session.last_error.is_none(),
+                    "native work must clear the prior failure"
+                );
+                recovered = true;
+            }
+            if recovered {
+                assert!(session.last_error.is_none());
+                completed |= bytes.windows(b"done ".len()).any(|part| part == b"done ");
+            }
+        },
+    );
+    assert!(
+        failed && answered && recovered && completed,
+        "exercise the recorded failure and successful subsequent turn"
+    );
+}
