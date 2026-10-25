@@ -238,6 +238,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
+- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`
@@ -1396,6 +1397,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 ---
 
 ## 9. Voice Dictation
+
+Voice settings retain the resolved speech engine when saved. Inactive external commands do not implicitly replace the selected Italian voice. Authorized isolated agent-test builds can enable speech output while microphone capture remains disabled.
 
 The `tuic-dictation` Rust crate implements audio, transcription and speech; the desktop application retains the commands, browser transport and event emission.
 

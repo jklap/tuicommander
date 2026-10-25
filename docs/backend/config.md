@@ -1039,6 +1039,8 @@ Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation c
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(base, config)`
 
+Voice saves resolve legacy engine defaults on the latest locked document before applying the caller’s delta. This preserves an unchanged engine choice without clobbering another client’s explicit choice. Isolated speech-output agent-test instances force effective hands-free listening off even if the saved file enables it.
+
 ### Config Defaults (read-only, no file)
 
 **Type:** `ConfigDefaults`

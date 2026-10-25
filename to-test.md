@@ -1,3 +1,8 @@
+## Worktree removal identity (2334-ca53) — Rust restart required
+
+- [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.
+- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in `reports/2334-worktree-identity.md`. This peer did not restart or access the daily app.
+
 ## Ego conversational submit (2314-cf94) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, let ego end with a plain-text question or a blocked progress report at idle. Confirm `session submit` sends the answer without raw input, busy turns still reject, and a native approval/selector/free-text modal rejects with `prompt_kind`. The peer did not restart the daily app.
@@ -2948,3 +2953,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
 
 - [ ] After the next manual restart, open a Markdown document through an agent and confirm Review agent defaults to that opener on desktop and in the mobile Markdown menu; explicit selection must survive session refresh (#2329-dc53). Rust backend changes require restart; do not restart the daily instance automatically.
+- [ ] Story 1996-3cff: after a manual Rust rebuild/restart, confirm one Italian spoken reply uses the selected voice without an extra system voice. Isolated TTS evidence does not establish historical double-voice attribution. Do not restart the daily instance until ready to lose its current session.
+- [ ] After the next planned backend rebuild/restart, request and submit a dummy secret, then remove it from the same MCP session and after a bridge reconnect: both removals return `removed` (including an already absent name). Old binaries return `missing` after successful deletion; MCP reconnect alone does not clear backend-owned values. Native automation was unavailable for story 1520-46b1 (`osascript` assistive access denied).

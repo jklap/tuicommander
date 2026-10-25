@@ -28,6 +28,8 @@ removing, archiving, or recycling that checkout. Cleanup names the suspended tab
 and refuses even a forced removal; recycling skips it. A removed checkout also
 loses its old Worktrees bell offer, so that offer cannot open the obsolete path.
 
+Worktree removal uses the same checkout identity as the sidebar. A symbolic branch name remains addressable even when Git reports its target branch. Deleting that alias after removal preserves the target branch. If a branch was renamed externally, refresh the repository before removal; the directory name does not define its identity.
+
 ## Worktree Storage Strategies
 
 Configure where worktrees are stored (Settings → Git & GitHub → Worktree Defaults → Storage):
