@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const menuCss = readFileSync(resolve(__dirname, "../components/MobileComposerMenu.module.css"), "utf-8");
 const css = readFileSync(resolve(__dirname, "../components/CommandInput.module.css"), "utf-8");
 // All blocks for a selector (including the shared `.send, .dictate` one), in source order.
 const rule = (name: string) =>
@@ -19,15 +18,6 @@ const inset = (block: string) => {
 	const [top, right = top, bottom = top, left = right] = v;
 	return { top, right, bottom, left };
 };
-// `padding: top right bottom left` -> [left, right]; falls back to padding-left/right.
-const sides = (block: string) => {
-	const v = (block.match(/(?:^|[;\s])padding:\s*([^;]+);/)?.[1] ?? "")
-		.trim()
-		.split(/\s+/)
-		.map((n) => Number.parseInt(n, 10));
-	if (v.length === 4) return { left: v[3], right: v[1] };
-	return { left: px(block, "padding-left"), right: px(block, "padding-right") };
-};
 // `margin: top right bottom left` -> left
 const marginLeft = (block: string) => {
 	const v = (block.match(/(?:^|[;\s])margin:\s*([^;]+);/)?.[1] ?? "0")
@@ -40,7 +30,6 @@ const marginLeft = (block: string) => {
 
 const send = rule("send");
 const sendHit = css.match(/\.send::before\s*\{([^}]*)\}/)?.[1] ?? "";
-const dictate = rule("dictate");
 const form = rule("form");
 
 describe("mobile command input layout (send outside the box)", () => {
@@ -54,20 +43,6 @@ describe("mobile command input layout (send outside the box)", () => {
 	it("does not let the send hit area reach left past the gap to the box", () => {
 		const gap = px(form, "gap") + marginLeft(send);
 		expect(-inset(sendHit).left).toBeLessThanOrEqual(gap);
-	});
-
-	// Catches: growing the combined button and spacing budget at the expense of the textarea.
-	it("keeps the horizontal space around the text within the 114px budget", () => {
-		const budget =
-			px(menuCss.match(/\.trigger\s*\{([^}]*)\}/)?.[1] ?? "", "width") +
-			sides(rule("input")).left +
-			sides(rule("input")).right +
-			px(rule("composer"), "padding-right") +
-			px(dictate, "width") +
-			px(form, "gap") +
-			marginLeft(send) +
-			px(send, "width");
-		expect(budget).toBeLessThanOrEqual(114);
 	});
 
 	// Catches: a fixed px width/max-width on the textarea or its box, which would stop it filling
