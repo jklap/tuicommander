@@ -62,6 +62,7 @@ vi.mock("../../components/Terminal/CanvasTerminal", () => ({
 }));
 
 import { Terminal } from "../../components/Terminal/Terminal";
+import { appLogger } from "../../stores/appLogger";
 import { terminalsStore } from "../../stores/terminals";
 
 let mounted: { unmount: () => void } | undefined;
@@ -119,16 +120,40 @@ const snapshot = (shell: string, error?: string) =>
 describe("Terminal API failure recovery 2335", () => {
 	let id: string;
 	beforeEach(async () => {
+		vi.spyOn(appLogger, "info").mockImplementation(() => {});
+		vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		vi.spyOn(appLogger.diag, "info").mockImplementation(() => {});
+		createSession.mockClear().mockResolvedValue("fresh-session");
+		resize.mockClear().mockResolvedValue(undefined);
 		sendCommand.mockClear().mockResolvedValue(undefined);
+		mockRpc.mockReset().mockResolvedValue(undefined);
 		ptyOptions.clear();
 		id = openIdleAgentTab();
-		await waitFor(() => expect(ptyOptions.has("live-session")).toBe(true));
+		// The eager subscription exists before resize/listener setup completes.
+		// Wait for the reconnect receipt before advancing the retry clock.
+		await waitFor(() =>
+			expect(appLogger.info).toHaveBeenCalledWith("terminal", `initSession(${id}) — reconnected to live-session`),
+		);
+		expect(createSession).not.toHaveBeenCalled();
+		expect(terminalsStore.get(id)?.sessionId).toBe("live-session");
 		vi.useFakeTimers();
 	});
 	afterEach(() => {
 		mounted?.unmount();
 		terminalsStore.remove(id);
 		vi.useRealTimers();
+		// These scenarios deliberately report provider failures and retry exhaustion.
+		for (const [source, message] of vi.mocked(appLogger.error).mock.calls) {
+			expect(source).toBe("terminal");
+			expect(message).toMatch(/^claude: (server error \(claude-transport-error\)|auth failure \(codex-native-auth\))$/);
+		}
+		for (const [source, message] of vi.mocked(appLogger.warn).mock.calls) {
+			expect(source).toBe("terminal");
+			expect(message).toBe("[AutoRetry] claude: exhausted 3 retries, manual intervention needed");
+		}
+		vi.restoreAllMocks();
 	});
 
 	// Catches: continue input erases the failure even when the harness never resumes.

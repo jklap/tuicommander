@@ -263,6 +263,15 @@ Working rows cancel a pending injection but do not reset its attempt budget.
 Only a recovered idle turn resets that budget. Authentication failures do not
 retry. Native harness retry output is not a final failure.
 
+Native Claude transport/auth and Codex stream errors match short anchored
+failure prefixes, not the complete English sentence. Rendered physical rows are
+joined with newlines, so a narrow pane can split the remaining sentence.
+Claude's native `⏺` and `⎿` markers are accepted; Codex still requires its final
+`■` marker, and retry-exhaustion status separators accept wrapped whitespace.
+`claude-wrapped-provider-failure-2335.tcap` records a real 40-column Claude
+connection failure, including a wrap inside `Connection to the API was lost`.
+The source-backed inventory tests also exercise 36-, 40- and 128-column rows.
+
 The inventory below quotes source literals. Braced fields are formatter
 parameters, not invented captured transcripts. Pattern names refer to
 `build_api_error_patterns`, except for the raw ego OSC consumer.

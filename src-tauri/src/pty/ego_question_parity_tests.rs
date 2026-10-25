@@ -406,17 +406,19 @@ async fn captured_ego_provider_recovery_2335_clears_error_on_native_work() {
         |record, session| {
             let bytes = &record.data;
             if record.direction == crate::pty_capture::CaptureDirection::Input {
-                if bytes
-                    .windows(b"Please complete".len())
-                    .any(|part| part == b"Please complete")
-                {
-                    assert!(
-                        failed && session.last_error.is_some(),
-                        "input alone must not clear failure"
-                    );
-                    answered = true;
-                }
                 return;
+            }
+            // This capture records output only. The native composer repaint is
+            // the recorded evidence of the follow-up, before its busy marker.
+            if bytes
+                .windows(b"> Please complete the response successfully.".len())
+                .any(|part| part == b"> Please complete the response successfully.")
+            {
+                assert!(
+                    failed && session.last_error.is_some(),
+                    "the follow-up composer alone must not clear failure"
+                );
+                answered = true;
             }
             if bytes
                 .windows(b"send a new prompt to continue".len())

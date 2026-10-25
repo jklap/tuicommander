@@ -834,27 +834,28 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             r"API Error: 5\d\d [A-Za-z]",
             "server",
         ),
-        // Installed Claude 2.1.308 final-failure strings (not retry countdowns).
+        // Native failure prefixes fit narrow panes; the remaining prose can wrap.
+        // Claude 2.1.308 renders either a tool-result marker or an assistant bullet.
         ae(
             "claude-transport-error",
-            r"(?m)^\s*(?:⎿\s*)?API Error: (?:Connection lost (?:mid-response|before a response was produced)\.|Request timed out\b|The response (?:stopped arriving|stalled before a response was produced)\.|Server error mid-response\.|Part of the response never arrived(?: and no response was produced)?\.|The response stream was malformed(?: and no response was produced)?\.|Connection (?:to the API was lost|dropped|refused)\b|Unable to connect to API\b)",
+            r"(?m)^\s*(?:[⎿⏺]\s*)?API Error: (?:Connection (?:lost|to the|dropped|refused)\b|Request timed out\b|The response (?:stopped|stalled|stream)\b|Server error\b|Part of the\b|Unable to connect\b)",
             "server",
         ),
         ae(
             "claude-auth-friendly",
-            r"(?m)^\s*(?:⎿\s*)?(?:Invalid API key · Fix external API key|Invalid auth token · Fix external auth token|Authentication required · Sign in again to continue)",
+            r"(?m)^\s*(?:[⎿⏺]\s*)?(?:Invalid API key\b|Invalid auth token\b|Authentication required\b)",
             "auth",
         ),
         // Codex 0.163.0 only commits non-retrying errors as a native ■ row.
         // Retry notifications update the status indicator instead.
         ae(
             "codex-native-auth",
-            r"(?m)^\s*■ (?:unexpected status (?:401|403)\b|exceeded retry limit, last status: (?:401|403)\b)",
+            r"(?m)^\s*■ (?:unexpected status (?:401|403)\b|exceeded retry limit,\s+last status:\s+(?:401|403)\b)",
             "auth",
         ),
         ae(
             "codex-native-transport",
-            r"(?m)^\s*■ (?:stream disconnected before completion:|request timed out\b|exceeded retry limit, last status: 5\d\d\b|unexpected status 5\d\d\b)",
+            r"(?m)^\s*■ (?:stream disconnected\b|request timed out\b|exceeded retry limit,\s+last status:\s+5\d\d\b|unexpected status 5\d\d\b)",
             "server",
         ),
         // ego may refuse authentication before opening a turn (no final OSC).
@@ -4335,6 +4336,42 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(kind, "server");
     }
 
+    /// Catches: Claude's native narrow-pane error wraps before the full signature.
+    #[test]
+    fn api_error_2335_captured_wrapped_claude_failure() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/claude-wrapped-provider-failure-2335.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        assert_eq!(cols, 40);
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        let mut detected = false;
+        let mut wrapped = false;
+        let mut parser = OutputParser::new();
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            grid.process(&record.data);
+            let screen = grid.screen_text_rows();
+            wrapped |= screen
+                .iter()
+                .any(|text| text.contains("API Error: Connection to the"))
+                && screen
+                    .iter()
+                    .any(|text| text.contains("API was lost (ECONNRESET)"));
+            let clean_rows: Vec<_> = screen
+                .iter()
+                .enumerate()
+                .map(|(index, text)| row(index, text))
+                .collect();
+            detected |= has_api_error(&parser.parse_clean_lines(&clean_rows, true));
+        }
+        assert!(wrapped, "exercise the recorded physical-row boundary");
+        assert!(detected, "wrapped native failure must report ApiError");
+    }
+
     /// Catches: final native failures missed, or ordinary quoted diagnostics turning red.
     #[test]
     fn api_error_2335_final_failures_reject_quoted_prose() {
@@ -4366,9 +4403,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         ];
         let mut missed = Vec::new();
         for line in lines {
-            let events = OutputParser::new().parse_clean_lines(&[row(0, line)], true);
-            if !has_api_error(&events) {
-                missed.push(format!("missed {line}"));
+            for width in [36, 40, 128] {
+                let chars: Vec<_> = line.chars().collect();
+                let texts: Vec<String> = chars
+                    .chunks(width)
+                    .map(|part| part.iter().collect())
+                    .collect();
+                let rows: Vec<_> = texts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| row(i, text))
+                    .collect();
+                let events = OutputParser::new().parse_clean_lines(&rows, true);
+                if !has_api_error(&events) {
+                    missed.push(format!("missed at {width} columns: {line}"));
+                }
             }
             for quoted in [
                 format!("The harness printed: {line}"),
