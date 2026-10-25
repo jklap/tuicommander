@@ -42,17 +42,6 @@
     ]
   },
   {
-    "file": "src/components/IdeLauncher/IdeLauncher.module.css",
-    "story": "2206-f340",
-    "rules": [
-      "[[],\".btn\",[\"height: 26px\",\"padding: 0 6px\",\"border: 1px solid var(--border)\"]]",
-      "[[],\".main\",[\"border-radius: var(--radius-md) 0 0 var(--radius-md)\",\"border-right: none\"]]",
-      "[[],\".arrowBtn\",[\"border-radius: 0 var(--radius-md) var(--radius-md) 0\",\"padding: 0 5px\",\"border-left: 1px solid var(--border)\"]]",
-      "[[],\".split:hover .btn:not(:disabled)\",[\"border-color: var(--accent)\"]]",
-      "[[],\".item\",[\"padding: 5px 10px\",\"border: none\"]]"
-    ]
-  },
-  {
     "file": "src/components/IdeasPanel/IdeasPanel.module.css",
     "story": "2207-8a6e",
     "rules": [
