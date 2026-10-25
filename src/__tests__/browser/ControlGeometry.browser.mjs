@@ -68,6 +68,12 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Remove help"]').firstElementChild).borderColor`),'rgb(200, 10, 20)','Circle retains removal hover');
 
       }
+      // Catches: a migrated icon action retaining a content-width hit target.
+      const actionIcons = await evaluate(`(window.geometryIconLabels ?? []).map(label=>{const button=[...document.querySelectorAll('#geometry button')].find(button=>button.getAttribute('aria-label')===label);if(!button)throw new Error('Missing expected icon '+label);const r=button.getBoundingClientRect();return {label,width:r.width,height:r.height};})`);
+      for(const icon of actionIcons) {
+        assert.equal(icon.width,width<=600?44:36,JSON.stringify(icon));
+        assert.equal(icon.height,width<=600?44:36,JSON.stringify(icon));
+      }
       const stretch = await evaluate(`[...document.querySelectorAll('[data-stretch-case]')].map(row=>({container:row.dataset.stretchCase,controls:[...row.querySelectorAll('button')].map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width,radius:getComputedStyle(button).borderRadius}))}))`);
       for (const row of stretch) {
         assert.ok(row.controls.length >= 2, 'Stretch cases must exercise multiple button sizes');
@@ -126,7 +132,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
         });
       }
       result.containment = [];
-      measurements.push({width,...result,icons,stretch,joined,textarea,states});
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states});
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);
       await writeFile(path,Buffer.from(image.data,'base64'));

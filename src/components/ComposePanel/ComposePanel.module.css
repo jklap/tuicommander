@@ -3,7 +3,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 142px;
+  height: auto;
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
@@ -31,12 +31,14 @@
 }
 
 .editor {
-  flex: 1;
+  flex-shrink: 0;
+  height: 96px;
   overflow: hidden;
 }
 
 .statusBar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -86,6 +88,8 @@
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
@@ -119,8 +123,7 @@
 }
 
 .queueList {
-  /* Shares the panel's 142px with the editor and the status bar, and does not
-     shrink. Above ~78px the editor is left with too few rows to compose in. */
+  /* The queue scrolls independently; it never consumes the reserved editor space. */
   max-height: 78px;
   overflow-y: auto;
   border-top: 1px solid var(--border);

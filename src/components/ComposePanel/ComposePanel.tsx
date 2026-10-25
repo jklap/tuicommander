@@ -311,6 +311,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 								</span>
 								<Button
 									variant="ghost"
+									shape="icon"
 									class={s.queueItemRemove}
 									onClick={() => props.onRemoveQueued(item.id)}
 									title="Remove from queue"
@@ -372,6 +373,8 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 						<Button
 							variant="ghost"
 							onClick={() => props.onTogglePin()}
+							shape="icon"
+							aria-label={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
 							title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
 							aria-pressed={props.pinned()}
 						>
@@ -382,6 +385,8 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 					<Show when={props.canEnqueue()}>
 						<Button
 							variant="ghost"
+							shape="icon"
+							aria-label="Queue for the next idle moment (Shift+Ctrl+Enter)"
 							class={s.queueButton}
 							onClick={handleEnqueue}
 							title="Queue for the next idle moment (Shift+Ctrl+Enter)"
@@ -407,6 +412,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 						variant="ghost"
 						type="button"
 						onClick={() => fileInput?.click()}
+						shape="icon"
 						title="Attach images"
 						aria-label="Attach images"
 					>
@@ -414,13 +420,20 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							<path d="M16.5 3a4.5 4.5 0 0 1 3.18 7.68l-8.49 8.49a6 6 0 0 1-8.48-8.48l8.49-8.49 1.41 1.41-8.49 8.49a4 4 0 0 0 5.66 5.66l8.49-8.49a2.5 2.5 0 0 0-3.54-3.54l-8.49 8.49a1 1 0 0 0 1.42 1.42l7.78-7.78 1.41 1.41-7.78 7.78a3 3 0 0 1-4.24-4.24l8.49-8.49A4.49 4.49 0 0 1 16.5 3z" />
 						</svg>
 					</Button>
-					<Button variant="primary" onClick={handleSend} title="Send (Ctrl+Enter)">
+					<Button
+						shape="icon"
+						variant="primary"
+						onClick={handleSend}
+						title="Send (Ctrl+Enter)"
+						aria-label="Send (Ctrl+Enter)"
+					>
 						<ComposeSendIcon />
 					</Button>
 					<Show when={!props.persistent?.()}>
 						<span class={s.divider} aria-hidden="true" />
 						<Button
 							variant="ghost"
+							shape="icon"
 							class={s.closeButton}
 							onClick={() => props.onDismiss()}
 							title="Close compose panel"

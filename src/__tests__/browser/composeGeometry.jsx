@@ -11,3 +11,5 @@ requestAnimationFrame(()=>{
  };
  requestAnimationFrame(ready);
 });
+
+window.geometryIconLabels=["Remove from queue","Unpin from the terminal bottom","Queue for the next idle moment (Shift+Ctrl+Enter)","Attach images","Send (Ctrl+Enter)","Close compose panel"];
