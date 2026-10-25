@@ -212,7 +212,7 @@ Per-terminal font size control:
 | Zoom out | `Cmd+-` | -2px font size |
 | Reset | `Cmd+0` | Back to default size |
 
-Range: 8px to 32px. Each terminal has its own zoom level. The current zoom is shown in the status bar.
+Range: 8px to 32px. Each terminal has its own zoom level, shared by its CLI and Chat views. Zoom shortcuts work in either view; the all-terminals variants update both views too. The current zoom is shown in the status bar.
 
 ## Split Panes
 

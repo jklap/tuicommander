@@ -113,6 +113,7 @@ export const TerminalChatView: Component<{
 		<>
 			<TerminalChatTranscript
 				sessionId={props.sessionId}
+				fontSize={term()?.fontSize}
 				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}
 				onOpenFile={openFile}
