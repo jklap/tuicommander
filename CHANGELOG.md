@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
 
