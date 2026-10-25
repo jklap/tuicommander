@@ -1347,6 +1347,14 @@ immediately before Enter. One response returns:
 | `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
 | `detail` | For pre-write rejections, a human-readable cause and corrective action; unknown agent identity includes the current foreground process |
 
+Direct submits may answer an idle conversational question, including a
+`progress blocked` report. That report is not a native dialog: its ranked
+`progress-blocked` ownership permits an explicit command while server notices
+remain parked. Ordinary low-confidence prose questions also permit submit.
+Native selectors, approvals and free-text dialogs still return `awaiting_input`;
+these refusals include `prompt_kind` (`choice`, `approval`, `free_text`, or
+`question`). Explicit human replies retain their separate busy-dialog path.
+
 The acknowledgement does not claim semantic application acceptance or task
 success. Default acknowledgement timeout is 3,000 ms; callers may request
 `timeout_ms`, clamped to 250–10,000 ms. `ack_timeout`, session exit after a

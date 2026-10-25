@@ -506,7 +506,8 @@ fn begin_session_submit(
             reason,
             composer_state,
             pending,
-        } => BeginSubmission::Response(serde_json::json!({
+        } => {
+            let mut response = serde_json::json!({
             "status": "rejected",
             "submission_id": submission_id,
             "submitted": false,
@@ -522,7 +523,14 @@ fn begin_session_submit(
             // composer; a bare `queued_commands_pending` against an empty
             // Compose list left a caller retrying with nothing to act on.
             "pending": pending,
-        })),
+            });
+            if matches!(reason, "awaiting_input" | "selection_required")
+                && let Some(kind) = crate::pty::agent_submission_prompt_kind(state, &session_id)
+            {
+                response["prompt_kind"] = serde_json::json!(kind);
+            }
+            BeginSubmission::Response(response)
+        }
         crate::pty::AgentSubmissionWrite::Failed(detail) => {
             BeginSubmission::Response(serde_json::json!({
                 "status": "write_failed",

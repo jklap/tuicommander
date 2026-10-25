@@ -1,3 +1,7 @@
+## Ego conversational submit (2314-cf94) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, let ego end with a plain-text question or a blocked progress report at idle. Confirm `session submit` sends the answer without raw input, busy turns still reject, and a native approval/selector/free-text modal rejects with `prompt_kind`. The peer did not restart the daily app.
+
 ## Ego phantom composer (2313-dd6d) — Rust restart required
 
 - [ ] After an authorized rebuild/restart or in an isolated agent-test instance, type input during a busy ego turn and let ego clear it. Queue a BG wake and a user command. Confirm both drain once in successive idle windows without Ctrl+U, real drafts remain untouched, and full MCP session inventory reports parked entries and their blocker. A busy `submit` still rejects without queueing; retry only after idle when `retry_safe` is true. The peer did not restart or access the daily instance.

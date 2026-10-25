@@ -381,11 +381,53 @@ fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
         .is_some_and(|session| session.awaiting_input)
 }
 
+/// A progress report asks for another conversational turn, not native keys.
+/// The accumulator preserves native dialog ownership against later reports.
+fn waiting_on_progress_report(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"))
+}
+
+/// Native controls which make an automated submit unsafe. A prose question or
+/// a progress-tool wait owns no modal controls; confirmed idle still gates it.
+pub(crate) fn agent_submission_prompt_kind(
+    state: &AppState,
+    session_id: &str,
+) -> Option<&'static str> {
+    let (confident, choice_kind, ego) =
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|session| {
+                let ego = session.agent_type.as_deref() == Some("ego");
+                let kind = session.choice_prompt.as_ref().map(|choice| {
+                    if ego && choice.selection_mode.is_none() {
+                        "approval"
+                    } else {
+                        "choice"
+                    }
+                });
+                (session.question_confident, kind, ego)
+            })?;
+    if choice_kind.is_some() {
+        return choice_kind;
+    }
+    (confident && !waiting_on_progress_report(state, session_id)).then_some(if ego {
+        "free_text"
+    } else {
+        "question"
+    })
+}
+
 fn submission_ready(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
-    queued_user_command: bool,
+    user_command: bool,
 ) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
@@ -407,14 +449,9 @@ fn submission_ready(
         .get(session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
         .unwrap_or(false);
-    // A queued user command answers a progress-tool wait, not a native dialog.
+    // A direct or queued user command answers a progress-tool wait, not a native dialog.
     // Read the source from ranked evidence, never infer ownership from a screen.
-    let progress_reply = queued_user_command
-        && state
-            .session_maps
-            .silence_states
-            .get(session_id)
-            .is_some_and(|silence| silence.lock().awaiting_source() == Some("progress-blocked"));
+    let progress_reply = user_command && waiting_on_progress_report(state, session_id);
     let blocked_on_question = state
         .session_maps
         .session_states
@@ -541,9 +578,9 @@ fn claim_idle_for_submission(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
-    queued_user_command: bool,
+    user_command: bool,
 ) -> Option<InjectionClaim> {
-    if !submission_ready(state, session_id, human_reply, queued_user_command) {
+    if !submission_ready(state, session_id, human_reply, user_command) {
         return None;
     }
     if human_reply && human_reply_waiting(state, session_id) {
@@ -774,16 +811,10 @@ fn agent_composer_rejection(
     {
         return Some(("selection_required", "empty"));
     }
-    if !human_reply
-        && state
-            .session_maps
-            .session_states
-            .get(session_id)
-            .is_some_and(|session| session.question_confident)
-    {
+    if !human_reply && agent_submission_prompt_kind(state, session_id).is_some() {
         return Some(("awaiting_input", "empty"));
     }
-    if !submission_ready(state, session_id, human_reply, false) {
+    if !submission_ready(state, session_id, human_reply, true) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -860,10 +891,12 @@ pub(super) fn agent_submission_rejection(
     // `agent_not_ready` is the truth, and it is the state that actually changes.
     // A confident question belongs to the human. Its parked automated entries
     // cannot drain until the answer clears the question, and must not prevent
-    // that answer from reaching the composer.
-    if !(human_reply
-        && (human_reply_waiting(state, session_id)
-            || blocked_on_confident_question(state, session_id)))
+    // that answer from reaching the composer. A direct answer to a progress-tool
+    // wait has the same priority over parked automated entries.
+    if !(waiting_on_progress_report(state, session_id)
+        || (human_reply
+            && (human_reply_waiting(state, session_id)
+                || blocked_on_confident_question(state, session_id))))
     {
         // The agent IS ready, so anything still parked can be typed right now.
         // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
@@ -886,7 +919,7 @@ pub(super) fn agent_submission_rejection(
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
-    if !submission_ready(state, session_id, human_reply, false) {
+    if !submission_ready(state, session_id, human_reply, true) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -967,7 +1000,7 @@ fn write_submission_to_pty(
             pending: summarize_pending_injections(state, session_id),
         };
     }
-    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, false) else {
+    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply, true) else {
         let (reason, composer_state) = agent_submission_rejection(state, session_id, human_reply)
             .unwrap_or(("claim_lost", "unknown"));
         return AgentSubmissionWrite::Rejected {

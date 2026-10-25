@@ -816,6 +816,11 @@ that acknowledgement. Movement proves the child terminal reacted, not that the
 application understood the command. A complete or uncertain write is never
 automatically retryable; only rejection/no-byte failure is.
 
+Direct submit and queued user commands can answer an idle `progress-blocked`
+conversational wait. A direct answer does not flush automated notices into that
+wait. Ranked native dialog ownership still wins over a later progress report;
+selectors, approvals and free-text modal questions remain protected.
+
 Mobile Queue supplies `expectedDraft` to validate the live InputLineBuffer before a server-side Ctrl-U and enqueue on this same FIFO. Preflight rejections leave the draft untouched. A write failure may have cleared it already; the caller reports uncertainty and does not retry automatically. Concurrent producers are not transactionally isolated.
 
 **User-composed commands share that gate:** the Compose panel's enqueue action
