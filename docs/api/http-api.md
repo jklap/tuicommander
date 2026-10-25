@@ -3264,8 +3264,8 @@ remains separate.
 
 | Method | Path | Request | Response |
 | --- | --- | --- | --- |
-| GET | `/repo/open-markdown-tabs` | `cwd` query: session directory | Array of `{id,title,relative_path,absolute_path,fs_root}` |
-| PUT | `/config/open-markdown-tabs` | `{tabs:[{id,repoPath,filePath,fsRoot?}]}` | `null` |
+| GET | `/repo/open-markdown-tabs` | `cwd` query: session directory | Array of `{id,title,relative_path,absolute_path,fs_root,opener_tuic_session?}` |
+| PUT | `/config/open-markdown-tabs` | `{tabs:[{id,repoPath,filePath,fsRoot?,openerTuicSession?}]}` | `null` |
 
 GET uses the existing remote authentication and returns 403 for unregistered
 directories. Repository/workspace ownership is computed by Rust. Only file tabs

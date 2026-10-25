@@ -2946,3 +2946,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
+
+- [ ] After the next manual restart, open a Markdown document through an agent and confirm Review agent defaults to that opener on desktop and in the mobile Markdown menu; explicit selection must survive session refresh (#2329-dc53). Rust backend changes require restart; do not restart the daily instance automatically.
