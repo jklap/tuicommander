@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep Markdown list comment actions outside the full list so nested bullets, numbers and task checkboxes stay unobstructed (#2330-6ef8).
+
 - Restore toolbar density in panel headers, view toggles and filters while keeping Settings forms at 36px and mobile targets at 44px (#2316-2f6b).
 
 - Accept direct replies to idle conversational progress waits while preserving native modal guards and reporting their prompt kind (#2314-cf94).
