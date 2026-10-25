@@ -6,7 +6,7 @@ import type { QueuedCommand } from "../../hooks/usePty";
 import { cx } from "../../utils";
 import { IMAGE_FILE_ACCEPT } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
-import actions from "../shared/ComposeActions.module.css";
+import { Button } from "../ui/Button";
 import s from "./ComposePanel.module.css";
 import { useComposeImages } from "./useComposeImages";
 
@@ -367,14 +367,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 						</button>
 					</Show>
 					<Show when={!props.persistent?.()}>
-						<button
-							class={cx(actions.pinButton, props.pinned() && actions.pinButtonActive)}
+						<Button
+							variant="ghost"
 							onClick={() => props.onTogglePin()}
 							title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
 							aria-pressed={props.pinned()}
 						>
 							<ComposePinIcon />
-						</button>
+						</Button>
 						<span class={s.divider} aria-hidden="true" />
 					</Show>
 					<Show when={props.canEnqueue()}>
@@ -400,20 +400,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							event.currentTarget.value = "";
 						}}
 					/>
-					<button
-						type="button"
-						class={actions.pinButton}
-						onClick={() => fileInput?.click()}
-						title="Attach images"
-						aria-label="Attach images"
-					>
+					<Button variant="ghost" onClick={() => fileInput?.click()} title="Attach images" aria-label="Attach images">
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 							<path d="M16.5 3a4.5 4.5 0 0 1 3.18 7.68l-8.49 8.49a6 6 0 0 1-8.48-8.48l8.49-8.49 1.41 1.41-8.49 8.49a4 4 0 0 0 5.66 5.66l8.49-8.49a2.5 2.5 0 0 0-3.54-3.54l-8.49 8.49a1 1 0 0 0 1.42 1.42l7.78-7.78 1.41 1.41-7.78 7.78a3 3 0 0 1-4.24-4.24l8.49-8.49A4.49 4.49 0 0 1 16.5 3z" />
 						</svg>
-					</button>
-					<button class={actions.sendButton} onClick={handleSend} title="Send (Ctrl+Enter)">
+					</Button>
+					<Button variant="primary" onClick={handleSend} title="Send (Ctrl+Enter)">
 						<ComposeSendIcon />
-					</button>
+					</Button>
 					<Show when={!props.persistent?.()}>
 						<span class={s.divider} aria-hidden="true" />
 						<button
