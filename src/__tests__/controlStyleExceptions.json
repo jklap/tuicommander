@@ -448,19 +448,6 @@
     ]
   },
   {
-    "file": "src/components/TabBar/TabBar.module.css",
-    "story": "2242-bc80",
-    "rules": [
-      "[[],\".scrollArrow\",[\"border: none\",\"padding: 0\"]]",
-      "[[],\".scrollArrowLeft\",[\"border-right: 1px solid var(--border)\"]]",
-      "[[],\".scrollArrowRight\",[\"border-left: 1px solid var(--border)\"]]",
-      "[[],\".tabNameInput\",[\"border: 1px solid var(--accent)\",\"border-radius: var(--radius-xs)\",\"padding: 0 4px\"]]",
-      "[[],\".tabClose\",[\"border: none\",\"height: 16px\",\"border-radius: var(--radius-md)\"]]",
-      "[[],\".newBtn\",[\"border: none\"]]",
-      "[[],\".globeIcon\",[\"border: none\",\"padding: 0 2px\"]]"
-    ]
-  },
-  {
     "file": "src/components/TaskQueuePanel/TaskQueuePanel.module.css",
     "story": "2243-6aa9",
     "rules": [
