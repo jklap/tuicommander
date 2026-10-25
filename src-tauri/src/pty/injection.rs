@@ -768,7 +768,12 @@ pub(crate) fn queued_submission_blocker(
     state: &AppState,
     session_id: &str,
 ) -> Option<&'static str> {
-    agent_composer_rejection(state, session_id, false).map(|(reason, _)| reason)
+    let user_command = state.pending_injections.get(session_id).and_then(|queue| {
+        queue
+            .front()
+            .map(|head| matches!(head, crate::state::PendingInjection::UserCommand { .. }))
+    })?;
+    agent_composer_rejection(state, session_id, false, user_command).map(|(reason, _)| reason)
 }
 
 const PENDING_PREVIEW_MAX_CHARS: usize = 80;
@@ -807,6 +812,7 @@ fn agent_composer_rejection(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
+    user_command: bool,
 ) -> Option<(&'static str, &'static str)> {
     if !state.session_maps.sessions.contains_key(session_id) {
         return Some(("session_not_found", "unknown"));
@@ -826,10 +832,13 @@ fn agent_composer_rejection(
     {
         return Some(("selection_required", "empty"));
     }
-    if !human_reply && agent_submission_prompt_kind(state, session_id).is_some() {
+    if !human_reply
+        && (agent_submission_prompt_kind(state, session_id).is_some()
+            || (!user_command && waiting_on_progress_report(state, session_id)))
+    {
         return Some(("awaiting_input", "empty"));
     }
-    if !submission_ready(state, session_id, human_reply, true) {
+    if !submission_ready(state, session_id, human_reply, user_command) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -882,7 +891,7 @@ pub(crate) fn agent_submission_rejection_detail(
 
 /// Describe why a terminal could not receive an inbox wake; never drains a queue.
 pub(crate) fn agent_mail_wake_detail(state: &AppState, session_id: &str) -> String {
-    let reason = agent_composer_rejection(state, session_id, false)
+    let reason = agent_composer_rejection(state, session_id, false, false)
         .map(|(reason, _)| agent_submission_rejection_detail(state, session_id, reason))
         .unwrap_or_else(|| "The terminal wake path is unavailable. Inspect the recipient's lifecycle before retrying.".into());
     format!(
@@ -895,7 +904,7 @@ pub(super) fn agent_submission_rejection(
     session_id: &str,
     human_reply: bool,
 ) -> Option<(&'static str, &'static str)> {
-    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply) {
+    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply, true) {
         return Some(rejection);
     }
     // Readiness is checked BEFORE the queue, and the order is the fix. An agent
