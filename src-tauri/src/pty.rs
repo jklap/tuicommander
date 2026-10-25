@@ -3647,6 +3647,18 @@ fn grid_send_min_interval_ms(input_recent: bool, dirty_run: u32) -> u64 {
     }
 }
 
+/// The ticker's rate policy, separate from OS thread scheduling. A ready
+/// reader-applied input hint may bypass a floor or wake between periodic ticks;
+/// synchronized-update expiry is a protocol deadline and never waits either.
+fn grid_send_must_wait(
+    sync_timeout_flush: bool,
+    floor_pending: bool,
+    periodic_tick: bool,
+    priority_due: bool,
+) -> bool {
+    !sync_timeout_flush && (floor_pending || !periodic_tick) && !priority_due
+}
+
 /// Stamp the per-session last-input timestamp (epoch ms). Read by the grid
 /// ticker to throttle frame sends while the user types under CPU saturation,
 /// keeping the WebView/browser main thread free for keystroke dispatch + echo.
@@ -4008,7 +4020,12 @@ pub(crate) fn spawn_reader_thread(
                 });
             let priority_request = ticker_priority.request(now, last_sent);
             let priority_due = priority_request.is_some_and(|request| request.ready_at <= now);
-            if !sync_timeout_flush && (floor_pending || !periodic_tick) && !priority_due {
+            if grid_send_must_wait(
+                sync_timeout_flush,
+                floor_pending,
+                periodic_tick,
+                priority_due,
+            ) {
                 // Retry only a coalescing deadline, never a closed gate. The
                 // periodic tick still owns gate/sync maintenance and background frames.
                 priority_retry = priority_request.map(|request| request.ready_at);
