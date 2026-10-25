@@ -321,3 +321,18 @@ fn field_schema_preserves_display_only_capabilities() {
         assert_eq!(round_trip[capability], false);
     }
 }
+
+// Catches: adding a read-only reason rejects older provider boards or loses the reason on the wire.
+#[test]
+fn board_write_disabled_reason_is_optional_and_round_trips() {
+    let board = json!({"id":"p", "name":"Project", "fieldId":"status", "columns":[]});
+    let old: WorkItemBoard = serde_json::from_value(board.clone()).unwrap();
+    assert!(old.write_disabled_reason.is_none());
+    let mut readonly = board;
+    readonly["writeDisabledReason"] = json!("Grant project write access");
+    let parsed: WorkItemBoard = serde_json::from_value(readonly).unwrap();
+    assert_eq!(
+        serde_json::to_value(parsed).unwrap()["writeDisabledReason"],
+        "Grant project write access"
+    );
+}

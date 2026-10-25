@@ -237,6 +237,11 @@ repository and worktree defaults.
 | **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
 | **Repository Bindings** | Which account each workspace repo resolves to |
 
+Git & GitHub requests `repo project` during OAuth login. A connected account with
+known scopes that omit `project` shows **Log in again for Projects**. This renews
+consent without requiring logout first. Existing repository permissions do not
+change; external tokens and organization access must be updated separately.
+
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring. The `gh` CLI login is not used.
 
 ## AI

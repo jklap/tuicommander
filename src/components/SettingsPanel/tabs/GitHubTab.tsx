@@ -582,6 +582,20 @@ export const GitHubTab: Component = () => {
 						</div>
 					</div>
 
+					<Show when={!!authStatus()?.scopes?.trim() && !authStatus()!.scopes!.split(/[ ,]+/).includes("project")}>
+						<p class={s.hint}>
+							Projects writes require the project scope. Log in again to grant it, or update your token and grant
+							organization access. Existing PR, issue and comment permissions are unchanged.
+						</p>
+						<Button
+							data-non-setting="Renew GitHub consent for Projects writes"
+							onClick={() => startLogin()}
+							disabled={loading()}
+						>
+							Log in again for Projects
+						</Button>
+					</Show>
+
 					{/* Only show logout for OAuth tokens — env tokens are managed externally */}
 					<Show when={authStatus()?.source === "oauth"}>
 						<div class={g.actions}>

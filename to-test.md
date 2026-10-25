@@ -2953,3 +2953,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
 
 - [ ] After the next planned backend rebuild/restart, request and submit a dummy secret, then remove it from the same MCP session and after a bridge reconnect: both removals return `removed` (including an already absent name). Old binaries return `missing` after successful deletion; MCP reconnect alone does not clear backend-owned values. Native automation was unavailable for story 1520-46b1 (`osascript` assistive access denied).
+
+- [ ] #2338-0cfd: After a Rust rebuild/restart, verify GitHub login requests `repo project`,
+  Settings offers re-login for an old `read:project` token, and read-only Projects
+  retain cards without allowing moves while issue/PR actions still work. Live move
+  and read-back need an explicitly authorized scratch project; do not use a real board.

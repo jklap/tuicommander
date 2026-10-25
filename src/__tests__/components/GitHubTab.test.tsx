@@ -583,3 +583,37 @@ describe("GitHubTab — access diagnostics", () => {
 		expect(queryByText(/Cannot access/)).toBeNull();
 	});
 });
+
+// Catches: old OAuth logins look complete even though Projects writes need new consent.
+describe("GitHubTab — Projects write consent", () => {
+	beforeEach(resetState);
+	it.each(["repo, read:project", "repo, read:org"])(
+		"offers re-login for known read-only scopes %s without hiding PR settings",
+		async (scopes) => {
+			h.rpc.mockImplementation((cmd, args) =>
+				cmd === "github_auth_status"
+					? Promise.resolve({ authenticated: true, login: "octocat", avatar_url: null, source: "oauth", scopes })
+					: h.defaultRpc(cmd, args),
+			);
+			const GitHubTab = await loadTab();
+			const view = render(() => <GitHubTab />);
+			expect(await view.findByText(/Projects writes require the project scope/)).toBeTruthy();
+			expect(view.getByText("Pull Requests")).toBeTruthy();
+			fireEvent.click(view.getByRole("button", { name: "Log in again for Projects" }));
+			await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("github_start_login"));
+			expect(h.rpc).not.toHaveBeenCalledWith("github_logout");
+		},
+	);
+	// Catches: fine-grained tokens with no OAuth header are incorrectly declared read-only.
+	it.each(["repo, project", null])("does not infer missing scope from %s", async (scopes) => {
+		h.rpc.mockImplementation((cmd, args) =>
+			cmd === "github_auth_status"
+				? Promise.resolve({ authenticated: true, login: "octocat", avatar_url: null, source: "oauth", scopes })
+				: h.defaultRpc(cmd, args),
+		);
+		const GitHubTab = await loadTab();
+		const view = render(() => <GitHubTab />);
+		await view.findByText("octocat");
+		expect(view.queryByText(/Projects writes require the project scope/)).toBeNull();
+	});
+});
