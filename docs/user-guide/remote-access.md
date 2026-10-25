@@ -42,6 +42,9 @@ temporary directory; this avoids `operation not permitted` on certificate writes
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+The Remote Mobile Connection dialog shows the complete connection URL as selectable
+text. Use **Copy URL** to copy it; the action shows **Copied** after success.
+
 If local IP discovery fails, the settings controls and QR dialog remain open. The
 network address area shows the error and a **Retry** action. Retry repeats address
 discovery without changing the saved remote-access configuration.

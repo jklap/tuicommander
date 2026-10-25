@@ -246,14 +246,6 @@
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
-    "file": "src/components/RemoteQrDialog/RemoteQrDialog.module.css",
-    "story": "2220-d71f",
-    "rules": [
-      "[[],\".url\",[\"padding: 8px 10px\",\"border: 1px solid var(--border)\",\"border-radius: var(--radius-sm)\"]]",
-      "[[],\".url:hover\",[\"border-color: var(--accent)\"]]"
-    ]
-  },
-  {
     "file": "src/components/RemoteRepoPicker/RemoteRepoPicker.module.css",
     "story": "2221-d5ad",
     "rules": [
