@@ -166,6 +166,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `make build` / `make build-dmg` no longer fail locally with a missing-private-key error: updater artifact signing (`createUpdaterArtifacts`) is skipped when `TAURI_SIGNING_PRIVATE_KEY` is unset; CI/release builds that set the key are unchanged.
 - Fix plugin updates failing with "Failed to backup data/" on Linux: the `data/` backup now lives inside the plugins directory (same filesystem) instead of the OS temp dir, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file instead of a predictable path in shared `/tmp`.
 - Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so repeated activations no longer queue several frames and a late frame cannot focus a detached wrapper.
+- Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
 
 ## [2.0.0-beta.1] - 2026-10-22
 
