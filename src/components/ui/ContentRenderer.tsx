@@ -84,6 +84,14 @@ export function applyCommentBlockMetadata(container: HTMLElement, source: string
 	const blocks = findTweakCommentBlocks(source);
 	const comments = parseTweakComments(source, blocks).filter((comment) => comment.anchor === "block");
 	const renderRoot = container.firstElementChild ?? container;
+	// Invisible marker edits can leave the rendered HTML unchanged. Reconcile
+	// retained DOM metadata with the source instead of only adding highlights.
+	for (const element of renderRoot.querySelectorAll<HTMLElement>(".tweak-block-highlight")) {
+		element.classList.remove("tweak-block-highlight");
+		delete element.dataset.tweakId;
+		delete element.dataset.tweakAt;
+		delete element.dataset.tweakComment;
+	}
 	const elements = Array.from(renderRoot.children) as HTMLElement[];
 	const listItems = Array.from(renderRoot.querySelectorAll<HTMLElement>("li"));
 	let elementIndex = 0;
