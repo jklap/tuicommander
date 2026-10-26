@@ -2596,6 +2596,7 @@ partial work, and their child processes may continue.
 ## 22. Remote Daemon (`tuic-remote`) — Beta
 
 ### 22.1 Overview
+- Shared GitHub poller lifecycle controls, repository status, PR snapshots and issue reads work without a WebView; events use `/events` SSE and TCP keeps the existing authentication. Account/auth and GitHub mutation routes remain outside the headless monitoring surface.
 - Standalone headless binary for running TUICommander on servers without a desktop environment
 - Same HTTP/WebSocket API as the desktop app's remote access feature
 - No Tauri dependency — pure Rust binary

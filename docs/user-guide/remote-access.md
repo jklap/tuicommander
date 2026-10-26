@@ -1,5 +1,10 @@
 # Remote Access
 
+## Headless GitHub monitoring
+
+`tuic-remote` supports the same GitHub poller controls and repository status, PR and issue reads as the desktop server. Use `/repo/github-poller/start` and `/repo/github-poller/stop` over its Unix socket or authenticated HTTP API. Poller events reach `/events` without a WebView. GitHub account setup and mutation routes are not exposed by the headless router. A repository without a GitHub remote needs no GitHub credentials for a lifecycle check.
+
+
 Access TUICommander from a browser on another device on your network.
 
 ## Setup

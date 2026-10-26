@@ -1139,7 +1139,9 @@ Returns recent git commits.
 GET /repo/github?path=/path/to/repo
 ```
 
-Returns PR status, CI status, ahead/behind for current branch.
+Returns `has_remote`, `current_branch`, `ahead` and `behind`. This route and
+`/repo/prs`, `/repo/prs/batch` and `/repo/issues` are shared by desktop and
+headless servers. PR and CI snapshots are not part of this status object.
 
 ### PR Statuses (Batch)
 
@@ -1190,10 +1192,33 @@ Content-Type: application/json
 
 Reopens a closed issue via GitHub GraphQL API.
 
+### GitHub Poller Controls (Desktop and Headless)
+
+These existing handlers share one route registration on both servers. TCP uses
+normal server authentication; the local Unix socket remains trusted local IPC.
+
+| Method | Path | JSON body |
+|---|---|---|
+| POST | `/repo/github-poller/start` | `{ "paths": ["/repo"], "issueFilter": "all", "prHideDrafts": false }` |
+| POST | `/repo/github-poller/stop` | none |
+| POST | `/repo/github-poller/visibility` | `{ "visible": true }` |
+| POST | `/repo/github-poller/poll-repo` | `{ "path": "/repo" }` |
+| POST | `/repo/github-poller/update-paths` | `{ "paths": ["/repo"] }` |
+| POST | `/repo/github-poller/set-issue-filter` | `{ "filter": "all" }` |
+| GET / POST | `/repo/github-poller/api-debug` | POST: `{ "enabled": false }` |
+
+Start cold-starts the poller without a WebView. Control delivery returns
+`{"ok":true}` or an error when no poller accepts the command. API-debug reads
+return `{"enabled":false}` (or true); writes also return `ok`. Repository status
+is read through `/repo/github?path=...`; there is no separate poller-status route.
+PR/issue updates also reach `/events` SSE. Empty paths or a repository with no
+GitHub remote permit a credential-free lifecycle smoke; that does not verify
+GitHub authentication, network calls or populated snapshots.
+
 ### GitHub Auth & Diagnostics
 
 Browser/PWA parity for the GitHub settings panel. Registered on the loopback
-router only (the headless `tuic-remote` daemon does not expose GitHub).
+router only (the headless `tuic-remote` daemon exposes monitoring, not account/auth routes).
 
 ```
 GET  /github/viewer-login                       -> string (login)
