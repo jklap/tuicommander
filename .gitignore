@@ -181,3 +181,7 @@ ORCHESTRATOR.md
 /reports/mutation/
 /.stryker-tmp/
 !scripts/audit-control-styles.mjs
+
+# Website: film is a release asset fetched at deploy; review screenshots stay local
+website/public/video/
+website/.review/
