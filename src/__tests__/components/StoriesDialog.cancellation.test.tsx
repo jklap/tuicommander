@@ -42,10 +42,12 @@ it("offers Remove only for the recorded cancelled prerequisite on backlog C", as
 });
 
 // Catches: hiding the plan state whenever the plan contains stories and cancellation counts.
-it("shows Active beside cancellation counts while a recorded story is selected", async () => {
+it("shows Active in the detail pane and cancellation counts while a recorded story is selected", async () => {
 	render(() => <StoriesDialog project={recorded.plan.value.project} onClose={() => {}} />);
 	await screen.findByRole("heading", { name: "A prerequisite" });
 	const plans = within(screen.getByRole("complementary", { name: "Plans" }));
-	expect(plans.getByText(/State: Active/)).toBeTruthy();
+	const detail = within(screen.getByRole("region", { name: "Story details" }));
+	expect(detail.getByText(/State: Active/)).toBeVisible();
+	expect(plans.queryByText(/State: Active/)).toBeNull();
 	expect(plans.getByText("1 won't fix")).toBeTruthy();
 });
