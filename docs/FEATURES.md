@@ -3159,7 +3159,7 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
 
-GitHub OAuth now requests `repo read:project`; existing logins need reauthorization before Projects v2 reads.
+GitHub OAuth requests `repo project` for Projects v2 reads and writes. Existing read-only logins get re-login guidance; Projects write denials leave board cards and repository actions available.
 
 ### Internal repository settings owners
 

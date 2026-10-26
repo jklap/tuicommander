@@ -83,20 +83,33 @@ export function TasksBoardView(props: {
 			</Show>
 			<Show when={pages.page()}>
 				{(snapshot) => (
-					<TasksBoard
-						scopeKey={JSON.stringify([props.provider.providerId, props.provider.accountId])}
-						board={snapshot().board}
-						lanes={snapshot().lanes}
-						onMove={(reference, action) => props.provider.act(reference, action)}
-						onUpdated={() => void pages.refresh()}
-						hasMore={!!snapshot().nextCursor}
-						loadingMore={pages.loading()}
-						onMore={() => void pages.more()}
-						onOpen={props.onOpen}
-						cardActions={(card) => (
-							<StartWorkMenu provider={props.provider} item={card.item} repoPath={props.repoPath} />
-						)}
-					/>
+					<>
+						<Show when={snapshot().board.writeDisabledReason}>
+							<p role="status">{snapshot().board.writeDisabledReason}</p>
+						</Show>
+						<TasksBoard
+							scopeKey={JSON.stringify([props.provider.providerId, props.provider.accountId])}
+							board={snapshot().board}
+							lanes={snapshot().lanes}
+							onMove={async (reference, action) => {
+								try {
+									return await props.provider.act(reference, action);
+								} catch (error) {
+									// Re-read provider permissions after a rejected write; retain the move error.
+									void pages.refresh();
+									throw error;
+								}
+							}}
+							onUpdated={() => void pages.refresh()}
+							hasMore={!!snapshot().nextCursor}
+							loadingMore={pages.loading()}
+							onMore={() => void pages.more()}
+							onOpen={props.onOpen}
+							cardActions={(card) => (
+								<StartWorkMenu provider={props.provider} item={card.item} repoPath={props.repoPath} />
+							)}
+						/>
+					</>
 				)}
 			</Show>
 		</section>

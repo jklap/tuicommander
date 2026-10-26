@@ -225,6 +225,7 @@ export interface WorkItemBoardColumn {
 
 export interface WorkItemBoard {
 	id: string;
+	writeDisabledReason?: string | null;
 	name: string;
 	fieldId: string;
 	columns: Array<WorkItemBoardColumn>;
