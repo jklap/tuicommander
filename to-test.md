@@ -1,3 +1,7 @@
+## Stable MCP instructions (2362-95a9) — Rust restart required
+
+- [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
+
 ## Collapsed Compose queue pill (2339-056c)
 
 - [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.

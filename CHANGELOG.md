@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep MCP initialize instructions unchanged by live terminal and peer churn; current inventory remains available through session and agent tools (#2362-95a9).
+
 - Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
 - Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
 - Start allowlisted GitHub issue intake polling on the owning headless daemon without a UI, retain it across client filter/stop calls, and report unregistered intake repositories (#2323-c294).

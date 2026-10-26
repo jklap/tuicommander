@@ -1616,21 +1616,41 @@ async fn initialize_instructions_ignore_live_session_and_peer_churn() {
         let with_session = initialize_result(&state, params.clone()).await;
 
         let peers = handle_messaging(&state, &serde_json::json!({"action": "list_peers"}), None);
-        assert!(peers["peers"].as_array().unwrap().iter().any(|p| p["tuic_session"] == TEST_UUID_A));
+        assert!(
+            peers["peers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["tuic_session"] == TEST_UUID_A)
+        );
         let sessions = handle_mcp_tool_call(
             &state,
             loopback_addr(),
             "session",
             &serde_json::json!({"action": "list"}),
             None,
-        ).await;
-        assert!(sessions.as_array().unwrap().iter().any(|s| s["session_id"] == "inventory-session"));
+        )
+        .await;
+        assert!(
+            sessions
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["session_id"] == "inventory-session")
+        );
 
         state.session_maps.sessions.remove("inventory-session");
         state.peer_agents.remove(TEST_UUID_A);
         let after_removal = initialize_result(&state, params).await;
-        for (stage, response) in [("peer registration", peer_only), ("session creation", with_session), ("removal", after_removal)] {
-            assert_eq!(before["instructions"], response["instructions"], "live {stage} changed instructions (collapsed={collapsed})");
+        for (stage, response) in [
+            ("peer registration", peer_only),
+            ("session creation", with_session),
+            ("removal", after_removal),
+        ] {
+            assert_eq!(
+                before["instructions"], response["instructions"],
+                "live {stage} changed instructions (collapsed={collapsed})"
+            );
         }
     }
 }

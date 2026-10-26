@@ -1343,7 +1343,7 @@ fn meta_tools_do_not_demand_a_schema_the_caller_already_has() {
 ///
 /// Reproducible because nothing here reads the host: the instructions
 /// render from an explicit [`InstructionContext`] instead of the user's
-/// `repositories.json` and live PTY list, and the spawn response renders
+/// `repositories.json` and capability registry, and the spawn response renders
 /// from fixed ids instead of a launched process.
 ///
 /// The upstream dimension measures TUIC's own contribution only — injected
@@ -1364,16 +1364,6 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
             groups: vec![("work".into(), 5)],
             remote: Vec::new(),
         },
-        sessions: (0..12)
-            .map(|i| {
-                (
-                    format!("sess{i:04}"),
-                    format!("/Users/dev/src/repo-{i}"),
-                    format!("feature/branch-{i}"),
-                )
-            })
-            .collect(),
-        peer_count: 6,
         ..Default::default()
     };
 
@@ -1496,7 +1486,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     );
     assert!(
         instructions_classic_loaded - instructions_classic_empty <= 1600,
-        "the dynamic repo/session block grew past its budget — {measured}"
+        "the configured repository summary grew past its budget — {measured}"
     );
     assert!(
         tools_collapsed < tools_classic / 5,
@@ -2763,7 +2753,6 @@ fn instructions_name_tools_unambiguously() {
         serde_json::from_str(include_str!("fixtures/tool-names-2108.json")).unwrap();
     let ctx = InstructionContext {
         native_tools: tools(&["agent", "session", "repo"]),
-        peer_count: 1,
         ..Default::default()
     };
     for (client, key) in [("claude-code", "claude"), ("codex", "codex")] {
