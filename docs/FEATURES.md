@@ -3029,6 +3029,13 @@ returned next-run/local fire times remove clock, list and get lookups. Identical
 caller requests reuse the first saved occurrence; exact UTC storage preserves
 elapsed delays across DST. Unknown caller profile identity fails explicitly.
 
+### Automation profile repair
+
+Unresolved automation profiles appear in the desktop Messages bell on startup
+and after saved profile changes. Failed-run notices include their reason,
+independently of creator mail. Runs groups repeated identical failures with a
+count and a Fix action that focuses the current definition's saved-profile picker.
+
 ### Automations dialog (backend integration pending)
 
 Machine-local scheduled-run editor with search, backend cadence/zone preview,

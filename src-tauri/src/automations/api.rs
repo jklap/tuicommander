@@ -19,6 +19,7 @@ use std::sync::Arc;
 pub(crate) enum AutomationAction {
     List {},
     Templates {},
+    Profiles {},
     Template {
         template_id: String,
         repository: String,
@@ -59,6 +60,8 @@ pub(crate) enum AutomationAction {
         limit: u32,
         #[serde(default)]
         offset: u32,
+        #[serde(default)]
+        group_failures: bool,
     },
     WorktreePreview {
         id: String,
@@ -261,6 +264,18 @@ fn execute_stored_configured(
             }
             Ok(Value::Array(items))
         }
+        AutomationAction::Profiles {} => {
+            let names: Vec<&str> = profiles
+                .map(|config| {
+                    config
+                        .saved_run_configs()
+                        .into_iter()
+                        .map(|(_, profile)| profile.name.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            value(names)
+        }
         AutomationAction::Templates {} => value(super::templates::TEMPLATES),
         AutomationAction::Template {
             template_id,
@@ -322,8 +337,17 @@ fn execute_stored_configured(
             actions::execute(definitions, DefinitionAction::Delete { id }, None)
         }
         AutomationAction::Run { id } => value(runs.get(&id)?),
-        AutomationAction::ListRuns { id, limit, offset } => {
-            value(runs.history(id.as_deref(), limit, offset)?)
+        AutomationAction::ListRuns {
+            id,
+            limit,
+            offset,
+            group_failures,
+        } => {
+            if group_failures {
+                value(runs.grouped_history(id.as_deref(), limit, offset)?)
+            } else {
+                value(runs.history(id.as_deref(), limit, offset)?)
+            }
         }
         AutomationAction::Summary { window } => {
             value(runs.summary(window, now.timestamp_millis())?)

@@ -183,6 +183,7 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
     assert_eq!(
         tool["inputSchema"]["properties"]["action"]["enum"],
         json!([
+            "profiles",
             "list",
             "get",
             "create",

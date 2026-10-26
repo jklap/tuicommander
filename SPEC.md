@@ -1031,6 +1031,15 @@ truncation is marked and stderr is excluded. Empty output and manual bypasses
 inject nothing. The run ledger records `precheck_context: {injected, bytes}` for
 the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
+## Automation profile repair (#2360-f7ca)
+
+Desktop startup and persisted agent-profile changes read backend definition
+validation and report unresolved profiles in the Messages bell. Live failed-run
+notices include the failure reason regardless of creator availability. Backend
+grouping collapses identical failed runs before pagination, preserving individual
+history and summaries. Fix reloads the current saved definition and focuses its
+profile picker; it never edits a historical snapshot or starts a run.
+
 ## Automation Runs View (#1619-b84d)
 
 The Runs tab displays paginated immutable history across definitions, including deleted definitions, and backend 24h/7d elapsed-window summaries. View run focuses only a live terminal owned by the addressed daemon. Absent, suspended or exited sessions display saved bounded output, truncation evidence and recorded workspace details without creating sessions or workspaces. The dialog captures the active repository's daemon owner when opened. Visual verification remains pending because headless Chrome screenshot attempts timed out.
