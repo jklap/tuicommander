@@ -537,6 +537,21 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		return isAbsolutePath(ft.filePath) || !root ? ft.filePath : joinPath(root, ft.filePath);
 	};
 
+	// Selection events read this outside the render owner; keep allocation owned.
+	const chatReference = createMemo(() => {
+		if (!aiChatTabs.active("global")) return undefined;
+		return {
+			source: content(),
+			path: fullPath() ?? "",
+			insert: (reference: string) => {
+				const session = aiChatTabs.active("global");
+				if (!session) return;
+				aiChatDraft.insertReference(session, reference);
+				uiStore.setAiChatPanelVisible(true);
+			},
+		};
+	});
+
 	const reviewComments = createMemo(() => parseTweakComments(content()));
 	const canSend = () => !!selectedAgentSession() && !sendingChanges();
 	const hasReviewChanges = () =>
@@ -796,20 +811,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}
-						chatReference={
-							aiChatTabs.active("global")
-								? {
-										source: content(),
-										path: fullPath() ?? "",
-										insert: (reference) => {
-											const session = aiChatTabs.active("global");
-											if (!session) return;
-											aiChatDraft.insertReference(session, reference);
-											uiStore.setAiChatPanelVisible(true);
-										},
-									}
-								: undefined
-						}
+						chatReference={chatReference()}
 						onSave={handleTweakSave}
 						onSaveBlock={handleTweakBlockSave}
 						blockSource={(range) => content().slice(range.start, range.end)}

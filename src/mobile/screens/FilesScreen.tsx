@@ -431,6 +431,22 @@ export function FilesScreen(props: FilesScreenProps) {
 	const toggleTask = (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) =>
 		void reviewWrite(() => toggleCheckbox(content(), sourceLine, mark, sourceCol));
 
+	// Event handlers read this value outside the render owner. Create its memo
+	// here, rather than letting a JSX conditional create computations per read.
+	const chatReference = createMemo(() => {
+		if (!props.onOpenAiChat || !aiChatTabs.active("global")) return undefined;
+		return {
+			source: content(),
+			path: joinPath(repo() ?? "", file() ?? ""),
+			insert: (reference: string) => {
+				const session = aiChatTabs.active("global");
+				if (!session) return;
+				aiChatDraft.insertReference(session, reference);
+				props.onOpenAiChat?.();
+			},
+		};
+	});
+
 	const saveInlineComment = (comment: TweakComment, occurrence: number) =>
 		reviewWrite(() => insertTweakComment(content(), comment, occurrence));
 
@@ -654,20 +670,7 @@ export function FilesScreen(props: FilesScreenProps) {
 									<ReviewableMarkdown
 										content={content()}
 										onSaveInlineComment={saveInlineComment}
-										chatReference={
-											props.onOpenAiChat && aiChatTabs.active("global")
-												? {
-														source: content(),
-														path: joinPath(repo() ?? "", file() ?? ""),
-														insert: (reference) => {
-															const session = aiChatTabs.active("global");
-															if (!session) return;
-															aiChatDraft.insertReference(session, reference);
-															props.onOpenAiChat?.();
-														},
-													}
-												: undefined
-										}
+										chatReference={chatReference()}
 										imageSrc={markdownImageSrc}
 										onCheckboxToggle={toggleTask}
 										onSaveBlockComment={saveBlockComment}

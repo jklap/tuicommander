@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { aiChatTabs } from "../../stores/aiChatTabs";
 import { rpc } from "../../transport";
@@ -328,6 +328,9 @@ describe("FilesScreen", () => {
 	describe("Markdown review", () => {
 		// Catches: mobile selection handles not revealing the action, or routing text to a stale session draft.
 		it("stages a selected table cell for the open chat and navigates there without writing the file", async () => {
+			// Catches JSX prop conditionals allocating unowned memos during selection events.
+			const warn = vi.spyOn(console, "warn");
+			onTestFinished(() => warn.mockRestore());
 			files.set("src/guide.md", "# Guide\n\n| Name |\n| --- |\n| **Important** |\n");
 			aiChatTabs.add("global", "mobile-reference");
 			aiChatDraft.activate("another-chat");
@@ -355,6 +358,7 @@ describe("FilesScreen", () => {
 			expect(calls).not.toContain("write_file_if_unchanged");
 			aiChatDraft.activate("another-chat");
 			expect(aiChatDraft.text()).toBe("Unrelated question");
+			expect(warn).not.toHaveBeenCalled();
 		});
 
 		const openGuide = async (text: string) => {
