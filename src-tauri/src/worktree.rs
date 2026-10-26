@@ -1290,15 +1290,10 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
                 .unwrap_or_else(|| format!("Failed to checkout {target_branch}: {e}"))
         })?;
 
-    // 2. Merge the source branch
-    //    `--ff` only when the user's config says `merge.ff=only` (see
-    //    `merge_ff_override`): that policy would otherwise fail a diverged merge.
+    // 2. Apply the explicit UI merge policy, not a second parser for mergeOptions.
     if let Err(e) = git_cmd(&base_repo)
         .args(["merge", &branch_name, "--no-edit"])
-        .args(crate::git_cli::merge_ff_override(
-            &base_repo,
-            Some(&target_branch),
-        ))
+        .args([crate::git_cli::requested_merge_ff_policy(&base_repo)])
         .run()
     {
         return Err(finish_failed_git_operation_after_abort(
@@ -2333,7 +2328,7 @@ mod tests {
     /// `merge.ff` set repo-locally to `ff` and (optionally) the base branch
     /// advanced past the worktree branch's fork point. Returns the repo, the
     /// worktree branch tip, and the parent count of the base branch's HEAD.
-    fn merge_archive_with_ff_config(ff: &str, diverge: bool) -> (TempDir, String, usize) {
+    fn merge_archive_with_ff_config(ff: &str, diverge: bool, options: Option<&str>) -> (TempDir, String, usize) {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let base = base_branch_of(repo.path());
@@ -2350,6 +2345,9 @@ mod tests {
             .args(["config", "merge.ff", ff])
             .run()
             .unwrap();
+        if let Some(options) = options {
+            git_cmd(repo.path()).args(["config", &format!("branch.{base}.mergeOptions"), options]).run().unwrap();
+        }
         let tip = git_cmd(repo.path())
             .args(["rev-parse", "feat-ffcfg"])
             .run()
@@ -2382,9 +2380,16 @@ mod tests {
         (repo, tip, parents)
     }
 
+    // Catches: a flag-shaped commit message being mistaken for fast-forward policy.
+    #[test]
+    fn merge_and_archive_preserves_merge_commit_with_flag_like_message() {
+        let (_repo, _tip, parents) = merge_archive_with_ff_config("false", false, Some("-m --ff-only"));
+        assert_eq!(parents, 2, "a message is not a fast-forward policy flag");
+    }
+
     #[test]
     fn merge_and_archive_merges_a_diverged_target_under_merge_ff_only() {
-        let (repo, _tip, parents) = merge_archive_with_ff_config("only", true);
+        let (repo, _tip, parents) = merge_archive_with_ff_config("only", true, None);
         assert_eq!(parents, 2, "a diverged target gets a merge commit");
         assert!(repo.path().join("work.txt").exists());
         assert!(repo.path().join("base-only.txt").exists());
@@ -2392,7 +2397,7 @@ mod tests {
 
     #[test]
     fn merge_and_archive_still_fast_forwards_under_merge_ff_only() {
-        let (repo, tip, parents) = merge_archive_with_ff_config("only", false);
+        let (repo, tip, parents) = merge_archive_with_ff_config("only", false, None);
         assert_eq!(parents, 1, "ff-able merge stays a fast-forward");
         let head = git_cmd(repo.path())
             .args(["rev-parse", "HEAD"])
@@ -2404,13 +2409,13 @@ mod tests {
 
     #[test]
     fn merge_and_archive_keeps_a_merge_commit_under_merge_ff_false() {
-        let (_repo, _tip, parents) = merge_archive_with_ff_config("false", false);
+        let (_repo, _tip, parents) = merge_archive_with_ff_config("false", false, None);
         assert_eq!(parents, 2, "merge.ff=false users still get a merge commit");
     }
 
     #[test]
     fn merge_and_archive_fast_forwards_by_default() {
-        let (_repo, tip, parents) = merge_archive_with_ff_config("true", false);
+        let (_repo, tip, parents) = merge_archive_with_ff_config("true", false, None);
         assert_eq!(parents, 1);
         assert!(!tip.is_empty());
     }
