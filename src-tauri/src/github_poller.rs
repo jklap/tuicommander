@@ -888,10 +888,9 @@ mod tests {
             .unwrap();
             loop {
                 if let AppEvent::GitHubIssuesUpdate { repo_path, .. } = events.recv().await.unwrap()
+                    && repo_path == paths[1]
                 {
-                    if repo_path == paths[1] {
-                        break;
-                    }
+                    break;
                 }
             }
             let request = fixture.requests.recv().await.unwrap();
