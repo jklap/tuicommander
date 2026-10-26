@@ -6,10 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
+
 ### Fixed
 
 - Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
 
+- Show readable story transition labels, criterion numbers and text, and compact session actors with full-ID tooltips (#2355-bb93).
+
+- Keep the toolbar repository filter and manual sidebar density controls blue while active, independent of shared button stylesheet order (#2353-9fca).
+
+- Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
 - Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
 - Start allowlisted GitHub issue intake polling on the owning headless daemon without a UI, retain it across client filter/stop calls, and report unregistered intake repositories (#2323-c294).
 - Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.

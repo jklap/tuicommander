@@ -51,6 +51,67 @@ export function StoryMetadata(props: { project: string; story: EditableStory & {
 			() => void refresh(),
 		),
 	);
+	const commandLabel = (command: Transition["command"]) => {
+		const kind = typeof command === "string" ? command : (Object.keys(command)[0] ?? "");
+		const value = typeof command === "string" ? undefined : command[kind];
+		let label = "";
+		switch (kind) {
+			case "start_manual":
+				label = t("stories.history.startManual", "Started manually");
+				break;
+			case "submit_qa":
+				label = t("stories.history.submitQa", "Submitted for QA");
+				break;
+			case "reject_qa":
+				label = t("stories.history.rejectQa", "QA rejected");
+				break;
+			case "submit_review":
+				label = t("stories.history.submitReview", "Submitted for review");
+				break;
+			case "approve":
+				label = t("stories.history.approve", "Approved");
+				break;
+			case "reject_review":
+				label = t("stories.history.rejectReview", "Review rejected");
+				break;
+			case "block":
+				label = t("stories.history.block", "Blocked");
+				break;
+			case "unblock":
+				label = t("stories.history.unblock", "Unblocked");
+				break;
+			case "wont_fix":
+				label = t("stories.history.wontFix", "Cancelled");
+				break;
+			case "check_criterion":
+			case "uncheck_criterion":
+			case "set_criterion_manual": {
+				const index =
+					kind === "set_criterion_manual" && value && typeof value === "object" && "index" in value
+						? value.index
+						: value;
+				if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0) break;
+				const params = { number: String(index + 1) };
+				if (kind === "check_criterion")
+					label = t("stories.history.checkCriterion", "Criterion {number} checked", params);
+				else if (kind === "uncheck_criterion")
+					label = t("stories.history.uncheckCriterion", "Criterion {number} unchecked", params);
+				else if (value && typeof value === "object" && "manual" in value && value.manual === true)
+					label = t("stories.history.setManual", "Criterion {number} marked manual", params);
+				else label = t("stories.history.unsetManual", "Criterion {number} no longer manual", params);
+				const text = props.story.criteria[index];
+				return text ? `${label}: ${text}` : label;
+			}
+		}
+		if (label) return label;
+		const humanized = kind
+			.replace(/[_-]+/g, " ")
+			.replace(/([a-z])([A-Z])/g, "$1 $2")
+			.trim();
+		return humanized
+			? humanized[0].toUpperCase() + humanized.slice(1)
+			: t("stories.history.unknown", "Unknown transition");
+	};
 	const originLabel = () => {
 		switch (props.story.origin.type) {
 			case "native":
@@ -119,15 +180,19 @@ export function StoryMetadata(props: { project: string; story: EditableStory & {
 								<span>
 									{t("stories.metadata.revision", "Revision")} {entry.revision} ·{" "}
 								</span>
-								<code>{typeof entry.command === "string" ? entry.command : JSON.stringify(entry.command)}</code>
+								<span>{commandLabel(entry.command)}</span>
 								<span>
 									{" "}
 									·{" "}
-									{entry.actor.type === "managed_session"
-										? `${sessionName(entry.actor.session_id) ?? ""} ${entry.actor.session_id}`.trim()
-										: entry.actor.type === "human"
-											? t("stories.metadata.human", "Human")
-											: t("stories.metadata.localApi", "Local API")}
+									{entry.actor.type === "managed_session" ? (
+										<span title={entry.actor.session_id}>
+											{sessionName(entry.actor.session_id) || entry.actor.session_id.slice(0, 8)}
+										</span>
+									) : entry.actor.type === "human" ? (
+										t("stories.metadata.human", "Human")
+									) : (
+										t("stories.metadata.localApi", "Local API")
+									)}
 								</span>
 							</li>
 						)}
