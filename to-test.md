@@ -1,6 +1,6 @@
 ## Plans and Stories selection (2354-a8a3)
 
-- [ ] Repeat three A/B plan round trips in a visible isolated agent-test window and retain a DOM removal/hide log plus a window-only screenshot. The regression tests prove plan, story and filter selections keep the same visible dialog while notes are pending. The native agent-test build succeeded, but its WebView reported a hidden document and its window was not on screen; callbacks did not settle reliably and the window-only capture timed out. Live completion is not claimed.
+- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
 
 ## Headless issue intake (2323-c294) — Rust restart required
 
