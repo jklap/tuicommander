@@ -802,6 +802,75 @@ pub fn requested_merge_ff_policy(cwd: &Path) -> &'static str {
     if no_ff { "--no-ff" } else { "--ff" }
 }
 
+/// [`merge_ff_override`] for a merge run in `cwd` that merges into whatever
+/// `cwd` has checked out.
+///
+/// Git applies `branch.<name>.mergeOptions` of the branch HEAD is on, not of a
+/// branch the caller merely names, so the checked-out branch is resolved with
+/// `symbolic-ref`. A detached HEAD has no branch and falls back to `merge.ff`.
+///
+/// The full ref is read and `refs/heads/` stripped by hand: `--short` prints
+/// `heads/<name>` when a tag of the same name exists, which would look up
+/// `branch.heads/<name>.mergeOptions` instead of the real branch's.
+pub fn merge_ff_override_for_head(cwd: &Path) -> Option<&'static str> {
+    let head = git_cmd(cwd)
+        .args(["symbolic-ref", "--quiet", "HEAD"])
+        .run_silent()
+        .and_then(|o| {
+            o.stdout
+                .trim()
+                .strip_prefix("refs/heads/")
+                .filter(|b| !b.is_empty())
+                .map(str::to_string)
+        });
+    merge_ff_override(cwd, head.as_deref())
+}
+
+/// Split a config value into words the way git's `split_cmdline` does (the
+/// parser behind `branch.<name>.mergeOptions` and aliases): whitespace
+/// separates words, `'` and `"` group (and are dropped), and a backslash
+/// takes the next character literally. Returns `None` for an unterminated
+/// quote or a trailing backslash, which git rejects as well.
+fn split_cmdline(s: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) if c == '\\' => cur.push(chars.next()?),
+            Some(_) => cur.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            None if c == '\\' => {
+                cur.push(chars.next()?);
+                in_word = true;
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Some(words)
+}
+
 /// Create a git command builder rooted at the given directory.
 pub fn git_cmd(cwd: &Path) -> GitCmd {
     #[cfg(any(test, feature = "test-support"))]
@@ -968,6 +1037,40 @@ mod tests {
         // a temp dir inside it resolves to the parent, which must be rejected.
         let parent = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
         assert_repo_root(parent.path());
+    }
+
+    #[test]
+    fn merge_ff_override_for_head_reads_the_checked_out_branch() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "merge.ff", "true"]);
+        git_in(&path, &["commit", "--allow-empty", "-m", "init"]);
+        git_in(&path, &["checkout", "-b", "feature"]);
+        // The branch a caller might name is not the one checked out here.
+        git_in(
+            &path,
+            &["config", "branch.feature.mergeOptions", "--ff-only"],
+        );
+        git_in(&path, &["config", "branch.other.mergeOptions", "--no-ff"]);
+        assert_eq!(merge_ff_override_for_head(&path), Some("--ff"));
+        // Detached HEAD: no branch, falls back to merge.ff (true here).
+        git_in(&path, &["checkout", "--detach"]);
+        assert_eq!(merge_ff_override_for_head(&path), None);
+    }
+
+    #[test]
+    fn merge_ff_override_for_head_survives_a_tag_named_like_the_branch() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "merge.ff", "true"]);
+        git_in(&path, &["commit", "--allow-empty", "-m", "init"]);
+        git_in(&path, &["checkout", "-b", "feature"]);
+        // With a tag `feature` too, `symbolic-ref --short HEAD` prints
+        // `heads/feature`.
+        git_in(&path, &["tag", "feature"]);
+        git_in(
+            &path,
+            &["config", "branch.feature.mergeOptions", "--ff-only"],
+        );
+        assert_eq!(merge_ff_override_for_head(&path), Some("--ff"));
     }
 
     /// A child that outlives any deadline these tests set.
