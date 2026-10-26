@@ -181,6 +181,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		}
 
 		// Single-block only: skip selections that cross block boundaries.
+		// DEFERRED (2026-10-26) — chat inherits this comment guard; multi-block references
+		// need separate action eligibility and source-span matching (critic R2-3).
 		if (crossesBlockBoundary(range, props.contentRef)) {
 			setBtnPos(null);
 			return;
