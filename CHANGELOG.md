@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
 
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
+- Stage elevated mdkb installs and Linux `.deb`/`.rpm` installs in fresh private 0700 temp directories instead of predictable `/tmp` paths another local user could pre-create or swap.
 
 ## [2.0.0-beta.3] - 2026-10-26
 
