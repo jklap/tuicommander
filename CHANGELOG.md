@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep Settings scroll and focus stable while launch instruction previews refresh, and explain each launch module with contextual help (#2373-2313).
+
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
 - Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).
 
