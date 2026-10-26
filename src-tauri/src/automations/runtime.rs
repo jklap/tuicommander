@@ -54,7 +54,7 @@ impl AutomationRuntime {
             let Some(state) = weak.upgrade() else { return };
             let mut events = state.event_bus.subscribe();
             drop(state);
-            // The poller emits only on change; an issue refused for capacity is retried from here.
+            // An issue refused for capacity is retried on the scheduler tick.
             let mut issues = super::event_intake::IssueSnapshot::default();
             let mut last_intake = None;
             let mut timer = tokio::time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
@@ -64,7 +64,7 @@ impl AutomationRuntime {
                     _ = timer.tick() => (true, true),
                     event = events.recv() => {
                         match event {
-                            Ok(crate::state::AppEvent::GitHubIssuesUpdate { repo_path, issues: update }) => {
+                            Ok(crate::state::AppEvent::GitHubIntakeIssuesUpdate { repo_path, issues: update }) => {
                                 issues.replace(repo_path, update);
                                 (false, true)
                             }
@@ -107,7 +107,10 @@ impl AutomationRuntime {
                 let polling_state = state.clone();
                 let polling = tokio::task::spawn_blocking(move || {
                     let config = DefinitionStore::at_path(polling_config).load()?;
-                    let paths = intake_poll_paths(&polling_state, &config.event_intake)?;
+                    let (paths, errors) = intake_poll_paths(&polling_state, &config.event_intake);
+                    for error in errors {
+                        tracing::error!(source="automations", %error, "Event intake configuration error");
+                    }
                     Ok::<_, String>((config.event_intake, paths))
                 })
                 .await;
@@ -217,9 +220,9 @@ impl AutomationRuntime {
 fn intake_poll_paths(
     state: &AppState,
     intake: &super::model::EventIntake,
-) -> Result<Vec<String>, String> {
+) -> (Vec<String>, Vec<String>) {
     if !intake.enabled() {
-        return Ok(Vec::new());
+        return (Vec::new(), Vec::new());
     }
     use crate::github_account::{
         GitHubAccountRegistry, RepoBindingStore, RepoResolution, resolve_repo_account,
@@ -244,21 +247,23 @@ fn intake_poll_paths(
         }
     }
     let mut paths = Vec::new();
+    let mut errors = Vec::new();
     for repository in &intake.repositories {
         let Some((_, path)) = resolved
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(repository))
         else {
-            return Err(format!(
+            errors.push(format!(
                 "Event intake repository {repository} is not registered with an unambiguous GitHub account on this daemon"
             ));
+            continue;
         };
         if !paths.contains(path) {
             paths.push(path.clone());
         }
     }
     paths.sort();
-    Ok(paths)
+    (paths, errors)
 }
 
 #[cfg(test)]
@@ -268,6 +273,21 @@ mod tests {
     // Catches: intake waiting for a client to start the shared GitHub poller.
     #[tokio::test]
     async fn headless_intake_polls_without_client() {
+        assert_headless_intake(vec!["sstraus/tuicommander".into()]).await;
+    }
+
+    // Catches: one unresolved allowlist entry disabling valid registered siblings.
+    #[tokio::test]
+    async fn headless_intake_keeps_valid_repository_with_missing_entries() {
+        assert_headless_intake(vec![
+            "missing/first".into(),
+            "sstraus/tuicommander".into(),
+            "missing/second".into(),
+        ])
+        .await;
+    }
+
+    async fn assert_headless_intake(repositories: Vec<String>) {
         let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let config = scratch.path().join("config");
         std::fs::create_dir_all(&config).unwrap();
@@ -305,7 +325,7 @@ mod tests {
         .unwrap();
         let intake = super::super::model::AutomationsConfig {
             event_intake: super::super::model::EventIntake {
-                repositories: vec!["sstraus/tuicommander".into()],
+                repositories,
                 label: "tuic-run".into(),
                 definition_id: "not-dispatched".into(),
             },
@@ -331,6 +351,25 @@ mod tests {
             .await
             .expect("headless intake did not poll after acquiring ownership")
             .unwrap();
+        let (resolved, errors) = intake_poll_paths(&fixture.state, &intake.event_intake);
+        assert_eq!(resolved, vec![repo.to_string_lossy().into_owned()]);
+        let missing: Vec<_> = intake
+            .event_intake
+            .repositories
+            .iter()
+            .filter(|name| name.starts_with("missing/"))
+            .collect();
+        assert_eq!(
+            errors.len(),
+            missing.len(),
+            "each failed entry needs its own diagnostic"
+        );
+        for name in missing {
+            assert!(
+                errors.iter().any(|error| error.contains(name)),
+                "missing diagnostic for {name}: {errors:?}"
+            );
+        }
         let query = request["query"].as_str().unwrap();
         assert!(query.contains("owner: \"sstraus\""), "{query}");
         assert!(
@@ -427,7 +466,9 @@ mod tests {
             repositories: vec!["missing/repository".into()],
             ..Default::default()
         };
-        let error = intake_poll_paths(&state, &intake).unwrap_err();
+        let (paths, errors) = intake_poll_paths(&state, &intake);
+        assert!(paths.is_empty());
+        let error = &errors[0];
         assert!(
             error.contains("missing/repository") && error.contains("not registered"),
             "{error}"
@@ -438,7 +479,8 @@ mod tests {
     #[tokio::test]
     async fn empty_intake_does_not_start_poller() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let paths = intake_poll_paths(&state, &Default::default()).unwrap();
+        let (paths, errors) = intake_poll_paths(&state, &Default::default());
+        assert!(errors.is_empty());
         crate::github_poller::set_intake_paths(&state, paths).unwrap();
         assert!(state.github.poller.lock().is_none());
     }
@@ -490,8 +532,16 @@ mod tests {
                 let request = fixture.requests.recv().await.unwrap();
                 let query = request["query"].as_str().unwrap();
                 if query.contains("name: \"intake\"") {
+                    let intake_selection = query
+                        .split("intakeIssues:")
+                        .nth(1)
+                        .expect("unfiltered intake selection")
+                        .split("viewerPrs:")
+                        .next()
+                        .unwrap();
                     assert!(
-                        query.contains("issues(") && !query.contains("filterBy:"),
+                        intake_selection.contains("issues(")
+                            && !intake_selection.contains("filterBy:"),
                         "{query}"
                     );
                     seen_intake = true;

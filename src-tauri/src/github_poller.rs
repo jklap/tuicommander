@@ -416,7 +416,15 @@ async fn poll_batch(
         return;
     }
     if client.is_empty() {
-        poll_filtered_batch(state, &intake, include_merged, "all", pr_hide_drafts, ps).await;
+        poll_filtered_batch(
+            state,
+            &intake,
+            include_merged,
+            issue_filter,
+            pr_hide_drafts,
+            ps,
+        )
+        .await;
         return;
     }
     // Keep the resync request for both halves of this logical batch.
@@ -431,7 +439,15 @@ async fn poll_batch(
     )
     .await;
     ps.force_resync |= force;
-    poll_filtered_batch(state, &intake, include_merged, "all", pr_hide_drafts, ps).await;
+    poll_filtered_batch(
+        state,
+        &intake,
+        include_merged,
+        issue_filter,
+        pr_hide_drafts,
+        ps,
+    )
+    .await;
 }
 
 async fn poll_filtered_batch(
@@ -448,12 +464,13 @@ async fn poll_filtered_batch(
     // Per-account circuit breakers are checked inside get_all_batch_impl so a
     // single failing account no longer blocks polling of the others.
 
-    match crate::github::get_all_batch_impl(
+    match crate::github::get_all_batch_with_intake_impl(
         paths,
         include_merged,
         issue_filter,
         pr_hide_drafts,
         state,
+        paths.iter().any(|path| ps.intake_paths.contains(path)),
     )
     .await
     {
@@ -464,6 +481,12 @@ async fn poll_filtered_batch(
             // here so a single successful poll re-hydrates the (reset) frontend store.
             let force = ps.force_resync;
             ps.force_resync = false;
+
+            for (repo_path, issues) in result.intake_issues {
+                let _ = state
+                    .event_bus
+                    .send(AppEvent::GitHubIntakeIssuesUpdate { repo_path, issues });
+            }
 
             for (repo_path, statuses) in result.prs {
                 let changed =
@@ -885,6 +908,110 @@ mod tests {
             "query payload eviction must not erase successful monitoring identity"
         );
         stop_poller(&state).await.unwrap();
+    }
+
+    // Catches: an intake overlap leaking all issues into a disabled client view.
+    #[tokio::test]
+    async fn overlapping_intake_preserves_disabled_client_delivery() {
+        assert_overlap_delivery("disabled", None, 0).await;
+    }
+
+    // Catches: intake overriding viewer-scoped filters, including GitHub-only mention semantics.
+    #[tokio::test]
+    async fn overlapping_intake_preserves_viewer_filtered_client_delivery() {
+        for (filter, clause) in [
+            ("assigned", "assignee"),
+            ("created", "createdBy"),
+            ("mentioned", "mentioned"),
+        ] {
+            assert_overlap_delivery(filter, Some(clause), 0).await;
+        }
+        assert_overlap_delivery("all", None, 1).await;
+    }
+
+    async fn assert_overlap_delivery(filter: &str, clause: Option<&str>, expected: usize) {
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        let repo = scratch.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/sstraus/tuicommander.git",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let path = repo.to_string_lossy().into_owned();
+        let mut fixture = crate::github::partial_tests::PollHttpFixture::start(true).await;
+        let mut events = fixture.state.event_bus.subscribe();
+        let mut ps = PollMutableState {
+            intake_paths: vec![path.clone()],
+            ..Default::default()
+        };
+        poll_batch(&fixture.state, &[path], false, filter, false, &mut ps).await;
+        let request = fixture.requests.try_recv().expect("one shared request");
+        let query = request["query"].as_str().unwrap();
+        assert!(
+            query.contains("intakeIssues: ") && query.contains("issues("),
+            "{query}"
+        );
+        let intake_selection = query
+            .split("intakeIssues:")
+            .nth(1)
+            .unwrap()
+            .split("viewerPrs:")
+            .next()
+            .unwrap();
+        assert!(
+            !intake_selection.contains("filterBy:"),
+            "intake selection was filtered: {query}"
+        );
+        if let Some(clause) = clause {
+            assert!(
+                query.contains(&format!(r#"{clause}: "sstraus""#)),
+                "{query}"
+            );
+        }
+        assert!(
+            fixture.requests.try_recv().is_err(),
+            "overlap must not trigger a second fetch"
+        );
+        let mut intake_count = None;
+        let delivered = loop {
+            match events.try_recv().expect("client snapshot") {
+                AppEvent::GitHubIntakeIssuesUpdate { issues, .. } => {
+                    intake_count = Some(issues.len())
+                }
+                AppEvent::GitHubIssuesUpdate { issues, .. } => break issues,
+                _ => {}
+            }
+        };
+        assert_eq!(intake_count, Some(1), "intake lost its unfiltered snapshot");
+        assert_eq!(
+            delivered.len(),
+            expected,
+            "client filter {filter} was overridden"
+        );
+        let payload =
+            crate::mcp_http::sse_routes::event_payload_for_test(&AppEvent::GitHubIssuesUpdate {
+                repo_path: "repo".into(),
+                issues: delivered,
+            });
+        assert_eq!(payload["issues"].as_array().unwrap().len(), expected);
+        fixture.close().await;
     }
 
     // Catches: duplicate snapshots inflating the gauge, or retired paths/pollers keeping ghost monitors.

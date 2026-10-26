@@ -1,6 +1,6 @@
 ## Headless issue intake (2323-c294) — Rust restart required
 
-- [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. This peer did not restart the daily app; Rust changes do not hot-reload.
+- [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. Include a missing allowlist entry alongside a valid one: the valid repository must continue polling and each missing entry must be logged. On an overlapping repository, assigned/created/mentioned/disabled client views must retain their filter while intake still receives all issues. This peer did not restart the daily app; Rust changes do not hot-reload.
 
 ## Development backend staleness (2332-3eef) — Rust restart required
 

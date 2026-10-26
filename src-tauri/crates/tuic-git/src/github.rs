@@ -710,6 +710,25 @@ pub fn build_unified_batch_query(
     viewer: &str,
     hide_drafts: bool,
 ) -> (String, Vec<(String, String)>) {
+    build_unified_batch_query_with_intake(
+        repos,
+        include_merged,
+        filter_mode,
+        viewer,
+        hide_drafts,
+        false,
+    )
+}
+
+/// Intake and client issue selections share one request but keep independent filters.
+pub fn build_unified_batch_query_with_intake(
+    repos: &[(String, String, String)],
+    include_merged: bool,
+    filter_mode: &str,
+    viewer: &str,
+    hide_drafts: bool,
+    intake: bool,
+) -> (String, Vec<(String, String)>) {
     let states = if include_merged {
         "[OPEN, MERGED]"
     } else {
@@ -751,11 +770,17 @@ pub fn build_unified_batch_query(
 
     for (i, (path, owner, name)) in repos.iter().enumerate() {
         let alias = format!("r{i}");
-        let issues_section = if include_issues {
+        let mut issues_section = if include_issues {
             format!("\n{}", issues_repo_section(filter_mode, viewer))
         } else {
             String::new()
         };
+        if intake {
+            issues_section.push_str(&format!(
+                "\n    intakeIssues: {}",
+                issues_repo_section("all", viewer)
+            ));
+        }
         parts.push(format!(
             "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed\n    pullRequests(first: {pr_first}, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}{issues_section}\n  }}"
         ));
@@ -785,8 +810,10 @@ pub fn build_unified_batch_query(
 
 /// Result of a unified batch poll.
 pub struct BatchPollResult {
+    /// Unfiltered machine-owned intake snapshots; never delivered to clients.
+    pub intake_issues: std::collections::HashMap<String, Vec<GitHubIssue>>,
     pub prs: std::collections::HashMap<String, Vec<BranchPrStatus>>,
-    /// Non-empty only when filter_mode != "disabled".
+    /// Client snapshots; disabled intake paths carry empty lists to clear stale badges.
     pub issues: std::collections::HashMap<String, Vec<GitHubIssue>>,
 }
 
