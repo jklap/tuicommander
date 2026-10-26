@@ -204,6 +204,7 @@ ORCHESTRATOR.md
 /.stryker-tmp/
 !scripts/audit-control-styles.mjs
 
+.obsidian/
 
 # Personal Claude Code state (`.claude/` itself is tracked: agents, hooks, skills).
 # The hook debug log rotates to dated names (`hook-debug.log.YYYY-MM-DD`) that
@@ -212,3 +213,6 @@ ORCHESTRATOR.md
 .claude/settings.local.json
 .claude/worktrees/
 .claude/*.lock
+trigger_mic
+trigger_mic.swift
+.pnpm-store/
