@@ -15,6 +15,9 @@ it("keeps different session pushes actionable while replacing repeats of one ses
 	const opened: string[] = [];
 	const worker = readFileSync("public/sw.js", "utf8");
 	runInNewContext(worker, {
+		// Stryker's preamble reads the active mutant from the context's own `process.env`; without it
+		// every mutant of sw.js stays inert and the run scores 0 killed.
+		process,
 		self: {
 			addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
 			registration: {
@@ -79,6 +82,9 @@ it("shows a generic actionable notification for invalid push payloads", async ()
 	const notices: Array<{ title: string; body: string; data: { url: string }; close: () => void }> = [];
 	const opened: string[] = [];
 	runInNewContext(readFileSync("public/sw.js", "utf8"), {
+		// Stryker's preamble reads the active mutant from the context's own `process.env`; without it
+		// every mutant of sw.js stays inert and the run scores 0 killed.
+		process,
 		self: {
 			addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
 			registration: {
@@ -131,4 +137,59 @@ it("shows a generic actionable notification for invalid push payloads", async ()
 		expect(opened, `${name} click opens a window`).toHaveLength(index + 1);
 		expect(opened.at(-1), `${name} notification opens mobile`).toBe("/mobile");
 	}
+});
+
+type ShownOptions = { tag: string; icon: string; badge: string; data: { url: string } };
+
+async function showPush(url: string): Promise<ShownOptions> {
+	let handler: ((event: unknown) => void) | undefined;
+	let shown: ShownOptions | undefined;
+	runInNewContext(readFileSync("public/sw.js", "utf8"), {
+		// See the first test: Stryker needs `process` inside the context.
+		process,
+		self: {
+			addEventListener: (type: string, listener: (event: unknown) => void) => {
+				if (type === "push") handler = listener;
+			},
+			registration: {
+				showNotification: async (_title: string, options: ShownOptions) => {
+					shown = options;
+				},
+			},
+		},
+	});
+	const pending: Promise<unknown>[] = [];
+	handler?.({
+		data: { json: () => ({ title: "TUICommander", body: "b", url }) },
+		waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+	});
+	await Promise.all(pending);
+	if (!shown) throw new Error("push listener did not show a notification");
+	return shown;
+}
+
+// Each row names the plausible sw.js bug it catches.
+it.each([
+	// id capture shortened to one character
+	["/mobile/session/abc", "tuic-session-abc"],
+	["/mobile/session/abc/", "tuic-session-abc"],
+	["/mobile/session/abc?x=1", "tuic-session-abc"],
+	["/mobile/session/abc#frag", "tuic-session-abc"],
+	// lost ^ anchor: a foreign path containing the session route is not a session deep link
+	["/x/mobile/session/a", "tuic-push"],
+	// boundary after the id: a longer path is not a session deep link, so it shares the generic tag
+	["/mobile/session/a/extra", "tuic-push"],
+	// chat deep link still uses its own tag
+	["/mobile?repo=%2Frepo&session=chat-a", "tuic-acp-chat-a"],
+	// empty fallback tag would merge unrelated generic pushes
+	["/mobile", "tuic-push"],
+])("tags the push for %s as %s", async (url, tag) => {
+	expect((await showPush(url)).tag).toBe(tag);
+});
+
+it("shows the app icon and badge and keeps the deep link in the notification data", async () => {
+	const options = await showPush("/mobile/session/a");
+	expect(options.icon).toBe("/mobile-icon.svg?v=2");
+	expect(options.badge).toBe("/mobile-icon.svg?v=2");
+	expect(options.data).toEqual({ url: "/mobile/session/a" });
 });
