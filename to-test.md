@@ -2992,3 +2992,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [x] Rebuilt `tuic-remote`: `python3 scripts/test-headless-github.py /absolute/path/to/tuic-remote` verifies isolated Unix-socket GitHub monitoring (#2345-49f0). _(verified: empty paths and a scratch no-remote repository start, return status/data, stop and restart; no authenticated GitHub fetch is claimed. The running desktop backend needs a manual restart to load Rust changes.)_
 
 - [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
+
+- [ ] After a manual backend restart, check automation profile repair: invalid saved profiles appear in the bell at desktop startup and after a profile rename/delete; repeated identical failures show a count and Fix opens the current profile picker. Rust changes do not hot-reload (#2360-f7ca).

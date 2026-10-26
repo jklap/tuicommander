@@ -51,7 +51,7 @@ describe("automation runs", () => {
 		expect(screen.getByText("No workspace was recorded.")).toBeTruthy();
 		expect(runNow).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Next runs" }));
-		await waitFor(() => expect(history).toHaveBeenCalledWith(undefined, 20, 21));
+		await waitFor(() => expect(history).toHaveBeenCalledWith(undefined, 20, 21, true));
 		await waitFor(() => expect(screen.getAllByRole("button", { name: "View run" })).toHaveLength(1));
 		expect(screen.getByRole("button", { name: "Next runs" })).toBeDisabled();
 	});
@@ -185,4 +185,20 @@ describe("automation runs", () => {
 			dispose();
 		});
 	});
+});
+
+// Catches: legacy failures having no repair path, even when the definition survives.
+it("legacy failure offers profile repair", async () => {
+	const run = {
+		...runFixture("legacy", "a1"),
+		status: "failed" as const,
+		reason: "Automation run configuration 'claude' not found",
+	};
+	render(() => <AutomationsDialog onClose={() => {}} adapter={fakeAdapter({ history: async () => [run] })} />);
+	fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Fix" }));
+	const picker = await screen.findByRole("combobox", { name: "Run config" });
+	expect(picker).toHaveFocus();
+	fireEvent.change(picker, { target: { value: "Claude Max" } });
+	expect(picker).toHaveValue("Claude Max");
 });

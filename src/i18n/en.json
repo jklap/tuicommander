@@ -1488,5 +1488,8 @@
 	"stories.view.list": "List",
 	"stories.view.kanban": "Kanban",
 	"stories.filter.empty": "No stories match these filters.",
-	"stories.board.empty": "No stories"
+	"stories.board.empty": "No stories",
+  "automations.fix": "Fix",
+  "automations.failureCount": "Occurrences",
+  "automations.chooseProfile": "Choose a saved profile"
 }
