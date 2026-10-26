@@ -179,7 +179,7 @@ it("read_only_board_keeps_cards_and_explains_missing_write_permission", async ()
 	expect(screen.getByRole("article", { name: "TASK-1" })).toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
 	expect(screen.getByRole("menuitem", { name: "Done" })).toBeDisabled();
-	fireEvent.click(screen.getByRole("button", { name: "TASK-1", exact: true }));
+	fireEvent.click(screen.getByRole("button", { name: /^TASK-1$/ }));
 	expect(open).toHaveBeenCalledWith(snapshot.lanes[0].cards[0].item.reference);
 });
 
