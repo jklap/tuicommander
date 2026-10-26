@@ -1,3 +1,7 @@
+## Plans and Stories editor layout (2356-5c36)
+
+- [ ] Coordinator pixel review: inspect the native before/after editor captures and the 1400/700/390px browser state captures in `~/Gits/.tmp/results/2356-review/`. Confirm the picker, wrapping title/source, disabled-Save reason, full-width New story, compact grouped plan actions, and archived toggle placement. The 80 focused component/i18n tests and TypeScript check pass. Screenshots and measured geometry are available; this text-only peer did not decode PNG content.
+
 ## Headless issue intake (2323-c294) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. Include a missing allowlist entry alongside a valid one: the valid repository must continue polling and each missing entry must be logged. On an overlapping repository, assigned/created/mentioned/disabled client views must retain their filter while intake still receives all issues. This peer did not restart the daily app; Rust changes do not hot-reload.

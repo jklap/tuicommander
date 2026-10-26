@@ -149,8 +149,8 @@ it("catches dropping an explicitly selected story type from the create request",
 	fireEvent.click(ui.getByRole("button", { name: "New story" }));
 	fireEvent.input(ui.getByLabelText("Title"), { target: { value: "Typed creation" } });
 	fireEvent.input(ui.getByLabelText("Acceptance criteria, one per line"), { target: { value: "Type survives" } });
-	const typeControls = ui.getAllByLabelText("Story type");
-	fireEvent.change(typeControls[1], { target: { value: "fix" } });
+	const typeControl = ui.getByLabelText("Story type");
+	fireEvent.change(typeControl, { target: { value: "fix" } });
 	fireEvent.click(ui.getByRole("button", { name: "Create story" }));
 	await waitFor(() =>
 		expect(invoke).toHaveBeenCalledWith("story_action_command", {

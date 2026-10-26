@@ -1,4 +1,13 @@
 {
+	"stories.planEdit.actions": "Plan actions",
+	"stories.planEdit.saving": "Saving plan…",
+	"stories.planEdit.titleRequired": "Enter a plan title to save.",
+	"stories.planEdit.sourceRequired": "Choose a plan document or paste a link to save.",
+	"stories.planEdit.unchanged": "Change the title or document to save.",
+	"stories.planEdit.document": "Repository plan document",
+	"stories.planEdit.chooseDocument": "Choose a repository plan…",
+	"stories.planEdit.noDocuments": "No plan documents found in this repository. You can paste a link below.",
+	"stories.planEdit.openSource": "Open document or link",
 	"markdownPanel.clearSearch": "Clear search",
 	"common.back": "Back",
 	"stories.notes.managed": "Managed session {id}",

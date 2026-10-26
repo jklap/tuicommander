@@ -128,3 +128,11 @@ button.boardCard[data-control-layout="card"] small { color: var(--fg-muted); fon
 .transitionHistory { padding-left: 20px; font-size: var(--font-sm); overflow-wrap: anywhere; }
 .transitionHistory li + li { margin-top: 8px; }
 .loadMore { margin-top: 12px; }
+
+.editorContent { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+.editorContent > form, .editorHeading { max-width: 720px; margin-inline: auto; }
+.editorContent > form { border-bottom: 0; }
+.editorHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-inline: 12px; }
+.editorHeading h3 { margin: 0; font-size: var(--font-xl); }
+.planActions { composes: toolbar from "../ui/FormControls.module.css"; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+.sourcePath { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-sm) var(--font-mono); }
