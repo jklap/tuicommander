@@ -55,7 +55,7 @@
 
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required
 
-- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. Windows cache counters, cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
+- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
 
 ## Windows Clippy platform gates (2306-0b3b)
 

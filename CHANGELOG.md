@@ -59,6 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep warm Codex discovery and Claude Usage caches reusable when Windows reports directory metadata notifications; retain file updates and directory replacement recovery (#2310-6e76).
+
 - Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
 - Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
