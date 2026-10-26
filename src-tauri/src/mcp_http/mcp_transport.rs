@@ -1476,7 +1476,7 @@ pub(super) async fn mcp_get(
         .into_response()
 }
 
-/// GET /mcp/instructions — Returns dynamic server instructions for the bridge binary
+/// GET /mcp/instructions — Returns inventory-independent guidance for the bridge binary
 pub(super) async fn mcp_instructions_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({"instructions": build_mcp_instructions(&state, None)}))
 }

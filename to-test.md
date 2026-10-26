@@ -1,3 +1,10 @@
+## Stable MCP instructions (2362-95a9) — Rust restart required
+
+- [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
+## Plans and Stories selection (2354-a8a3)
+
+- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
+
 ## Collapsed Compose queue pill (2339-056c)
 
 - [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
@@ -2994,3 +3001,4 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
 
 - [ ] External PR integration (#129, #132, #139, #140, #144, #146): after landing and a manual Rust rebuild/restart when ready, check enterprise usage fallback, tunnel stop cleanup, non-origin default-branch safe removal, UI-requested merges with `merge.ff=only`, and named-instance IPC socket diagnostics. Targeted Linux regression evidence is recorded in the `tuic-prfix` result report; the daily backend was not restarted and does not hot-reload these changes.
+- [ ] After a manual backend restart, check automation profile repair: invalid saved profiles appear in the bell at desktop startup and after a profile rename/delete; repeated identical failures show a count and Fix opens the current profile picker. Rust changes do not hot-reload (#2360-f7ca).

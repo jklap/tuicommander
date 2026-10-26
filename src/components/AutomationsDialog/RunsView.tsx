@@ -62,7 +62,12 @@ export function RunOutput(props: { run: AutomationRun }) {
 	);
 }
 
-export function RunsView(props: { store: AutomationsStore; connectionId?: string; onNavigate: () => void }) {
+export function RunsView(props: {
+	store: AutomationsStore;
+	connectionId?: string;
+	onNavigate: () => void;
+	onFix: (id: string) => void;
+}) {
 	const [selected, setSelected] = createSignal<AutomationRun>();
 	return (
 		<section class={s.history} aria-label={t("automations.runs", "Runs")}>
@@ -113,8 +118,23 @@ export function RunsView(props: { store: AutomationsStore; connectionId?: string
 								{run.status}
 							</strong>
 							<span>{run.definition.repository}</span>
+							<Show when={(run.failure_count ?? 1) > 1}>
+								<span>
+									{t("automations.failureCount", "Occurrences")}: {run.failure_count}
+								</span>
+							</Show>
 							<Show when={run.reason}>
 								<p>{run.reason}</p>
+							</Show>
+							<Show
+								when={
+									run.status === "failed" &&
+									props.store.items().some((item) => item.definition.id === run.definition.id)
+								}
+							>
+								<Button type="button" onClick={() => props.onFix(run.definition.id)}>
+									{t("automations.fix", "Fix")}
+								</Button>
 							</Show>
 							<WorktreeCleanup run={run} connectionId={props.connectionId} />
 							<Button

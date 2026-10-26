@@ -30,9 +30,11 @@ def plan(instance: str, port: str, speech_output: bool = False) -> dict:
         raise ValueError("speech output requires an agent-test-<name> instance")
     if os.environ.get("CARGO_TARGET_DIR"):
         raise ValueError("unset CARGO_TARGET_DIR; mbx owns the target directory")
-    # Short, instance-specific runtime files stay under Gits, not the OS temp dir.
+    # Keep runtime temp separate from the intentionally granted Gits/.tmp scratch
+    # root: ego must prove its negative filesystem probe outside granted roots.
+    # This stays under Gits and does not change ego grants or confinement.
     digest = hashlib.sha256(instance.encode()).hexdigest()[:16]
-    runtime = Path.home() / "Gits/.tmp/tuic-at" / digest
+    runtime = Path.home() / "Gits/.tuic/tuic-at" / digest
     socket = runtime / f"tuic-mcp-{digest}.sock"
     if len(os.fsencode(socket)) >= 104:
         raise ValueError("runtime socket path exceeds the macOS Unix socket limit")

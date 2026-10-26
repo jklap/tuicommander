@@ -20,6 +20,7 @@ it.each([false, true])("setting enabled=%s does not overwrite newer fields saved
 	};
 	const adapter: AutomationAdapter = {
 		templates: async () => [],
+		profiles: async () => [],
 		template: async () => {
 			throw new Error("Unexpected template request");
 		},
