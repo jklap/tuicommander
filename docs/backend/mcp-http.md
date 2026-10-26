@@ -1,5 +1,10 @@
 # MCP & HTTP Server
 
+## Headless GitHub monitoring
+
+Both routers mount one shared GitHub monitoring surface: poller start/stop, visibility, immediate poll, path updates, issue filter and API-debug controls; repository status (`/repo/github`), PR snapshots (`/repo/prs`, `/repo/prs/batch`) and issues (`/repo/issues`). The poller does not require an AppHandle. It publishes through the event bus and `/events` SSE without a window. TCP keeps the existing authentication and request-boundary middleware; the trusted Unix socket uses the local router. GitHub account/auth, mutation and AI routes stay outside this shared surface. A credential-free no-remote smoke proves transport and lifecycle, not authenticated GitHub fetching.
+
+
 Planner Ideas use the same `StoryAction` envelope as plans and stories: `add_idea {text,source?}`, `list_ideas`, and `update_idea {idea_id,text}`. IPC `story_action_command`, HTTP `POST /stories/action?path=<project>` (`{action:<StoryAction>,sessionId?:string}`), CLI `tuic story`, and MCP `workflow action=story input=<StoryAction>` share the Rust owner. Add/update return `{type:"idea",value:<camelCase Idea>}`; list returns `{type:"ideas",value:[...]}`. The project sets `repoPath`; list also includes global Ideas, while update requires project ownership. Source defaults to the bound session id or `local-api`. Text is trimmed to a nonblank maximum of 16000 characters; source is nonblank with a maximum of 256. Writes use the strict locked `notes.json` owner and publish payload-free `ideas-changed` on desktop and `/events` SSE. UI `save_notes(base,config)` / `PUT /config/notes` applies per-id and per-field intent instead of replacing stale arrays. See [Ideas through the planner](../user-guide/native-stories.md#ideas-through-the-planner).
 
 Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
@@ -727,6 +732,9 @@ consumer integration is not proven by TUIC's tests.
 
 ### On-demand native tool guidance
 
+The compact `automations` guide includes `profiles` to discover saved run profile
+names; its full help and Settings description retain this guidance.
+
 `session`, `agent`, `repo`, `ui`, `voice`, `telegram` and `automations` advertise
 compact agent-facing descriptions with every action and the hard constraints.
 Call the same tool with `{"action":"help"}` for its complete usage guide in the
@@ -796,6 +804,30 @@ The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<Tool
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
 The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
+**Instruction stability contract.** Terminal sessions and peer inventory never appear in
+initialize instructions: opening, closing, renaming or moving a terminal, or
+registering/removing a peer, must not change their bytes for the same caller and
+configuration. Read `session action=list` for current terminal ids, paths and
+worktree branches. Read `agent action=list_peers` for current peers; its `peers`
+array gives the current count. This keeps live inventory out of clients' cached
+system prefixes; it does not claim a provider cache hit.
+
+The fields retained in instructions are the application version, caller-specific
+protocol/launch guidance and marker settings, tool-discovery mode, registered
+native tool names, available upstream server names and tool counts, and configured
+repository totals/groups/remote-connection counts. These describe the installed
+protocol, caller policy or tool/configuration surface, not terminal activity.
+Configuration edits, application upgrades, caller identity/parentage changes and
+upstream capability/availability changes can still change that surface; the
+contract is not a permanent snapshot of tool capabilities.
+
+All instruction surfaces share `render_mcp_instructions`: HTTP `POST /mcp`
+initialize uses `build_mcp_instructions_for_session`; modern `server/discover`
+uses `build_mcp_instructions_for_mode`; `GET /mcp/instructions` uses
+`build_mcp_instructions`. The IPC listener serves the same `build_router` routes
+on Unix sockets and Windows named pipes, and `tuic mcp` initializes that server
+through IPC. There is no separate CLI instruction renderer.
+
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` on its own line, at the start of every user task and on material phase changes. "On its own line" is in the instruction because the ack sentence is required to open that same first message: an agent that runs the two together leaves the token mid-row, where the parser has to reach for it (see `docs/backend/output-parser.md` → Intent). The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
@@ -813,7 +845,7 @@ on its first turn. Deferred tool discovery can expose them later.
 
 | Surface | Transport receipt | Model visibility | Owns |
 |---|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, live state |
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, configuration/capability summaries |
 | tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
 
 **Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with

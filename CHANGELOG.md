@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
+### Added
+
+- Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).
+
+- Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
+
+### Fixed
+
+- Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
+- Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
+- Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).
+
+- Keep AI Chat message actions below their answer without overlapping the next message; use compact Copy and Fork controls and remove redundant code-block Copy buttons (#2366-0408).
+
+- Keep isolated agent-test runtime temp outside ego’s shared scratch grant so AI Chat can prove its confined filesystem perimeter without changing grants (#2364-0737).
+- Report unresolved automation profiles at desktop startup and after profile changes, include failure reasons in the bell, and group identical run failures with a direct profile repair action (#2360-f7ca).
+- Keep MCP initialize instructions unchanged by live terminal and peer churn; current inventory remains available through session and agent tools (#2362-95a9).
+- Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
+
+- Show readable story transition labels, criterion numbers and text, and compact session actors with full-ID tooltips (#2355-bb93).
+
+- Keep the toolbar repository filter and manual sidebar density controls blue while active, independent of shared button stylesheet order (#2353-9fca).
+
+- Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
+- Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
+- Start allowlisted GitHub issue intake polling on the owning headless daemon without a UI, retain it across client filter/stop calls, and report unregistered intake repositories (#2323-c294).
+- Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
+
+- Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
+- Stage elevated mdkb installs and Linux `.deb`/`.rpm` installs in fresh private 0700 temp directories instead of predictable `/tmp` paths another local user could pre-create or swap.
+
+## [2.0.0-beta.3] - 2026-10-26
+
+- Serve shared GitHub poller controls and repository status, PR and issue reads from headless `tuic-remote`, with the existing transport authentication (#2345-49f0).
+
+- Warn in development when Cargo dep-info inputs or a rebuilt executable outdate the running Rust backend; keep unrelated frontend-only landings quiet (#2332-3eef).
 - Keep final agent API failures red through idle and failed auto-retry; detect wrapped Claude connection loss/auth/JSON errors, Codex native and legacy final errors, and ego provider-failure receipts (#2335-9c03).
 
 - Remove inherited rustup proxy state from new terminals so repository toolchain pins apply; preserve explicit run-config toolchain overrides (#2318-4b44).
@@ -24,6 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep warm Codex discovery and Claude Usage caches reusable when Windows reports directory metadata notifications; retain file updates and directory replacement recovery (#2310-6e76).
 
+- Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
 - Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
@@ -157,6 +195,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
 
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
+- Stop a remote's `HEAD` symref (e.g. `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch named after the remote, and classify `is_remote` from the full refname so remotes not named `origin` and local branches such as `origin/foo` or `feature/HEAD` are reported correctly (branch switcher, Git Panel Branches tab, base-ref picker, graph decorations).
+- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
+- `make build` / `make build-dmg` no longer fail locally with a missing-private-key error: updater artifact signing (`createUpdaterArtifacts`) is skipped when `TAURI_SIGNING_PRIVATE_KEY` is unset; CI/release builds that set the key are unchanged.
+- Fix plugin updates failing with "Failed to backup data/" on Linux: the `data/` backup now lives inside the plugins directory (same filesystem) instead of the OS temp dir, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file instead of a predictable path in shared `/tmp`.
+- Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so repeated activations no longer queue several frames and a late frame cannot focus a detached wrapper.
+- Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
+- Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo global workspace suppresses them.
+- Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
+- Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
+- Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state.
+- Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
+- Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the host limit (103 bytes on macOS, 107 on Linux) and the longest `TMPDIR` that would hold it; `TUIC_SOCKET` is client-only and does not move the listener, and the doomed bind retries are skipped.
+- Run the git processes of every Rust test binary that links `tuic-test-support` against a fixed hermetic gitconfig (it points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, and drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail those tests. `tuic-ipc`'s one git-running test does not link it and is not covered.
+- Resolve a repository's default branch from the HEAD of the main checkout's tracked remote or any other remote (including remotes with slashes in the name) when `origin` has none and neither a configured base nor a local `main`/`master` decides it. A remote default whose short name is shadowed by a local branch or a tag keeps its full `refs/remotes/...` name, `fetch_if_remote` splits `<remote>/<branch>` against the configured remotes instead of at the first slash, and the answer no longer depends on which linked worktree the caller passes.
+- Kill an SSH tunnel's whole process group (not just the `ssh` child) on shutdown and wait, bounded, for confirmed exit on app quit, so forked `ProxyCommand` grandchildren are no longer orphaned.
+- A ghost terminal tab (its terminal entry is gone) no longer keeps a split pane open: the pane collapses when the terminal is removed, and closing a sibling tab ignores ghost terminal, diff, Markdown and editor tabs when deciding whether a pane is empty. A pane whose only tab is a ghost diff, Markdown or editor tab is still not swept until another tab in it closes. Reset Panel Sizes now also rebuilds the active Global Workspace layout (keeping the focused terminal), and switching workspace scope reconciles the active terminal without stealing selection from a docked non-terminal tab.
+- Merge-and-archive and Update-from-base (merge strategy) no longer fail with "Not possible to fast-forward" for users whose Git config sets `merge.ff=only` or whose target branch's `branch.<target>.mergeOptions` selects `--ff-only`; the explicit UI policy uses `--no-ff` when `merge.ff` is false, otherwise `--ff`, overriding branch fast-forward flags without parsing Git options.
 
 ## [2.0.0-beta.1] - 2026-10-22
 

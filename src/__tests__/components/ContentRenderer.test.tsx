@@ -118,6 +118,29 @@ describe("ContentRenderer", () => {
 		expect(items[0].classList.contains("tweak-block-highlight")).toBe(true);
 	});
 
+	// Catches: retracting one source-only block comment clears surviving or inline comments too.
+	it("reconciles externally removed block comments while preserving surviving and inline metadata", async () => {
+		const marker = "<!--tweak:block:c_remove @2026-10-26T12:00:00.000Z\nRemove note-->\n";
+		const remaining = "<!--tweak:block:c_keep @2026-10-26T12:00:00.000Z\nKeep note-->\n";
+		const tail =
+			"Second.\n\n<!--tweak:begin:c_inline-->Inline<!--tweak:end:c_inline @2026-10-26T12:00:00.000Z\nInline note-->\n";
+		const [source, setSource] = createSignal(`${marker}First.\n\n${remaining}${tail}`);
+		const { container } = render(() => <ContentRenderer content={source()} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		const first = container.querySelector<HTMLElement>("p")!;
+		const inline = container.querySelector<HTMLElement>(".tweak-highlight")!;
+		setSource(`First.\n\n${remaining}${tail}`);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		expect(container.querySelector("p")).toBe(first);
+		expect(first.classList.contains("tweak-block-highlight")).toBe(false);
+		expect(first.dataset.tweakId).toBeUndefined();
+		expect(first.dataset.tweakAt).toBeUndefined();
+		expect(first.dataset.tweakComment).toBeUndefined();
+		expect(container.querySelectorAll(".tweak-block-highlight")).toHaveLength(1);
+		expect(container.querySelector<HTMLElement>(".tweak-block-highlight")?.dataset.tweakId).toBe("c_keep");
+		expect(inline.dataset.tweakId).toBe("c_inline");
+	});
+
 	it("keeps structural markdown intact and highlights an existing block comment", async () => {
 		const source = "# Heading\n\nParagraph.";
 		const heading = findTweakCommentBlocks(source)[0];

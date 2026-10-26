@@ -1,4 +1,18 @@
 {
+	"stories.history.startManual": "Started manually",
+	"stories.history.submitQa": "Submitted for QA",
+	"stories.history.rejectQa": "QA rejected",
+	"stories.history.submitReview": "Submitted for review",
+	"stories.history.approve": "Approved",
+	"stories.history.rejectReview": "Review rejected",
+	"stories.history.block": "Blocked",
+	"stories.history.unblock": "Unblocked",
+	"stories.history.wontFix": "Cancelled",
+	"stories.history.checkCriterion": "Criterion {number} checked",
+	"stories.history.uncheckCriterion": "Criterion {number} unchecked",
+	"stories.history.setManual": "Criterion {number} marked manual",
+	"stories.history.unsetManual": "Criterion {number} no longer manual",
+	"stories.history.unknown": "Unknown transition",
 	"markdownPanel.clearSearch": "Clear search",
 	"common.back": "Back",
 	"stories.notes.managed": "Managed session {id}",
@@ -1488,5 +1502,8 @@
 	"stories.view.list": "List",
 	"stories.view.kanban": "Kanban",
 	"stories.filter.empty": "No stories match these filters.",
-	"stories.board.empty": "No stories"
+	"stories.board.empty": "No stories",
+  "automations.fix": "Fix",
+  "automations.failureCount": "Occurrences",
+  "automations.chooseProfile": "Choose a saved profile"
 }

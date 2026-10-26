@@ -36,6 +36,44 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(binary.stat() if binary.exists() else None, before,
                          "dry run must neither create nor replace an existing warm executable")
 
+    def test_runtime_temp_does_not_overlap_ego_scratch_grant(self):
+        # Bug caught (2364): inherited TMPDIR under the intentional shared
+        # scratch grant prevents ego from proving its negative filesystem probe.
+        scratch_grant = Path.home() / "Gits/.tmp"
+        for instance in ["agent-test", "agent-test-2364", "a" * 63]:
+            with self.subTest(instance=instance):
+                plan = self.plan(f"AGENT_TEST_INSTANCE={instance}", TMPDIR=str(scratch_grant))
+                temporary = Path(plan["environment"]["TMPDIR"])
+                self.assertTrue(temporary.is_relative_to(Path.home() / "Gits"))
+                self.assertFalse(temporary.is_relative_to(scratch_grant),
+                                 "ego negative probe must run outside the shared scratch grant")
+                self.assertEqual(Path(plan["socket"]).parent, temporary)
+                self.assertEqual(Path(plan["pid_file"]).parent, temporary)
+                self.assertEqual(Path(plan["stop_fifo"]).parent, temporary)
+                self.assertLess(len(os.fsencode(plan["socket"])), 104)
+
+    def test_github_preset_reuses_login_namespace_despite_agent_overrides(self):
+        # Bug caught: each GitHub live-check agent selects a fresh credential
+        # namespace and asks for login again instead of reusing agent-test-ghlive.
+        env = {**os.environ, "TUIC_APP_INSTANCE": "agent-test-2338", "TUIC_PORT": "19838"}
+        env.pop("CARGO_TARGET_DIR", None)
+        for arguments in [[], ["AGENT_TEST_INSTANCE=agent-test-2338", "AGENT_TEST_PORT=19838"]]:
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    ["make", "--no-print-directory", "agent-test-github", "AGENT_TEST_DRY_RUN=1", *arguments],
+                    cwd=ROOT, env=env, text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                plan = json.loads(result.stdout)
+                self.assertEqual(plan["environment"]["TUIC_APP_INSTANCE"], "agent-test-ghlive")
+                self.assertEqual(plan["environment"]["TUIC_PORT"], "19887")
+                self.assertTrue(plan["config_dir"].endswith("/instances/agent-test-ghlive"))
+                stop = subprocess.run(
+                    ["make", "--no-print-directory", "-n", "agent-test-github-stop", *arguments],
+                    cwd=ROOT, env=env, text=True, capture_output=True, check=True,
+                )
+                self.assertIn('stop --instance "agent-test-ghlive" --port "19887"', stop.stdout)
+
     def test_speech_output_is_explicit_and_keeps_capture_disabled(self):
         # Bug caught: speech reproduction enables the microphone or daily state.
         plan = self.plan("AGENT_TEST_INSTANCE=agent-test-1996", "AGENT_TEST_SPEECH_OUTPUT=1")

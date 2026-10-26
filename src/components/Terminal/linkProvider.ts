@@ -12,7 +12,8 @@ export function filePathRegex(): RegExp {
 			`((?:[A-Za-z]:[\\\\/][\\w.\\\\/@-]+(?::\\d+(?::\\d+)?)?` +
 			`|(?:~/|/|\\.\\.?/|[\\w@.-]+/)[\\w./@-]+(?::\\d+(?::\\d+)?)?` +
 			`|[\\w@.-]+\\.(?:${CODING_EXT})(?::\\d+(?::\\d+)?)?))` +
-			`(?=[\\s"'\`),;.!?:\\]}>${BOX_DRAWING}]|$)`,
+			// Exclude sentence periods, but keep a final parent-directory segment.
+			`(?:(?<!\\.)|(?<=[/\\\\]\\.\\.))(?=[\\s"'\`),;.!?:\\]}>${BOX_DRAWING}]|$)`,
 		"g",
 	);
 }

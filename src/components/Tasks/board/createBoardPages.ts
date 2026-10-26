@@ -36,7 +36,8 @@ export function createBoardPages() {
 				{ columnId: column.id, cards: [] as WorkItemBoardPage["lanes"][number]["cards"] },
 			]),
 		);
-		for (const { columnId, card } of cards.values()) lanes.get(columnId)?.cards.push(card);
+		for (const { columnId, card } of cards.values())
+			lanes.get(columnId)?.cards.push(next.board.writeDisabledReason ? { ...card, moves: [] } : card);
 		return {
 			...next,
 			lanes: [...lanes.values()],

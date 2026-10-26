@@ -21,6 +21,7 @@ it.each(["switch", "clear", "park", "start"])("keeps startup-delayed paste owner
 	});
 	const chat = {
 		sessionId,
+		phase: () => (connected && sessionId() ? "live" : "starting"),
 		busy: () => false,
 		queuedPrompts: () => [],
 		configOptions: () => [],

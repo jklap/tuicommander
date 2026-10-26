@@ -1,5 +1,10 @@
 # Remote Access
 
+## Headless GitHub monitoring
+
+`tuic-remote` supports the same GitHub poller controls and repository status, PR and issue reads as the desktop server. Use `/repo/github-poller/start` and `/repo/github-poller/stop` over its Unix socket or authenticated HTTP API. Poller events reach `/events` without a WebView. GitHub account setup and mutation routes are not exposed by the headless router. A repository without a GitHub remote needs no GitHub credentials for a lifecycle check.
+
+
 Access TUICommander from a browser on another device on your network.
 
 ## Setup
@@ -111,7 +116,9 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 
 Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
 
-At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it. Each absolute file path appears once; files in different worktrees stay separate.
+
+The session actions menu scrolls within the available session area. Scroll down to reach **Copy session ID** and **Terminate session**. Claude/Codex account usage names the provider, plan and quota window, with the percentage used and reset time in your device’s local timezone. The desktop usage cards use the same descriptions.
 
 After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
 

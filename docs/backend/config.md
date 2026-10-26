@@ -85,6 +85,18 @@ editable configuration defaults. See
 [Development Setup](../guides/development-setup.md#isolated-agent-desktop-checks-macos)
 for the resource audit, dry-run and stop commands.
 
+`make agent-test-github` and `make agent-test-github-stop` reuse the persistent
+`agent-test-ghlive` instance on port `19887` for authorized GitHub live checks.
+They pin both values rather than inheriting a per-agent instance override. This
+keeps the existing login available across worktrees and rebuilds without copying
+credentials or changing generic verification defaults. Only one coordinated owner
+may run this instance at a time. Its debug vault is stored in
+`~/.tuicommander-dev/instances/agent-test-ghlive/credentials.json`; configuration
+and account metadata stay in the platform config directory. Stop removes runtime
+PID/FIFO files only. A different instance name selects a different vault, not a
+fresh build of the same login. See the development guide's
+[persistent login procedure](../guides/development-setup.md#persistent-github-live-check-login).
+
 Which target defaults to what is deliberate and guarded. `make test` is the
 throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
 is Boss's daily driver and carries **no** instance, because switching it looks

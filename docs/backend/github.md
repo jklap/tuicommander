@@ -151,6 +151,11 @@ for unconfigured paths are ignored, so completed asynchronous actions cannot res
 a retired monitor. Stopping the poller resets the gauge to zero. A new
 poller starts with no successful snapshots, even if old query payloads remain cached.
 
+For the distinction between configured paths, successful monitoring history, and
+rendered sidebar data, see the [2336 investigation](github-monitoring-investigation-2336.md).
+It records why the old TTL-cache gauge could report zero without deregistration
+and which observations are still required to prove the historical empty sidebar.
+
 ## Data Types
 
 ### GitHubStatus
@@ -472,7 +477,7 @@ finish even if the window closes; a consumed nonce cannot be replayed. Rotation
 invalidates the same GitHub Enterprise runtime cache as the account owner API.
 Native inspection remains blocked until the private window is destroyed.
 
-GitHub OAuth device flow requests `repo read:project`. The request builder and the Settings permission text read the same value from `src/data/github-oauth-scopes.txt` (Rust `include_str!` and Vite raw import). Existing account tokens retain their previous scopes until the user signs in again. GitHub Projects v2 permission failures retain the API error, including `INSUFFICIENT_SCOPES`; they are not empty boards.
+GitHub OAuth device flow requests `repo project` (repository access and Projects v2 read/write). The request builder and the Settings permission text read the same value from `src/data/github-oauth-scopes.txt` (Rust `include_str!` and Vite raw import). Existing account tokens retain their previous scopes until the user signs in again. GitHub Projects v2 permission failures retain the API error, including `INSUFFICIENT_SCOPES`; they are not empty boards. Settings offers re-login when a known OAuth scope list lacks `project`. The github-work provider reads `x-oauth-scopes` from account-scoped HTTP responses: a known list without `project` makes Projects fields read-only and removes legal board moves. The board retains its cards and shows `writeDisabledReason`. A mutation authorization denial is remembered only for that project until Tasks reloads. Repository PRs, issues, comments and monitoring are not disabled. Missing or empty scope headers do not imply denial for fine-grained or App tokens. GitHub's [Projects API authentication guide](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects#authentication) limits `read:project` to queries and requires `project` for mutations such as `updateProjectV2ItemFieldValue`.
 
 ## GitHub settings owner adapter
 
@@ -579,3 +584,9 @@ passes through `graphql_request` and the same response-adoption function used by
 `poll_one_account`, and checks both PR and issue output. The fixture records its
 request, timestamp and source; it contains no headers or credentials. It is not
 a recorded missing-scope or organization-policy response.
+
+### Machine-owned issue intake
+
+The automation runtime retains every resolved allowlist entry and logs each missing or ambiguous registration separately. A bad entry does not clear valid intake paths.
+
+The shared poller keeps intake and client issue delivery separate. For an intake path, the same GraphQL request includes an unfiltered `intakeIssues: issues(...)` selection and the normal client-filtered `issues(...)` selection. GitHub applies assigned, created and mentioned predicates with the resolved account viewer; no local approximation or second network poll is used. Disabled client issues publish an empty client snapshot. Unfiltered snapshots use an internal event consumed only by the automation runtime and excluded from SSE; desktop and SSE receive the same filtered client snapshot. Each issue connection retains the existing 30-node bound (at most 60 issue nodes per overlapping repository when both selections are enabled).

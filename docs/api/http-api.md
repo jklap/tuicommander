@@ -1,5 +1,20 @@
 # HTTP API Reference
 
+## Build identity
+
+`GET /api/version` returns `version` and `git_hash` in all builds. The desktop
+debug WebView also receives `window.__TUIC_DEV_BACKEND__` before frontend scripts:
+`exe` (current executable), `build_exe` (original Cargo artifact when the copy
+runner is used), `bridge_exe` (the used bridge build artifact, when present),
+`started_at_ms` (application-entry Unix milliseconds), and `git_hash`.
+
+Vite alone serves `GET /__tuic_backend_identity?backend=<URL-encoded launch JSON>`,
+uncached. It returns `status` (`current`, `stale`, or `unavailable`), a dismissal
+`key`, and, when available, `backend_id`, `tree_id`, and the checked input count.
+It reads Cargo's final binary dep-info and compares mtimes. This development
+endpoint is not part of the packaged HTTP server; release builds expose neither
+the launch global nor the warning module.
+
 Planner Ideas use the same `StoryAction` envelope as plans and stories: `add_idea {text,source?}`, `list_ideas`, and `update_idea {idea_id,text}`. IPC `story_action_command`, HTTP `POST /stories/action?path=<project>` (`{action:<StoryAction>,sessionId?:string}`), CLI `tuic story`, and MCP `workflow action=story input=<StoryAction>` share the Rust owner. Add/update return `{type:"idea",value:<camelCase Idea>}`; list returns `{type:"ideas",value:[...]}`. The project sets `repoPath`; list also includes global Ideas, while update requires project ownership. Source defaults to the bound session id or `local-api`. Text is trimmed to a nonblank maximum of 16000 characters; source is nonblank with a maximum of 256. Writes use the strict locked `notes.json` owner and publish payload-free `ideas-changed` on desktop and `/events` SSE. UI `save_notes(base,config)` / `PUT /config/notes` applies per-id and per-field intent instead of replacing stale arrays. See [Ideas through the planner](../user-guide/native-stories.md#ideas-through-the-planner).
 
 Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
@@ -1124,7 +1139,9 @@ Returns recent git commits.
 GET /repo/github?path=/path/to/repo
 ```
 
-Returns PR status, CI status, ahead/behind for current branch.
+Returns `has_remote`, `current_branch`, `ahead` and `behind`. This route and
+`/repo/prs`, `/repo/prs/batch` and `/repo/issues` are shared by desktop and
+headless servers. PR and CI snapshots are not part of this status object.
 
 ### PR Statuses (Batch)
 
@@ -1175,10 +1192,33 @@ Content-Type: application/json
 
 Reopens a closed issue via GitHub GraphQL API.
 
+### GitHub Poller Controls (Desktop and Headless)
+
+These existing handlers share one route registration on both servers. TCP uses
+normal server authentication; the local Unix socket remains trusted local IPC.
+
+| Method | Path | JSON body |
+|---|---|---|
+| POST | `/repo/github-poller/start` | `{ "paths": ["/repo"], "issueFilter": "all", "prHideDrafts": false }` |
+| POST | `/repo/github-poller/stop` | none |
+| POST | `/repo/github-poller/visibility` | `{ "visible": true }` |
+| POST | `/repo/github-poller/poll-repo` | `{ "path": "/repo" }` |
+| POST | `/repo/github-poller/update-paths` | `{ "paths": ["/repo"] }` |
+| POST | `/repo/github-poller/set-issue-filter` | `{ "filter": "all" }` |
+| GET / POST | `/repo/github-poller/api-debug` | POST: `{ "enabled": false }` |
+
+Start cold-starts the poller without a WebView. An automation executor also starts polling its registered issue-intake allowlist without a client. Client path/filter changes do not replace this subscription; stop releases only client paths while intake is enabled. Intake paths use issue filter `all`, while other paths retain the client filter. Control delivery returns
+`{"ok":true}` or an error when no poller accepts the command. API-debug reads
+return `{"enabled":false}` (or true); writes also return `ok`. Repository status
+is read through `/repo/github?path=...`; there is no separate poller-status route.
+PR/issue updates also reach `/events` SSE. Empty paths or a repository with no
+GitHub remote permit a credential-free lifecycle smoke; that does not verify
+GitHub authentication, network calls or populated snapshots.
+
 ### GitHub Auth & Diagnostics
 
 Browser/PWA parity for the GitHub settings panel. Registered on the loopback
-router only (the headless `tuic-remote` daemon does not expose GitHub).
+router only (the headless `tuic-remote` daemon exposes monitoring, not account/auth routes).
 
 ```
 GET  /github/viewer-login                       -> string (login)
@@ -1737,7 +1777,7 @@ Returns status and metrics for all upstream MCP servers (connecting, ready, circ
 GET /mcp/instructions
 ```
 
-Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
+Returns server guidance for the MCP bridge binary as `{"instructions": "..."}`. It uses the same producer as MCP initialize, without live terminal or peer inventory. Configuration and capability changes can change the guidance; use `session action=list` and `agent action=list_peers` for current inventory.
 
 ## Filesystem Endpoints
 
@@ -3102,7 +3142,8 @@ extraction errors.
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
 | `run_now` | `id` | Full persisted run, including status and reason |
-| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0) | Newest-first run snapshots, including deleted definitions |
+| `profiles` | None | Saved run profile names for the addressed backend, sorted by name |
+| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0), `group_failures` (default false) | Newest-first run snapshots, including deleted definitions. Grouping collapses failures with the same definition, repository, profile and reason before pagination; returns the newest representative plus `failure_count`. Other states remain separate. Individual ledger records and summaries do not change. |
 | `worktree_preview` | Saved run `id` | `{automation_id,run_id,repository,workspace,workspace_id,can_remove,reason,safety}` |
 | `cleanup_worktree` | Saved run `id` | `{removed:true,run_id,branch_delete_warning}`; unsafe workspaces return an error |
 | `summary` | `window`: `24h` or `7d` | `{total,by_status}` over elapsed UTC windows |
@@ -3574,11 +3615,15 @@ DTO. `GET /github/diagnostics` remains read-only. This maps to
 ### Session usage
 
 `GET /sessions/{id}/usage` mirrors `get_session_usage(session_id)`. It returns
-`{agent, model, scope, source, availability, reason, observed_at_ms, stale, lines}`.
-Each line has `label` and `value`; the backend owns units and formatting.
+`{agent, model, scope, source, availability, reason, observed_at_ms, stale, lines, quota_windows}`.
+Each non-quota line has `label` and `value`; Rust owns token and cost semantics.
+Each quota window has `provider`, nullable `plan`, nullable `window_seconds`,
+`window_name`, `used_percent`, and nullable `resets_at` (an ISO instant).
+The shared desktop/mobile presenter owns quota wording and converts reset and
+report instants to the viewing client’s local short date and time.
 Availability is `available` or `unavailable`; unknown identity/timestamp fields
 are null, not inferred from defaults. Scope is `account_quota` or `session_usage`.
-Claude/Codex lines describe shared account windows, not session spend. ego v3
+Claude/Codex quota windows describe shared account windows, not session spend. ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
 settlement. Remote sessions are forwarded to their owning daemon or are unavailable.

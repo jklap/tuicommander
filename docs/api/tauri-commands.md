@@ -898,6 +898,11 @@ machine; HTTP clients cannot read or write the host pasteboard.
 
 ### Automations
 
+The `profiles` action lists saved profile names on the addressed machine. The
+`list_runs` action accepts `group_failures: true` to page grouped identical
+failures, with `failure_count` on the newest representative snapshot. Without
+that flag, individual history remains unchanged.
+
 `automation_action(input: serde_json::Value) -> Result<serde_json::Value, String>`
 is an async command that shares parsing, definition edits, history, schedule
 previews/presets, UTC run summaries and owner-guarded Run Now with
@@ -1103,6 +1108,8 @@ clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
 This async command runs outside the macOS main thread. Rust selects the owner,
 profile and exact ego ledger row. Missing usage is an explicit unavailable
 snapshot, not a zero quota or cost. No messages-generation fallback is used.
+Quota windows are structured fields (provider, plan, duration, percentage and
+reset instant), formatted by the same client presenter on desktop and mobile.
 
 `get_repo_structure` and `get_repo_summary` also return `worktree_diagnostics: Array<{path, branch: string | null, state: "missing" | "duplicate_branch", guidance}>`, identical to HTTP. Diagnostics are read-only and have no workspace ID. Discovery does not prune unavailable registrations.
 

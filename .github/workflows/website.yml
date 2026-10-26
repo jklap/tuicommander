@@ -42,6 +42,19 @@ jobs:
         working-directory: website
         run: pnpm build
 
+      # The film is too large for the repository. It is a release asset, named in
+      # website/film.env, which also gives the page its source path. A missing
+      # asset warns instead of failing: the page then shows its "not available" note.
+      - name: Fetch the film
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . website/film.env
+          if ! gh release download "$FILM_TAG" --repo "${{ github.repository }}" \
+               --pattern "$FILM_ASSET" --dir website/dist/video --clobber; then
+            echo "::warning::Film $FILM_ASSET not found in release $FILM_TAG; the site deploys without it."
+          fi
+
       - name: Install mdBook
         uses: peaceiris/actions-mdbook@v2
         with:

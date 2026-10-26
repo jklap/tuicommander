@@ -70,8 +70,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
-#[cfg(unix)]
-use tuic_ipc::named_socket_path;
 
 /// Maximum terminal dimension (rows or cols). Prevents resource abuse from
 /// absurdly large allocations while still allowing generous sizes.
@@ -194,12 +192,11 @@ fn resolve_socket_path() -> std::path::PathBuf {
             let alt = crate::app_instance::current_app_instance()
                 .named_id()
                 .map(|id| {
-                    let base = named_socket_path(id, &std::env::temp_dir());
-                    base.with_file_name(format!(
-                        "{}-{}.sock",
-                        base.file_stem().unwrap_or_default().to_string_lossy(),
-                        std::process::id()
-                    ))
+                    tuic_ipc::named_alternate_socket_path(
+                        id,
+                        &std::env::temp_dir(),
+                        std::process::id(),
+                    )
                 })
                 .unwrap_or_else(|| {
                     crate::config::config_dir().join(format!("mcp-{}.sock", std::process::id()))
@@ -1039,6 +1036,37 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
+        // GitHub monitoring: headless-capable controls and read-only data.
+        .route("/repo/github", get(github_routes::repo_github_status))
+        .route("/repo/prs", get(github_routes::repo_pr_statuses))
+        .route("/repo/prs/batch", post(github_routes::repo_all_pr_statuses))
+        .route("/repo/issues", get(github_routes::repo_issues))
+        // GitHub poller
+        .route(
+            "/repo/github-poller/start",
+            post(github_routes::poller_start),
+        )
+        .route("/repo/github-poller/stop", post(github_routes::poller_stop))
+        .route(
+            "/repo/github-poller/visibility",
+            post(github_routes::poller_set_visibility),
+        )
+        .route(
+            "/repo/github-poller/poll-repo",
+            post(github_routes::poller_poll_repo),
+        )
+        .route(
+            "/repo/github-poller/update-paths",
+            post(github_routes::poller_update_paths),
+        )
+        .route(
+            "/repo/github-poller/set-issue-filter",
+            post(github_routes::poller_set_issue_filter),
+        )
+        .route(
+            "/repo/github-poller/api-debug",
+            get(github_routes::api_debug_get).post(github_routes::api_debug_set),
+        )
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only
@@ -1715,8 +1743,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Health
         .route("/health", get(session::health))
         // Git/GitHub (desktop-only)
-        .route("/repo/github", get(github_routes::repo_github_status))
-        .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
         .route(
             "/repo/pr-review-threads",
@@ -1782,39 +1808,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/post-pr-review",
             post(github_routes::repo_post_pr_review),
         )
-        .route("/repo/prs/batch", post(github_routes::repo_all_pr_statuses))
-        .route("/repo/issues", get(github_routes::repo_issues))
         .route("/repo/issue-detail", get(github_routes::repo_issue_detail))
         .route("/repo/issues/close", post(github_routes::repo_close_issue))
         .route(
             "/repo/issues/reopen",
             post(github_routes::repo_reopen_issue),
-        )
-        // GitHub poller
-        .route(
-            "/repo/github-poller/start",
-            post(github_routes::poller_start),
-        )
-        .route("/repo/github-poller/stop", post(github_routes::poller_stop))
-        .route(
-            "/repo/github-poller/visibility",
-            post(github_routes::poller_set_visibility),
-        )
-        .route(
-            "/repo/github-poller/poll-repo",
-            post(github_routes::poller_poll_repo),
-        )
-        .route(
-            "/repo/github-poller/update-paths",
-            post(github_routes::poller_update_paths),
-        )
-        .route(
-            "/repo/github-poller/set-issue-filter",
-            post(github_routes::poller_set_issue_filter),
-        )
-        .route(
-            "/repo/github-poller/api-debug",
-            get(github_routes::api_debug_get).post(github_routes::api_debug_set),
         )
         // GitHub auth (device-code flow) + misc — browser/PWA via loopback
         .route(
@@ -2250,7 +2248,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     // Multi-account accounts + repo resolution — desktop-only: add/remove/resolve go
     // through the keychain-backed #[cfg(feature = "desktop")] impls in github_account.rs.
-    // The remote daemon never serves GitHub routes (build_remote_router omits them), so
+    // The remote daemon omits GitHub account management routes, so
     // gate these out of the always-compiled build_router so the lib builds for
     // tuic-remote (#094-ec55 remote-target fix).
     #[cfg(feature = "desktop")]
@@ -2463,10 +2461,12 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 ///
 /// Includes all per-repo routes needed for remote terminal management:
 /// sessions (CRUD + stream), terminal grid, git, worktrees, file system,
-/// agents, watchers, events (SSE), and repo info.
+/// agents, watchers, events (SSE), repo info, and GitHub monitoring
+/// (poller controls, repository status, PR snapshots, and issues).
 ///
 /// Excludes desktop-only routes: config management, MCP bridge, plugins,
-/// push notifications, prompt processing, AI chat, GitHub poller, and
+/// push notifications, prompt processing, AI chat, GitHub account/auth and
+/// mutation routes, and
 /// static file serving (no frontend embedded in the remote binary).
 ///
 /// Auth and compression layers are applied identically to `build_router()`.
@@ -2717,6 +2717,12 @@ pub(crate) async fn spawn_ipc_listener(state: &Arc<AppState>, mcp_enabled: bool)
     #[cfg(unix)]
     {
         let sock = resolve_socket_path();
+        // A path past sun_path fails every bind with an opaque "path must be
+        // shorter than SUN_LEN"; name the budget and the way out instead.
+        if let Err(reason) = tuic_ipc::check_unix_socket_path(&sock) {
+            tracing::error!(source = "mcp_http", path = %sock.display(), "Unix socket not bound: {reason}");
+            return;
+        }
 
         if let Some(parent) = sock.parent()
             && let Err(e) = std::fs::create_dir_all(parent)
@@ -3432,6 +3438,52 @@ mod tests {
         assert_eq!(json["build"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(json["build"]["target"], env!("TUIC_TARGET_TRIPLE"));
         assert_eq!(json["build"]["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    /// Catches: moving GitHub monitoring outside the remote authentication boundary.
+    #[tokio::test]
+    async fn remote_github_monitoring_requires_authentication() {
+        let state = test_state();
+        *state.session_token.write() = "github-monitor-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for path in [
+            "/repo/github",
+            "/repo/prs",
+            "/repo/prs/batch",
+            "/repo/issues",
+            "/repo/github-poller/start",
+            "/repo/github-poller/stop",
+            "/repo/github-poller/visibility",
+            "/repo/github-poller/poll-repo",
+            "/repo/github-poller/update-paths",
+            "/repo/github-poller/set-issue-filter",
+            "/repo/github-poller/api-debug",
+        ] {
+            for (query, expected) in [
+                ("", StatusCode::UNAUTHORIZED),
+                (
+                    "?token=github-monitor-secret",
+                    StatusCode::METHOD_NOT_ALLOWED,
+                ),
+            ] {
+                // PATCH probes registration without invoking a GitHub API handler.
+                let mut request = Request::builder()
+                    .method("PATCH")
+                    .uri(format!("{path}{query}"))
+                    .header(header::HOST, "127.0.0.1:9877")
+                    .body(Body::empty())
+                    .unwrap();
+                request
+                    .extensions_mut()
+                    .insert(ConnectInfo(std::net::SocketAddr::from((
+                        [203, 0, 113, 5],
+                        5555,
+                    ))));
+                let response = app.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), expected, "{path}{query}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -4706,6 +4758,18 @@ mod tests {
         // handler's own 404 (e.g. get_output 404s for a missing session, which would
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
+            // Catches: GitHub monitoring remains desktop-only (#2345-49f0).
+            "/repo/github",
+            "/repo/prs",
+            "/repo/prs/batch",
+            "/repo/issues",
+            "/repo/github-poller/start",
+            "/repo/github-poller/stop",
+            "/repo/github-poller/visibility",
+            "/repo/github-poller/poll-repo",
+            "/repo/github-poller/update-paths",
+            "/repo/github-poller/set-issue-filter",
+            "/repo/github-poller/api-debug",
             "/config/defaults",
             "/api/version",
             // The remote client's only way onto a WebSocket: it trades Basic
@@ -4800,8 +4864,6 @@ mod tests {
             "/fs/read-editor",
             "/github/accounts",
             "/github/resolve-repo",
-            "/repo/github",
-            "/repo/prs",
             "/dictation/status",
             "/config/themes",
             "/mcp/status",
@@ -9953,7 +10015,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn named_instance_socket_path_stays_within_macos_limit() {
-        let path = named_socket_path(
+        let path = tuic_ipc::named_socket_path(
             "validate-763-20260913-with-a-long-but-valid-instance-name",
             std::path::Path::new("/var/folders/ab/cdefghijklmnop/T"),
         );

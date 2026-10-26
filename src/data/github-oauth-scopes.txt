@@ -1,1 +1,1 @@
-repo read:project
+repo project

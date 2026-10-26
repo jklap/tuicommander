@@ -10,8 +10,8 @@ them. Overlap `skip` still refuses an occurrence while the previous run is open.
 Open the command palette and select **Automations**. This dialog manages runs
 on this machine. It does not dispatch onto a different saved remote connection.
 
-Select **New automation**, enter a name, repository path, configured run config
-identifier and literal prompt. Choose an existing checkout or a new worktree
+Select **New automation**, enter a name, repository path, select a saved run config
+and enter a literal prompt. Choose an existing checkout or a new worktree
 per run with a base branch. The agent uses its run config's permissions.
 
 Saved run configurations are validated against the same named-profile lookup used
@@ -21,6 +21,12 @@ updates and re-enabling reject an unresolved name with a repair hint listing
 valid saved profiles. Existing list rows retain invalid definitions, but expose
 `run_config_error` and return `next_run_ms: null` until repaired. A profile can
 be removed after saving; launch checks it again and records a failed run.
+
+On desktop startup, backend validation reports unresolved definitions in the
+Messages bell without opening Runs. Renaming or deleting a profile triggers the
+same check as soon as its settings save completes. **Fix** opens the current
+definition and focuses the profile picker. Select a saved profile and **Save**;
+TUIC never substitutes an agent default or starts a replacement run automatically.
 
 Choose Hourly, Daily, Weekdays or Weekly, set the time controls and select
 **Apply cadence**. The backend converts the cadence to cron. You can also edit a
@@ -77,7 +83,8 @@ durable owner-channel claim prevents duplicate or restart replay. Definitions
 created by HTTP/IPC without a creator still use the bell and configured alerts.
 
 
-A live transition to `needs_you` or `failed` adds a Messages bell item. Select
+A live transition to `needs_you` or `failed` adds a Messages bell item, including
+the failure reason even when the creator session is closed. Select
 it to open the canonical saved run, including its status, output and owning
 session. Editing uses the current saved definition, not the historical run snapshot.
 The run stays available after its definition is deleted, with no definition editor. **Open owning
@@ -106,7 +113,11 @@ independently; this guide does not claim an installed scheduler is available.
 
 ## Run history and saved output
 
-The dialog addresses the daemon that owns the active repository when you open it (or this machine for a local repository). Switch repository and reopen to view another owner. Select **Runs** to view all persisted runs, including runs of deleted automations. The 24h and 7d counts come from the backend and use elapsed UTC windows, not local calendar days. **Previous runs** and **Next runs** page through history. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
+The dialog addresses the daemon that owns the active repository when you open it (or this machine for a local repository). Switch repository and reopen to view another owner. Select **Runs** to view all persisted runs, including runs of deleted automations. The 24h and 7d counts come from the backend and use elapsed UTC windows, not local calendar days. Identical failures (same definition, repository, profile and reason) share one row
+with an occurrence count and the newest run as representative. **Fix** opens the
+saved definition's profile picker, not an editable copy of historical settings.
+Deleted definitions retain read-only history. **Previous runs** and **Next runs**
+page through grouped rows; summaries still count individual runs. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
 
 **View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled.
 
@@ -161,7 +172,7 @@ For step-by-step policy setup, use the three [event configuration Smart Prompts]
 "event_intake": { "repositories": ["owner/name"], "label": "tuic-run", "definition_id": "<definition id>" }
 ```
 
-The existing GitHub poller supplies the issues, so its issue filter must be `all` for the repository. An open issue that carries the label starts the named, enabled definition once per issue and label; the key is stored in the run ledger and survives restarts. If an open run or the concurrency limit refuses it, a later 30-second tick admits it. The agent receives only the issue URL, never its title or body.
+After acquiring executor ownership, the daemon starts the shared GitHub poller for the allowlisted repositories without a UI call. Each entry must resolve to a registered, unambiguous github.com repository on that daemon; otherwise its logs show an **Event intake configuration error** with the repository name. Each failing entry is reported separately; valid entries continue polling. The runtime re-reads configuration on its existing 30-second tick and on repository/settings changes. Intake requests all open issues regardless of a client's issue filter or subscribed paths. If a repository belongs to both subscriptions, one GraphQL request selects unfiltered intake issues and separately filtered client issues. The sidebar and SSE snapshots retain the client filter, including disabled issues; internal intake snapshots never reach clients. Client stop releases only the client subscription while intake remains enabled. Removing the allowlist removes the intake subscription; normal client polling remains unchanged. An open issue that carries the label starts the named, enabled definition once per issue and label; the key is stored in the run ledger and survives restarts. If an open run or the concurrency limit refuses it, a later 30-second tick admits it. The agent receives only the issue URL, never its title or body.
 
 When such a run completes in an isolated workspace (`new_per_run`), TUIC creates a draft pull request for the workspace branch through its GitHub API layer, using the TUIC GitHub login. The agent must push that branch itself. Publication re-checks the allowlist and that the workspace remote is the admitted repository; no other repository is ever written.
 

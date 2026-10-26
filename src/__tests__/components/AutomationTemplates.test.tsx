@@ -26,6 +26,7 @@ it("applies a backend draft only after repository and config selection, then sav
 		<AutomationsDialog
 			onClose={() => {}}
 			adapter={fakeAdapter({
+				profiles: async () => ["my-config"],
 				templates: async () => [{ id: "daily_review", name: "Daily change review" }],
 				template: async (...args) => {
 					requests.push(args);
@@ -54,7 +55,8 @@ it("applies a backend draft only after repository and config selection, then sav
 	fireEvent.change(screen.getByLabelText("Template"), { target: { value: "daily_review" } });
 	expect(screen.getByRole("button", { name: "Apply template" })).toBeDisabled();
 	fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/chosen" } });
-	fireEvent.input(screen.getByLabelText("Run config"), { target: { value: "my-config" } });
+	await screen.findByRole("option", { name: "my-config" });
+	fireEvent.change(screen.getByLabelText("Run config"), { target: { value: "my-config" } });
 	fireEvent.click(screen.getByRole("button", { name: "Apply template" }));
 	await waitFor(() => expect(screen.getByLabelText("Prompt")).toHaveValue("Backend literal prompt"));
 	expect(requests).toEqual([["daily_review", "/chosen", "my-config", ""]]);

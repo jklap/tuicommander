@@ -16,6 +16,7 @@ import { createAutomationAdapter } from "./transportAdapter";
 
 export function AutomationsDialog(props: { onClose: () => void; adapter?: AutomationAdapter; connectionId?: string }) {
 	const store = createAutomationsStore(props.adapter ?? createAutomationAdapter(props.connectionId));
+	const [focusProfile, setFocusProfile] = createSignal(false);
 	const [tab, setTab] = createSignal("definitions");
 	const [search, setSearch] = createSignal("");
 	const preferenceKey = "tuic-automations-select-first";
@@ -36,12 +37,29 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 		searchInput?.focus();
 		void store.refresh().then(() => {
 			const first = store.items()[0];
-			if (selectFirst() && first && !store.draft() && !automationsUi.requestedRun()) choose(first.definition);
+			if (
+				selectFirst() &&
+				first &&
+				!store.draft() &&
+				!focusProfile() &&
+				!automationsUi.requestedRun() &&
+				!automationsUi.requestedDefinition()
+			)
+				choose(first.definition);
 		});
 	});
 	onCleanup(() => {
 		store.dispose();
 		if (priorFocus instanceof HTMLElement && priorFocus.isConnected) priorFocus.focus();
+	});
+	const repair = async (id: string) => {
+		setFocusProfile(true);
+		setTab("definitions");
+		await store.openDefinition(id);
+	};
+	createEffect(() => {
+		const id = automationsUi.requestedDefinition();
+		if (id) void repair(id);
 	});
 	createEffect(() => {
 		const id = automationsUi.requestedRun();
@@ -55,6 +73,7 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 		setConfirmDelete(false);
 	});
 	const choose = (value: Parameters<typeof store.select>[0]) => {
+		setFocusProfile(false);
 		store.select(value);
 		void store.preview();
 		void store.loadHistory();
@@ -126,7 +145,12 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 				/>
 				<Show when={tab() === "runs"}>
 					<main class={s.detail} role="tabpanel" id="automations-panel-runs" aria-labelledby="automations-tab-runs">
-						<RunsView store={store} connectionId={props.connectionId} onNavigate={props.onClose} />
+						<RunsView
+							store={store}
+							connectionId={props.connectionId}
+							onNavigate={props.onClose}
+							onFix={(id) => void repair(id)}
+						/>
 					</main>
 				</Show>
 				<Show when={tab() === "definitions"}>
@@ -253,7 +277,7 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 									</div>
 								</Show>
 								<Show when={store.draft()?.id} keyed>
-									{(_id) => <DefinitionEditor store={store} />}
+									{(_id) => <DefinitionEditor store={store} focusProfile={focusProfile()} />}
 								</Show>
 							</Show>
 							<Show when={!store.isNew() && (store.draft() || store.runs().length > 0)}>

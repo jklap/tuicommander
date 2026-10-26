@@ -148,6 +148,46 @@ denies `show` and `set-focus`; it adds no presentation permission. The daily
 capability file is unchanged. Stop the instance when the check ends to remove
 the floating window. The daily window configuration remains unchanged.
 
+#### Persistent GitHub live-check login
+
+Use one named instance for all authorized GitHub live checks, across stories and
+worktrees. Do not select a new instance name for each agent:
+
+```bash
+make agent-test-github AGENT_TEST_DRY_RUN=1
+make agent-test-github
+# Stop only after the current owner finishes:
+make agent-test-github-stop
+```
+
+These targets always select `agent-test-ghlive` on port `19887`, including when
+`AGENT_TEST_INSTANCE`, `AGENT_TEST_PORT` or `TUIC_*` values are inherited or supplied
+for another story. They reuse the instance used for the authenticated Tasks
+checks. The generic `agent-test` defaults and all isolation guards are unchanged.
+Coordinate ownership before starting or stopping this shared verification
+instance. Its existing supervisor lock rejects a second owner; do not stop
+another agent's run. Stop preserves persistent state.
+
+The agent-test executable is a **debug build**. Its credential adapter uses
+`~/.tuicommander-dev/instances/agent-test-ghlive/credentials.json`, not macOS
+Keychain. App configuration and account metadata remain under
+`~/Library/Application Support/com.tuic.commander/instances/agent-test-ghlive/`.
+The vault service is `tuicommander-instance-agent-test-ghlive`, user `vault`,
+with the GitHub OAuth token in the `account/github.com` slot. A different instance
+selects a different file and vault namespace; it does not reuse this login.
+Rebuilding or changing the worktree does not change either persistent path.
+`agent-test-stop` removes the PID and FIFO only, not credentials or configuration.
+Do not read, copy, reset or delete credential files to move a login between
+instances. Never copy the daily instance's credentials.
+
+Before requesting another Device Flow login, use the instance's normal GitHub
+status UI/API to check its existing account, not its token store. The 2026-10-23
+Tasks worklog records a successful login and restart retention in
+`agent-test-ghlive`. File existence alone does not prove that token is still valid.
+An expired/revoked token or a newly required OAuth scope can still require consent;
+for example, adding Projects write access requires `project`, not the older
+`read:project` scope. Reusing a namespace does not add permissions to an old token.
+
 #### Native visibility regression (authorized macOS runs only)
 
 The unattended `scripts/agent-test-tests.py` checks launcher/configuration and
@@ -195,7 +235,7 @@ part of the unattended shell/Rust/JS suites.
 | --- | --- |
 | Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
 | Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
-| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tmp/tuic-at/`. Child CLI/bridge processes inherit the same namespace. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tuic/tuic-at/`. Child CLI/bridge processes inherit the same namespace. Runtime temp stays outside the intentional ego scratch grant `~/Gits/.tmp`, so its negative filesystem probe remains meaningful. Do not grant the runtime temp parent to ego or disable confinement to admit a conversation. Stop older instances with their original launcher before updating: their FIFO/socket remains at the old path. |
 | Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
 | Microphone and dictation | Not compiled by default. With explicit authorization, `AGENT_TEST_SPEECH_OUTPUT=1` and an `agent-test-<name>` instance enable runtime speech output only: effective listening is forced off, microphone permission/capture is refused, and global input ownership stays disabled. Speech output is audible; do not use this option without authorization. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
@@ -219,6 +259,34 @@ must checksum the running daily binary and app bundle before and after, start
 agent-test alongside it, verify both listeners without mutating the daily API,
 and stop only agent-test. Until that proof is recorded, do not claim macOS TCC,
 simultaneous listeners or global-input isolation have been verified live.
+
+### Development backend restart warning
+
+`tauri dev --no-watch` keeps the Rust process running while Vite reloads the UI.
+A short, dismissible warning appears when a Cargo-recorded input is newer than
+its executable, or the backend executable was rebuilt after application entry.
+It shows compact backend/tree identifiers (source SHA plus timestamp token) and
+`Restart tauri dev`. Restart only when you are ready to end the backend session.
+Missing executable or dep-info files, or an older backend without launch identity,
+show `Backend identity unavailable` instead of a silent match.
+
+Vite reads Cargo's final `<binary>.d`, which covers local path crates and embedded
+assets even outside `src-tauri/`. It also checks local package manifests found
+through dependency ancestors and the workspace `Cargo.lock`. There are no source
+extension allowlists or fixture-directory exclusions. The debug bridge built and
+used by `make dev` has its own executable/dep-info check, against its own build
+time. Unrelated frontend, test-only module and documentation edits stay quiet;
+frontend assets embedded by Rust are backend inputs and do warn.
+
+This uses Cargo-style mtimes, not content fingerprints: an edit followed by a
+revert still asks for a restart. Vite checks on load and after HMR, without polling,
+compiling or restarting the backend. The macOS copy runner passes
+`TUIC_DEV_BUILD_EXE` so checks follow the original Cargo artifact rather than its
+protected launch copy. A rebuilt original bridge also requires restart when the
+runner still holds its older protected sibling copy. Without that binding, the running executable needs its
+own sibling `.d`. Vite does not guess an mbx target directory. Source archives
+with build artifacts can work without Git (the SHA is diagnostic only). Release
+builds do not expose launch identity or include the warning module.
 
 ### Browser Mode
 

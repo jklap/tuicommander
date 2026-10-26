@@ -73,6 +73,7 @@ choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
 Tap a file link in the transcript to open it in **Files**. A directory link
 opens that directory in **Files**. Links use the AI Chat workspace as their base.
+Saved tabs are attached before a message is sent, including when Chat is reopened after switching mobile tabs. If ego no longer has a saved conversation, Chat opens a fresh one automatically and removes only the stale local tab. Other load failures remain visible for explicit retry; they do not replace history.
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 
@@ -100,6 +101,9 @@ tabs and the selected tab are restored after restarting TUICommander, and their
 history is replayed when ego starts. Selecting a saved tab connects and loads it
 without sending a message. The panel shows **Connecting conversation…** while
 it attaches, or the failure reason and **Retry** if it cannot open the conversation.
+Reopening the panel on an existing connection also attaches the selected saved tab.
+If ego no longer has that conversation, Chat opens a fresh one automatically,
+without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 
@@ -134,8 +138,10 @@ wakes an idle ego with a short notice.
 
 Select text in user messages, answers, code blocks, and tool output and use
 `Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
-keyboard focus. It copies the raw message text. Code blocks have their own
-Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
+keyboard focus. It copies the whole raw message, including fenced code, through
+the same clipboard adapter as the terminal. Answers have no separate code-block
+Copy button. The compact Copy and **Fork from here** row stays below its answer
+and does not overlap the next message. Web links open in the
 system browser; file links and plain source paths are resolved by the backend.
 Files open in TUICommander's viewer or editor, while directories open in the
 file browser, including when AI Chat is detached.
@@ -334,3 +340,9 @@ captured turn; a queued Stop does not interrupt unrelated work.
 ## Settings MCP startup boundary
 
 The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).
+
+### Discuss a Markdown selection
+
+With a conversation open in AI Chat, select text in a Markdown file and choose **Send to AI Chat** beside the comment action. TUIC appends the file path, original source line range and quoted selected text to that conversation’s draft, then focuses the composer. It preserves your existing draft and attachments and does not send a message. This action is also available in the mobile Files Markdown view after you open a chat conversation.
+
+Selections can include inline links and adjacent punctuation. Link destinations and reference identifiers do not count as visible occurrences when locating the source lines.

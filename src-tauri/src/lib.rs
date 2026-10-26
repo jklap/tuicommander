@@ -26,6 +26,8 @@ pub(crate) mod audio_enumeration;
 pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
+#[cfg(all(debug_assertions, feature = "desktop"))]
+pub mod dev_backend;
 pub(crate) mod launch_instructions;
 pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
@@ -152,8 +154,11 @@ pub(crate) mod plugin_pty;
 pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
+// The elevated-copy staging serves the desktop-only mdkb installer.
 #[cfg(feature = "desktop")]
 mod press_and_hold;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) mod private_scratch;
 pub(crate) use tuic_core::process_env;
 pub(crate) mod progress;
 pub(crate) mod prompt;
@@ -1826,6 +1831,15 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(!agent_test::active());
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("dev-backend-identity")
+            .js_init_script(format!(
+                "window.__TUIC_DEV_BACKEND__ = {};",
+                dev_backend::identity()
+            ))
+            .build(),
+    );
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())
@@ -2737,10 +2751,18 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
                     }
-                    // Kill all SSH tunnel processes so ports are freed for restart
+                    // Kill all SSH tunnel processes so ports are freed for restart.
+                    // Waited (bounded by GRACEFUL_SHUTDOWN_TIMEOUT), not
+                    // fire-and-forget: shutdown_all() only sends each
+                    // supervisor a signal and returns immediately, and since
+                    // this process is about to exit, nothing would otherwise
+                    // be left running long enough to confirm the SSH child
+                    // processes are actually gone before we do.
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                         state.secrets.clear();
-                        state.tunnel_manager.shutdown_all();
+                        tauri::async_runtime::block_on(
+                            state.tunnel_manager.shutdown_all_and_wait(),
+                        );
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
                         }

@@ -19,8 +19,8 @@ const CLIENT_ID: &str = "Ov23liN95BHKQDboVFRl";
 
 /// Scopes requested during Device Flow authentication.
 ///
-/// `repo` covers repository REST/GraphQL operations; `read:project` permits
-/// Projects v2 reads. Existing logins must authorize again to gain that scope.
+/// `repo` covers repository REST/GraphQL operations; `project` permits
+/// Projects v2 reads and writes. Existing logins must authorize again to gain that scope.
 /// SAML-SSO access still requires the user's per-org token authorization.
 const OAUTH_SCOPES: &str = include_str!("../../src/data/github-oauth-scopes.txt");
 
@@ -1184,6 +1184,7 @@ mod tests {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
         *state.github.poller.lock() = Some(crate::github_poller::GitHubPoller {
+            intake_paths: Vec::new(),
             cmd_tx,
             previous_prs: Default::default(),
             stop: std::sync::Arc::new(tokio::sync::Notify::new()),
@@ -1325,9 +1326,9 @@ mod tests {
 
 #[cfg(test)]
 mod device_scope_tests {
-    /// Catches: a newly authorized TUIC account cannot read Projects v2 because consent omits read:project.
+    /// Catches: a newly authorized TUIC account cannot move Projects v2 cards because consent omits project.
     #[test]
-    fn device_flow_requests_projects_read_scope() {
+    fn device_flow_requests_projects_write_scope() {
         let request = super::device_flow_request(&reqwest::Client::new())
             .build()
             .expect("valid device-code request");
@@ -1352,8 +1353,8 @@ mod device_scope_tests {
             "repository access must be retained"
         );
         assert!(
-            scopes.contains("read:project"),
-            "Projects v2 reads require read:project consent"
+            scopes.contains("project"),
+            "Projects v2 mutations require project consent"
         );
     }
 }

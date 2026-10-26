@@ -24,6 +24,7 @@ it.each([
 	});
 	const chat = {
 		sessionId,
+		phase: () => (connected && sessionId() ? "live" : "starting"),
 		busy: () => false,
 		queuedPrompts: () => [],
 		configOptions: () => [],
