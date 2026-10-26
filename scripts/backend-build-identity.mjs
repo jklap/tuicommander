@@ -49,7 +49,11 @@ export function backendBuildIdentity(cwd, backend) {
 			if (!isAbsolute(artifact)) return unavailable;
 			const binary = statSync(artifact);
 			if (!binary.isFile()) return unavailable;
-			if (artifact === exe && binary.mtimeMs > backend.started_at_ms) stale = true;
+			// The copy runner snapshots the main executable and its siblings
+			// before entry. Rebuilding an original sibling does not refresh
+			// the protected copy that the running app still uses.
+			const copiedSibling = exe !== backend.exe && dirname(artifact) === dirname(exe);
+			if ((artifact === exe || copiedSibling) && binary.mtimeMs > backend.started_at_ms) stale = true;
 			key.update(`${artifact}\0${binary.mtimeMs}\0${binary.size}\0`);
 			const depInfo = artifact.replace(/\.exe$/i, "") + ".d";
 			const inputs = new Set(dependencies(readFileSync(depInfo, "utf8")).map((file) => {

@@ -122,3 +122,14 @@ test("compares bridge source to the bridge build rather than the main build", ()
 		utimesSync(backend.bridge_exe, oldBridge.atime, oldBridge.mtime);
 	}
 });
+
+// Catches: rebuilding the bridge clears skew even though the copy runner's
+// protected bridge still holds the version copied before application entry.
+test("warns when the copy runner bridge is rebuilt without refreshing its launch copy", () => {
+	const original = statSync(backend.bridge_exe);
+	try {
+		const rebuilt = new Date(backend.started_at_ms + 1000);
+		utimesSync(backend.bridge_exe, rebuilt, rebuilt);
+		assert.equal(backendBuildIdentity(root, { ...backend, exe: join(root, "protected-copy"), build_exe: backend.exe }).status, "stale");
+	} finally { utimesSync(backend.bridge_exe, original.atime, original.mtime); }
+});

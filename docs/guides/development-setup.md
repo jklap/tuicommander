@@ -242,7 +242,8 @@ This uses Cargo-style mtimes, not content fingerprints: an edit followed by a
 revert still asks for a restart. Vite checks on load and after HMR, without polling,
 compiling or restarting the backend. The macOS copy runner passes
 `TUIC_DEV_BUILD_EXE` so checks follow the original Cargo artifact rather than its
-protected launch copy. Without that binding, the running executable needs its
+protected launch copy. A rebuilt original bridge also requires restart when the
+runner still holds its older protected sibling copy. Without that binding, the running executable needs its
 own sibling `.d`. Vite does not guess an mbx target directory. Source archives
 with build artifacts can work without Git (the SHA is diagnostic only). Release
 builds do not expose launch identity or include the warning module.
