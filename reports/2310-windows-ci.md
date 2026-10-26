@@ -1,5 +1,95 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Recorded directory-event repair (2026-10-26, tuic-2310)
+
+The latest completed CI run inspected for this follow-up is `40331854991`,
+commit `e0387dcea460eb362b7fb4739c2e82dc70095ab3`, Windows job `121603040336`.
+The run metadata and complete failed-job output are saved under
+`~/Gits/.tmp/results/tuic-2310-latest-{run.json,failed.log}`. Retrieval used
+`gh run view 40331854991 --log-failed`; no Windows VM was used.
+
+The Windows test summary is 8424 run, 8398 passed, 25 failed and one timed out.
+This is not Windows GREEN. Of the original 24 owners, rows 6, 9, 17 and 23
+still fail; the other 20 eventually pass. Row 15 needs a qualification: it
+passes on retry after a new first-attempt archive-proof error (lines
+15546–15547), not the original invalid Git destination. That retry is not proof
+that this new intermittent symptom is repaired.
+
+| Original rows | Latest native result and retained classification |
+|---|---|
+| 1–5, 7, 10, 19–22, 24 | PASS; fixture causes remain as classified below. |
+| 8, 11, 13–16 | Eventually PASS; the earlier product path-boundary fixes remain in place. Row 15 has the additional retry qualification above. |
+| 12 | PASS in 0.513s; grouped Windows fixture command is still valid. |
+| 6 | All three attempts fail. Direct and shell-mediated Git still exit `0xC0000005` with empty streams. Fault ownership remains unknown. |
+| 9 | All three attempts fail: year/month `Modify(Any)` events trigger exactly 130 extra metadata reads. Product invalidation defect. |
+| 17 | All three attempts fail: project `Modify(Any)` clears the seen-file set and stats both transcripts, instead of only the changed transcript. Product invalidation defect. |
+| 18 | PASS in 0.043s in this run. Earlier native failures and the deterministic replay below still prove the same product invalidation defect. |
+| 23 | Repeat listings take 14.348338s and 13.7463788s on the first two attempts. The third fails during setup because shared `gitconfig` access is denied (line 18068). The latency cause remains open; this later setup error is not latency evidence. |
+
+### Repair and regression evidence
+
+Both production watcher callbacks now feed a named event-recording method.
+The existing warm-cache tests replay the exact `Modify(Any)` directory event
+shapes recorded by native CI, rebased onto real temporary fixture directories.
+They still assert the original observable session ID/token totals and the exact
+metadata-read counts. No assertion or deadline was relaxed.
+
+For RED, the affected source files came from local main
+`977f9364dfc48dfef19dfa986c95a1eaee4ff617`, plus only mechanical callback
+extraction and recorded-event replay. The build ran in the assigned worktree,
+not the protected main checkout; no branch was switched. The assigned branch's
+original source files were restored with the same test patch afterward, so
+unrelated main changes are not included in the commits.
+
+- Native macOS, build-slot + mbx + `scripts/with-test-tmp.sh cargo nextest run
+  --manifest-path src-tauri/Cargo.toml --lib -E
+  'test(codex_warm_discovery_does_not_restat_historical_rollouts) |
+  test(session_stats_warm_refresh_does_not_stat_unchanged_history)'`:
+  **two failed**, summary 0.343s. Codex: 130 extra reads versus zero. Usage:
+  two total reads versus one. Log: `tuic-2310-red-mac.log` in the results folder.
+- rb initially exited 78 for the Mac-only source precondition. After that native
+  RED, the same filter through `RB_FORCE=1 build-slot.sh --remote` also reports
+  **two failed**, summary 0.066s, build 4m30s. Log:
+  `tuic-2310-red-rb-forced.log`. An earlier incorrect `build-slot --force`
+  spelling exited 2 before any remote work; `RB_FORCE=1` is the wrapper's API.
+- The test-only/extraction commit is `5fec97831`. Post-fix GREEN is reserved
+  for batch integration under the managed-story rule; it is not claimed here.
+
+The fix shares one narrow rule in `fs::is_directory_metadata_event`: ignore
+`Modify(Any)` only when its path is still a directory. File events, absent
+paths, create/remove/rename events, and watcher overflow/rescan still follow
+existing invalidation and recovery. This prevents redundant history scans and
+avoids discarding/recreating the Codex index for directory metadata alone.
+The rule is common to both caches so it cannot drift between them.
+
+Adjacent coverage already exists: Codex file replacement/deletion, day-directory
+replacement and expiry; Usage growth/truncation/deletion, dirty-file-only
+refresh and periodic reconciliation. Those tests require batch GREEN alongside
+the two replay tests. Runtime caps remain 4096 pending Codex paths, 16384 Usage
+paths and 30-minute Usage reconciliation. No new state, timer or quota is added.
+
+Regression verdict: the warm-cache contract was introduced with Codex indexing
+in `8d16c1b00d` and Usage dirty-file tracking in `4819a61c58`; neither classified
+directory `Modify(Any)` separately. `19c99bbd98` additionally re-created the
+Codex index on these ancestor events, explaining the second full scan. This
+contract did not work for the recorded Windows event shape; it is not evidence
+of a formerly GREEN Windows path regressing in the current task.
+
+### Remaining acceptance gaps
+
+Row 6 still cannot be honestly classified product versus fixture/runtime
+without identifying the native Git fault or recording a decisive environment
+comparison. Row 23 still needs internal per-checkout timings beyond the existing
+queue/inspection envelope; do not raise its response bound. The latest third
+attempt's shared-Git-config error is separately addressed on current main by
+`b854c18cd5` (per-process stable configuration), but that does not establish the
+cause or repair of the original latency or Git access violation.
+
+The first two original acceptance criteria therefore remain open, as does
+Windows CI GREEN pending Boss's next authorized push. No push, VM build,
+desktop launch or daily-app restart occurred. Rust changes require an authorized
+rebuild/restart to affect the daily application; `to-test.md` retains that check.
+
 ## Native lab build attempt (2026-10-26, ci-win-f)
 
 The coordinator supplied a verified host-key file under `~/Gits/.tmp`.

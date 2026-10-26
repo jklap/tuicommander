@@ -1026,8 +1026,11 @@ Coalesced scrolling uses one atomic latest-wins slot for both transports. `termi
 Heuristic Codex session discovery shares a watched candidate index per `CODEX_HOME`
 (up to 16 stores). It scans only today's and yesterday's rollout directories on
 initialization. Later lookups use the index; file events refresh changed rollout
-paths. Date changes, directory events and lost-event notifications rebuild the
-recent-day snapshot. Watches cover only the recent day trees and their shallow
+paths. Date changes, directory creation/removal/rename events and lost-event
+notifications rebuild the recent-day snapshot. A `Modify(Any)` notification
+for an existing directory does not invalidate file candidates; Windows reports
+these notifications for directory metadata too. Missing directory paths still
+trigger recovery. Watches cover only the recent day trees and their shallow
 parent boundaries, not the lifetime session tree. Watch failure falls back to
 fresh recent-day scans rather than serving stale entries. A replaced watched day or parent directory invalidates the index so the next lookup re-arms its watches, even when the date paths do not change.
 

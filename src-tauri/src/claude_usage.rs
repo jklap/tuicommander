@@ -262,6 +262,9 @@ impl UsageChanges {
             self.rescan = true;
         }
         for path in event.paths {
+            if crate::fs::is_directory_metadata_event(&event.kind, &path) {
+                continue;
+            }
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
@@ -2099,7 +2102,6 @@ mod tests {
     /// before its already-populated parse cache can reject unchanged files.
     #[tokio::test]
     async fn session_stats_warm_refresh_does_not_stat_unchanged_history() {
-        // DEFERRED (2026-10-25) — Windows CI observes a second metadata read; capture watcher availability/events before changing invalidation or this exact counter.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
@@ -2148,7 +2150,6 @@ mod tests {
     /// or a missed watcher event never being repaired by reconciliation.
     #[tokio::test]
     async fn session_stats_only_stats_the_changed_transcript_then_reconciles() {
-        // DEFERRED (2026-10-25) — Windows CI restats both transcripts; watcher rescan versus pending-path cause needs native event evidence.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");

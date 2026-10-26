@@ -712,6 +712,9 @@ impl CodexUpdates {
         match event {
             Ok(event) if !event.need_rescan() => {
                 for path in event.paths {
+                    if crate::fs::is_directory_metadata_event(&event.kind, &path) {
+                        continue;
+                    }
                     if self.paths.len() >= 4096 {
                         self.paths.clear();
                         self.rescan = true;
@@ -2709,7 +2712,6 @@ mod tests {
     // Catches re-statting every historical rollout on each idle/busy discovery.
     #[test]
     fn codex_warm_discovery_does_not_restat_historical_rollouts() {
-        // DEFERRED (2026-10-25) — Windows CI restats 130 rollouts; record watcher availability/events before attributing the two rescans or weakening the zero-stat contract.
         let root = TempDir::new().unwrap();
         let sessions = root.path().join("sessions");
         let day = codex_recent_day_dirs_for_test(&sessions);
