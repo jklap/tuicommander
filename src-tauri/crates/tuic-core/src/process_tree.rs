@@ -20,6 +20,12 @@ pub fn kill_process_group(pgid: u32) -> bool {
     signal_process_group(pgid, libc::SIGKILL)
 }
 
+/// Whether group `pgid` still has a member (signal 0 probes, delivers nothing).
+#[cfg(unix)]
+pub fn process_group_exists(pgid: u32) -> bool {
+    signal_process_group(pgid, 0)
+}
+
 #[cfg(unix)]
 fn signal_process_group(pgid: u32, signal: libc::c_int) -> bool {
     let Ok(pgid) = libc::pid_t::try_from(pgid) else {
@@ -55,5 +61,28 @@ mod tests {
         assert!(!terminate_process_group(0));
         assert!(!kill_process_group(1));
         assert!(!kill_process_group(u32::MAX));
+        assert!(!process_group_exists(0));
+        assert!(!process_group_exists(1));
+    }
+
+    // Catches: the probe reporting a live group as gone (the supervisor would
+    // stop waiting and skip the SIGKILL) or a dead one as live.
+    #[test]
+    fn group_probe_tracks_a_real_group_until_it_is_killed() {
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn sh");
+        let pgid = child.id();
+        assert!(process_group_exists(pgid));
+        assert!(kill_process_group(pgid));
+        child.wait().expect("reap");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while process_group_exists(pgid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!process_group_exists(pgid));
     }
 }
