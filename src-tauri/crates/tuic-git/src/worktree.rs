@@ -3539,15 +3539,18 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         let branch = remote_head_branch(repo_path, remote)?;
         if remote == "origin" || local_tracks(remote, &branch) {
             Some(branch)
-        } else if ["refs/heads/", "refs/tags/"]
+        } else if ["refs/", "refs/heads/", "refs/tags/"]
             .iter()
-            .any(|p| rev_at(cwd, &format!("{p}{remote}/{branch}^{{commit}}")).is_ok())
+            .any(|p| rev_at(cwd, &format!("{p}{remote}/{branch}")).is_ok())
         {
-            // git resolves a short name through refs/<name>, refs/tags/<name>,
-            // refs/heads/<name> and only then refs/remotes/<name>, so a tag or
-            // a local branch literally named `<remote>/<branch>` would shadow
-            // the remote ref. Keep the qualified name then; `integration_bases`,
-            // `list_base_ref_options` and `fetch_if_remote` accept it.
+            // git resolves a short name through <name>, refs/<name>,
+            // refs/tags/<name>, refs/heads/<name> and only then
+            // refs/remotes/<name>, so a ref, tag or local branch literally
+            // named `<remote>/<branch>` would shadow the remote ref. Keep the
+            // qualified name then; `integration_bases`, `list_base_ref_options`
+            // and `fetch_if_remote` accept it. Existence only (no `^{commit}`):
+            // a blob/tree tag or a non-commit `refs/<short>` shadows the name
+            // just the same.
             Some(format!("refs/remotes/{remote}/{branch}"))
         } else {
             Some(format!("{remote}/{branch}"))
@@ -5786,6 +5789,35 @@ mod tests {
         let options = list_base_ref_options(path).unwrap();
         assert_eq!(options[0].name, got);
         assert!(options[0].is_default);
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_non_commit_tag_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A tag pointing at a tree never peels to a commit, but still wins
+        // name resolution over refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["tag", "upstream/develop", "HEAD^{tree}"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_top_level_ref_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // refs/upstream/develop outranks refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["update-ref", "refs/upstream/develop", "HEAD"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
     }
 
     #[test]
