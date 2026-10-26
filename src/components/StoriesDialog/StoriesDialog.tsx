@@ -311,7 +311,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		const detail = cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message;
 		setError(
 			detail.startsWith("project_unavailable:")
-				? t("stories.error.projectUnavailable", "Cannot read the project folder: {path}", { path: props.project })
+				? t("stories.error.projectUnavailable", "Cannot read {path}", { path: props.project })
 				: detail,
 		);
 	};
