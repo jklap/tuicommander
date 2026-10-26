@@ -211,3 +211,29 @@ it("catches the current document losing selection when its repository option arr
 	expect((option as HTMLOptionElement).selected).toBe(true);
 	expect(ui.getByRole("button", { name: "Save" })).toBeDisabled();
 });
+
+it("catches Retry after a project read failure discarding an unsaved plan draft", async () => {
+	const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+	let unavailable = false;
+	vi.mocked(invoke).mockImplementation(async (command, args) => {
+		const action = (args as { action?: { action: string } } | undefined)?.action?.action;
+		if (unavailable && (action === "list_plan_sources" || action === "list_plans")) {
+			throw new Error("project_unavailable: temporarily disconnected repository");
+		}
+		return originalInvoke(command, args);
+	});
+	const ui = render(() => <StoriesDialog project="/plan-edit" onClose={() => {}} />);
+	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
+	await waitFor(() => expect(ui.getByRole("button", { name: "Refresh" })).not.toBeDisabled());
+	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: "Unsaved migration decision" } });
+	unavailable = true;
+	fireEvent.click(ui.getByRole("button", { name: "Refresh" }));
+	await ui.findByRole("alert");
+	fireEvent.click(ui.getByRole("button", { name: "Retry" }));
+	await waitFor(() => expect(ui.queryByRole("status")).toBeNull());
+	unavailable = false;
+	fireEvent.click(ui.getByRole("button", { name: "Retry" }));
+	const title = await ui.findByLabelText("Plan title");
+	expect((title as HTMLTextAreaElement).value).toBe("Unsaved migration decision");
+	expect(updates()).toHaveLength(0);
+});
