@@ -38,7 +38,7 @@ button.item[data-control-layout="row"] small { color: var(--fg-muted); font-size
 .manualForm { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .form input, .form textarea, .form select, .inline select { width: 100%; }
-.form input:focus-visible, .form textarea:focus-visible, .form select:focus-visible, .inline select:focus-visible, .item:focus-visible, .actions button:focus-visible, .columnHeader button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.form select:focus-visible, .inline select:focus-visible, .item:focus-visible, .actions button:focus-visible, .columnHeader button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .detail { padding: 16px; }
 .detail section { margin-top: 20px; }
 .detail h3 { margin: 4px 0 0; font-size: var(--font-xl); }

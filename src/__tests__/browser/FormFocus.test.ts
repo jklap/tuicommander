@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -22,56 +21,22 @@ describe.skipIf(!url)("browser-rendered shared control focus", () => {
 	beforeAll(() => {
 		const directory = process.env.TUIC_FOCUS_EVIDENCE_DIR;
 		if (!directory) throw new Error("TUIC_FOCUS_EVIDENCE_DIR is required");
-		mkdirSync(join(directory, "ab-empty"), { recursive: true });
-		const wrapper = join(homedir(), "Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh");
-		const run = (...args: string[]) =>
-			execFileSync("perl", ["-e", "alarm 40; exec @ARGV", wrapper, ...args], {
-				env: { ...process.env, AB_SESSION: "tuic2377", AB_AGENT_BROWSER_DIR: join(directory, "ab-empty") },
-				encoding: "utf8",
-				timeout: 45000,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-		const sample = () =>
-			JSON.parse(
-				run(
-					"--",
-					"eval",
-					`(() => {
-			const node = document.activeElement;
-			const ring = node.getAttribute('role') === 'switch' ? node.parentElement : node;
-			const style = getComputedStyle(ring);
-			const color = (token) => {
-				const probe = document.createElement('span');
-				probe.style.color = 'var(' + token + ')';
-				document.body.append(probe);
-				const value = getComputedStyle(probe).color;
-				probe.remove();
-				return value;
-			};
-			return { name: node.getAttribute('aria-label') || node.textContent,
-				focused: node.matches(':focus-visible'), outline: style.outlineStyle,
-				offset: style.outlineOffset, border: style.borderTopColor, shadow: style.boxShadow,
-				accent: color('--accent'), error: color('--error') };
-		})()`,
-				),
-			) as Appearance;
-		try {
-			run("mac-chrome", `${url}/src/__tests__/browser/formFocus.html`);
-			run("--", "set", "viewport", "1400", "1100");
-			run("--", "wait", "input[aria-label='Title']");
-			for (let index = 0; index < 9; index++) {
-				run("--", "press", "Tab");
-				samples.push(sample());
-			}
-			run("--", "click", ".tweak-highlight");
-			run("--", "wait", "[data-tweak-popover] textarea");
-			samples.push({ ...sample(), name: "Comment popover" });
-			run("--", "screenshot", "[data-tweak-popover]", join(directory, "comment-popover-1400.png"));
-			writeFileSync(join(directory, "computed-focus.json"), JSON.stringify(samples, null, 2));
-		} finally {
-			run("--", "tab", "close");
-		}
-	}, 240000);
+		execFileSync("node", [join(process.cwd(), "src/__tests__/browser/captureFormFocus.mjs"), url!, directory], {
+			timeout: 240000,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		samples.push(...JSON.parse(readFileSync(join(directory, "computed-focus.json"), "utf8")));
+	}, 250000);
+
+	const expectTextFocus = (sample: Appearance) => {
+		expect.soft(sample.focused, sample.name).toBe(true);
+		expect.soft(sample.outline, sample.name).toBe("none");
+		expect.soft(sample.offset, sample.name).toBe("0px");
+		expect.soft(sample.shadow, sample.name).toContain("inset");
+		expect.soft(sample.shadow, sample.name).toContain("0px 0px 0px 1px");
+		expect.soft(sample.shadow, sample.name).toContain(sample.accent);
+		expect.soft(sample.border, sample.name).toBe(sample.name === "Invalid description" ? sample.error : sample.accent);
+	};
 
 	it("hugs mounted Input and Textarea borders — catches offset outlines doubling text-field focus", () => {
 		expect(samples.map((sample) => sample.name)).toEqual([
@@ -84,19 +49,17 @@ describe.skipIf(!url)("browser-rendered shared control focus", () => {
 			"Enabled",
 			"Volume",
 			"Blue",
+			"Story title",
+			"Story description",
+			"Workflow title",
+			"Workflow description",
 			"Comment popover",
 		]);
-		for (const sample of [...samples.slice(0, 4), samples[9]]) {
-			expect.soft(sample.focused, sample.name).toBe(true);
-			expect.soft(sample.outline, sample.name).toBe("none");
-			expect.soft(sample.offset, sample.name).toBe("0px");
-			expect.soft(sample.shadow, sample.name).toContain("inset");
-			expect.soft(sample.shadow, sample.name).toContain("0px 0px 0px 1px");
-			expect.soft(sample.shadow, sample.name).toContain(sample.accent);
-			expect
-				.soft(sample.border, sample.name)
-				.toBe(sample.name === "Invalid description" ? sample.error : sample.accent);
-		}
+		for (const sample of [...samples.slice(0, 4), samples[13]]) expectTextFocus(sample);
+	});
+
+	it("keeps consumer text focus border-hugging — catches feature CSS restoring detached outlines", () => {
+		for (const sample of samples.slice(9, 13)) expectTextFocus(sample);
 	});
 
 	it("retains non-text keyboard rings — catches a broad focus reset hiding action focus", () => {

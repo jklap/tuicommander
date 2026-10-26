@@ -25,6 +25,14 @@ render(() => {
 			<Switch aria-label="Enabled" />
 			<Slider aria-label="Volume" />
 			<ColorSwatch aria-label="Blue" swatchColor="#7aa2f7" />
+			<section data-focus-context="stories">
+				<Input aria-label="Story title" />
+				<Textarea aria-label="Story description" />
+			</section>
+			<section data-focus-context="workflow">
+				<Input aria-label="Workflow title" />
+				<Textarea aria-label="Workflow description" />
+			</section>
 			<div ref={content}>
 				<span
 					class="tweak-highlight"
