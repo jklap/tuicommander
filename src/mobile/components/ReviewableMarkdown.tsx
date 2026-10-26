@@ -1,4 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
+import { CommentOverlay, type MarkdownChatReference } from "../../components/MarkdownTab/CommentOverlay";
 import { Button, Textarea } from "../../components/ui";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { generateTweakCommentId, type TweakComment } from "../../utils/tweakComments";
@@ -16,6 +17,8 @@ interface SelectedBlock {
 }
 
 interface ReviewableMarkdownProps {
+	chatReference?: MarkdownChatReference;
+	onSaveInlineComment?: (comment: TweakComment, occurrence: number) => Promise<boolean>;
 	content: string;
 	imageSrc: (relativePath: string) => string;
 	onCheckboxToggle: (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) => void;
@@ -56,6 +59,7 @@ export function ReviewableMarkdown(props: ReviewableMarkdownProps) {
 	const [draft, setDraft] = createSignal("");
 	const [saving, setSaving] = createSignal(false);
 	let root: HTMLDivElement | undefined;
+	const [contentEl, setContentEl] = createSignal<HTMLDivElement>();
 	let selectedEl: HTMLElement | null = null;
 
 	function clearSelection() {
@@ -88,6 +92,7 @@ export function ReviewableMarkdown(props: ReviewableMarkdownProps) {
 				return;
 			}
 		}
+		if (window.getSelection()?.isCollapsed === false) return;
 		const block = target.closest<HTMLElement>("[data-comment-source-start][data-comment-source-end]");
 		if (!block) return;
 		const start = Number(block.dataset.commentSourceStart);
@@ -130,7 +135,13 @@ export function ReviewableMarkdown(props: ReviewableMarkdownProps) {
 
 	return (
 		<div class={styles.root}>
-			<div ref={root} onClick={onClick}>
+			<div
+				ref={(el) => {
+					root = el;
+					setContentEl(el);
+				}}
+				onClick={onClick}
+			>
 				<ContentRenderer
 					content={props.content}
 					imageSrc={props.imageSrc}
@@ -138,6 +149,16 @@ export function ReviewableMarkdown(props: ReviewableMarkdownProps) {
 					commentableBlocks
 				/>
 			</div>
+			<Show when={contentEl() && props.chatReference}>
+				<CommentOverlay
+					selectionOnly
+					observeSelection
+					contentRef={contentEl()!}
+					chatReference={props.chatReference}
+					onSave={(comment, occurrence) => props.onSaveInlineComment?.(comment, occurrence) ?? false}
+					onDelete={() => false}
+				/>
+			</Show>
 			<Show when={selected()}>
 				{(block) => (
 					<div class={styles.bar} role="region" aria-label="Block comment">

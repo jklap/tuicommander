@@ -60,6 +60,20 @@ export const Composer: Component<{
 			},
 		),
 	);
+	createEffect(() => {
+		if (props.chat.phase() !== "live" || aiChatDraft.focusRequested() !== props.chat.sessionId()) return;
+		queueMicrotask(() => {
+			if (
+				!textarea?.isConnected ||
+				props.chat.phase() !== "live" ||
+				aiChatDraft.focusRequested() !== props.chat.sessionId()
+			)
+				return;
+			textarea.focus();
+			textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+			aiChatDraft.consumeFocus();
+		});
+	});
 	const resize = () => {
 		if (!textarea || props.mobileAttachments) return;
 		const previous = textarea.offsetHeight;

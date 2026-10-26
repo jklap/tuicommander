@@ -24,6 +24,7 @@ export interface StagedFile {
  * panel — the terminal context menu — can hand it a selection to ask about.
  */
 const [text, setText] = createSignal("");
+const [focusRequested, setFocusRequested] = createSignal<string | null>(null);
 const [images, setImages] = createSignal<StagedImage[]>([]);
 const [files, setFiles] = createSignal<StagedFile[]>([]);
 interface DraftContent {
@@ -115,6 +116,9 @@ function readImage(file: File): Promise<string> {
 }
 
 export const aiChatDraft = {
+	focusRequested,
+	requestFocus: (session: string) => setFocusRequested(session),
+	consumeFocus: () => setFocusRequested(null),
 	text,
 	set: setText,
 	expandedText(): string {
@@ -238,6 +242,13 @@ export const aiChatDraft = {
 		setFiles((current) => current.filter((item) => item !== file));
 	},
 
+	/** Hand a document reference to its open session without losing another session’s draft. */
+	insertReference(session: string, reference: string): void {
+		this.activate(session);
+		this.append(reference);
+		this.requestFocus(session);
+	},
+
 	/** Add text to the draft and leave the cursor after it. */
 	append(addition: string): void {
 		const current = text();
@@ -254,6 +265,7 @@ export const aiChatDraft = {
 	},
 
 	reset(): void {
+		setFocusRequested(null);
 		drafts.clear();
 		parkedDrafts.clear();
 		setParked(null);

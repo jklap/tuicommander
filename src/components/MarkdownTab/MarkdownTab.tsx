@@ -5,6 +5,7 @@ import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
+import { aiChatTabs } from "../../stores/aiChatTabs";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -28,6 +29,7 @@ import {
 	toggleCheckbox,
 	updateTweakComment,
 } from "../../utils/tweakComments";
+import { aiChatDraft } from "../AIChatPanel/draft";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
@@ -794,6 +796,20 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}
+						chatReference={
+							aiChatTabs.active("global")
+								? {
+										source: content(),
+										path: fullPath() ?? "",
+										insert: (reference) => {
+											const session = aiChatTabs.active("global");
+											if (!session) return;
+											aiChatDraft.insertReference(session, reference);
+											uiStore.setAiChatPanelVisible(true);
+										},
+									}
+								: undefined
+						}
 						onSave={handleTweakSave}
 						onSaveBlock={handleTweakBlockSave}
 						blockSource={(range) => content().slice(range.start, range.end)}

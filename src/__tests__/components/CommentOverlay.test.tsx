@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentOverlay } from "../../components/MarkdownTab/CommentOverlay";
 
@@ -325,5 +326,50 @@ describe("CommentOverlay edit actions", () => {
 		expect(document.body.querySelector("textarea")).toBe(textarea);
 		fireEvent.keyDown(textarea, { key: "Escape" });
 		expect(document.body.querySelector("textarea")).toBeNull();
+	});
+});
+
+describe("Markdown selection chat reference", () => {
+	// Catches: using rendered table offsets (or the first repeated cell) as source line offsets.
+	it("sends the selected table cell and its source row line to the composer without saving", () => {
+		const content = document.createElement("div");
+		content.innerHTML =
+			"<table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Repeated</td></tr><tr><td><strong>Repeated</strong></td></tr></tbody></table>";
+		document.body.append(content);
+		const text = content.querySelector("strong")!.firstChild!;
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		const rect = { left: 100, right: 160, top: 100, bottom: 120, height: 20 } as DOMRect;
+		range.getClientRects = () => [rect] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => rect;
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(range);
+		const insert = vi.fn();
+		const save = vi.fn();
+		const [available, setAvailable] = createSignal(false);
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={save}
+				onDelete={vi.fn()}
+				chatReference={
+					available()
+						? { source: "# Map\n\n| Name |\n| --- |\n| Repeated |\n| **Repeated** |\n", path: "/repo/map.md", insert }
+						: undefined
+				}
+			/>
+		));
+		fireEvent.mouseUp(content);
+		expect(document.body.querySelector('[aria-label="Send to AI Chat"]')).toBeNull();
+		expect(document.body.querySelector('[aria-label="Add inline comment"]')).not.toBeNull();
+		setAvailable(true);
+		fireEvent.mouseUp(content);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action).not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith("/repo/map.md:6-6\n\n> Repeated");
+		expect(save).not.toHaveBeenCalled();
+		window.getSelection()!.removeAllRanges();
+		content.remove();
 	});
 });
