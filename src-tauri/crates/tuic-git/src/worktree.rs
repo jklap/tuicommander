@@ -872,11 +872,14 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
             .into_iter()
             .collect();
     }
+    let local_ref = format!("refs/heads/{default_branch}");
     let upstream = git_cmd(repo)
-        .args(["rev-parse", "--symbolic-full-name", "--verify", &format!("refs/heads/{default_branch}@{{upstream}}")])
+        .args(["for-each-ref", "--format=%(refname)%09%(upstream)", &local_ref])
         .run_silent()
-        .map(|out| out.stdout.trim().to_string())
-        .filter(|name| !name.is_empty());
+        .and_then(|out| out.stdout.lines().find_map(|line| {
+            let (name, upstream) = line.split_once('\t')?;
+            (name == local_ref && !upstream.is_empty()).then(|| upstream.to_string())
+        }));
     let mut bases = Vec::new();
     for base in upstream.into_iter().chain([
         format!("refs/remotes/origin/{default_branch}"),
