@@ -188,6 +188,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the host limit (103 bytes on macOS, 107 on Linux) and the longest `TMPDIR` that would hold it; `TUIC_SOCKET` is client-only and does not move the listener, and the doomed bind retries are skipped.
 - Run the git processes of every Rust test binary that links `tuic-test-support` against a fixed hermetic gitconfig (it points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, and drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail those tests. `tuic-ipc`'s one git-running test does not link it and is not covered.
 - Resolve a repository's default branch from the HEAD of the main checkout's tracked remote or any other remote (including remotes with slashes in the name) when `origin` has none and neither a configured base nor a local `main`/`master` decides it. A remote default whose short name is shadowed by a local branch or a tag keeps its full `refs/remotes/...` name, `fetch_if_remote` splits `<remote>/<branch>` against the configured remotes instead of at the first slash, and the answer no longer depends on which linked worktree the caller passes.
+- Kill an SSH tunnel's whole process group (not just the `ssh` child) on shutdown and wait, bounded, for confirmed exit on app quit, so forked `ProxyCommand` grandchildren are no longer orphaned.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
