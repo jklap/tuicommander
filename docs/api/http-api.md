@@ -1777,7 +1777,7 @@ Returns status and metrics for all upstream MCP servers (connecting, ready, circ
 GET /mcp/instructions
 ```
 
-Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
+Returns server guidance for the MCP bridge binary as `{"instructions": "..."}`. It uses the same producer as MCP initialize, without live terminal or peer inventory. Configuration and capability changes can change the guidance; use `session action=list` and `agent action=list_peers` for current inventory.
 
 ## Filesystem Endpoints
 

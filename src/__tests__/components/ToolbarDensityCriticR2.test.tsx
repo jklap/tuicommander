@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,7 +21,7 @@ import { uiStore } from "../../stores/ui";
 
 afterEach(() => {
 	cleanup();
-	uiStore.flushSave();
+	uiStore._testCancelPendingSave();
 });
 
 describe("Toolbar density marker after removing the auto outline (critic 1351)", () => {
@@ -40,4 +42,47 @@ describe("Toolbar density marker after removing the auto outline (critic 1351)",
 			rich: true,
 		});
 	});
+});
+
+// Catches shared ghost styles overriding the active filter after the Button migration.
+describe("Toolbar active filter colors", () => {
+	it.each([false, true])(
+		"keeps active filter accent regardless of stylesheet order (shared last: %s)",
+		(sharedLast) => {
+			const paths = ["src/components/ui/FormControls.module.css", "src/components/Toolbar/Toolbar.module.css"];
+			if (sharedLast) paths.reverse();
+			const sheet = document.createElement("style");
+			sheet.textContent =
+				":root { --accent: #007acc; --text-on-accent: #ffffff; --fg-secondary: #a0a0a0; }\n" +
+				paths.map((path) => readFileSync(resolve(process.cwd(), path), "utf8")).join("\n");
+			document.head.append(sheet);
+			uiStore.setSidebarVisible(true);
+			uiStore.setRepoFilterActiveOnly(true);
+			try {
+				const { container } = render(() => <Toolbar />);
+				const filter = container.querySelector(
+					"button[title='Showing active repos only — click to show all']",
+				) as HTMLButtonElement;
+				expect(filter).not.toBeNull();
+				expect(getComputedStyle(filter).backgroundColor).toBe("#007acc");
+				expect(getComputedStyle(filter).color).toBe("#ffffff");
+				const density = container.querySelector("[data-testid='sidebar-density-toggle']") as HTMLButtonElement;
+				for (let i = 0; i < 3; i++) {
+					expect(getComputedStyle(density).backgroundColor).toBe(
+						uiStore.state.sidebarDensityMode === "auto" ? "transparent" : "#007acc",
+					);
+					fireEvent.click(density);
+				}
+				fireEvent.click(filter);
+				expect(uiStore.state.repoFilterActiveOnly).toBe(false);
+				expect(getComputedStyle(filter).backgroundColor).toBe("transparent");
+				expect(getComputedStyle(filter).color).toBe("#a0a0a0");
+				fireEvent.click(filter);
+				expect(getComputedStyle(filter).backgroundColor).toBe("#007acc");
+			} finally {
+				uiStore.setRepoFilterActiveOnly(false);
+				sheet.remove();
+			}
+		},
+	);
 });
