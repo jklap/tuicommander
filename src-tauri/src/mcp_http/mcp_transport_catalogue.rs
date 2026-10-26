@@ -10,27 +10,24 @@ use super::mcp_transport::resolve_agent_type;
 use super::mcp_transport::resolve_marker_flags;
 
 /// Build server instructions for the MCP initialize response.
-/// Tells the connecting agent what tools are available, which repos are managed,
-/// and what sessions are currently active so it can orient itself.
+/// Describes tools, configured repository summaries and caller-specific rules.
+/// Live peer and terminal inventory belongs in tool responses, not cached guidance.
 pub(super) fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> String {
     let collapse_tools = state.config.read().collapse_tools;
     build_mcp_instructions_for_mode(state, client_name, collapse_tools)
 }
 
-/// The live state the instructions render: managed repos, open sessions and
-/// connected peers. Gathered by [`instruction_context`] and rendered by
+/// The configuration and capability context the instructions render.
+/// Gathered by [`instruction_context`] and rendered by
 /// [`render_mcp_instructions`], which reads nothing else.
 ///
 /// The split exists so the rendered size is reproducible. `load_repo_settings`
-/// reads the user's `repositories.json` and the session list reads live PTYs,
+/// reads the user's `repositories.json` and capabilities depend on the install,
 /// so a renderer that gathered its own inputs could only be measured against
 /// whatever happened to be open on the machine running the test.
 #[derive(Default)]
 pub(super) struct InstructionContext {
     pub(super) repos: RepoSummary,
-    /// `(short session id, cwd, worktree branch)`, already defaulted to `—`.
-    pub(super) sessions: Vec<(String, String, String)>,
-    pub(super) peer_count: usize,
     /// Names of the native tools registered on this install, in registration order.
     pub(super) native_tools: Vec<String>,
     /// `(name, tool count)` of the connected upstream servers this session may use.
@@ -104,25 +101,6 @@ pub(super) fn tag_repo_connection(row: &mut serde_json::Value, stored: Option<&s
 fn instruction_context(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> InstructionContext {
     let repos = summarize_repos(&crate::config::load_repositories());
 
-    let sessions = state
-        .session_maps
-        .sessions
-        .iter()
-        .map(|entry| {
-            let id = entry.key().clone();
-            let session = entry.value().lock();
-            (
-                id[..8.min(id.len())].to_string(),
-                session.cwd.clone().unwrap_or_else(|| "—".to_string()),
-                session
-                    .worktree
-                    .as_ref()
-                    .and_then(|w| w.branch.clone())
-                    .unwrap_or_else(|| "—".to_string()),
-            )
-        })
-        .collect();
-
     let native_tools = filtered_native_tools(state)
         .iter()
         .filter_map(|t| t["name"].as_str().map(str::to_string))
@@ -135,8 +113,6 @@ fn instruction_context(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> I
 
     InstructionContext {
         repos,
-        sessions,
-        peer_count: state.peer_agents.len(),
         native_tools,
         upstreams,
         spawned_child: mcp_session_id.is_some_and(|id| is_spawned_child(state, id)),
@@ -186,7 +162,7 @@ pub(super) fn build_mcp_instructions_for_session(
 /// is deliberately absent here — see `every_documented_action_constant_matches_schema_and_description`
 /// and `instructions_do_not_repeat_what_tool_descriptions_already_say`. What is
 /// left is what belongs to no single tool: the wire protocol markers, the rules
-/// that forbid a *non-TUIC* tool, and the live state below.
+/// that forbid a *non-TUIC* tool, and configuration/capability summaries below.
 pub(super) fn render_mcp_instructions(
     client_name: Option<&str>,
     collapse_tools: bool,
@@ -285,19 +261,12 @@ pub(super) fn render_mcp_instructions(
 
     // ── Multi-agent work — what the tool descriptions cannot say ─────
     // The orchestration primer, the identity rules and the reporting contract
-    // all live in the `agent` description, which reaches every client. Only
-    // three things are left here: how many peers are live (state, not prose),
-    // the worktree entry point, and the Claude-Code-only delegation hint, which
-    // is conditioned on the connecting client and so cannot sit in a static
-    // description at all.
+    // all live in the `agent` description, which reaches every client.
+    // Keep inventory out of this cached prefix: it changes between handshakes.
+    // The tools serve current peers and terminals when the caller needs them.
     let is_claude_code = detect_claude_code_client(client_name);
     out.push_str("## Multi-Agent Work\n\n");
-    if ctx.peer_count > 0 {
-        out.push_str(&format!(
-            "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
-            ctx.peer_count
-        ));
-    }
+    out.push_str("- `agent action=list_peers`; `session action=list`.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
     if is_claude_code {
@@ -312,15 +281,6 @@ pub(super) fn render_mcp_instructions(
         out.push_str("## Repos\n\n");
         out.push_str(&render_repo_line(&ctx.repos, collapse_tools));
         out.push_str("\n\n");
-    }
-
-    // ── Dynamic: sessions ───────────────────────────────────────────
-    if !ctx.sessions.is_empty() {
-        out.push_str("## Sessions\n\n");
-        for (short_id, cwd, branch) in &ctx.sessions {
-            out.push_str(&format!("- `{short_id}` {cwd} ({branch})\n"));
-        }
-        out.push('\n');
     }
 
     out
