@@ -58,6 +58,8 @@ pub(crate) enum PollerCmd {
     SetVisibility(bool),
     PollRepo(String),
     UpdatePaths(Vec<String>),
+    /// Machine-owned intake paths cannot be removed or filtered by a UI client.
+    SetIntakePaths(Vec<String>),
     SetIssueFilter(String),
     SetPrHideDrafts(bool),
     /// Re-emit current PR + issue state for all repos on the next poll, even when
@@ -69,6 +71,7 @@ pub(crate) enum PollerCmd {
 
 pub(crate) struct GitHubPoller {
     pub(crate) cmd_tx: mpsc::Sender<PollerCmd>,
+    pub(crate) intake_paths: Vec<String>,
     /// Successful PR snapshots also identify monitored repositories. Unlike the
     /// query cache, this state lives until a path is removed or this poller stops.
     pub(crate) previous_prs: Arc<parking_lot::RwLock<PrevState>>,
@@ -95,6 +98,7 @@ impl GitHubPoller {
         ));
         Self {
             cmd_tx: tx,
+            intake_paths: Vec::new(),
             stop,
             previous_prs,
         }
@@ -120,6 +124,7 @@ struct PollMutableState {
     /// When set, the next poll re-emits PR + issue state regardless of change
     /// detection, then clears. Set by `PollerCmd::ForceResync`.
     force_resync: bool,
+    intake_paths: Vec<String>,
 }
 
 impl PollMutableState {
@@ -158,6 +163,7 @@ async fn poll_loop(
 ) {
     let mut visible = true;
     let mut paths: Vec<String> = Vec::new();
+    let mut client_paths: Vec<String> = Vec::new();
     let mut issue_filter = String::new();
     let mut pr_hide_drafts = false;
     let mut ps = PollMutableState {
@@ -250,9 +256,18 @@ async fn poll_loop(
                         }
                     }
                     Some(PollerCmd::UpdatePaths(new_paths)) => {
-                        ps.retain_paths(&new_paths);
-                        pending_poll_paths.retain(|path| new_paths.contains(path));
-                        paths = new_paths;
+                        client_paths = new_paths;
+                        paths = merged_paths(&client_paths, &ps.intake_paths);
+                        ps.retain_paths(&paths);
+                        pending_poll_paths.retain(|path| paths.contains(path));
+                    }
+                    Some(PollerCmd::SetIntakePaths(new_paths)) => {
+                        ps.intake_paths = new_paths;
+                        paths = merged_paths(&client_paths, &ps.intake_paths);
+                        ps.retain_paths(&paths);
+                        pending_poll_paths.clear();
+                        ps.force_resync = true;
+                        pending_poll_at = Some(tokio::time::Instant::now());
                     }
                     Some(PollerCmd::SetIssueFilter(filter)) => {
                         if filter != issue_filter {
@@ -365,7 +380,77 @@ fn snapshot_key(count: usize, max_updated_at: &str) -> String {
     format!("{count}|{max_updated_at}")
 }
 
+fn merged_paths(client: &[String], intake: &[String]) -> Vec<String> {
+    let mut paths = client.to_vec();
+    for path in intake {
+        if !paths.contains(path) {
+            paths.push(path.clone());
+        }
+    }
+    paths
+}
+
+/// Intake needs every open issue, independent of the client's sidebar filter.
 async fn poll_batch(
+    state: &AppState,
+    paths: &[String],
+    include_merged: bool,
+    issue_filter: &str,
+    pr_hide_drafts: bool,
+    ps: &mut PollMutableState,
+) {
+    let (intake, client): (Vec<_>, Vec<_>) = paths
+        .iter()
+        .cloned()
+        .partition(|path| ps.intake_paths.contains(path));
+    if intake.is_empty() {
+        poll_filtered_batch(
+            state,
+            &client,
+            include_merged,
+            issue_filter,
+            pr_hide_drafts,
+            ps,
+        )
+        .await;
+        return;
+    }
+    if client.is_empty() {
+        poll_filtered_batch(
+            state,
+            &intake,
+            include_merged,
+            issue_filter,
+            pr_hide_drafts,
+            ps,
+        )
+        .await;
+        return;
+    }
+    // Keep the resync request for both halves of this logical batch.
+    let force = ps.force_resync;
+    poll_filtered_batch(
+        state,
+        &client,
+        include_merged,
+        issue_filter,
+        pr_hide_drafts,
+        ps,
+    )
+    .await;
+    ps.force_resync |= force;
+    poll_filtered_batch(
+        state,
+        &intake,
+        include_merged,
+        issue_filter,
+        pr_hide_drafts,
+        ps,
+    )
+    .await;
+}
+
+async fn poll_filtered_batch(
     state: &AppState,
     paths: &[String],
     include_merged: bool,
@@ -379,12 +464,13 @@ async fn poll_batch(
     // Per-account circuit breakers are checked inside get_all_batch_impl so a
     // single failing account no longer blocks polling of the others.
 
-    match crate::github::get_all_batch_impl(
+    match crate::github::get_all_batch_with_intake_impl(
         paths,
         include_merged,
         issue_filter,
         pr_hide_drafts,
         state,
+        paths.iter().any(|path| ps.intake_paths.contains(path)),
     )
     .await
     {
@@ -395,6 +481,12 @@ async fn poll_batch(
             // here so a single successful poll re-hydrates the (reset) frontend store.
             let force = ps.force_resync;
             ps.force_resync = false;
+
+            for (repo_path, issues) in result.intake_issues {
+                let _ = state
+                    .event_bus
+                    .send(AppEvent::GitHubIntakeIssuesUpdate { repo_path, issues });
+            }
 
             for (repo_path, statuses) in result.prs {
                 let changed =
@@ -615,6 +707,26 @@ pub(crate) fn ensure_polling(
     *guard = Some(poller);
 }
 
+/// Reconcile the executor's subscription without replacing any client configuration.
+/// Only enqueue changes, so the scheduler's periodic read cannot flood the channel.
+pub(crate) fn set_intake_paths(state: &Arc<AppState>, paths: Vec<String>) -> Result<(), String> {
+    let mut guard = state.github.poller.lock();
+    if guard.is_none() && paths.is_empty() {
+        return Ok(());
+    }
+    let poller = guard.get_or_insert_with(|| GitHubPoller::start(Arc::clone(state)));
+    if poller.intake_paths != paths {
+        poller
+            .cmd_tx
+            .try_send(PollerCmd::SetIntakePaths(paths.clone()))
+            .map_err(|error| {
+                format!("GitHub intake polling configuration not delivered: {error}")
+            })?;
+        poller.intake_paths = paths;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -664,10 +776,17 @@ pub(crate) fn send_poller_cmd(state: &AppState, cmd: PollerCmd) -> Result<(), St
 /// returns, so the Stop was stranded for good. Raising the notify instead lands
 /// on the poll itself — see [`GitHubPoller::stop`].
 pub(crate) async fn stop_poller(state: &AppState) -> Result<(), String> {
-    let poller = state
-        .github
-        .poller
-        .lock()
+    // A client releases its subscription, not the executor's machine-owned one.
+    let mut guard = state.github.poller.lock();
+    if let Some(poller) = guard.as_ref()
+        && !poller.intake_paths.is_empty()
+    {
+        return poller
+            .cmd_tx
+            .try_send(PollerCmd::UpdatePaths(Vec::new()))
+            .map_err(|error| format!("GitHub poller command not delivered: {error}"));
+    }
+    let poller = guard
         .take()
         .ok_or_else(|| "GitHub poller is not running".to_string())?;
     poller.stop.notify_one();
@@ -789,6 +908,110 @@ mod tests {
             "query payload eviction must not erase successful monitoring identity"
         );
         stop_poller(&state).await.unwrap();
+    }
+
+    // Catches: an intake overlap leaking all issues into a disabled client view.
+    #[tokio::test]
+    async fn overlapping_intake_preserves_disabled_client_delivery() {
+        assert_overlap_delivery("disabled", None, 0).await;
+    }
+
+    // Catches: intake overriding viewer-scoped filters, including GitHub-only mention semantics.
+    #[tokio::test]
+    async fn overlapping_intake_preserves_viewer_filtered_client_delivery() {
+        for (filter, clause) in [
+            ("assigned", "assignee"),
+            ("created", "createdBy"),
+            ("mentioned", "mentioned"),
+        ] {
+            assert_overlap_delivery(filter, Some(clause), 0).await;
+        }
+        assert_overlap_delivery("all", None, 1).await;
+    }
+
+    async fn assert_overlap_delivery(filter: &str, clause: Option<&str>, expected: usize) {
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        let repo = scratch.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/sstraus/tuicommander.git",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let path = repo.to_string_lossy().into_owned();
+        let mut fixture = crate::github::partial_tests::PollHttpFixture::start(true).await;
+        let mut events = fixture.state.event_bus.subscribe();
+        let mut ps = PollMutableState {
+            intake_paths: vec![path.clone()],
+            ..Default::default()
+        };
+        poll_batch(&fixture.state, &[path], false, filter, false, &mut ps).await;
+        let request = fixture.requests.try_recv().expect("one shared request");
+        let query = request["query"].as_str().unwrap();
+        assert!(
+            query.contains("intakeIssues: ") && query.contains("issues("),
+            "{query}"
+        );
+        let intake_selection = query
+            .split("intakeIssues:")
+            .nth(1)
+            .unwrap()
+            .split("viewerPrs:")
+            .next()
+            .unwrap();
+        assert!(
+            !intake_selection.contains("filterBy:"),
+            "intake selection was filtered: {query}"
+        );
+        if let Some(clause) = clause {
+            assert!(
+                query.contains(&format!(r#"{clause}: "sstraus""#)),
+                "{query}"
+            );
+        }
+        assert!(
+            fixture.requests.try_recv().is_err(),
+            "overlap must not trigger a second fetch"
+        );
+        let mut intake_count = None;
+        let delivered = loop {
+            match events.try_recv().expect("client snapshot") {
+                AppEvent::GitHubIntakeIssuesUpdate { issues, .. } => {
+                    intake_count = Some(issues.len())
+                }
+                AppEvent::GitHubIssuesUpdate { issues, .. } => break issues,
+                _ => {}
+            }
+        };
+        assert_eq!(intake_count, Some(1), "intake lost its unfiltered snapshot");
+        assert_eq!(
+            delivered.len(),
+            expected,
+            "client filter {filter} was overridden"
+        );
+        let payload =
+            crate::mcp_http::sse_routes::event_payload_for_test(&AppEvent::GitHubIssuesUpdate {
+                repo_path: "repo".into(),
+                issues: delivered,
+            });
+        assert_eq!(payload["issues"].as_array().unwrap().len(), expected);
+        fixture.close().await;
     }
 
     // Catches: duplicate snapshots inflating the gauge, or retired paths/pollers keeping ghost monitors.
@@ -1030,6 +1253,7 @@ mod tests {
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(8);
         let stop = Arc::new(tokio::sync::Notify::new());
         *state.github.poller.lock() = Some(GitHubPoller {
+            intake_paths: Vec::new(),
             cmd_tx,
             previous_prs: Default::default(),
             stop: Arc::clone(&stop),
@@ -1062,6 +1286,7 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
         *state.github.poller.lock() = Some(GitHubPoller {
+            intake_paths: Vec::new(),
             cmd_tx,
             previous_prs: Default::default(),
             stop: Arc::new(Notify::new()),
@@ -1225,6 +1450,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let poller = GitHubPoller {
             cmd_tx: tx,
+            intake_paths: Vec::new(),
             previous_prs: Default::default(),
             stop: Arc::new(Notify::new()),
         };
@@ -1254,6 +1480,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let poller = GitHubPoller {
             cmd_tx: tx,
+            intake_paths: Vec::new(),
             previous_prs: Default::default(),
             stop: Arc::new(Notify::new()),
         };

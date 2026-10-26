@@ -1184,6 +1184,7 @@ mod tests {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
         *state.github.poller.lock() = Some(crate::github_poller::GitHubPoller {
+            intake_paths: Vec::new(),
             cmd_tx,
             previous_prs: Default::default(),
             stop: std::sync::Arc::new(tokio::sync::Notify::new()),
