@@ -7,14 +7,32 @@
  *   Mount once inside MarkdownTab. Pass `contentRef` (the rendered markdown
  *   container) and callbacks for save/delete that operate on the raw source.
  */
+import { marked, type Token } from "marked";
 import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
-import { generateTweakCommentId, normalizeForMatch, type TweakComment } from "../../utils/tweakComments";
+import {
+	findSourceMatch,
+	generateTweakCommentId,
+	normalizeForMatch,
+	type TweakComment,
+} from "../../utils/tweakComments";
 import { Button } from "../ui/Button";
 import { Textarea } from "../ui/Textarea";
 import s from "./MarkdownTab.module.css";
 
+export interface MarkdownChatReference {
+	source: string;
+	path: string;
+	insert: (reference: string) => void;
+}
+
 export interface CommentOverlayProps {
+	/** Present only when a chat can receive this document selection. */
+	chatReference?: MarkdownChatReference;
+	/** Mobile owns block comments; this overlay supplies selection actions only. */
+	selectionOnly?: boolean;
+	/** Native mobile selection handles do not reliably dispatch content mouseup. */
+	observeSelection?: boolean;
 	/** The rendered markdown container — used to scope selection and click events. */
 	contentRef: HTMLDivElement;
 	/** Called with the new or updated comment when the user saves. `occurrenceIndex`
@@ -116,6 +134,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	const [popover, setPopover] = createSignal<PopoverState | null>(null);
 	const [tooltip, setTooltip] = createSignal<TooltipState | null>(null);
 	const [draft, setDraft] = createSignal("");
+	const [selectionReference, setSelectionReference] = createSignal<string | null>(null);
 
 	// The selected text captured at "add comment" button time.
 	// We must snapshot it immediately because the selection may clear on click.
@@ -131,15 +150,19 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		setBlockBtn(null);
 	};
 
+	createEffect(() => {
+		props.chatReference?.source;
+		props.chatReference?.path;
+		setBtnPos(null);
+		setSelectionReference(null);
+	});
+
 	// ── Selection detection ──
 	//
-	// We deliberately do NOT listen to `selectionchange` on document: that event
-	// fires on every cursor movement and DOM selection update anywhere in the
-	// app (including xterm buffers repainting), which caused noticeable UI lag.
-	//
-	// Instead we listen to `mouseup` and `keyup` scoped to the markdown content
-	// element. These fire only when the user actively interacts with the
-	// markdown, which is the only time a new selection can be created.
+	// Desktop uses content-scoped mouseup/keyup: document selectionchange also
+	// fires for terminal repaints and previously caused UI lag. The mobile-only
+	// observeSelection opt-in follows native selection handles; its listener is
+	// removed when the Markdown review unmounts.
 
 	const checkSelectionAndUpdateButton = () => {
 		if (popover()) return;
@@ -158,6 +181,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		}
 
 		// Single-block only: skip selections that cross block boundaries.
+		// DEFERRED (2026-10-26) — chat inherits this comment guard; multi-block references
+		// need separate action eligibility and source-span matching (critic R2-3).
 		if (crossesBlockBoundary(range, props.contentRef)) {
 			setBtnPos(null);
 			return;
@@ -177,6 +202,19 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const rects = range.getClientRects();
 		// biome-ignore lint/style/useAtIndex: DOMRectList has indexed access but no at method.
 		const rect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
+		const chat = props.chatReference;
+		const text = sel.toString().trim();
+		const match = chat && selectionSourceMatch(chat.source, props.contentRef, range, text);
+		if (chat && match) {
+			const first = chat.source.slice(0, match.start).split("\n").length;
+			const last = chat.source.slice(0, match.end).split("\n").length;
+			setSelectionReference(
+				`${chat.path}:${first}-${last}\n\n${text
+					.split("\n")
+					.map((line) => `> ${line}`)
+					.join("\n")}`,
+			);
+		} else setSelectionReference(null);
 		const BTN_SIZE = 28;
 		clearBlockTarget();
 		setBtnPos({
@@ -186,6 +224,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	};
 
 	const handleMouseUp = () => checkSelectionAndUpdateButton();
+	const handleTouchEnd = () => checkSelectionAndUpdateButton();
 	const handleKeyUp = (e: KeyboardEvent) => {
 		// Only handle shift+arrow-style keyboard selection.
 		if (e.shiftKey || e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End") {
@@ -196,6 +235,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	// ── Click listener — open view/edit popover on existing highlights ──
 
 	const handleClick = (e: MouseEvent) => {
+		if (props.selectionOnly) return;
 		// Ignore if click is inside an open popover (handled by popover itself).
 		const target = e.target as HTMLElement;
 		if (target.closest("a, button, input, select, textarea, label")) return;
@@ -255,7 +295,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	};
 
 	const handleBlockGutterMove = (e: MouseEvent) => {
-		if (popover() || btnPos()) return;
+		if (props.selectionOnly || popover() || btnPos()) return;
 		const targets = props.contentRef.querySelectorAll<HTMLElement>(
 			"[data-comment-source-start][data-comment-source-end]",
 		);
@@ -298,6 +338,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	onMount(() => {
 		const scrollHost = props.contentRef.parentElement ?? props.contentRef;
 		props.contentRef.addEventListener("mouseup", handleMouseUp);
+		props.contentRef.addEventListener("touchend", handleTouchEnd, { passive: true });
+		if (props.observeSelection) document.addEventListener("selectionchange", checkSelectionAndUpdateButton);
 		props.contentRef.addEventListener("keyup", handleKeyUp);
 		props.contentRef.addEventListener("click", handleClick);
 		props.contentRef.addEventListener("mouseover", handleMouseOver);
@@ -306,6 +348,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		scrollHost.addEventListener("scroll", clearBlockTarget, { passive: true });
 		onCleanup(() => {
 			props.contentRef.removeEventListener("mouseup", handleMouseUp);
+			props.contentRef.removeEventListener("touchend", handleTouchEnd);
+			document.removeEventListener("selectionchange", checkSelectionAndUpdateButton);
 			props.contentRef.removeEventListener("keyup", handleKeyUp);
 			props.contentRef.removeEventListener("click", handleClick);
 			props.contentRef.removeEventListener("mouseover", handleMouseOver);
@@ -455,22 +499,43 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 			{/* Floating "Comment" button near selection */}
 			<Show when={btnPos() && !popover()}>
-				<Button
-					shape="icon"
-					class={s.commentBtn}
-					style={{ left: `${btnPos()!.x}px`, top: `${btnPos()!.y}px` }}
-					onMouseDown={(e) => {
-						e.preventDefault();
-						openNewCommentPopover();
+				<div
+					class={s.selectionActions}
+					style={{
+						left: `${Math.max(4, Math.min(btnPos()!.x, window.innerWidth - (props.chatReference ? 240 : 48)))}px`,
+						top: `${Math.max(4, Math.min(btnPos()!.y, window.innerHeight - 48))}px`,
 					}}
-					title="Add inline comment"
-					aria-label="Add inline comment"
 				>
-					<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-						<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
-						<path d="M5 6h6v1H5zm0 2h4v1H5z" opacity="0.6" />
-					</svg>
-				</Button>
+					<Button
+						shape="icon"
+						onMouseDown={(e) => {
+							e.preventDefault();
+							openNewCommentPopover();
+						}}
+						title="Add inline comment"
+						aria-label="Add inline comment"
+					>
+						<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
+							<path d="M5 6h6v1H5zm0 2h4v1H5z" opacity="0.6" />
+						</svg>
+					</Button>
+					<Show when={props.chatReference && selectionReference()}>
+						<Button
+							aria-label="Send to AI Chat"
+							onMouseDown={(event) => event.preventDefault()}
+							onClick={() => {
+								const reference = selectionReference();
+								if (!reference) return;
+								props.chatReference?.insert(reference);
+								setBtnPos(null);
+								window.getSelection()?.removeAllRanges();
+							}}
+						>
+							Send to AI Chat
+						</Button>
+					</Show>
+				</div>
 			</Show>
 
 			<Show when={blockBtn() && !btnPos() && !popover()}>
@@ -552,6 +617,53 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 // ── Helpers ──
 
 const BLOCK_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "BLOCKQUOTE", "PRE", "TD", "TH"]);
+
+/** Keep source coordinates, but exclude link syntax that has no rendered text. */
+function visibleLinkSource(source: string, documentSource: string): string {
+	const chars = source.split("");
+	const hide = (start: number, end: number) => {
+		for (let i = start; i < end; i++) {
+			// The matcher ignores underscores: hidden syntax must not insert visible spaces.
+			if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = "_";
+		}
+	};
+	const visit = (tokens: Token[], offset: number) => {
+		for (const token of tokens) {
+			if (token.type === "link") {
+				const labelStart = token.raw.indexOf(token.text);
+				hide(offset, offset + labelStart);
+				hide(offset + labelStart + token.text.length, offset + token.raw.length);
+				visit(token.tokens!, offset + labelStart);
+			} else if (token.type === "image" || token.type === "html") {
+				hide(offset, offset + token.raw.length);
+			} else if ("tokens" in token && token.tokens) {
+				const childStart = token.raw.indexOf(token.tokens.map((child: Token) => child.raw).join(""));
+				if (childStart >= 0) visit(token.tokens, offset + childStart);
+			}
+			offset += token.raw.length;
+		}
+	};
+	const lexer = new marked.Lexer();
+	lexer.tokens.links = marked.lexer(documentSource).links;
+	visit(lexer.inlineTokens(source), 0);
+	return chars.join("");
+}
+
+function selectionSourceMatch(source: string, root: HTMLElement, range: Range, text: string) {
+	const element =
+		range.startContainer.nodeType === Node.ELEMENT_NODE
+			? (range.startContainer as Element)
+			: range.startContainer.parentElement;
+	const block = element?.closest<HTMLElement>("[data-comment-source-start][data-comment-source-end]");
+	const start = block && root.contains(block) ? Number(block.dataset.commentSourceStart) : 0;
+	const end = block && root.contains(block) ? Number(block.dataset.commentSourceEnd) : source.length;
+	const match = findSourceMatch(
+		visibleLinkSource(source.slice(start, end), source),
+		text,
+		occurrenceOrdinal(block ?? root, range, text),
+	);
+	return match ? { start: start + match.start, end: start + match.end } : null;
+}
 
 /**
  * 0-based ordinal of `selectionText` among identical rendered occurrences: the

@@ -21,6 +21,7 @@ it("does not lose a second paste when capabilities arrive before the initial ses
 	});
 	const chat = {
 		sessionId,
+		phase: () => (connected && sessionId() ? "live" : "starting"),
 		busy: () => false,
 		queuedPrompts: () => [],
 		configOptions: () => [],

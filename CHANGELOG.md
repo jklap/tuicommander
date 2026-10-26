@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 ### Added
 
+- Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).
+
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
@@ -17,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep Settings scroll and focus stable while launch instruction previews refresh, and explain each launch module with contextual help (#2373-2313).
 
+- Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
 - Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).
 
@@ -59,6 +62,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep SSH discovery Probe actions separated with shared settings row spacing, and hide remote update actions when the current build clears the out-of-date warning (#2337-6a62).
 
 ### Fixed
+
+- Keep warm Codex discovery and Claude Usage caches reusable when Windows reports directory metadata notifications; retain file updates and directory replacement recovery (#2310-6e76).
 
 - Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
 - Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.

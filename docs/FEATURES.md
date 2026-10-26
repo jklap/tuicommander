@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
+
 - The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
 
 Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
@@ -266,7 +268,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - `Cmd+L` — clears display, running processes unaffected
 
 ### 1.7 Clickable File Paths
-- File paths in terminal output are auto-detected and become clickable links
+- File paths in terminal output are auto-detected and become clickable links; a sentence period after a path is excluded from its filesystem target
 - Terminal directory links open the File Browser at the resolved directory; missing paths show a notification without opening a tab
 - Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)

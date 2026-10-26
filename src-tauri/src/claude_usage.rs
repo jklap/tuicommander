@@ -245,6 +245,43 @@ struct UsageChanges {
     diagnostics: Vec<String>,
 }
 
+impl UsageChanges {
+    fn record(&mut self, root: &Path, event: notify::Result<notify::Event>) {
+        #[cfg(test)]
+        if self.diagnostics.len() < 128 {
+            self.diagnostics.push(format!("event={event:?}"));
+        }
+        let Ok(event) = event else {
+            self.rescan = true;
+            return;
+        };
+        if event.kind.is_access() {
+            return;
+        }
+        if event.need_rescan() || event.paths.is_empty() {
+            self.rescan = true;
+        }
+        for path in event.paths {
+            if crate::fs::is_directory_metadata_event(&event.kind, &path) {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            let depth = relative.components().count();
+            if depth < 2 {
+                self.rescan = true;
+            } else if depth == 2 && path.extension().is_some_and(|e| e == "jsonl") {
+                self.paths.insert(path);
+            }
+        }
+        if self.paths.len() > 16_384 {
+            self.paths.clear();
+            self.rescan = true;
+        }
+    }
+}
+
 impl UsageScan {
     fn prepare(&mut self, root: &Path) {
         use notify::Watcher;
@@ -257,36 +294,7 @@ impl UsageScan {
             let watched_root = root.to_path_buf();
             self.watcher =
                 notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                    let mut changes = events.lock();
-                    #[cfg(test)]
-                    if changes.diagnostics.len() < 128 {
-                        changes.diagnostics.push(format!("event={event:?}"));
-                    }
-                    let Ok(event) = event else {
-                        changes.rescan = true;
-                        return;
-                    };
-                    if event.kind.is_access() {
-                        return;
-                    }
-                    if event.need_rescan() || event.paths.is_empty() {
-                        changes.rescan = true;
-                    }
-                    for path in event.paths {
-                        let Ok(relative) = path.strip_prefix(&watched_root) else {
-                            continue;
-                        };
-                        let depth = relative.components().count();
-                        if depth < 2 {
-                            changes.rescan = true;
-                        } else if depth == 2 && path.extension().is_some_and(|e| e == "jsonl") {
-                            changes.paths.insert(path);
-                        }
-                    }
-                    if changes.paths.len() > 16_384 {
-                        changes.paths.clear();
-                        changes.rescan = true;
-                    }
+                    events.lock().record(&watched_root, event);
                 })
                 .map_err(|error| {
                     #[cfg(test)]
@@ -2101,7 +2109,6 @@ mod tests {
     /// before its already-populated parse cache can reject unchanged files.
     #[tokio::test]
     async fn session_stats_warm_refresh_does_not_stat_unchanged_history() {
-        // DEFERRED (2026-10-25) — Windows CI observes a second metadata read; capture watcher availability/events before changing invalidation or this exact counter.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");
@@ -2119,6 +2126,19 @@ mod tests {
             .unwrap();
         assert_eq!(first.total_input_tokens, 10);
         SESSION_FILE_STATS.with(|stats| assert_eq!(stats.get(), 1));
+        // Recorded in Windows CI 40150611058 and 40331854991: a project
+        // directory Modify(Any) does not mean every transcript changed.
+        let canonical_project = project.canonicalize().unwrap();
+        {
+            let scan = state.claude_usage_scan.lock();
+            scan.events.lock().record(
+                scan.root.as_deref().unwrap(),
+                Ok(
+                    notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                        .add_path(canonical_project),
+                ),
+            );
+        }
         let second = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
             .await
             .unwrap();
@@ -2137,7 +2157,6 @@ mod tests {
     /// or a missed watcher event never being repaired by reconciliation.
     #[tokio::test]
     async fn session_stats_only_stats_the_changed_transcript_then_reconciles() {
-        // DEFERRED (2026-10-25) — Windows CI restats both transcripts; watcher rescan versus pending-path cause needs native event evidence.
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
         let projects = dir.path().join("projects");

@@ -1599,6 +1599,20 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(loadsOf(SECOND_SESSION)).toBe(2);
 	});
 
+	// Catches: reference handoff replacing a draft, sending it, or losing focus across mobile remount.
+	it("appends a document reference and focuses the composer after it mounts without sending", async () => {
+		aiChatDraft.activate(SESSION);
+		aiChatDraft.set("Existing question");
+		aiChatDraft.insertReference(SESSION, "/repo/map.md:6-6\n\n> Repeated");
+		const { container } = await renderPanel();
+		await settle();
+		const editor = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(editor.value).toBe("Existing question\n\n/repo/map.md:6-6\n\n> Repeated");
+		expect(document.activeElement).toBe(editor);
+		expect(editor.selectionStart).toBe(editor.value.length);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
 	it("keeps a terminal context-menu draft queued before the first session opens", async () => {
 		aiChatDraft.append("Explain this selected error");
 		const { container } = await renderPanel();
