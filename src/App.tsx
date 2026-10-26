@@ -121,6 +121,7 @@ import { updaterStore } from "./stores/updater";
 import { userActivityStore } from "./stores/userActivity";
 import { worktreeManagerStore } from "./stores/worktreeManager";
 import { isTauri } from "./transport";
+import { closeActiveTarget } from "./utils/activeOrphanTab";
 import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
 import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
@@ -452,17 +453,12 @@ const App: Component = () => {
 	const splitPanes = useSplitPanes();
 
 	// Single decision for every "close terminal / close tab" entry point
-	// (keyboard, command palette, native menu). In split mode close the active
-	// pane — which cancels a freshly-split empty pane instead of destroying a
-	// terminal; otherwise close the active terminal tab.
-	const closeActiveTabOrPane = () => {
-		if (paneLayoutStore.isSplit()) {
-			splitPanes.closeActivePane();
-		} else {
-			const activeId = terminalsStore.state.activeId;
-			if (activeId) terminalLifecycle.closeTerminal(activeId);
-		}
-	};
+	// (keyboard, command palette, native menu). The target is whatever the user is
+	// looking at: an orphan tab overlaying a split, else (in split mode) the
+	// active pane — which cancels a freshly-split empty pane instead of destroying
+	// a terminal — else the active terminal tab. See resolveCloseTarget.
+	const closeActiveTabOrPane = () =>
+		closeActiveTarget({ closeTab: terminalLifecycle.closeTerminal, closePane: splitPanes.closeActivePane });
 
 	// Register pane tab auto-assignment hook (must be after store imports)
 	initPaneTabAssignment();

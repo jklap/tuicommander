@@ -215,7 +215,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Vertical split: `Cmd+\` (side by side)
 - Horizontal split: `Cmd+Alt+\` (stacked)
 - Navigate: `Alt+←/→` (vertical), `Alt+↑/↓` (horizontal)
-- Close active pane: `Cmd+W`
+- Close active pane: `Cmd+W` (closes the full-page tab in front of the split instead, when that tab is not part of the split)
 - Drag-resize divider between panes
 - Up to 6 panes in same direction (N-way split)
 - Split layout persists per branch

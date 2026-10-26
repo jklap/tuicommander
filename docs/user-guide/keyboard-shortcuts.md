@@ -60,7 +60,7 @@ without clearing your draft. When Find is open, Escape closes Find first.
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+T` | New terminal tab |
-| `Cmd+W` | Close tab (or close active pane in split mode) |
+| `Cmd+W` | Close tab (in split mode: the tab in front of the split if it isn't part of it, otherwise the active pane) |
 | `Cmd+Shift+T` | Reopen last closed tab |
 | `Cmd+Shift+R` | Run saved command |
 | `Cmd+R` | Reload active web/preview tab |
@@ -115,7 +115,7 @@ Font size range: 8px to 32px, step 2px per action.
 | `Cmd+Alt+\` | Split horizontally (stacked) |
 | `Alt+←` / `Alt+→` | Navigate panes (vertical split) |
 | `Alt+↑` / `Alt+↓` | Navigate panes (horizontal split) |
-| `Cmd+W` | Close active pane (collapses to single) |
+| `Cmd+W` | Close active pane (collapses to single) — unless a tab outside the split is shown in front of it, in which case only that tab closes |
 | `Cmd+Shift+Enter` | Maximize / restore active pane |
 | `Cmd+Alt+Enter` | Focus mode — hide sidebar, tab bar, and all side panels (keeps toolbar + status bar) |
 
