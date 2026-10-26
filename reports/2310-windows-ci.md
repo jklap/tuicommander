@@ -1,5 +1,66 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Native lab build attempt (2026-10-26, ci-win-f)
+
+The coordinator supplied a verified host-key file under `~/Gits/.tmp`.
+Its ED25519 fingerprint matched the authorized value. SSH then succeeded with
+strict checking. The lab reports Git `2.55.0.windows.5`, Rust/Cargo `1.97.0`,
+Nextest `0.9.140`, and Visual Studio 2022 Build Tools. Prerequisite evidence:
+`~/Gits/.tmp/results/ci-win-f-prerequisites.log`.
+
+The worktree HEAD `4cd7b83d11d669b55913c08e44f0302405fca598` was transferred
+with a Git bundle, not pushed, and checked out on the lab machine under
+`C:\Users\stefano.straus\Gits\.tmp\ci-win-f\repo`. The pinned plugin
+sources were transferred separately. Frontend and sidecar stubs match CI.
+Process-local Git configuration disables CRLF conversion without changing the
+machine's Git configuration. No installed application was replaced.
+
+The five-row filter selected the original owner tests in packages
+`tuicommander` and `tuic-git`, with default desktop features, `--lib`,
+`--no-fail-fast`, and one test worker. It ran through `with-test-tmp.sh`.
+Test temporary paths were scoped to the task's remote directory. No test
+binary started:
+
+1. Initial dependency resolution failed before compilation. Cargo's Windows
+   Schannel transport reports `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)` for
+   the crates.io sparse index. Evidence: `ci-win-f-native.log` in the results
+   directory. TLS validation was not disabled.
+2. All 1006 registry packages in the lockfile were present in the Mac's
+   existing Cargo cache. Their archives and corresponding sparse-index entries
+   were copied to an isolated task-local Cargo home on Windows. No Cargo
+   configuration or credential file was copied. Offline resolution succeeded,
+   and the build reached the root library test compilation, which failed with
+   `rustc-LLVM ERROR: out of memory` / `Allocation failed`, native status
+   `0xc0000409`. Evidence: `ci-win-f-offline.log`.
+3. A measured resource query reports `TotalVisibleMemorySize=6290484` KiB
+   and `TotalVirtualMemorySize=10304116` KiB. A retry using the same artifacts
+   and `CARGO_BUILD_JOBS=1` failed at the same root library test compilation
+   with the same out-of-memory error. Evidence: `ci-win-f-memory.log` and
+   `ci-win-f-serial.log`. No profile, feature, compiler flag, target directory,
+   assertion or deadline was changed to evade that failure.
+4. A narrower row-6-only attempt selected package `tuic-git` with the same
+   target directory. Its dependency graph required additional compilation;
+   it failed linking `schemars_derive` with `LNK1318: Unexpected PDB error;
+   LIMIT (12)`. Evidence: `ci-win-f-gitonly.log`. The owner test did not run.
+   This is a build-prerequisite failure, not row 6's Git access violation.
+   Its internal cause is not established.
+
+A subsequent resource/cleanup prerequisite connection failed authentication:
+`Permission denied (publickey,password,keyboard-interactive)`; evidence:
+`ci-win-f-resources.log`. No further credential attempts were made. The remote
+checkout, isolated Cargo home, build artifacts and transfer files remain under
+`C:\Users\stefano.straus\Gits\.tmp\ci-win-f`; authentication must be restored
+to remove that task-owned directory. Every foreground remote build command
+returned before this failure; no persistent server was started.
+
+Rows 6, 9, 17, 18 and 23 retain their previous classifications. None of their
+owner tests executed on the lab machine, so no Windows RED, new fault-module
+attribution, watcher repair, performance diagnosis or GREEN result is claimed.
+Continuation requires restored SSH authentication and sufficient resources to
+compile the root test binary, or an authorized matching native test artifact.
+The linker failure also remains an explicit prerequisite to resolve. The
+initial host-key blocker below is historical and has been resolved.
+
 ## Native lab prerequisite follow-up (2026-10-26, ci-win-f)
 
 Merged local `main` into the assigned worktree as authorized; resulting HEAD
