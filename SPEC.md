@@ -1415,3 +1415,10 @@ Worktree discovery preserves existing branch workspace IDs. Forced duplicates us
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 
 Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. Story detail lists notes with author/time/revision provenance and receipt IDs, provides an append-only add field, and has an explicit Refresh notes control for external additions. Drafts and pending replies stay scoped to the selected story.
+
+GitHub Projects write consent (#2338-0cfd): the shared device-flow scope source
+requests `repo project`. Known read-only tokens disable only Projects field edits
+and board moves, with a visible board reason and Settings re-login guidance.
+Project-local authorization denials do not disable issue/PR actions. Tokens without
+classic scope headers retain API-based permission checks. Live mutation evidence
+requires separate authorization for a scratch project.

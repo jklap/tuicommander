@@ -1562,7 +1562,7 @@ story 1697-4cdc; the catalog lists GitHub Work. Configure `data/config.json` wit
 account IDs and repositories as described in the module README. B6/B7 core ports and the duplicate-picker consumer also need integration.
 The current `host.invoke` whitelist must not be bypassed to reach core PR commands.
 Projects v2 success paths remain unverified because the recording credential lacks
-`read:project`. See the module README for the open integration tasks.
+`project` for writes (`read:project` alone permits only reads). See the module README for the open integration tasks.
 
 ## Plugin Management (Settings > Plugins)
 
@@ -1973,6 +1973,11 @@ Transitions use provider action IDs, not state display names. Board columns may 
 carry the actual legal action to dispatch on drop (workflow IDs can vary by item). Start-work carries repoPath,
 branch, optional baseRef, prompt, agentType and explicit draft/submit delivery;
 core executes the existing worktree/agent workflow and owns errors/rollback.
+`WorkItemBoard.writeDisabledReason` is an optional nullable message for a read-only
+board. Core keeps readable cards, shows the reason, and removes legal moves from
+all loaded pages while the reason is set. Providers must reject direct writes too
+and mark affected field schemas non-editable. Unrelated item actions remain available.
+
 Core `CardMoveMenu` provides a portalled, keyboard-accessible menu of other columns and enables only destinations allowed by the card's moves.
 
 `work_items::demo::demo_provider()` supplies deterministic local-only data with

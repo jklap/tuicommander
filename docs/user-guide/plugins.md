@@ -53,7 +53,7 @@ The account HTTP port, runtime catalog and account-scoped B6/B7 ports are alread
 An operator can run a read-only check after login:
 
 1. Start a **separate desktop verification instance** with `TUIC_APP_INSTANCE=github-work-check`. Do this only when you can release the global dictation shortcut and microphone. An agent must not start a second desktop app. Do not use the production instance or its sessions.
-2. In that instance, install and enable GitHub Work. Complete GitHub device-flow login in Settings, with `repo read:project` consent. Configure the account and repository in Tasks. An old authorization without Projects access needs new consent.
+2. In that instance, install and enable GitHub Work. Complete GitHub device-flow login in Settings, with `repo project` consent. Configure the account and repository in Tasks. An old authorization without Projects access needs new consent.
 3. Select an accessible issue URL, PR URL and Projects v2 node ID (`PVT_...`). The project must have a single-select Status field. Confirm the verification instance's HTTP port; it must not be `9876`.
 4. Set these non-secret values once in your shell:
 
@@ -114,7 +114,7 @@ verification path; use a unique `agent-test-<name>` instance and port.
 The remaining checks need operator input:
 
 - **GitHub Work integration:** complete device-flow login for a test account with
-  `repo read:project`; configure its repository in Tasks; supply an accessible
+  `repo project`; configure its repository in Tasks; supply an accessible
   issue, PR and Projects v2 project. In an approved loaded-plugin runtime, run
   the read-only probe above and separately check the actual Tasks views.
 - **GitHub create metadata E2E:** authorize one issue creation in a named scratch

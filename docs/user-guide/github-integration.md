@@ -17,7 +17,7 @@ TUICommander needs a GitHub token to access PRs and CI status. You have two opti
 5. Paste the code and authorize
 6. Done — the token is stored securely in your OS keyring
 
-Settings shows the requested scopes before login, using the same scope list as the login request. This method automatically requests the correct scopes (`repo` and `read:project`) and works with private repositories and organization repos.
+Settings shows the requested scopes before login, using the same scope list as the login request. This method automatically requests the correct scopes (`repo` and `project`) and works with private repositories and organization repos.
 
 ### Option 2: Environment variable
 
@@ -327,7 +327,7 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
-GitHub logins created before Projects v2 support must sign in again to consent to `read:project`. Existing credentials are not upgraded automatically; a Projects read can return `INSUFFICIENT_SCOPES` until reauthorization.
+Existing GitHub logins with only `read:project` can read Projects but cannot move cards or edit project fields. Log in again from Settings → Git & GitHub to grant `project` read/write consent. Settings explains missing write consent without disconnecting your account. For external tokens, update the token's project permissions; organization approval may also be required. Read-only boards keep their cards and show the permission message. PRs, issues, comments and the sidebar retain their existing access. After a project-specific write denial, grant access and reload Tasks. Credentials are not upgraded automatically.
 
 ## Setup through Settings MCP
 
