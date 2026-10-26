@@ -184,6 +184,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
 - Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
 - Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state.
+- Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
