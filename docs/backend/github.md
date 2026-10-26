@@ -151,6 +151,11 @@ for unconfigured paths are ignored, so completed asynchronous actions cannot res
 a retired monitor. Stopping the poller resets the gauge to zero. A new
 poller starts with no successful snapshots, even if old query payloads remain cached.
 
+For the distinction between configured paths, successful monitoring history, and
+rendered sidebar data, see the [2336 investigation](github-monitoring-investigation-2336.md).
+It records why the old TTL-cache gauge could report zero without deregistration
+and which observations are still required to prove the historical empty sidebar.
+
 ## Data Types
 
 ### GitHubStatus
