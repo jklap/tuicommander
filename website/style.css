@@ -1,6 +1,15 @@
 /* TUICommander website. Brand rules: DESIGN.md (flat surfaces, 1px borders,
    3-4px radii, Observation Blue as the one accent, no gradients, no blur). */
 
+/* Reveal animations must not hide content for reduced-motion visitors. */
+@media (prefers-reduced-motion: reduce) {
+  body [data-sal] {
+    opacity: 1;
+    transform: none;
+    transition-property: none;
+  }
+}
+
 /* === Reset & Base === */
 *,
 *::before,
