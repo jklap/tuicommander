@@ -22,24 +22,27 @@ CHECK='✓'
 CROSS='✗'
 DOT='•'
 
+log() {
+    local NOT_OK=$1
+    local MSG="$2"
+    local FAILED_MSG="${3:-$MSG}"
+    if [ $1 -ne 0 ]; then
+        echo -e "  ${BOLD_RED}${CROSS}${OFF} ${FAILED_MSG}"
+    else
+        echo -e "  ${BOLD_GREEN}${CHECK}${OFF} ${MSG}"
+    fi
+}
+
 check_folder() {
     local FOLDER="$1"
     #echo "${FOLDER} folder"
     ls "$FOLDER" >& /dev/null
-    if [ $? -ne 0 ]; then
-        echo -e "  ${BOLD_RED}${CROSS}${OFF} ${FOLDER}"
-    else
-        echo -e "  ${BOLD_GREEN}${CHECK}${OFF} ${FOLDER}"
-    fi
+    log $? "$FOLDER"
 }
 
 echo "Data from other apps"
 op account list >& /dev/null
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}${CROSS}${OFF} Failed to read from 1Password"
-else
-    echo -e "  ${BOLD_GREEN}${CHECK}${OFF} App data access"
-fi
+log $? "App data access" "Failed to read from 1Password"
 
 # unsigned software
 # x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_DevTools
@@ -48,11 +51,7 @@ test_script() {
     local APP="$1"
     local SCRIPT="$2"
     osascript -e "$SCRIPT" > /dev/null
-    if [ $? -ne 0 ]; then
-        echo -e "  ${BOLD_RED}${CROSS}${OFF} ${APP}"
-    else
-        echo -e "  ${BOLD_GREEN}${CHECK}${OFF} ${APP}"
-    fi
+    log $? "$APP"
 }
 
 echo "Automation"
@@ -60,6 +59,7 @@ echo "Automation"
 # System Events
 # BBEdit
 # IntelliJ
+# Safari
 # osascript -e 'tell application "System Events"' -e 'tell application process "IntelliJ IDEA"' -e 'set testCheck to name of front window' -e 'end tell' -e 'end tell'
 test_script "Finder" 'tell application "Finder" to get name of front Finder window'
 
@@ -76,10 +76,46 @@ check_folder "$HOME/Pictures/Photos Library.photoslibrary"
 echo "Media"
 check_folder "$HOME/Music/Music/"
 
-# TODO: microphone
+echo "Microphone"
 # x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone
-# ffmpeg -f avfoundation -i ":0" -t 1 out.wav
-# sox -d -d
+if ! [ -f "trigger_mic" ]; then
+    if ! [ -f "trigger_mic.swift" ]; then
+        cat << 'EOF' > trigger_mic.swift
+import AVFoundation
+import Foundation
+
+// Force the system call by requesting access asynchronously (triggers the OS popup if needed)
+AVCaptureDevice.requestAccess(for: .audio) { granted in
+    // This closure will fire once the user clicks an option or instantly if already decided
+}
+
+// Read the absolute system status immediately to determine the exit code
+let status = AVCaptureDevice.authorizationStatus(for: .audio)
+
+switch status {
+case .authorized:
+    print("Permission GRANTED")
+    exit(0)
+case .denied:
+    print("Permission DENIED")
+    exit(1)
+case .notDetermined:
+    print("Permission NOT DETERMINED (Prompt triggered, waiting for user response)")
+    // Give the user a moment to interact with the OS popup before exiting
+    sleep(5)
+    exit(2)
+case .restricted:
+    print("Permission RESTRICTED (e.g., Parental Controls/MDM)")
+    exit(3)
+@unknown default:
+    exit(4)
+}
+EOF
+    fi
+    swiftc trigger_mic.swift
+fi
+./trigger_mic >& /dev/null
+log $? "Microphone access"
 
 # other folders?
 
@@ -101,11 +137,7 @@ check_folder "$HOME/Library/Safari"
 # x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles
 echo "Modify Apps"
 touch /Applications/Maccy.app/Contents/Info.plist >& /dev/null
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}${CROSS}${OFF} No access"
-else
-    echo -e "  ${BOLD_GREEN}${CHECK}${OFF} Able to modify apps"
-fi
+log $? "Able to modify apps" "No access"
 
 # accessibility
 # x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility
