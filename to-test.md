@@ -1,3 +1,7 @@
+## Plans and Stories editor layout (2356-5c36)
+
+- [ ] Coordinator pixel review: inspect the native before/after editor captures and the 1400/700/390px browser state captures in `~/Gits/.tmp/results/2356-review/`. Confirm the picker, wrapping title/source, disabled-Save reason, full-width New story, compact grouped plan actions, and archived toggle placement. The 80 focused component/i18n tests and TypeScript check pass. Screenshots and measured geometry are available; this text-only peer did not decode PNG content.
+
 ## Secret form phone link (2378-c2eb) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the backend, request a generic secret form and expand **Open on a trusted browser or phone**. Verify the full selectable URL, Copy URL, browser link and matching QR. Remote Access off must show Settings guidance, and native-only account forms must not offer phone entry. Rust does not hot-reload; this peer did not restart the daily app.

@@ -150,12 +150,48 @@ describe("StoriesDialog", () => {
 		);
 	});
 
-	it("shows a recoverable error when loading fails", async () => {
+	it("catches a failed read being presented as an empty project and supports retry", async () => {
 		vi.mocked(invoke).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("offline"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/offline/);
+		expect(screen.queryByText("Create a plan to begin.")).toBeNull();
+		expect(screen.queryByText("Select or create a plan.")).toBeNull();
+		expect(screen.queryByText("This plan has no stories.")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await screen.findByRole("heading", { name: "Implement API" });
+	});
+
+	it("catches action failures hiding previously loaded stories as if their read failed", async () => {
+		const original = vi.mocked(invoke).getMockImplementation()!;
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if ((args as { action?: { action: string } })?.action?.action === "transition")
+				throw new Error("criteria are incomplete");
+			return original(command, args);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Start work" }));
+		await screen.findByText("criteria are incomplete");
+		expect(screen.getByRole("heading", { name: "Implement API" })).toBeVisible();
+		expect(screen.getByText("API works")).toBeVisible();
+	});
+
+	it("catches an untyped project error labeling its path as a folder", async () => {
+		vi.mocked(invoke)
+			.mockResolvedValueOnce(true)
+			.mockRejectedValueOnce(
+				new HttpRpcError(
+					"story_action_command",
+					422,
+					JSON.stringify({ error: "project_unavailable: project root '/repo' is not a directory" }),
+				),
+			);
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toContain("Cannot read /repo");
+		expect(alert.textContent).not.toMatch(/folder|plan file/);
+		expect(alert.textContent).not.toContain("project_unavailable");
+		expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
 	});
 
 	it("explains how to load the missing native stories backend", async () => {
