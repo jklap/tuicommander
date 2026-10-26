@@ -31,5 +31,5 @@ button.node[data-control-layout="card"] { display: flex; flex-direction: column;
 .inspector button { display: block; margin-top: 9px; width: 100%; }
 .error, .notice { margin: 0; padding: 8px 18px; border-bottom: 1px solid var(--border); font-size: var(--font-sm); }
 .error { color: var(--error); }.notice { color: var(--success); }
-.designer button:focus-visible, .designer select:focus-visible, .designer textarea:focus-visible, .designer input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.designer button:focus-visible, .designer select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) { .body { grid-template-columns: 150px minmax(0, 1fr); } .inspector { grid-column: 1 / -1; border-top: 1px solid var(--border); border-left: 0; max-height: 210px; } .palette { grid-template-columns: 1fr; } .graph { margin-top: 24px; } }

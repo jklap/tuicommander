@@ -1569,10 +1569,11 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 		},
 	);
 	const launchPreview = () => {
-		const snapshot = preview();
-		return activeStore().state.loaded && !preview.loading && snapshot?.connectionId === machine()
-			? snapshot?.instructions
-			: undefined;
+		// Preview edits must not suspend the outer Settings panel: detaching its
+		// scroll container resets scroll and focus. Retain only this machine's
+		// last resolved preview while the next snapshot loads.
+		const snapshot = preview.state === "ready" || preview.state === "refreshing" ? preview.latest : undefined;
+		return activeStore().state.loaded && snapshot?.connectionId === machine() ? snapshot?.instructions : undefined;
 	};
 
 	onMount(() => {
