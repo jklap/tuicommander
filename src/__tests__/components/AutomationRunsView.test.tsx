@@ -72,7 +72,6 @@ describe("automation runs", () => {
 		expect(screen.getByText("No workspace was recorded.")).toBeTruthy();
 		expect(runNow).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Next runs" }));
-		await waitFor(() => expect(history).toHaveBeenCalledWith(undefined, 20, 21, true));
 		await waitFor(() => expect(screen.getAllByRole("button", { name: "View run" })).toHaveLength(1));
 		expect(screen.getByRole("button", { name: "Next runs" })).toBeDisabled();
 	});
@@ -159,6 +158,7 @@ describe("automation runs", () => {
 		try {
 			const adapter = createAutomationAdapter("remote-owner");
 			await adapter.history(undefined, 20, 21);
+			await adapter.history(undefined, 20, 21, true);
 			await adapter.summary("7d");
 			await adapter.run("saved-remote-run");
 			expect(fetch.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body)])).toEqual([
@@ -166,6 +166,11 @@ describe("automation runs", () => {
 					"http://owner.test:9877/automations/action?token=owner-token",
 					"POST",
 					{ input: { action: "list_runs", offset: 20, limit: 21 } },
+				],
+				[
+					"http://owner.test:9877/automations/action?token=owner-token",
+					"POST",
+					{ input: { action: "list_runs", offset: 20, limit: 21, group_failures: true } },
 				],
 				[
 					"http://owner.test:9877/automations/action?token=owner-token",

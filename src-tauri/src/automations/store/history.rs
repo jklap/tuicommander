@@ -62,7 +62,7 @@ impl RunStore {
             ORDER BY created_ms DESC,id DESC LIMIT ?2 OFFSET ?3"
         ).map_err(error)?;
         stmt.query_map(params![automation_id, limit, offset], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(error)?
         .map(|row| {

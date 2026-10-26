@@ -54,10 +54,13 @@ export function DefinitionEditor(props: { store: AutomationsStore; focusProfile?
 									onChange={(event) => store.edit({ run_config: event.currentTarget.value })}
 								>
 									<option value="">{t("automations.chooseProfile", "Choose a saved profile")}</option>
-									<Show when={draft().run_config && !profiles().includes(draft().run_config)}>
+									{/* Keep the selected option mounted when the asynchronous catalogue arrives. */}
+									<Show when={draft().run_config}>
 										<option value={draft().run_config}>{draft().run_config}</option>
 									</Show>
-									<For each={profiles()}>{(name) => <option value={name}>{name}</option>}</For>
+									<For each={profiles().filter((name) => name !== draft().run_config)}>
+										{(name) => <option value={name}>{name}</option>}
+									</For>
 								</Select>
 							</label>
 						</div>
