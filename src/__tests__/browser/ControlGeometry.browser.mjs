@@ -198,8 +198,18 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       // Catches: native overlay/disclosure exceptions shrinking or clipping shared AI Chat targets.
       const aiChat = await evaluate('window.aiChatGeometry ? window.aiChatGeometry() : null');
       if (aiChat) {
+        console.log('AI_CHAT_ACTIONS', JSON.stringify({width, actions:aiChat.messageActions, codeCopies:aiChat.codeCopies}));
+        await context.test(`catches AI Chat message actions overlapping the next message at ${width}px`, () => {
+          assert.equal(aiChat.messageActions.length, 1, 'Measure the mounted assistant action row');
+          for (const {row, message, next} of aiChat.messageActions) {
+            assert.ok(row.bottom <= message.bottom, `Message must contain its actions: ${JSON.stringify({row,message})}`);
+            assert.ok(row.bottom <= next.top, `Actions must not intersect the next user message: ${JSON.stringify({row,next})}`);
+          }
+        });
         const target = width <= 600 ? 44 : 22;
         assert.deepEqual(aiChat.rawActions, [], 'AI Chat actions and text fields must use shared primitives');
+        assert.equal(aiChat.codeCopies, 0, 'Whole-message Copy replaces redundant code-only actions');
+        for (const {buttons} of aiChat.messageActions) for (const button of buttons) assert.equal(button.height, target, 'Message actions retain compact desktop and touch sizing');
         assert.equal(aiChat.visible.height, target, 'Visible picker frame owns shared target height');
         assert.deepEqual(aiChat.picker, aiChat.visible, 'Invisible native picker must cover the complete visible frame');
         assert.equal(aiChat.summaries.length, 2, 'Both native SessionControls disclosures must mount');

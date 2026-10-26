@@ -205,17 +205,6 @@
   opacity: 1;
 }
 
-.messageList :global(pre[data-raw-code]) {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.messageList :global(pre[data-raw-code] button[data-copy-code]) {
-  align-self: flex-end;
-  order: -1;
-}
-
 .messageList > * {
   flex-shrink: 0;
 }
@@ -248,8 +237,6 @@
 
 .assistantMsg {
   position: relative;
-  /* Hover actions occupy the existing inter-message gutter, never a blank row. */
-  margin-bottom: 8px;
   align-self: flex-start;
   width: 100%;
   font-size: var(--font-base);
@@ -1143,10 +1130,9 @@
 }
 
 .replyActions {
-  position: absolute;
-  top: 100%;
-  left: 0;
+  /* Reserve the real control height, including the touch minimum. */
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   gap: 8px;
 }
@@ -1206,6 +1192,7 @@
 }
 
 .messageList[data-terminal-chat] [data-answer-card] .replyActions {
+  position: absolute;
   top: 4px;
   right: 8px;
   left: auto;

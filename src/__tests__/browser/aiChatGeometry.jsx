@@ -27,6 +27,7 @@ const chat = {
 const entries = [
   { id: 'user', kind: 'user', text: 'Show shared controls' },
   { id: 'reply', kind: 'agent', text: 'A reply with fenced code.\n\n```sh\necho geometry\n```', messageId: 'reply-message' },
+  { id: 'followup', kind: 'user', text: 'Please check the answer above and keep the Copy and Fork actions separate from this next message.' },
   { id: 'notice', kind: 'notice', text: 'Review the result', action: { kind: 'open_result', path: '/geometry/result.md' } },
 ];
 const interactions = [
@@ -57,6 +58,8 @@ window.aiChatGeometry = () => {
   const box = element => { if (!element) throw new Error('Missing AI Chat geometry target'); const r = element.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }; };
   const picker = document.querySelector('[data-control-layout="overlay-picker"]');
   return {
+    messageActions: [...document.querySelectorAll('.' + s.replyActions)].map(row => ({ row: box(row), message: box(row.parentElement), next: box(row.parentElement.nextElementSibling), buttons: [...row.querySelectorAll('button')].map(box) })),
+    codeCopies: document.querySelectorAll('button[data-copy-code]').length,
     picker: box(picker), visible: box(picker.previousElementSibling),
     header: box(document.querySelector('.' + s.tidyHeader.split(' ').join('.'))),
     summaries: [...document.querySelectorAll('summary[data-control-layout="disclosure"]')].map(box),
