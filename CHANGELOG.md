@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep isolated agent-test runtime temp outside ego’s shared scratch grant so AI Chat can prove its confined filesystem perimeter without changing grants (#2364-0737).
 - Report unresolved automation profiles at desktop startup and after profile changes, include failure reasons in the bell, and group identical run failures with a direct profile repair action (#2360-f7ca).
 - Keep MCP initialize instructions unchanged by live terminal and peer churn; current inventory remains available through session and agent tools (#2362-95a9).
 - Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
