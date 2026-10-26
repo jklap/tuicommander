@@ -1,3 +1,7 @@
+## Development backend staleness (2332-3eef) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
+
 ## Final API failure indicator (2335-9c03) — Rust restart required
 
 - [x] Isolated `agent-test-2335` on port 19975: installed ego 0.1.4 hit a real loopback-induced truncated response, stayed idle with a red tab dot and red sidebar Error icon, then returned green after a complete later turn. Native screenshots and DOM/backend responses are under `orchestrator/reports/tuicommander/img/2026-10-25-2335/`. Verified build: `08978a8ee`. A later retry-reset fix still needs integration validation; this live check does not prove retry exhaustion.

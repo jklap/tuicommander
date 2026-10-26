@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
+
 The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
 
 Native story list service (#2174-6b3f): optional state/priority/story_type filters combine server-side. Optional limit 1–100 and a plan/filter-bound keyset cursor page id-ordered records with additive next_cursor; absent limit preserves full filtered reads. Dispatch retains the existing complete plan and priority/id order.
