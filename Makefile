@@ -36,7 +36,7 @@ DIST_DIR=dist-release
 TAURI_BUILD_FLAGS=$(if $(TAURI_SIGNING_PRIVATE_KEY),,--config '{"bundle":{"createUpdaterArtifacts":false}}')
 
 
-.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding check-chat-readability cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test agent-test agent-test-stop agent-test-github agent-test-github-stop test-shell build build-dmg check check-desktop-embedding check-chat-readability cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -123,6 +123,14 @@ agent-test:
 
 agent-test-stop:
 	@python3 -B scripts/agent-test.py stop --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)"
+
+# Reuse the already-authenticated isolated namespace across GitHub live checks.
+# Explicit recursive assignments prevent per-agent overrides from hiding its login.
+agent-test-github:
+	@$(MAKE) --no-print-directory agent-test AGENT_TEST_INSTANCE=agent-test-ghlive AGENT_TEST_PORT=19887
+
+agent-test-github-stop:
+	@$(MAKE) --no-print-directory agent-test-stop AGENT_TEST_INSTANCE=agent-test-ghlive AGENT_TEST_PORT=19887
 
 # Build .app only (default, fast — skips DMG)
 build:
