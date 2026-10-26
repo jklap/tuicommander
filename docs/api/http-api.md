@@ -1207,7 +1207,7 @@ normal server authentication; the local Unix socket remains trusted local IPC.
 | POST | `/repo/github-poller/set-issue-filter` | `{ "filter": "all" }` |
 | GET / POST | `/repo/github-poller/api-debug` | POST: `{ "enabled": false }` |
 
-Start cold-starts the poller without a WebView. Control delivery returns
+Start cold-starts the poller without a WebView. An automation executor also starts polling its registered issue-intake allowlist without a client. Client path/filter changes do not replace this subscription; stop releases only client paths while intake is enabled. Intake paths use issue filter `all`, while other paths retain the client filter. Control delivery returns
 `{"ok":true}` or an error when no poller accepts the command. API-debug reads
 return `{"enabled":false}` (or true); writes also return `ok`. Repository status
 is read through `/repo/github?path=...`; there is no separate poller-status route.
