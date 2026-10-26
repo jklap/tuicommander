@@ -43,6 +43,7 @@ export interface SavedOutput {
 	truncated: boolean;
 }
 export interface AutomationRun {
+	failure_count?: number;
 	id: string;
 	definition: AutomationDefinition;
 	status: RunStatus;
@@ -87,6 +88,7 @@ export interface AutomationTemplate {
 }
 export interface AutomationAdapter {
 	templates(): Promise<AutomationTemplate[]>;
+	profiles(): Promise<string[]>;
 	template(
 		template_id: string,
 		repository: string,
@@ -99,7 +101,7 @@ export interface AutomationAdapter {
 	setEnabled(id: string, enabled: boolean): Promise<void>;
 	remove(id: string): Promise<void>;
 	runNow(id: string): Promise<RunReceipt>;
-	history(id?: string, offset?: number, limit?: number): Promise<AutomationRun[]>;
+	history(id?: string, offset?: number, limit?: number, groupFailures?: boolean): Promise<AutomationRun[]>;
 	summary(window: "24h" | "7d"): Promise<RunSummary>;
 	preview(cron: string, timezone: string): Promise<SchedulePreview>;
 	previewDefinition(definition: AutomationDefinition): Promise<DefinitionSchedulePreview>;
@@ -108,14 +110,14 @@ export interface AutomationAdapter {
 
 /** Request contract for automation_action; serde model payloads are unchanged. */
 export type AutomationAction =
-	| { action: "list" | "templates" }
+	| { action: "list" | "templates" | "profiles" }
 	| { action: "template"; template_id: string; repository: string; run_config: string; timezone: string | null }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
 	| { action: "get" | "run" | "worktree_preview" | "cleanup_worktree"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
-	| { action: "list_runs"; id?: string; limit: number; offset?: number }
+	| { action: "list_runs"; id?: string; limit: number; offset?: number; group_failures?: boolean }
 	| { action: "preview"; cron: string; timezone: string | null; count: number }
 	| { action: "preview_definition"; definition: AutomationDefinition; count: number }
 	| { action: "preset"; preset: SchedulePreset };

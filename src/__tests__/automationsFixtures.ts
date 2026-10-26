@@ -18,6 +18,7 @@ export const definition: AutomationDefinition = {
 export function fakeAdapter(overrides: Partial<AutomationAdapter> = {}): AutomationAdapter {
 	return {
 		templates: async () => [],
+		profiles: async () => ["claude:unattended", "Claude Max", "Claude Team"],
 		template: async () => {
 			throw new Error("Unexpected template request");
 		},
