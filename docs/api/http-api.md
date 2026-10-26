@@ -2951,6 +2951,12 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
 
 ## Private secret entry
 
+Generic form metadata includes an absolute `mobile_url` when Remote Access has
+an address. Otherwise `mobile_url` is null and optional `mobile_unavailable`
+explains disabled remote access or missing address discovery. Native-only
+account forms expose neither a phone URL nor phone setup guidance. The URL
+contains the existing one-use nonce, never a pairing session token.
+
 - `GET /secrets/forms/{nonce}` returns only the pending schema, argv and entry
   capability; no stored values. A guessed or expired nonce returns 404.
 - `POST /secrets/forms/submit` accepts `{nonce,status,values,template}`. Status

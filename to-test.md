@@ -1,3 +1,7 @@
+## Secret form phone link (2378-c2eb) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend, request a generic secret form and expand **Open on a trusted browser or phone**. Verify the full selectable URL, Copy URL, browser link and matching QR. Remote Access off must show Settings guidance, and native-only account forms must not offer phone entry. Rust does not hot-reload; this peer did not restart the daily app.
+
 ## Private mdkb staging (2367-6c08) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the backend, the next elevated mdkb installation uses a fresh private staging directory and removes it on success or failure. The rb planted-path RED and 12 targeted GREEN tests verify staging without a privileged install. This peer did not restart the daily app or invoke elevation; Rust changes do not hot-reload.

@@ -2910,6 +2910,10 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 ## Private secret forms
 
+The private window offers a selectable full phone-entry URL, Copy URL, a browser
+link and QR code using the Remote Mobile address policy. Disabled remote access
+shows setup guidance. Account-vault entry remains native-only.
+
 The `secret` MCP tool opens a separate native form for requested sensitive
 fields and returns names/status only. Approved argv commands receive values in
 the child environment; pipe output is masked for exact and common encoded

@@ -1,8 +1,13 @@
 import { fireEvent, screen, waitFor } from "@solidjs/testing-library";
+import { invoke } from "@tauri-apps/api/core";
 import { afterEach, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.resetModules();
+	vi.clearAllMocks();
 	document.body.innerHTML = "";
 	history.replaceState(null, "", "/");
 });
@@ -57,4 +62,29 @@ it("loads and submits the nonce form through the authenticated browser router", 
 	);
 	expect(root.querySelector("input")).toBeNull();
 	expect(root.textContent).not.toContain("synthetic-only");
+});
+
+// Catches: the private native window using browser-only clipboard/navigation APIs.
+it("copies and opens only the backend-issued native form URL", async () => {
+	const nonce = "e".repeat(64);
+	const url = `https://host.example:9876/index.html#/secret-form?nonce=${nonce}`;
+	vi.stubGlobal("__TAURI_INTERNALS__", {});
+	vi.mocked(invoke).mockResolvedValue({
+		id: "native",
+		nonce,
+		reason: "Login",
+		argv: null,
+		fields: [],
+		mobile_url: url,
+	});
+	const root = document.createElement("main");
+	document.body.appendChild(root);
+	const { startSecretForm } = await import("./secretForm");
+	await startSecretForm(root);
+	fireEvent.click(screen.getByRole("button", { name: "Copy form URL", hidden: true }));
+	fireEvent.click(screen.getByRole("link", { name: url, hidden: true }));
+	await waitFor(() => {
+		expect(invoke).toHaveBeenCalledWith("write_clipboard_text", { text: url });
+		expect(invoke).toHaveBeenCalledWith("open_default_app", { target: url, kind: "url" });
+	});
 });

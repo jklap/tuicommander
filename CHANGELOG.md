@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Make private secret-form phone links selectable, absolute, clickable and copyable, with a shared QR code and guidance when Remote Access is off (#2378-c2eb).
 - Remove the detached double blue focus ring from shared text fields, including Markdown comment popovers, while preserving keyboard focus on other controls (#2377-e02e). Keep the same shared focus appearance in story, plan and workflow editors.
 - Align MCP capability labels, help and migration warnings with other Settings rows, and place ego immediately after Local tools in General (#2374-cfc7).
 

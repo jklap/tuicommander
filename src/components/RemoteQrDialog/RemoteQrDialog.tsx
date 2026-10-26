@@ -1,9 +1,9 @@
-import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import { rpc } from "../../transport";
 import { writeClipboard } from "../../utils/clipboard";
+import { qrCodeDataUrl } from "../../utils/qrCode";
 import d from "../shared/dialog.module.css";
 import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
@@ -56,7 +56,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 				if (cancelled) return;
 				setConnectUrl(url);
 				// Black-on-white for reliable scanning across phone cameras.
-				return QRCode.toDataURL(url, { width: 320, margin: 2, color: { dark: "#000000", light: "#ffffff" } });
+				return qrCodeDataUrl(url);
 			})
 			.then((dataUrl) => {
 				if (!cancelled && dataUrl) setQrDataUrl(dataUrl);
