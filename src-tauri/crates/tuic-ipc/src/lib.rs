@@ -67,8 +67,8 @@ pub fn check_unix_socket_path(path: &Path) -> Result<(), String> {
     }
     Err(format!(
         "{} is {len} bytes, over the {UNIX_SOCKET_PATH_MAX}-byte Unix socket path limit; \
-         a named instance's socket lives in TMPDIR, so use a TMPDIR of at most \
-         {} bytes for this name, or set TUIC_SOCKET to a shorter path",
+         a named instance's socket lives in TMPDIR, so start the app with a TMPDIR of \
+         at most {} bytes for this name",
         path.display(),
         UNIX_SOCKET_PATH_MAX.saturating_sub(1 + path.file_name().map_or(0, |name| name.len()))
     ))

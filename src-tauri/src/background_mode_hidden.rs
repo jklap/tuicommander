@@ -17,6 +17,7 @@ pub(crate) struct Visibility {
     /// blurring a tab never clears another remote client's claim. Bounded by
     /// [`MAX_VIEWER_ID_LEN`] and [`MAX_VIEWERS_PER_SESSION`]: viewer ids are
     /// client-supplied, and without a cap a client could grow this without bound.
+    /// A claim older than [`REMOTE_CLAIM_TTL`] no longer counts.
     remote_visible: HashMap<String, HashMap<String, std::time::Instant>>,
     last_remote_activity: HashMap<String, std::time::Instant>,
     last_global_observation: Option<std::time::Instant>,
@@ -26,7 +27,10 @@ impl Visibility {
     pub(crate) fn watched(&self, state: &AppState, id: &str) -> bool {
         self.all_watchers > 0
             || self.watchers.get(id).copied().unwrap_or(0) > 0
-            || self.remote_visible.get(id).is_some_and(|v| !v.is_empty())
+            || self
+                .remote_visible
+                .get(id)
+                .is_some_and(|viewers| viewers.values().any(|claimed| claim_is_fresh(*claimed)))
             || state
                 .ws_clients
                 .get(id)
@@ -79,6 +83,16 @@ pub(crate) const LEGACY_VIEWER_ID: &str = "legacy";
 const MAX_VIEWER_ID_LEN: usize = 128;
 /// Past this, a new viewer's claim evicts the oldest existing one.
 const MAX_VIEWERS_PER_SESSION: usize = 16;
+/// How long a remote viewer's `visible: true` claim lasts without a re-assert.
+/// The frontend re-asserts on its 30 s snapshot timer, so a live viewer never
+/// gets near this; a viewer that vanished without sending `visible: false` (a
+/// crashed tab, a dropped connection) stops holding its session visible, and
+/// out of standby, after it.
+pub(crate) const REMOTE_CLAIM_TTL: std::time::Duration = std::time::Duration::from_secs(90);
+
+fn claim_is_fresh(claimed: std::time::Instant) -> bool {
+    claimed.elapsed() < REMOTE_CLAIM_TTL
+}
 
 /// IPC visibility belongs to the desktop; HTTP visibility belongs to a remote client.
 /// Production callers pass `wake` through [`set_visible_waking`].
@@ -137,6 +151,7 @@ pub(crate) fn set_visible_for_viewer_waking(
         visibility.desktop.insert(id.into(), visible);
     } else if visible {
         let viewers = visibility.remote_visible.entry(id.into()).or_default();
+        viewers.retain(|_, claimed| claim_is_fresh(*claimed));
         if viewers.len() >= MAX_VIEWERS_PER_SESSION
             && !viewers.contains_key(viewer)
             && let Some(oldest) = viewers
@@ -159,6 +174,28 @@ pub(crate) fn set_visible_for_viewer_waking(
             .insert(id.into(), std::time::Instant::now());
     }
     visibility.refresh_waking(state, id, wake);
+}
+
+/// Drop every remote claim older than [`REMOTE_CLAIM_TTL`] and recompute the
+/// affected sessions' visibility, returning how many sessions lost a claim. The
+/// standby checker runs this each tick: nothing else would notice a claim aging
+/// out, so the derived `session_visibility` would keep saying visible. Never
+/// wakes a session: losing a claim can only make it less visible.
+pub(crate) fn expire_remote_claims(state: &AppState) -> usize {
+    let mut visibility = state.background_visibility.lock();
+    let mut expired = Vec::new();
+    visibility.remote_visible.retain(|id, viewers| {
+        let before = viewers.len();
+        viewers.retain(|_, claimed| claim_is_fresh(*claimed));
+        if viewers.len() != before {
+            expired.push(id.clone());
+        }
+        !viewers.is_empty()
+    });
+    for id in &expired {
+        visibility.refresh_waking(state, id, false);
+    }
+    expired.len()
 }
 
 /// A remote read or input is activity even without a persistent stream. Serialize
@@ -417,6 +454,68 @@ mod activity_tests {
                 .lock()
                 .recently_active(&state, "viewed")
         );
+    }
+
+    // Catches (audit C2): a crashed remote viewer's `visible: true` claim
+    // holding its session visible, and out of standby, until the session closes.
+    #[test]
+    fn an_expired_remote_claim_stops_pinning_visibility() {
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "s1");
+        set_visible_for_viewer(&state, "s1", true, false, "crashed");
+        set_visible_for_viewer(&state, "s1", true, false, "live");
+        assert!(state.is_session_visible("s1"));
+
+        let stale = std::time::Instant::now() - REMOTE_CLAIM_TTL;
+        let backdate = |viewer: &str| {
+            state
+                .background_visibility
+                .lock()
+                .remote_visible
+                .get_mut("s1")
+                .unwrap()
+                .insert(viewer.into(), stale);
+        };
+        backdate("crashed");
+        assert_eq!(expire_remote_claims(&state), 1);
+        assert_eq!(remote_viewers_for_test(&state, "s1"), vec!["live"]);
+        assert!(
+            state.is_session_visible("s1"),
+            "the live viewer still counts"
+        );
+
+        backdate("live");
+        assert!(
+            !state.background_visibility.lock().watched(&state, "s1"),
+            "an expired claim no longer counts even before the sweep"
+        );
+        assert_eq!(expire_remote_claims(&state), 1);
+        assert!(remote_viewers_for_test(&state, "s1").is_empty());
+        assert!(!state.is_session_visible("s1"));
+        assert_eq!(expire_remote_claims(&state), 0);
+        crate::pty::close_pty_core(&state, "s1", false);
+    }
+
+    // Catches: a new claim keeping expired siblings, so one crashed viewer
+    // occupies a slot of the per-session cap forever.
+    #[test]
+    fn a_new_claim_drops_expired_siblings() {
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "s1");
+        set_visible_for_viewer(&state, "s1", true, false, "crashed");
+        state
+            .background_visibility
+            .lock()
+            .remote_visible
+            .get_mut("s1")
+            .unwrap()
+            .insert(
+                "crashed".into(),
+                std::time::Instant::now() - REMOTE_CLAIM_TTL,
+            );
+        set_visible_for_viewer(&state, "s1", true, false, "fresh");
+        assert_eq!(remote_viewers_for_test(&state, "s1"), vec!["fresh"]);
+        crate::pty::close_pty_core(&state, "s1", false);
     }
 
     // Catches: an all-session SSE disconnect omits grace or protects sessions forever.

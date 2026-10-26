@@ -1440,9 +1440,7 @@ pub(super) async fn set_session_visible(
     // Remote visibility is per viewer (decision 8 port of B.8): one remote
     // client blurring a tab must not clear another remote client's claim.
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
-    // `wake: false` (the frontend keep-alive) refreshes the claim without
-    // SIGCONT-ing a parked session; absent/`true` keeps the wake-on-focus.
-    crate::background_mode::hidden::set_visible_for_viewer_waking(
+    crate::pty::apply_session_visibility(
         &state,
         &session_id,
         body.visible,
@@ -7299,6 +7297,22 @@ mod tests {
             "POST /sessions/worktree must hold its response until the shell is idle"
         );
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A terminal-store id sent where a PTY session id belongs is warned about and never recorded:
+    /// teardown only reaps the entries of ids that were real sessions.
+    #[tokio::test]
+    async fn set_session_visible_route_does_not_record_an_id_that_names_no_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SessionVisibleRequest =
+            serde_json::from_value(serde_json::json!({"visible": true, "viewer_id": "v"})).unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("term-6".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "a terminal id sent as a session id must not be remembered for the process lifetime"
+        );
     }
 
     /// B2.3: the frontend's periodic keep-alive sends `wake: false` — it must
