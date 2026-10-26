@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
 
@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 	sendNotification: vi.fn(),
 }));
 vi.mock("../../invoke", () => ({ invoke: invokeMock }));
+vi.mock("../../stores/notifications", () => ({ notificationsStore: { isSessionSilenced: () => false } }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn() } }));
 vi.mock("../../stores/repositories", () => ({
@@ -30,6 +31,8 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		vi.useFakeTimers();
 	});
 
+	afterEach(() => vi.useRealTimers());
+
 	it("a release function called twice does not cancel the trailing read of the other mounted row", async () => {
 		// catches: release that decrements on every call, so a double release steals another row's hold
 		invokeMock.mockResolvedValue(flow("x"));
@@ -42,7 +45,6 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		releaseA();
 		await vi.advanceTimersByTimeAsync(6000);
 		expect(flowCalls()).toBe(2);
-		vi.useRealTimers();
 	});
 
 	it("remounting a row after the last release schedules and runs a fresh trailing read", async () => {
@@ -57,7 +59,6 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		await store.refreshSidebarFlow("/repo"); // still inside the gap
 		await vi.advanceTimersByTimeAsync(6000);
 		expect(flowCalls()).toBe(2);
-		vi.useRealTimers();
 	});
 
 	it("a late older response is dropped once a newer one was applied", async () => {
@@ -72,7 +73,6 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		resolveOld(flow("old"));
 		await old;
 		expect((store.sidebarFlow("/repo") as unknown as { tag: string }).tag).toBe("new");
-		vi.useRealTimers();
 	});
 
 	it("an older response is applied when the newer read failed", async () => {
@@ -87,7 +87,6 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		resolveOld(flow("old"));
 		await old;
 		expect((store.sidebarFlow("/repo") as unknown as { tag: string }).tag).toBe("old");
-		vi.useRealTimers();
 	});
 
 	it("a response in flight across resetForTests is dropped", async () => {
@@ -100,6 +99,5 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		resolveOld(flow("old"));
 		await pending;
 		expect(store.sidebarFlow("/repo")).toBeUndefined();
-		vi.useRealTimers();
 	});
 });
