@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
+
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
 
 ## [2.0.0-beta.3] - 2026-10-26
