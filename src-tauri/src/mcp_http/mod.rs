@@ -6832,7 +6832,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_external_rejects_a_blank_additional_readable_dir() {
         let state = test_state();
-        state.config.write().additional_readable_dirs = vec!["".to_string(), "  ".to_string()];
+        state.config.write().additional_readable_dirs = vec![String::new(), "  ".to_string()];
         let app = build_router(state, false, true);
         let resp = app
             .oneshot(
@@ -10829,7 +10829,7 @@ mod tests {
             std::path::Path::new("/var/folders/ab/cdefghijklmnop/T"),
         );
         assert!(
-            path.as_os_str().len() < 104,
+            path.as_os_str().len() <= tuic_ipc::UNIX_SOCKET_PATH_MAX,
             "named instance socket path must fit macOS SUN_LEN: {}",
             path.display()
         );

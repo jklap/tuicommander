@@ -7674,14 +7674,17 @@ fn dsr_cursor_position_query_is_flushed_by_process_chunk() {
 /// Shared setup for the DSR/CPR edge-case tests below: a real PTY session
 /// backed by a `RecordingWriter`, plus the per-session state `process_chunk`
 /// requires.
+/// What [`setup_dsr_test_session`] hands back: the app state, the bytes the
+/// session's `RecordingWriter` captured, and the session's silence state.
 #[cfg(unix)]
-fn setup_dsr_test_session(
-    sid: &str,
-) -> (
+type DsrTestSession = (
     crate::state::AppState,
     Arc<std::sync::Mutex<Vec<u8>>>,
     Arc<Mutex<SilenceState>>,
-) {
+);
+
+#[cfg(unix)]
+fn setup_dsr_test_session(sid: &str) -> DsrTestSession {
     let state = crate::state::tests_support::make_test_app_state();
     let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -18732,23 +18735,13 @@ mod discovery_offsets {
         use std::process::{Command, Stdio};
         let scratch = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
         let run = |rel: &str| -> Option<&'static str> {
-            let exe = scratch.path().join(rel);
-            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-            std::fs::copy("/bin/cat", &exe).unwrap();
-            #[cfg(target_os = "macos")]
-            assert!(
-                Command::new("/usr/bin/codesign")
-                    .args(["--force", "--sign", "-"])
-                    .arg(&exe)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            // install_identity_probe creates the nested directories.
+            let exe = tuic_test_support::install_identity_probe(scratch.path(), rel);
             let mut child = Command::new(&exe).stdin(Stdio::piped()).spawn().unwrap();
             let mut name = None;
             for _ in 0..200 {
                 name = process_name_from_pid(child.id());
-                if name.as_deref().is_some_and(|n| n != "cat") {
+                if name.is_some() {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));

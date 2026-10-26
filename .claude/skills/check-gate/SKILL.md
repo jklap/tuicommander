@@ -54,7 +54,10 @@ make check-gate
 Do **not** run `make check 2>&1 | tee somelog.log` yourself and trust the reported exit code —
 that pipeline's exit status is `tee`'s (almost always 0), not `make`'s, so a real failure
 partway through the `&&`-chained steps goes unnoticed. `check-gate.sh` fixes this (captures
-`make`'s own exit code correctly) and also defensively rebuilds `tuic-hook` first, since that
+`make`'s own exit code correctly: make runs in the background writing a log file the script
+streams to the terminal, with no pipe and no process substitution — `/dev/fd` is denied in the
+agent sandbox, and a pipe hangs on a leaked grandchild — and Ctrl-C/SIGTERM stop make too) and
+also defensively rebuilds `tuic-hook` first, since that
 binary can transiently read as 0 bytes even right after a successful build — a stale copy fails
 `agent_hook.rs`'s `golden_wire_output` tests for reasons unrelated to your change. See
 `AGENTS.md` > Fresh Worktree Setup for background on both gotchas.

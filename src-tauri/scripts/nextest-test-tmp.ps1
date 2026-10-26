@@ -41,6 +41,15 @@ $lines = @(
     "GIT_TEMPLATE_DIR=$gitTemplate"
     "GIT_CEILING_DIRECTORIES=$gitCeiling"
 )
+# TUIC_TEST_FAKE_HOME=1: a throwaway HOME for the test processes, as
+# nextest-test-tmp.sh does. On Windows only HOME-reading tools see it (Git for
+# Windows' global config, a test's own HOME override); the `dirs` crate reads
+# Known Folders, not the environment, so APPDATA/USERPROFILE are left alone.
+if ($env:TUIC_TEST_FAKE_HOME -eq '1') {
+    $fakeHome = Join-Path $root 'home'
+    New-Item -ItemType Directory -Path $fakeHome -Force | Out-Null
+    $lines += "HOME=$fakeHome"
+}
 [System.IO.File]::AppendAllText(
     $env:NEXTEST_ENV,
     ($lines -join "`n") + "`n",
