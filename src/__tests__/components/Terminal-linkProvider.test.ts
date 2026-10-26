@@ -11,6 +11,17 @@ describe("linkProvider regexes", () => {
 			return results;
 		}
 
+		// Catches: directory paths swallowing a sentence period and resolving to a nonexistent file (#2372).
+		it.each([
+			["work/engineering/gdpr-asset-data-maintenance.md. Next", "work/engineering/gdpr-asset-data-maintenance.md"],
+			["work/README.md.", "work/README.md"],
+			["/repo/.config/v1.2/notes.md:12:4.", "/repo/.config/v1.2/notes.md:12:4"],
+			["C:\\repo\\notes.md.", "C:\\repo\\notes.md"],
+			["./assets/. Next", "./assets/"],
+		])("excludes sentence punctuation from %s", (text, path) => {
+			expect(matchAll(text)).toEqual([path]);
+		});
+
 		it("matches absolute paths", () => {
 			expect(matchAll("open /usr/local/bin/test.rs")).toEqual(["/usr/local/bin/test.rs"]);
 		});

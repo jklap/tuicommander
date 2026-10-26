@@ -12,7 +12,8 @@ export function filePathRegex(): RegExp {
 			`((?:[A-Za-z]:[\\\\/][\\w.\\\\/@-]+(?::\\d+(?::\\d+)?)?` +
 			`|(?:~/|/|\\.\\.?/|[\\w@.-]+/)[\\w./@-]+(?::\\d+(?::\\d+)?)?` +
 			`|[\\w@.-]+\\.(?:${CODING_EXT})(?::\\d+(?::\\d+)?)?))` +
-			`(?=[\\s"'\`),;.!?:\\]}>${BOX_DRAWING}]|$)`,
+			// A terminal sentence's final period is prose, not part of its heuristic path.
+			`(?<!\\.)(?=[\\s"'\`),;.!?:\\]}>${BOX_DRAWING}]|$)`,
 		"g",
 	);
 }

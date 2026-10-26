@@ -33,6 +33,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
 import { terminalsStore } from "../../stores/terminals";
+import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
 
 const ROWS = 2;
 const COLS = 60;
@@ -42,7 +43,8 @@ const GUTTER = 6;
 const CELL_W = 8;
 const SESSION_CWD = "/work/session";
 const REL = "work/business-review/Q3-FEATURES-REVIEW.md";
-const ROW0 = `  ${REL}  plain words`;
+// A sentence period must not become part of the filesystem candidate (#2372).
+const ROW0 = `  ${REL}. plain words`;
 /** Inside the path, past the first directory segment. */
 const PATH_COL = 12;
 const OTHER_COL = 50;
@@ -92,8 +94,11 @@ describe.each([
 	const onOpen = vi.fn();
 	let canvas: Element;
 	let unmount: () => void;
+	let perfDebug: boolean;
 
 	beforeEach(async () => {
+		perfDebug = isPerfDebug();
+		setPerfDebug(false);
 		onOpen.mockClear();
 		invoke.mockReset();
 		const resolve = (cwd: string, c: string) =>
@@ -167,6 +172,7 @@ describe.each([
 
 	afterEach(() => {
 		unmount();
+		setPerfDebug(perfDebug);
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});

@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
+
 - Keep AI Chat message actions below their answer without overlapping the next message; use compact Copy and Fork controls and remove redundant code-block Copy buttons (#2366-0408).
 
 - Keep isolated agent-test runtime temp outside ego’s shared scratch grant so AI Chat can prove its confined filesystem perimeter without changing grants (#2364-0737).
