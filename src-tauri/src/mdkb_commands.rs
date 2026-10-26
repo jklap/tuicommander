@@ -252,6 +252,18 @@ fn mdkb_asset_name() -> &'static str {
     }
 }
 
+fn stage_mdkb_for_elevation(
+    base: &std::path::Path,
+    asset: &str,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
+    let tmp_dir = base.join("mdkb-install");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let staged = tmp_dir.join(asset);
+    std::fs::write(&staged, bytes)?;
+    Ok(staged)
+}
+
 #[tauri::command]
 pub async fn install_mdkb(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let asset = mdkb_asset_name();
@@ -294,17 +306,15 @@ pub async fn install_mdkb(state: State<'_, Arc<AppState>>) -> Result<String, Str
     } else {
         // Need elevation
         let _ = std::fs::remove_file(&tmp_path);
-        let tmp_dir = std::env::temp_dir().join("mdkb-install");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let staged = tmp_dir.join(asset);
-        std::fs::write(&staged, &bytes).map_err(|e| format!("Failed to stage binary: {e}"))?;
+        let staged = stage_mdkb_for_elevation(&std::env::temp_dir(), asset, &bytes)
+            .map_err(|e| format!("Failed to stage binary: {e}"))?;
 
         crate::tuic_cli::copy_with_elevation(
             &staged.to_string_lossy(),
             &install_path.to_string_lossy(),
         )?;
 
-        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = std::fs::remove_dir_all(staged.parent().unwrap());
     }
 
     #[cfg(unix)]
@@ -380,6 +390,20 @@ pub async fn uninstall_mdkb(state: State<'_, Arc<AppState>>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_does_not_reuse_a_planted_install_path() {
+        // Catches the elevated installer adopting a directory controlled by another user.
+        let base = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let planted = base.path().join("mdkb-install");
+        std::fs::create_dir(&planted).unwrap();
+        let planted_binary = planted.join("mdkb-linux-x64");
+        std::fs::write(&planted_binary, b"attacker-controlled").unwrap();
+        let staged = stage_mdkb_for_elevation(base.path(), "mdkb-linux-x64", b"downloaded").unwrap();
+        assert_ne!(staged.parent().unwrap(), planted, "must not reuse a planted staging directory");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"downloaded");
+        assert_eq!(std::fs::read(&planted_binary).unwrap(), b"attacker-controlled");
+    }
 
     fn symbol(name: &str, file: &str, line_start: u32) -> crate::mdkb_client::MdkbSymbol {
         crate::mdkb_client::MdkbSymbol {
