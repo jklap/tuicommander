@@ -2648,6 +2648,7 @@ async fn conditional_configured_telegram_preserves_caller_authority() {
 // UI updated verbatim from main 06f115ae14 for the added 2067 Design Mode actions.
 // Agent guidance updated for the explicit interrupt delivery contract in 2113.
 // Telegram guidance updated for non-owner send and reply routing in 2119.
+// Automations guidance updated from 5337762482 for saved profile discovery in 2360.
 #[tokio::test]
 async fn native_help_preserves_every_displaced_rule_2069() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();

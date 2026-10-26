@@ -732,6 +732,9 @@ consumer integration is not proven by TUIC's tests.
 
 ### On-demand native tool guidance
 
+The compact `automations` guide includes `profiles` to discover saved run profile
+names; its full help and Settings description retain this guidance.
+
 `session`, `agent`, `repo`, `ui`, `voice`, `telegram` and `automations` advertise
 compact agent-facing descriptions with every action and the hard constraints.
 Call the same tool with `{"action":"help"}` for its complete usage guide in the
