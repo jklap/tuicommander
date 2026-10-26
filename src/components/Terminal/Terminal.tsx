@@ -38,6 +38,7 @@ import { Button } from "../ui";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
+import { ComposeToggle } from "./ComposeToggle";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { submitCompose } from "./composeSubmit";
 import { focusIsInsideOwnInput } from "./focusGuards";
@@ -1511,22 +1512,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				)}
 			</Show>
 			<Show when={!composeOpen() && !chatActive()}>
-				<div
-					class={s.composeHint}
-					onClick={() => setComposeOpen(true)}
-					title={`Open compose editor (${keyFor("toggle-compose-panel")})`}
-				>
-					<svg
-						width="10"
-						height="10"
-						viewBox="0 0 16 16"
-						fill="currentColor"
-						style={{ "margin-right": "4px", opacity: 0.7 }}
-					>
-						<path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708L5.854 13.146a.5.5 0 0 1-.233.131l-3.5 1a.5.5 0 0 1-.617-.617l1-3.5a.5.5 0 0 1 .131-.233L12.146.854z" />
-					</svg>
-					Compose {keyFor("toggle-compose-panel")}
-				</div>
+				<ComposeToggle
+					shortcut={keyFor("toggle-compose-panel")}
+					queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
+					onOpen={() => setComposeOpen(true)}
+					onLoadQueue={() => (sessionId ? pty.listQueuedCommands(sessionId) : Promise.resolve([]))}
+				/>
 			</Show>
 			<Show when={composeVisible()}>
 				<Suspense>

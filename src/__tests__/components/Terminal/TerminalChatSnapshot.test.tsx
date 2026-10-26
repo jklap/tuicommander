@@ -20,6 +20,63 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Catches: a cleared projection is reported as an empty conversation while remount replay is pending.
+it.each([false, true])("reopening Chat twice never reports empty during replay (mobile=%s)", async (mobile) => {
+	const snapshot = {
+		epoch: 0,
+		nextSeq: 2,
+		reset: true,
+		unknownRows: 0,
+		malformedRows: 0,
+		updates: [
+			{
+				sessionUpdate: "user_message_chunk",
+				messageId: "question",
+				content: { type: "text", text: "Original question" },
+			},
+			{ sessionUpdate: "agent_message_chunk", messageId: "reply", content: { type: "text", text: "Original answer" } },
+		],
+	};
+	for (let mount = 0; mount < 3; mount++) {
+		let resolve!: (snapshot: unknown) => void;
+		invokeMock.mockReturnValueOnce(
+			new Promise((done) => {
+				resolve = done;
+			}),
+		);
+		const view = render(() => (
+			<TerminalChatTranscript sessionId="reopen" mobile={mobile} terminalAgent="claude" onUnavailable={() => {}} />
+		));
+		await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(mount + 1));
+		try {
+			expect(view.queryByText("No messages in this conversation yet.")).toBeNull();
+			expect(view.getByText("Loading conversation…")).toBeTruthy();
+		} finally {
+			resolve(snapshot);
+			await waitFor(() => expect(view.getByLabelText("Chat transcript").textContent).toContain("Original answer"));
+		}
+		const text = view.getByLabelText("Chat transcript").textContent!;
+		expect(text.indexOf("Original question")).toBeLessThan(text.indexOf("Original answer"));
+		view.unmount();
+	}
+});
+
+// Catches: the loading label hides a genuinely empty conversation after a successful snapshot.
+it("reports an empty conversation only after its first snapshot arrives", async () => {
+	let resolve!: (snapshot: unknown) => void;
+	invokeMock.mockReturnValueOnce(
+		new Promise((done) => {
+			resolve = done;
+		}),
+	);
+	const view = render(() => <TerminalChatTranscript sessionId="empty" onUnavailable={() => {}} />);
+	await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+	expect(view.queryByText("No messages in this conversation yet.")).toBeNull();
+	resolve({ epoch: 0, nextSeq: 0, reset: true, updates: [], unknownRows: 0, malformedRows: 0 });
+	await waitFor(() => expect(view.getByText("No messages in this conversation yet.")).toBeTruthy());
+	expect(view.queryByText("Loading conversation…")).toBeNull();
+});
+
 // Catches: every replayed entry republishes partial history and rerenders all
 // preceding rows, making desktop/mobile first open quadratic at 2000 entries.
 it("snapshot replay publishes only the complete transcript", async () => {

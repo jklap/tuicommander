@@ -4,7 +4,8 @@ import "../../mobile.css";
 
 // Screenshot fixture only. The HTTP/SSE boundary is covered by Rust and Vitest.
 window.fetch = async () => new Response(JSON.stringify({ lines: [], screen: [], total_lines: 0 }));
-document.getElementById("root")!.style.cssText = "height:100dvh;display:flex;flex-direction:column";
+document.getElementById("root")!.style.cssText =
+	"position:fixed;top:44px;height:calc(100dvh - 78px);width:100%;display:flex;flex-direction:column";
 render(
 	() => (
 		<SessionDetailScreen
@@ -29,4 +30,4 @@ requestAnimationFrame(() => {
 	(document.querySelector('[aria-label="More session actions"]') as HTMLButtonElement)?.click();
 });
 
-// DEFERRED (2026-10-23) — headless screenshot capture timed out; rerun this isolated fixture when desktop capture is available.
+// The reduced containing pane exercises safe areas/browser chrome independently of viewport height.
