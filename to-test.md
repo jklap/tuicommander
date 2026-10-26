@@ -1,3 +1,7 @@
+## Headless issue intake (2323-c294) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. This peer did not restart the daily app; Rust changes do not hot-reload.
+
 ## Development backend staleness (2332-3eef) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
