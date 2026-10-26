@@ -1,4 +1,5 @@
 {
+	"stories.error.projectUnavailable": "Cannot read the project folder: {path}",
 	"stories.planEdit.otherSource": "Other link…",
 	"stories.planEdit.actions": "Plan actions",
 	"stories.planEdit.saving": "Saving plan…",

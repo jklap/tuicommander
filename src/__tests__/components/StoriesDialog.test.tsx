@@ -176,6 +176,23 @@ describe("StoriesDialog", () => {
 		expect(screen.getByText("API works")).toBeVisible();
 	});
 
+	it("catches a project read failure exposing its internal snake-case code", async () => {
+		vi.mocked(invoke)
+			.mockResolvedValueOnce(true)
+			.mockRejectedValueOnce(
+				new HttpRpcError(
+					"story_action_command",
+					422,
+					JSON.stringify({ error: "project_unavailable: project root '/repo' is not a directory" }),
+				),
+			);
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toContain("Cannot read the project folder: /repo");
+		expect(alert.textContent).not.toContain("project_unavailable");
+		expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+	});
+
 	it("explains how to load the missing native stories backend", async () => {
 		vi.stubGlobal("__TAURI_INTERNALS__", {});
 		try {

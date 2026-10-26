@@ -16,7 +16,7 @@ Use **Status** to show all, open, or closed stories. Open includes every native 
 
 The close button receives keyboard focus when the dialog opens. If the running backend predates native stories, the dialog asks you to restart TUICommander to load the newer backend.
 
-A failed project read shows its error reason and **Retry**, not empty-project guidance. Retry reloads the project; a confirmed empty result shows plan creation controls.
+A failed project read shows a plain folder error with its path and **Retry**, not internal error codes or empty-project guidance. Retry reloads the project; a confirmed empty result shows plan creation controls.
 
 Before loading plans, the dialog checks whether the running backend has native story support. A missing capability prompts a restart; a story action error remains visible as that action's error, shown as the plain message (for example `criteria are incomplete: unchecked indexes 1` or `plan document not found: <path>`), not as the raw HTTP response. Workflow Designer: **Publish** is disabled while the draft has no edit since its last publication.
 

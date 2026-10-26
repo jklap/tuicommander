@@ -308,7 +308,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message);
+		const detail = cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message;
+		setError(
+			detail.startsWith("project_unavailable:")
+				? t("stories.error.projectUnavailable", "Cannot read the project folder: {path}", { path: props.project })
+				: detail,
+		);
 	};
 	const ensureCapabilities = async (): Promise<void> => {
 		if (capabilitiesReady) return;

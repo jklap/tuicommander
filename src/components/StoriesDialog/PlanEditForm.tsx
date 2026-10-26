@@ -97,9 +97,17 @@ export function PlanEditForm(props: {
 						!props.sources.some((candidate) => candidate.source === baseline.source)
 					}
 				>
-					<option value={baseline.source}>{baseline.title}</option>
+					<option value={baseline.source} selected={!otherSource() && source() === baseline.source}>
+						{baseline.title}
+					</option>
 				</Show>
-				<For each={props.sources}>{(candidate) => <option value={candidate.source}>{candidate.title}</option>}</For>
+				<For each={props.sources}>
+					{(candidate) => (
+						<option value={candidate.source} selected={!otherSource() && source() === candidate.source}>
+							{candidate.title}
+						</option>
+					)}
+				</For>
 				<option value={otherOption}>{t("stories.planEdit.otherSource", "Other link…")}</option>
 			</Select>
 

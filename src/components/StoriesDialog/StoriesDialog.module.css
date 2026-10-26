@@ -6,7 +6,8 @@
   composes: toolbar from "../ui/FormControls.module.css"; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto; align-items: start; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
 .header > div:first-child { min-width: 0; }
 .header h2 { margin: 0 0 2px; font-size: var(--font-xl); }
-.headerActions { display: flex; flex-wrap: nowrap; min-width: 0; overflow-x: auto; justify-content: flex-start; align-items: center; gap: 8px; }
+.headerActions { display: flex; flex-wrap: nowrap; min-width: 0; overflow-x: auto; scrollbar-width: none; justify-content: flex-start; align-items: center; gap: 8px; }
+.headerActions::-webkit-scrollbar { display: none; }
 .headerActions > button { flex-shrink: 0; white-space: nowrap; }
 .project { display: block; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .content { display: grid; grid-template-columns: minmax(170px, 22%) minmax(210px, 26%) minmax(0, 1fr); flex: 1; min-height: 0; overflow: auto; }

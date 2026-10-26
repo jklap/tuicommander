@@ -200,3 +200,14 @@ it("catches archive action being separated from the selected plan actions", asyn
 	expect(actions.queryByLabelText("Archived plans")).toBeNull();
 	expect(ui.getByLabelText("Archived plans")).toBeTruthy();
 });
+
+it("catches the current document losing selection when its repository option arrives asynchronously", async () => {
+	plan.source = "repository-plan.md";
+	const ui = render(() => <StoriesDialog project="/plan-edit" onClose={() => {}} />);
+	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
+	const option = await ui.findByRole("option", { name: "Repository plan" });
+	const picker = ui.getByRole("combobox", { name: "Repository plan document" }) as HTMLSelectElement;
+	await waitFor(() => expect(picker.value).toBe("repository-plan.md"));
+	expect((option as HTMLOptionElement).selected).toBe(true);
+	expect(ui.getByRole("button", { name: "Save" })).toBeDisabled();
+});
