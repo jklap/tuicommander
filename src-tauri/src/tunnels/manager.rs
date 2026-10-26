@@ -893,11 +893,11 @@ mod tests {
         let manager = Arc::new(TunnelManager::new(audit));
         let marker = crate::test_support::test_temp_root().join("abort_mid_cleanup_ssh.pid");
         let _ = std::fs::remove_file(&marker);
-        let script = fake_ssh_script(&format!(
-            "echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600",
-            marker.display()
-        ));
-        let ssh_path = script.path().to_path_buf();
+        let ssh_path = crate::test_support::fake_ssh_script(
+            "abort-mid-cleanup",
+            &format!("echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600", marker.display()),
+            "exit /b 0",
+        );
         let marker_in_spawn = marker.clone();
         let profile = test_profile("abort-mid-cleanup");
         let id = profile.id.clone();
