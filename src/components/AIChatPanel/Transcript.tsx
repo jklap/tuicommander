@@ -335,6 +335,7 @@ const CopyButton: Component<{ label: string; text: string; answer?: boolean }> =
 	<Button
 		type="button"
 		variant="ghost"
+		size="compact"
 		class={s.copyAction}
 		aria-label={props.label}
 		onClick={() =>
@@ -882,11 +883,6 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																}
 																onLinkClick={props.onOpenFile}
 																autoLinkFiles={true}
-																onCodeCopy={(text) =>
-																	void writeClipboard(text).catch((error) =>
-																		appLogger.error("ai-chat", "Copy failed", error),
-																	)
-																}
 															/>
 														</Show>
 														<div class={s.replyActions}>
@@ -895,6 +891,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																<Button
 																	type="button"
 																	variant="ghost"
+																	size="compact"
 																	class={s.copyAction}
 																	aria-label="Fork from here"
 																	disabled={props.busy()}
