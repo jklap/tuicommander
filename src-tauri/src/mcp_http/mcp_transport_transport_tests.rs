@@ -1594,6 +1594,47 @@ async fn initialize_result(state: &Arc<AppState>, params: serde_json::Value) -> 
     parsed["result"].clone()
 }
 
+// Catches: reconnecting clients receive volatile live inventory in their cached prefix.
+#[cfg(unix)]
+#[tokio::test]
+async fn initialize_instructions_ignore_live_session_and_peer_churn() {
+    for collapsed in [false, true] {
+        let state = test_state();
+        state.config.write().collapse_tools = collapsed;
+        let params = serde_json::json!({"clientInfo": {"name": "instruction-stability-test"}});
+        let before = initialize_result(&state, params.clone()).await;
+        assert!(before["instructions"].as_str().is_some());
+
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "name": "inventory-peer", "tuic_session": TEST_UUID_A}),
+            Some("inventory-mcp"),
+        );
+        assert_eq!(registered["tuic_session"], TEST_UUID_A);
+        let peer_only = initialize_result(&state, params.clone()).await;
+        insert_managed_test_session(&state, "inventory-session", TEST_SPAWN_CWD);
+        let with_session = initialize_result(&state, params.clone()).await;
+
+        let peers = handle_messaging(&state, &serde_json::json!({"action": "list_peers"}), None);
+        assert!(peers["peers"].as_array().unwrap().iter().any(|p| p["tuic_session"] == TEST_UUID_A));
+        let sessions = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "list"}),
+            None,
+        ).await;
+        assert!(sessions.as_array().unwrap().iter().any(|s| s["session_id"] == "inventory-session"));
+
+        state.session_maps.sessions.remove("inventory-session");
+        state.peer_agents.remove(TEST_UUID_A);
+        let after_removal = initialize_result(&state, params).await;
+        for (stage, response) in [("peer registration", peer_only), ("session creation", with_session), ("removal", after_removal)] {
+            assert_eq!(before["instructions"], response["instructions"], "live {stage} changed instructions (collapsed={collapsed})");
+        }
+    }
+}
+
 /// The spec answer to `initialize` is the client's own version when we
 /// support it — answering our preferred revision to a client that asked for
 /// an older one tells it to speak a dialect it may not have.
