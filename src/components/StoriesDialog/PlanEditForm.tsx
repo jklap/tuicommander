@@ -29,6 +29,8 @@ export function PlanEditForm(props: {
 	const baseline = props.plan;
 	const [title, setTitle] = createSignal(baseline.title);
 	const [source, setSource] = createSignal(baseline.source);
+	const [otherSource, setOtherSource] = createSignal(/^https?:\/\//i.test(baseline.source));
+	const otherOption = "__other_source__";
 	const saveHintId = createUniqueId();
 	const pickerId = createUniqueId();
 	const patch = (): PlanEditPatch => {
@@ -68,16 +70,19 @@ export function PlanEditForm(props: {
 			</label>
 			<div class={s.sourceHeader}>
 				<label for={pickerId}>{t("stories.planEdit.document", "Repository plan document")}</label>
-				<Button disabled={props.busy || props.sourcesLoading} onClick={props.onRefreshSources}>
+				<Button size="compact" disabled={props.busy || props.sourcesLoading} onClick={props.onRefreshSources}>
 					{t("stories.refreshPlans", "Refresh")}
 				</Button>
 			</div>
 			<Select
 				id={pickerId}
-				value={props.sources.some((candidate) => candidate.source === source()) ? source() : ""}
+				value={otherSource() ? otherOption : source()}
 				disabled={props.busy || props.sourcesLoading}
 				onChange={(event) => {
-					if (event.currentTarget.value) setSource(event.currentTarget.value);
+					const value = event.currentTarget.value;
+					if (!value) return;
+					setOtherSource(value === otherOption);
+					if (value !== otherOption) setSource(value);
 				}}
 			>
 				<option value="">
@@ -85,44 +90,50 @@ export function PlanEditForm(props: {
 						? t("stories.loading", "Loading plans and stories…")
 						: t("stories.planEdit.chooseDocument", "Choose a repository plan…")}
 				</option>
-				<For each={props.sources}>
-					{(candidate) => (
-						<option value={candidate.source}>
-							{candidate.title} — {candidate.source}
-						</option>
-					)}
-				</For>
+				<Show
+					when={
+						baseline.source &&
+						!/^https?:\/\//i.test(baseline.source) &&
+						!props.sources.some((candidate) => candidate.source === baseline.source)
+					}
+				>
+					<option value={baseline.source}>{baseline.title}</option>
+				</Show>
+				<For each={props.sources}>{(candidate) => <option value={candidate.source}>{candidate.title}</option>}</For>
+				<option value={otherOption}>{t("stories.planEdit.otherSource", "Other link…")}</option>
 			</Select>
-			<Show when={!props.sourcesLoading && props.sources.length === 0}>
-				<p class={s.muted}>
-					{t("stories.planEdit.noDocuments", "No plan documents found in this repository. You can paste a link below.")}
-				</p>
+
+			<Show when={otherSource()}>
+				<label>
+					{t("stories.planSource", "Plan document or link")}
+					<Textarea
+						autoGrow
+						required
+						maxlength={4096}
+						value={source()}
+						disabled={props.busy}
+						onInput={(event) => setSource(event.currentTarget.value)}
+					/>
+				</label>
 			</Show>
-			<label>
-				{t("stories.planSource", "Plan document or link")}
-				<Textarea
-					autoGrow
-					required
-					maxlength={4096}
-					value={source()}
-					disabled={props.busy}
-					onInput={(event) => setSource(event.currentTarget.value)}
-				/>
-			</label>
 			<Show when={source().trim()}>
-				<p class={s.sourcePath} title={source().trim()}>
-					{source().trim()}
-				</p>
-				<Button disabled={props.busy} onClick={() => props.onOpenSource(source().trim())}>
-					{t("stories.planEdit.openSource", "Open document or link")}
-				</Button>
+				<div class={s.sourceRow}>
+					<Show when={!otherSource()}>
+						<p class={s.sourcePath} title={source().trim()}>
+							{source().trim()}
+						</p>
+					</Show>
+					<Button size="compact" disabled={props.busy} onClick={() => props.onOpenSource(source().trim())}>
+						{t("stories.planEdit.openSource", "Open")}
+					</Button>
+				</div>
 			</Show>
 			<Show when={props.error}>
 				<p role="alert" class={s.editError}>
 					{props.error}
 				</p>
 			</Show>
-			<p id={saveHintId} role="status" class={s.muted}>
+			<p id={saveHintId} hidden>
 				{saveReason()}
 			</p>
 			<div class={s.inline}>

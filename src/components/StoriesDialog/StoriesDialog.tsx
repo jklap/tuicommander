@@ -230,6 +230,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [wontFixCount, setWontFixCount] = createSignal(0);
 	const [allCancelled, setAllCancelled] = createSignal(false);
 	const [loading, setLoading] = createSignal(true);
+	const [readFailed, setReadFailed] = createSignal(false);
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [newPlan, setNewPlan] = createSignal(false);
@@ -579,6 +580,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				setPlanSources(available);
 				if (available.length > 0) setNewPlan(true);
 			}
+			setReadFailed(false);
 			setPlans(list.value);
 			setPlanId(nextPlan);
 			setStories(nextStories);
@@ -592,7 +594,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				preferredStory && selectableIds.includes(preferredStory) ? preferredStory : (selectableIds[0] ?? null),
 			);
 		} catch (cause) {
-			if (current === request) fail(cause);
+			if (current === request) {
+				setReadFailed(true);
+				fail(cause);
+			}
 		} finally {
 			if (current === request) setLoading(false);
 		}
@@ -844,6 +849,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					</div>
 					<div class={s.headerActions}>
 						<Button
+							size="compact"
 							type="button"
 							aria-pressed={!showRuns() && !showDesigner()}
 							onClick={() => {
@@ -854,6 +860,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							Stories
 						</Button>
 						<Button
+							size="compact"
 							type="button"
 							disabled={
 								busy() ||
@@ -868,6 +875,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</Button>
 						{/* DEFERRED (2026-10-22) — "Start plan workflow" is hidden until the slice E plan dispatch entry point exists (audit 2137 A11). */}
 						<Button
+							size="compact"
 							type="button"
 							aria-pressed={showRuns()}
 							disabled={!planId()}
@@ -879,6 +887,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							Run history
 						</Button>
 						<Button
+							size="compact"
 							type="button"
 							aria-pressed={showDesigner()}
 							onClick={() => {
@@ -1220,7 +1229,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</section>
 					</div>
 				</Show>
-				<Show when={!showRuns() && !showDesigner()}>
+				<Show when={!showRuns() && !showDesigner() && !readFailed()}>
 					<Show when={editingPlan()} keyed>
 						{(plan) => (
 							<section class={s.editorContent} aria-label={t("stories.planEdit.open", "Edit plan")}>
@@ -1389,9 +1398,6 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											)}
 										</Show>
 									</div>
-									<p class={s.planNotice}>
-										{t("stories.state", "State")}: {planStateLabel(planState())}
-									</p>
 								</Show>
 								<Show when={selectedPlan() && wontFixCount() > 0}>
 									<p class={s.planNotice}>
@@ -1404,7 +1410,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<div class={s.form}>
 										<div class={s.sourceHeader}>
 											<span>{t("stories.existingPlans", "Plans in this project")}</span>
-											<Button type="button" disabled={sourcesLoading()} onClick={() => void loadPlanSources()}>
+											<Button
+												size="compact"
+												type="button"
+												disabled={sourcesLoading()}
+												onClick={() => void loadPlanSources()}
+											>
 												{t("stories.refreshPlans", "Refresh")}
 											</Button>
 										</div>
@@ -1456,7 +1467,6 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										</details>
 									</div>
 								</Show>
-								{/* DEFERRED (2026-10-26) — a failed project read also renders empty-state guidance; separate error from confirmed empty results in the follow-up design pass. */}
 								<Show when={!loading() && plans().length === 0}>
 									<p class={s.empty}>{t("stories.emptyPlans", "Create a plan to begin.")}</p>
 								</Show>
@@ -1616,6 +1626,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								</Show>
 							</section>
 							<section class={s.detail} aria-label={t("stories.details", "Story details")}>
+								<Show when={selectedPlan()}>
+									<p class={s.planState}>
+										{t("stories.state", "State")}: {planStateLabel(planState())}
+									</p>
+								</Show>
 								<Show
 									when={selectedStory()}
 									fallback={
@@ -1628,9 +1643,6 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													<h3>{plan().title}</h3>
 													<p>
 														{t("stories.source", "Source")}: {plan().source}
-													</p>
-													<p>
-														{t("stories.state", "State")}: {planStateLabel(planState())}
 													</p>
 												</div>
 											)}

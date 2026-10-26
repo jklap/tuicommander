@@ -150,12 +150,30 @@ describe("StoriesDialog", () => {
 		);
 	});
 
-	it("shows a recoverable error when loading fails", async () => {
+	it("catches a failed read being presented as an empty project and supports retry", async () => {
 		vi.mocked(invoke).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("offline"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/offline/);
+		expect(screen.queryByText("Create a plan to begin.")).toBeNull();
+		expect(screen.queryByText("Select or create a plan.")).toBeNull();
+		expect(screen.queryByText("This plan has no stories.")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await screen.findByRole("heading", { name: "Implement API" });
+	});
+
+	it("catches action failures hiding previously loaded stories as if their read failed", async () => {
+		const original = vi.mocked(invoke).getMockImplementation()!;
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if ((args as { action?: { action: string } })?.action?.action === "transition")
+				throw new Error("criteria are incomplete");
+			return original(command, args);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Start work" }));
+		await screen.findByText("criteria are incomplete");
+		expect(screen.getByRole("heading", { name: "Implement API" })).toBeVisible();
+		expect(screen.getByText("API works")).toBeVisible();
 	});
 
 	it("explains how to load the missing native stories backend", async () => {

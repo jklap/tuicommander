@@ -48,6 +48,9 @@ it("catches plan saves omitting a field, losing the original revision, or failin
 	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
 	const form = within(ui.getByRole("form", { name: "Edit plan" }));
 	fireEvent.input(form.getByLabelText("Plan title"), { target: { value: "Corrected plan" } });
+	fireEvent.change(form.getByRole("combobox", { name: "Repository plan document" }), {
+		target: { value: "__other_source__" },
+	});
 	fireEvent.input(form.getByLabelText("Plan document or link"), { target: { value: "moved.md" } });
 	fireEvent.click(form.getByRole("button", { name: "Save" }));
 	await ui.findByRole("button", { name: "Corrected plan" });
@@ -106,6 +109,9 @@ it("catches active-coordinator source refusals hiding the remedy or clearing the
 		"plan source is in use by an active plan coordinator: run active; finish the coordinator or cancel the run before changing the source";
 	const ui = render(() => <StoriesDialog project="/plan-edit" onClose={() => {}} />);
 	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
+	fireEvent.change(ui.getByRole("combobox", { name: "Repository plan document" }), {
+		target: { value: "__other_source__" },
+	});
 	fireEvent.input(ui.getByLabelText("Plan document or link"), { target: { value: "moved.md" } });
 	fireEvent.click(ui.getByRole("button", { name: "Save" }));
 	expect((await ui.findByRole("alert")).textContent).toBe(failure);
@@ -117,9 +123,10 @@ it("catches the plan source being available only as typed text", async () => {
 	const ui = render(() => <StoriesDialog project="/plan-edit" onClose={() => {}} />);
 	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
 	const picker = await ui.findByRole("combobox", { name: "Repository plan document" });
-	await ui.findByRole("option", { name: "Repository plan — repository-plan.md" });
+	await ui.findByRole("option", { name: "Repository plan" });
 	fireEvent.change(picker, { target: { value: "repository-plan.md" } });
-	expect((ui.getByLabelText("Plan document or link") as HTMLTextAreaElement).value).toBe("repository-plan.md");
+	expect(ui.queryByLabelText("Plan document or link")).toBeNull();
+	expect(ui.getByText("repository-plan.md")).toBeVisible();
 	fireEvent.click(ui.getByRole("button", { name: "Save" }));
 	await waitFor(() => expect(updates()).toHaveLength(1));
 	expect(updates()[0][1]).toMatchObject({ action: { expected_revision: 7, patch: { source: "repository-plan.md" } } });
@@ -131,11 +138,15 @@ it("catches disabled Save hiding its reason or submitting an invalid patch", asy
 	const save = ui.getByRole("button", { name: "Save" });
 	expect(save).toBeDisabled();
 	expect(save).toHaveAccessibleDescription("Change the title or document to save.");
+	expect(ui.getByText("Change the title or document to save.")).not.toBeVisible();
 	fireEvent.submit(ui.getByRole("form", { name: "Edit plan" }));
 	expect(updates()).toHaveLength(0);
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: " " } });
 	expect(save).toHaveAccessibleDescription("Enter a plan title to save.");
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: "Valid" } });
+	fireEvent.change(ui.getByRole("combobox", { name: "Repository plan document" }), {
+		target: { value: "__other_source__" },
+	});
 	fireEvent.input(ui.getByLabelText("Plan document or link"), { target: { value: " " } });
 	expect(save).toHaveAccessibleDescription("Choose a plan document or paste a link to save.");
 	fireEvent.submit(ui.getByRole("form", { name: "Edit plan" }));
@@ -146,14 +157,17 @@ it("catches a pasted URL or selected file opening the wrong source", async () =>
 	const onClose = vi.fn();
 	const ui = render(() => <StoriesDialog project="/plan-edit" onClose={onClose} />);
 	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
+	fireEvent.change(ui.getByRole("combobox", { name: "Repository plan document" }), {
+		target: { value: "__other_source__" },
+	});
 	fireEvent.input(ui.getByLabelText("Plan document or link"), { target: { value: "https://example.com/plan" } });
-	fireEvent.click(ui.getByRole("button", { name: "Open document or link" }));
+	fireEvent.click(ui.getByRole("button", { name: "Open" }));
 	expect(handleOpenUrl).toHaveBeenCalledWith("https://example.com/plan");
 	expect(onClose).not.toHaveBeenCalled();
 	const picker = ui.getByRole("combobox", { name: "Repository plan document" });
-	await ui.findByRole("option", { name: "Repository plan — repository-plan.md" });
+	await ui.findByRole("option", { name: "Repository plan" });
 	fireEvent.change(picker, { target: { value: "repository-plan.md" } });
-	fireEvent.click(ui.getByRole("button", { name: "Open document or link" }));
+	fireEvent.click(ui.getByRole("button", { name: "Open" }));
 	expect(openFileAction).toHaveBeenCalledWith("repository-plan.md", "/plan-edit");
 	expect(onClose).toHaveBeenCalledOnce();
 });
@@ -172,9 +186,10 @@ it("catches a failed document listing losing the draft instead of offering retry
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: "Keep this draft" } });
 	failListing = false;
 	fireEvent.click(ui.getByRole("button", { name: "Refresh" }));
-	await ui.findByRole("option", { name: "Repository plan — repository-plan.md" });
+	await ui.findByRole("option", { name: "Repository plan" });
 	expect((ui.getByLabelText("Plan title") as HTMLTextAreaElement).value).toBe("Keep this draft");
-	expect((ui.getByLabelText("Plan document or link") as HTMLTextAreaElement).value).toBe("original.md");
+	expect(ui.queryByLabelText("Plan document or link")).toBeNull();
+	expect(ui.getByText("original.md")).toBeVisible();
 });
 
 it("catches archive action being separated from the selected plan actions", async () => {
