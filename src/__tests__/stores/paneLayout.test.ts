@@ -1097,6 +1097,43 @@ describe("paneLayoutStore", () => {
 		});
 	});
 
+	describe("agentOwned persistence", () => {
+		// Catches: the tmux shim's agent-owned marker stripped from the persisted
+		// layout, so an agent-arranged split looked user-built after a restart.
+		it("saves agentOwned with an agent-arranged layout", async () => {
+			const { invoke } = await import("../../invoke");
+			const mockInvoke = vi.mocked(invoke);
+			vi.useFakeTimers();
+			try {
+				testInScope(() => {
+					store._testCancelPendingSave();
+					mockInvoke.mockClear();
+					store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+					store.flushSave();
+					const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_pane_layout");
+					expect(saves).toHaveLength(1);
+					expect((saves[0][1] as { layout: { agentOwned?: boolean } }).layout.agentOwned).toBe(true);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("restores agentOwned from disk", async () => {
+			const { invoke } = await import("../../invoke");
+			vi.mocked(invoke).mockResolvedValueOnce({
+				root: { type: "leaf", id: "g1" },
+				groups: { g1: { id: "g1", tabs: [{ id: "term-1", type: "terminal" }], activeTabId: "term-1" } },
+				activeGroupId: "g1",
+				agentOwned: true,
+			});
+			await testInScope(async () => {
+				await store.loadFromDisk();
+				expect(store.isAgentOwned()).toBe(true);
+			});
+		});
+	});
+
 	describe("loadFromDisk", () => {
 		it("filters out non-terminal tabs on restore", async () => {
 			const { invoke } = await import("../../invoke");

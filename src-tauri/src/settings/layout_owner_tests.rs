@@ -233,3 +233,22 @@ fn minimum_width_resize_roundoff_does_not_reject_layout_save() {
     });
     assert_eq!(save_pane_layout(Value::Null, layout), Ok(()));
 }
+
+/// Catches: the tmux shim's agent-owned marker being dropped from the persisted
+/// layout (deny_unknown_fields rejected it, so it never survived a restart).
+#[test]
+fn pane_layout_round_trips_agent_owned_and_defaults_it_off() {
+    let mut owned = initial();
+    owned["agentOwned"] = json!(true);
+    let layout: super::layout::PaneLayout = serde_json::from_value(owned).unwrap();
+    assert!(layout.agent_owned);
+    let reparsed: super::layout::PaneLayout =
+        serde_json::from_value(serde_json::to_value(&layout).unwrap()).unwrap();
+    assert!(
+        reparsed.agent_owned,
+        "agentOwned must survive serialize -> deserialize"
+    );
+
+    let user: super::layout::PaneLayout = serde_json::from_value(initial()).unwrap();
+    assert!(!user.agent_owned, "an absent agentOwned is a user layout");
+}

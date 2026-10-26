@@ -9,7 +9,7 @@ Consolidated reference for all terminal behaviors, keyboard shortcuts, and confi
 | Shortcut | Action | Notes |
 |----------|--------|-------|
 | Cmd+T | New terminal tab | |
-| Cmd+W | Close tab/pane | Closes active split pane, or tab if no split |
+| Cmd+W | Close tab/pane | Closes the tab in front of a split if it isn't part of the split (a full-page orphan tab), else the active split pane, or the tab if no split |
 | Cmd+Shift+T | Reopen closed tab | Restores last 10 closed tabs |
 | Cmd+1–9 | Switch to tab N | First 9 tabs only |
 | Ctrl+Tab | Next tab | NSEvent monitor on macOS |

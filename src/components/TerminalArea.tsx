@@ -9,6 +9,7 @@ import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 import { uiStore } from "../stores/ui";
+import { getActiveOrphanTabId } from "../utils/activeOrphanTab";
 import { markdownDocumentPanelId } from "../utils/markdownDocumentPanelId";
 import { shouldAutoSubmitSuggestion } from "../utils/sendCommand";
 import { sendTextToSession } from "../utils/sendToActiveTerminal";
@@ -76,16 +77,7 @@ const SuggestOverlayContainer: Component = () => {
 export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 	const { isDragging, attachTo } = useFileDrop();
 
-	const hasActiveOrphan = createMemo(() => {
-		if (!paneLayoutStore.isSplit()) return false;
-		const ids = [
-			terminalsStore.state.activeId,
-			diffTabsStore.state.activeId,
-			mdTabsStore.state.activeId,
-			editorTabsStore.state.activeId,
-		];
-		return ids.some((id) => id && !paneLayoutStore.getGroupForTab(id));
-	});
+	const hasActiveOrphan = createMemo(() => getActiveOrphanTabId() !== null);
 
 	// When a non-terminal tab becomes active, release focus from xterm's textarea.
 	// On macOS WKWebView, wheel events follow focus rather than cursor position,

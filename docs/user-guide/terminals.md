@@ -246,7 +246,7 @@ Drag the divider between the two panes to adjust the split ratio. Both terminals
 
 ### Closing Split Panes
 
-- **Cmd+W** closes the active pane and collapses back to a single pane
+- **Cmd+W** closes the active pane and collapses back to a single pane. If a tab that is not part of the split is shown full-page in front of it, Cmd+W closes that tab and leaves the split untouched
 - The surviving pane automatically receives focus
 
 ### Split Layout Persistence

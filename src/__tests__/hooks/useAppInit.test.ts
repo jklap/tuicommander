@@ -23,6 +23,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -1023,6 +1024,31 @@ describe("initApp", () => {
 		expect(byId("unnamed")?.nameFromSpawn).toBe(false);
 	});
 
+	it("docks an agent-spawned session into an agent-owned split without taking focus", async () => {
+		let sessionCreated: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") sessionCreated = handler as typeof sessionCreated;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		const existing = terminalsStore.add({
+			sessionId: null,
+			fontSize: 14,
+			name: "mine",
+			cwd: null,
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(existing);
+		paneLayoutStore.arrangeSessionsAsLayout(["s1", "s2"], "tiled");
+		expect(paneLayoutStore.isAgentOwned()).toBe(true);
+
+		sessionCreated!({ payload: { session_id: "agent-x", cwd: "/repo", agent_type: "claude" } });
+
+		const id = terminalsStore.getTerminalForSession("agent-x")!;
+		expect(paneLayoutStore.getGroupForTab(id)).toBeTruthy();
+		expect(terminalsStore.state.activeId).toBe(existing);
+	});
+
 	// `term-alias-assigned` fires once, at spawn. A WebView reload rebuilds every
 	// tab from this list, so the list is the only place the alias survives — a tab
 	// without it loses the address other agents reach it by, and the next restart
@@ -1772,6 +1798,64 @@ describe("initApp", () => {
 			expect(arrangeSpy).not.toHaveBeenCalled();
 			expect(paneLayoutStore.getRoot()).toBeNull();
 			arrangeSpy.mockRestore();
+		});
+
+		// The swarm's terminals belong to a repo+branch; the split must be built in THAT
+		// branch's layout, not in whichever branch happens to be on screen.
+		describe("branch ownership", () => {
+			function setUpRepos(): void {
+				for (const path of ["/repo/onscreen", "/repo/swarm"]) {
+					repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+					repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
+					repositoriesStore.setActiveWorkspace(path, "main");
+				}
+			}
+
+			beforeEach(() => {
+				savedPaneLayouts.clear();
+				setUpRepos();
+			});
+
+			afterEach(() => {
+				savedPaneLayouts.clear();
+				paneLayoutStore.flushSave();
+			});
+
+			it("builds the split in the live layout when the terminals' branch is on screen", async () => {
+				const getCb = captureWindowLayoutRequested();
+				await initApp(createMockDeps());
+				const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+				const term2 = terminalsStore.add(makeTerminal({ sessionId: "sess-b" }));
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term1);
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term2);
+				repositoriesStore.setActive("/repo/swarm");
+
+				getCb()!({ payload: { session_ids: ["sess-a", "sess-b"], layout: "tiled" } });
+
+				expect(paneLayoutStore.isSplit()).toBe(true);
+				expect(savedPaneLayouts.size).toBe(0);
+			});
+
+			it("builds the split in the owning branch's saved layout when another repo is on screen", async () => {
+				const getCb = captureWindowLayoutRequested();
+				await initApp(createMockDeps());
+				const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+				const term2 = terminalsStore.add(makeTerminal({ sessionId: "sess-b" }));
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term1);
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term2);
+				repositoriesStore.setActive("/repo/onscreen");
+
+				getCb()!({ payload: { session_ids: ["sess-a", "sess-b"], layout: "tiled" } });
+
+				expect(paneLayoutStore.isSplit()).toBe(false);
+				const saved = savedPaneLayouts.get(paneLayoutKey("/repo/swarm", "main"));
+				expect(saved?.root?.type).toBe("branch");
+				expect(
+					Object.values(saved?.groups ?? {})
+						.flatMap((g) => g.tabs.map((t) => t.id))
+						.sort(),
+				).toEqual([term1, term2].sort());
+			});
 		});
 	});
 
