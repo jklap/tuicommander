@@ -122,7 +122,7 @@ Auto-copies selected text to clipboard when text is selected in terminal. Config
 Cmd+Click on URLs in terminal output opens them in the system browser. URL detection handled by the native terminal link parser.
 
 ### File Path Click
-Clickable file paths in terminal output (absolute and relative paths with known extensions). Opens in IDE or markdown viewer.
+Clickable file paths in terminal output resolve against the terminal working directory when relative. Sentence periods are excluded from heuristic path targets, including paths in soft-wrapped lines. Existing files open in their viewer or editor; directories open in the File Browser.
 
 ### Tab Features
 - **Middle-click** closes tab

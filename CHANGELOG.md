@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
 - Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).
 

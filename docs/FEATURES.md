@@ -268,7 +268,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - `Cmd+L` — clears display, running processes unaffected
 
 ### 1.7 Clickable File Paths
-- File paths in terminal output are auto-detected and become clickable links
+- File paths in terminal output are auto-detected and become clickable links; a sentence period after a path is excluded from its filesystem target
 - Terminal directory links open the File Browser at the resolved directory; missing paths show a notification without opening a tab
 - Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
