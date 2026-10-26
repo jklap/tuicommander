@@ -131,39 +131,43 @@ export function SecretForm(props: {
 					<details class="secret-phone">
 						<summary>Open on a trusted browser or phone</summary>
 						<Show when={props.form.mobile_url} fallback={<p>{props.form.mobile_unavailable}</p>}>
-							<p>Scan or open this one-time link on a trusted device. Use HTTPS to protect entry in transit.</p>
-							<a
-								class="secret-phone-url"
-								href={props.form.mobile_url!}
-								target="_blank"
-								rel="noopener noreferrer"
-								referrerpolicy="no-referrer"
-								onClick={(event) => {
-									if (!props.openUrl) return;
-									event.preventDefault();
-									void props
-										.openUrl(props.form.mobile_url!)
-										.catch(() => setCopyStatus("Could not open the browser. Copy the URL instead."));
-								}}
-							>
-								{props.form.mobile_url}
-							</a>
-							<Button aria-label="Copy form URL" onClick={() => void copyUrl()}>
-								Copy URL
-							</Button>
-							<p role="status">{copyStatus()}</p>
-							<Show
-								when={!qr.error && qr()}
-								fallback={<p>{qr.error ? "QR unavailable. Open or copy the URL instead." : "Generating QR…"}</p>}
-							>
-								<img
-									class="secret-phone-qr"
-									src={qr()!}
-									alt="QR code for private secret entry"
-									width={320}
-									height={320}
-								/>
-							</Show>
+							<div class="secret-phone-content">
+								<div class="secret-phone-link">
+									<p>Scan or open this one-time link on a trusted device. Use HTTPS to protect entry in transit.</p>
+									<a
+										class="secret-phone-url"
+										href={props.form.mobile_url!}
+										target="_blank"
+										rel="noopener noreferrer"
+										referrerpolicy="no-referrer"
+										onClick={(event) => {
+											if (!props.openUrl) return;
+											event.preventDefault();
+											void props
+												.openUrl(props.form.mobile_url!)
+												.catch(() => setCopyStatus("Could not open the browser. Copy the URL instead."));
+										}}
+									>
+										{props.form.mobile_url}
+									</a>
+									<Button aria-label="Copy form URL" onClick={() => void copyUrl()}>
+										Copy URL
+									</Button>
+									<p role="status">{copyStatus()}</p>
+								</div>
+								<Show
+									when={!qr.error && qr()}
+									fallback={<p>{qr.error ? "QR unavailable. Open or copy the URL instead." : "Generating QR…"}</p>}
+								>
+									<img
+										class="secret-phone-qr"
+										src={qr()!}
+										alt="QR code for private secret entry"
+										width={160}
+										height={160}
+									/>
+								</Show>
+							</div>
 						</Show>
 					</details>
 				</Show>

@@ -129,6 +129,10 @@ it("shares the same absolute nonce URL through link copy and QR", async () => {
 			"data:image/png;base64,AA==",
 		),
 	);
+	// Catches: rendering the sharp 320px source at full size and overflowing the private window.
+	const qr = view.getByAltText("QR code for private secret entry") as HTMLImageElement;
+	expect(qr.width).toBe(160);
+	expect(qr.height).toBe(160);
 	expect(QRCode.toDataURL).toHaveBeenCalledWith(url, expect.objectContaining({ width: 320 }));
 	fireEvent.click(view.getByRole("button", { name: "Decline" }));
 	expect(view.queryByRole("link", { hidden: true })).toBeNull();
