@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
+
 - The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
 
 Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
@@ -266,7 +268,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - `Cmd+L` — clears display, running processes unaffected
 
 ### 1.7 Clickable File Paths
-- File paths in terminal output are auto-detected and become clickable links
+- File paths in terminal output are auto-detected and become clickable links; a sentence period after a path is excluded from its filesystem target
 - Terminal directory links open the File Browser at the resolved directory; missing paths show a notification without opening a tab
 - Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
@@ -380,7 +382,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 - **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
 - **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
-- **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
+- **Queue count** — the collapsed Compose button shows a muted pill for every waiting FIFO item, including commands and peer/orchestrator notices, hidden at zero. Hover or focus shows the command/message breakdown. The open panel shows `N queued`; click it to inspect and remove entries, or clear the queue. Counts come from the backend (`state.queued_commands`), including across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting. Hands-free speech does not use this queue at all — see 9.9
 - **Progress replies** — a queued user command can resume an idle agent waiting on a blocked progress report. Native questions and approval dialogs still block queued delivery; server notices cannot use this exception or be overtaken
 - **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
@@ -538,7 +540,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Block comments**: move through the gutter left of a heading, paragraph, individual list item (including task and nested items), quote, table, or code block to highlight its exact Markdown source and reveal its comment button. List-item markers sit on an indented continuation line below the chosen item's own content, preserving the list. Block anchors use the renderer's raw-source ranges, so links and inline HTML do not depend on matching rendered text back to Markdown
   - After each save, block ranges and highlights are refreshed from the updated source even when the visible Markdown is unchanged by the invisible comment markers. Consecutive comments remain attached to the items that were selected.
   - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window. After a successful send, Agent and Send hide until a new tweak comment, checkbox change or saved text edit. Edits saved while a send is pending keep the controls available for another send. Failed sends keep the controls available for retry
-  - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
+  - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete. Deleting removes the saved marker and its highlight, closes the popover, and leaves other comments intact, including comments on rendered Mermaid diagrams, even when the rendered Markdown text is unchanged
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers. Inline comments wrap their source text with `tweak:begin` / `tweak:end`; block comments use a `tweak:block` marker immediately before the target block, while list-item comments use a `tweak:item` marker within that item. Both forms are invisible to standard Markdown renderers, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **Save failures**: Markdown files opened by absolute path use the external file writer. A failed comment save shows an error toast and keeps the comment popover and draft open for retry.
   - **LLM-friendly**: the first comment added to a file prepends an invisible HTML-comment header explaining inline, block, and list-item markers, so an AI agent reading the raw file understands them without external context. Existing files with the older header remain readable and editable. The intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
@@ -1091,9 +1093,9 @@ one configured ego binary and speaks ACP to it, per
   or prompts; model/mode controls show pending values until options arrive.
   The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
-- Transcript text and tool output are selectable. User and assistant messages,
-  tool outputs and code blocks have copy actions using the terminal clipboard
-  adapter. Web links open externally; after backend resolution, file paths use
+- Transcript text and tool output are selectable. User and assistant messages
+  and tool outputs have copy actions using the terminal clipboard adapter.
+  Message Copy includes fenced code without a separate code-block button. Web links open externally; after backend resolution, file paths use
   the terminal file opener and directory paths open the file browser, including
   from a detached chat. Transcript focus gives `Cmd/Ctrl+A` (select this
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
@@ -2908,6 +2910,10 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 ## Private secret forms
 
+The private window offers a selectable full phone-entry URL, Copy URL, a browser
+link and QR code using the Remote Mobile address policy. Disabled remote access
+shows setup guidance. Account-vault entry remains native-only.
+
 The `secret` MCP tool opens a separate native form for requested sensitive
 fields and returns names/status only. Approved argv commands receive values in
 the child environment; pipe output is masked for exact and common encoded
@@ -2971,7 +2977,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
-`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
+`story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Transition history uses readable command labels and 1-based criterion numbers, with the current criterion text when available. Actors show a live session name or an eight-character session ID; hover the actor to see the complete session ID. The current history API does not return timestamps. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
 
 Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Slice F supplies public story graph starts and history controls; D/E add independent approval and plan dispatch; graph completion alone never closes a native story.
@@ -3028,6 +3034,13 @@ saved `run_config` from a bound agent. Host-resolved repository defaults and
 returned next-run/local fire times remove clock, list and get lookups. Identical
 caller requests reuse the first saved occurrence; exact UTC storage preserves
 elapsed delays across DST. Unknown caller profile identity fails explicitly.
+
+### Automation profile repair
+
+Unresolved automation profiles appear in the desktop Messages bell on startup
+and after saved profile changes. Failed-run notices include their reason,
+independently of creator mail. Runs groups repeated identical failures with a
+count and a Fix action that focuses the current definition's saved-profile picker.
 
 ### Automations dialog (backend integration pending)
 
@@ -3152,7 +3165,7 @@ permissions. Recurring cadence previews retain the existing runtime limitations.
 
 Terminal gestures hold the requested history row even when output arrives before the backend applies the scroll. If capped scrollback evicts that row, the viewport clamps to the oldest retained row.
 
-GitHub OAuth now requests `repo read:project`; existing logins need reauthorization before Projects v2 reads.
+GitHub OAuth requests `repo project` for Projects v2 reads and writes. Existing read-only logins get re-login guidance; Projects write denials leave board cards and repository actions available.
 
 ### Internal repository settings owners
 

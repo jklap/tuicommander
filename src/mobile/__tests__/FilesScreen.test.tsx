@@ -2,7 +2,9 @@
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { aiChatDraft } from "../../components/AIChatPanel/draft";
+import { aiChatTabs } from "../../stores/aiChatTabs";
 import { rpc } from "../../transport";
 import { FilesScreen } from "../screens/FilesScreen";
 
@@ -75,6 +77,10 @@ const openRepo = async (getByRole: ReturnType<typeof render>["getByRole"]) => {
 
 afterEach(() => {
 	cleanup();
+	aiChatDraft.reset();
+	localStorage.removeItem("tuic-ai-chat-tabs");
+	aiChatTabs.resetMemory();
+	window.getSelection()?.removeAllRanges();
 	files.set("src/hello.txt", "hello\n");
 	files.set("src/guide.md", "# Guide\n\n**Important** note.\n");
 	calls.length = 0;
@@ -320,6 +326,41 @@ describe("FilesScreen", () => {
 	});
 
 	describe("Markdown review", () => {
+		// Catches: mobile selection handles not revealing the action, or routing text to a stale session draft.
+		it("stages a selected table cell for the open chat and navigates there without writing the file", async () => {
+			// Catches JSX prop conditionals allocating unowned memos during selection events.
+			const warn = vi.spyOn(console, "warn");
+			onTestFinished(() => warn.mockRestore());
+			files.set("src/guide.md", "# Guide\n\n| Name |\n| --- |\n| **Important** |\n");
+			aiChatTabs.add("global", "mobile-reference");
+			aiChatDraft.activate("another-chat");
+			aiChatDraft.set("Unrelated question");
+			const openChat = vi.fn();
+			const view = render(() => <FilesScreen onOpenAiChat={openChat} />);
+			await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+			await openRepo(view.getByRole);
+			await fireEvent.click(view.getByRole("button", { name: /guide.md/ }));
+			await waitFor(() => expect(view.container.querySelector("td strong")).not.toBeNull());
+			const cell = view.container.querySelector("td strong")!;
+			const range = document.createRange();
+			range.selectNodeContents(cell);
+			const rect = { left: 10, right: 80, top: 100, bottom: 120, height: 20 } as DOMRect;
+			range.getClientRects = () => [rect] as unknown as DOMRectList;
+			range.getBoundingClientRect = () => rect;
+			window.getSelection()!.removeAllRanges();
+			window.getSelection()!.addRange(range);
+			fireEvent(document, new Event("selectionchange"));
+			const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]')!;
+			expect(action).not.toBeNull();
+			fireEvent.click(action);
+			expect(aiChatDraft.text()).toBe("/repo-one/src/guide.md:5-5\n\n> Important");
+			expect(openChat).toHaveBeenCalledOnce();
+			expect(calls).not.toContain("write_file_if_unchanged");
+			aiChatDraft.activate("another-chat");
+			expect(aiChatDraft.text()).toBe("Unrelated question");
+			expect(warn).not.toHaveBeenCalled();
+		});
+
 		const openGuide = async (text: string) => {
 			files.set("src/guide.md", text);
 			const view = render(() => <FilesScreen />);

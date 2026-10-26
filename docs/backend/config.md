@@ -1103,8 +1103,11 @@ This request does not save config or rewrite launch files.
 
 One app-owned watcher marks changed top-level JSONL transcripts dirty. Warm
 refreshes enumerate membership but do not stat unchanged transcript history.
-Specific-project scope resolves that project directly. Refreshes share one scan
-gate; watcher errors and overflow force reconciliation. A full metadata check
+Specific-project scope resolves that project directly. A `Modify(Any)` event
+for an existing directory does not mark unchanged transcripts dirty. File events
+still update individual transcripts; directory creation/removal/rename and missing
+directory paths retain full reconciliation. Refreshes share one scan gate;
+watcher errors and overflow force reconciliation. A full metadata check
 also runs after 30 minutes, or on every refresh if watching is unavailable.
 Watcher delivery is asynchronous, so edits become visible after their event
 arrives. The persisted parse-cache format does not change.

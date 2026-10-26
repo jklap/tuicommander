@@ -166,3 +166,36 @@ it("more_disables_all_lanes_while_pending", async () => {
 	resolve?.(page("2", "again"));
 	await screen.findByRole("article", { name: "TASK-2" });
 });
+
+// Catches: read-only Projects hides its permission explanation or discards the readable cards.
+it("read_only_board_keeps_cards_and_explains_missing_write_permission", async () => {
+	const snapshot = page("1", null);
+	snapshot.board = { ...board, writeDisabledReason: "Projects writes require the project scope. Log in again." };
+	for (const lane of snapshot.lanes) for (const card of lane.cards) card.moves = [];
+	const source = provider({ boards: [snapshot.board], board: async () => snapshot });
+	const open = vi.fn();
+	render(() => <TasksBoardView provider={source} onOpen={open} />);
+	expect(await screen.findByText(/Projects writes require the project scope/)).toBeInTheDocument();
+	expect(screen.getByRole("article", { name: "TASK-1" })).toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+	expect(screen.getByRole("menuitem", { name: "Done" })).toBeDisabled();
+	fireEvent.click(screen.getByRole("button", { name: /^TASK-1$/ }));
+	expect(open).toHaveBeenCalledWith(snapshot.lanes[0].cards[0].item.reference);
+});
+
+// Catches: a later read-only page leaves earlier cards with stale legal moves.
+it("read_only_page_removes_moves_from_previously_loaded_cards", async () => {
+	const source = provider({
+		boards: [board],
+		board: async (_id, query) =>
+			query.cursor
+				? { ...page("2", null), board: { ...board, writeDisabledReason: "Project write access denied" } }
+				: page("1", "page-2"),
+	});
+	render(() => <TasksBoardView provider={source} onOpen={() => {}} />);
+	fireEvent.click(await screen.findByRole("button", { name: "More in To do" }));
+	await screen.findByText("Project write access denied");
+	fireEvent.click(screen.getByRole("button", { name: "Move TASK-1" }));
+	expect(screen.getByRole("menuitem", { name: "Done" })).toBeDisabled();
+	expect(screen.getByRole("article", { name: "TASK-2" })).toBeInTheDocument();
+});

@@ -161,6 +161,11 @@ export default function MobileApp() {
 		return sessions().some((s) => s.session_id === id);
 	});
 
+	const openAiChat = () => {
+		setSessionFilesOpen(false);
+		setSelectedSessionId(null);
+		setActiveTab("chat");
+	};
 	function navigateToSession(id: string) {
 		markSeen(id);
 		setSelectedSessionId(id);
@@ -232,10 +237,17 @@ export default function MobileApp() {
 									<Match when={activeTab() === "files"}>
 										<Show
 											when={chatFileLink()}
-											fallback={<FilesScreen sessions={sessions()} recoveryRevision={recoveryRevision()} />}
+											fallback={
+												<FilesScreen
+													sessions={sessions()}
+													recoveryRevision={recoveryRevision()}
+													onOpenAiChat={aiChatAvailable() ? openAiChat : undefined}
+												/>
+											}
 										>
 											{(link) => (
 												<FilesScreen
+													onOpenAiChat={aiChatAvailable() ? openAiChat : undefined}
 													sessions={sessions()}
 													recoveryRevision={recoveryRevision()}
 													initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
@@ -295,6 +307,7 @@ export default function MobileApp() {
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							onOpenAiChat={aiChatAvailable() ? openAiChat : undefined}
 							sessions={sessions()}
 							recoveryRevision={recoveryRevision()}
 							initialSessionId={lastKnownSession()!.session_id}

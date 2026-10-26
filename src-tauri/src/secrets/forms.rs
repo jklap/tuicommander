@@ -108,13 +108,21 @@ pub(super) async fn ask_with_sink(
             .clone()
             .ok_or("Secret entry requires a desktop host")?;
         let form = state.secrets.open_with_sink(form, sink)?;
-        // Browser entry uses the existing server origin and its auth/TLS policy.
-        // Boss accepts app-origin service-worker exposure and plaintext access.
+        // Account vault entry remains native-only. Generic forms use the same
+        // address/TLS policy as RemoteQrDialog, without its session token.
+        let mobile = phone_entry_address(state);
         if let Some(pending) = state.secrets.inner.lock().pending.as_mut()
             && pending.sink.is_none()
         {
-            pending.form.mobile_url =
-                Some(format!("/index.html#/secret-form?nonce={}", form.nonce));
+            match mobile {
+                Ok(base) => {
+                    pending.form.mobile_url = Some(format!(
+                        "{base}index.html#/secret-form?nonce={}",
+                        form.nonce
+                    ))
+                }
+                Err(reason) => pending.form.mobile_unavailable = Some(reason.into()),
+            }
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         if let Some(pending) = state.secrets.inner.lock().pending.as_mut() {
@@ -219,4 +227,28 @@ fn close_window(state: &Arc<AppState>, id: &str) {
     }
     #[cfg(not(feature = "desktop"))]
     let _ = (state, id);
+}
+
+fn phone_entry_address(state: &AppState) -> Result<String, &'static str> {
+    if !state.config.read().services.server.enabled {
+        return Err(
+            "Remote Access is off. Enable it in Settings → Remote Access, then request a new form.",
+        );
+    }
+    let ip = crate::get_local_ips_impl(state).into_iter().next()
+        .ok_or("No remote address is available. Connect to a network and check Settings → Remote Access, then request a new form.")?;
+    Ok(crate::remote_access_base_url(state, &ip.ip))
+}
+
+#[cfg(test)]
+mod tests {
+    // Catches: offering an unusable phone address while Remote Access is off.
+    #[test]
+    fn phone_entry_disabled_has_setup_guidance() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().services.server.enabled = false;
+        let reason = super::phone_entry_address(&state).unwrap_err();
+        assert!(reason.contains("Remote Access is off"));
+        assert!(reason.contains("Settings → Remote Access"));
+    }
 }

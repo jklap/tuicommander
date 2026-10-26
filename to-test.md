@@ -2,6 +2,27 @@
 
 - [ ] Coordinator pixel review: inspect the native before/after editor captures and the 1400/700/390px browser state captures in `~/Gits/.tmp/results/2356-review/`. Confirm the picker, wrapping title/source, disabled-Save reason, full-width New story, compact grouped plan actions, and archived toggle placement. The 80 focused component/i18n tests and TypeScript check pass. Screenshots and measured geometry are available; this text-only peer did not decode PNG content.
 
+## Secret form phone link (2378-c2eb) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend, request a generic secret form and expand **Open on a trusted browser or phone**. Verify the full selectable URL, Copy URL, browser link and matching QR. Remote Access off must show Settings guidance, and native-only account forms must not offer phone entry. Rust does not hot-reload; this peer did not restart the daily app.
+
+## Private mdkb staging (2367-6c08) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend, the next elevated mdkb installation uses a fresh private staging directory and removes it on success or failure. The rb planted-path RED and 12 targeted GREEN tests verify staging without a privileged install. This peer did not restart the daily app or invoke elevation; Rust changes do not hot-reload.
+
+## Stable MCP instructions (2362-95a9) — Rust restart required
+
+- [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
+## Plans and Stories selection (2354-a8a3)
+
+- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
+
+## Collapsed Compose queue pill (2339-056c)
+
+- [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
+- [x] Coordinator-authorized browser fixture at `1200×844` and `390×844`: captured only the real Compose controls at counts 0 and 3, driven through `applySessionStateEvent` and the terminal store. Pixel comparison against the approved B mock has mean channel error below 0.5/255 for all four captures. Evidence and comparison metrics: `~/Gits/.tmp/tuic-2339-browser/`.
+- [x] At 390px, activating Compose opens the editor and **3 queued**, not the queue list. Activating **3 queued** then exposes all three command/notice/initial-prompt entries. The compact command/message title itself is hover/focus-only; touch users reach the detailed list through these existing controls. Verified with browser button clicks, not physical touchscreen input. No gesture was added.
+- [x] The real Terminal boundary regression fails on baseline `8039973d39085a255e0641db17f9cf12a4958ba6` because collapsed Compose has no rendered `1`; the current Terminal and ComposeToggle files pass all 6 tests. The disposable baseline export, verification Vite server and named browser sessions were removed or stopped.
 ## Headless issue intake (2323-c294) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. Include a missing allowlist entry alongside a valid one: the valid repository must continue polling and each missing entry must be logged. On an overlapping repository, assigned/created/mentioned/disabled client views must retain their filter while intake still receives all issues. This peer did not restart the daily app; Rust changes do not hot-reload.
@@ -42,7 +63,7 @@
 
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required
 
-- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. Windows cache counters, cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
+- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
 
 ## Windows Clippy platform gates (2306-0b3b)
 
@@ -2983,6 +3004,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Story 1996-3cff: after a manual Rust rebuild/restart, confirm one Italian spoken reply uses the selected voice without an extra system voice. Isolated TTS evidence does not establish historical double-voice attribution. Do not restart the daily instance until ready to lose its current session.
 - [ ] After the next planned backend rebuild/restart, request and submit a dummy secret, then remove it from the same MCP session and after a bridge reconnect: both removals return `removed` (including an already absent name). Old binaries return `missing` after successful deletion; MCP reconnect alone does not clear backend-owned values. Native automation was unavailable for story 1520-46b1 (`osascript` assistive access denied).
 
+- [ ] #2338-0cfd: After a Rust rebuild/restart, verify GitHub login requests `repo project`,
+  Settings offers re-login for an old `read:project` token, and read-only Projects
+  retain cards without allowing moves while issue/PR actions still work. Live move
+  and read-back need an explicitly authorized scratch project; do not use a real board.
 - [ ] After a manual Rust rebuild/restart, verify GitHub Status keeps the monitored-repository count after query-cache expiry, removes deleted repository paths, and resets it when monitoring stops (#2336-da0a). This change does not hot-reload.
 - [x] #2336-da0a: On 2026-10-25, isolated `agent-test-2336` Tasks loaded 140 public GitHub items through the production provider and plugin HTTP transport with no account credential. An instance-only CONNECT proxy rejection settled with an error and retained stale results. Restoring the proxy and selecting Refresh loaded 140 items again and removed the stale/error indicators. A separate mute-proxy check settled after 30.004 seconds with a timeout and stale results. Native-window screenshots and timestamped DOM/provider evidence are in `~/Gits/.tmp/results/tuic-2336-{baseline,drop,recovery,mute}*`. This did not reproduce the historical loading hang or verify authenticated native GitHub polling.
 - [ ] [HUMAN] #2336-da0a: Log in through the isolated instance's GitHub device flow, configure an unreachable remote, and verify authenticated local sidebar PR/issue data and recovery after an instance-only network interruption. No daily credentials were read or copied; the daily app was not restarted.
@@ -2990,3 +3015,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [x] Rebuilt `tuic-remote`: `python3 scripts/test-headless-github.py /absolute/path/to/tuic-remote` verifies isolated Unix-socket GitHub monitoring (#2345-49f0). _(verified: empty paths and a scratch no-remote repository start, return status/data, stop and restart; no authenticated GitHub fetch is claimed. The running desktop backend needs a manual restart to load Rust changes.)_
 
 - [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
+
+- [ ] External PR integration (#129, #132, #139, #140, #144, #146): after landing and a manual Rust rebuild/restart when ready, check enterprise usage fallback, tunnel stop cleanup, non-origin default-branch safe removal, UI-requested merges with `merge.ff=only`, and named-instance IPC socket diagnostics. Targeted Linux regression evidence is recorded in the `tuic-prfix` result report; the daily backend was not restarted and does not hot-reload these changes.
+- [ ] After a manual backend restart, check automation profile repair: invalid saved profiles appear in the bell at desktop startup and after a profile rename/delete; repeated identical failures show a count and Fix opens the current profile picker. Rust changes do not hot-reload (#2360-f7ca).
+
+- [ ] Markdown selection to AI Chat (#2361-8099): on a real iPhone, adjust the native selection handles inside a table cell, tap Send to AI Chat, and confirm the draft is focused without sending. Browser-mode automated selection and source-row checks cover the shared path.
+- [ ] After the next backend rebuild/restart, check that MCP automations discovery includes `profiles: saved profile names` (#2370-bf4a).

@@ -6,7 +6,13 @@ import { getRepoConnection } from "../../transportRuntime";
 const Dialog = lazy(() => import("./AutomationsDialog").then((module) => ({ default: module.AutomationsDialog })));
 function OwnedDialog() {
 	const connectionId = getRepoConnection(repositoriesStore.state.activeRepoPath);
-	return <Dialog connectionId={connectionId} onClose={automationsUi.close} />;
+	// Profile notices are produced by this machine's startup validation, never
+	// by the repository that happens to be focused when the user clicks Fix.
+	return (
+		<Show when={{ connectionId: automationsUi.requestedDefinition() ? undefined : connectionId }} keyed>
+			{(owner) => <Dialog connectionId={owner.connectionId} onClose={automationsUi.close} />}
+		</Show>
+	);
 }
 export function AutomationsHost() {
 	return (

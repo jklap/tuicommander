@@ -898,6 +898,11 @@ machine; HTTP clients cannot read or write the host pasteboard.
 
 ### Automations
 
+The `profiles` action lists saved profile names on the addressed machine. The
+`list_runs` action accepts `group_failures: true` to page grouped identical
+failures, with `failure_count` on the newest representative snapshot. Without
+that flag, individual history remains unchanged.
+
 `automation_action(input: serde_json::Value) -> Result<serde_json::Value, String>`
 is an async command that shares parsing, definition edits, history, schedule
 previews/presets, UTC run summaries and owner-guarded Run Now with

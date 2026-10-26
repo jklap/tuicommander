@@ -174,6 +174,9 @@ pub struct WorkItemBoardColumn {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkItemBoard {
     pub id: String,
+    /// Read-only boards keep their cards while explaining why writes are unavailable.
+    #[serde(default)]
+    pub write_disabled_reason: Option<String>,
     pub name: String,
     pub field_id: String,
     pub columns: Vec<WorkItemBoardColumn>,

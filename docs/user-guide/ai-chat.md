@@ -138,8 +138,10 @@ wakes an idle ego with a short notice.
 
 Select text in user messages, answers, code blocks, and tool output and use
 `Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
-keyboard focus. It copies the raw message text. Code blocks have their own
-Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
+keyboard focus. It copies the whole raw message, including fenced code, through
+the same clipboard adapter as the terminal. Answers have no separate code-block
+Copy button. The compact Copy and **Fork from here** row stays below its answer
+and does not overlap the next message. Web links open in the
 system browser; file links and plain source paths are resolved by the backend.
 Files open in TUICommander's viewer or editor, while directories open in the
 file browser, including when AI Chat is detached.
@@ -338,3 +340,9 @@ captured turn; a queued Stop does not interrupt unrelated work.
 ## Settings MCP startup boundary
 
 The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).
+
+### Discuss a Markdown selection
+
+With a conversation open in AI Chat, select text in a Markdown file and choose **Send to AI Chat** beside the comment action. TUIC appends the file path, original source line range and quoted selected text to that conversation’s draft, then focuses the composer. It preserves your existing draft and attachments and does not send a message. This action is also available in the mobile Files Markdown view after you open a chat conversation.
+
+Selections can include inline links and adjacent punctuation. Link destinations and reference identifiers do not count as visible occurrences when locating the source lines.

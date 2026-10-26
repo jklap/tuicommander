@@ -154,8 +154,11 @@ pub(crate) mod plugin_pty;
 pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
+// The elevated-copy staging serves the desktop-only mdkb installer.
 #[cfg(feature = "desktop")]
 mod press_and_hold;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) mod private_scratch;
 pub(crate) use tuic_core::process_env;
 pub(crate) mod progress;
 pub(crate) mod prompt;
@@ -1232,22 +1235,30 @@ fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
-    let port = state.config.read().services.server.port;
     let token = state.session_token.read().clone();
+    let (scheme, host, port) = remote_access_address(&state, &ip);
+    build_connect_url(scheme, &host, port, &token)
+}
 
-    // If TLS is active and the IP is a Tailscale address, use https + FQDN
+/// Shared address policy for pairing and private phone-entry links.
+pub(crate) fn remote_access_base_url(state: &AppState, ip: &str) -> String {
+    let (scheme, host, port) = remote_access_address(state, ip);
+    build_remote_base_url(scheme, &host, port)
+}
+
+fn remote_access_address(state: &AppState, ip: &str) -> (&'static str, String, u16) {
+    let port = state.config.read().services.server.port;
     let ts = state.tailscale_state.read().clone();
     if let tailscale::TailscaleState::Running {
         ref fqdn,
         https_enabled: true,
     } = ts
         && state.tls_listener.read().strong_count() > 0
-        && crate::mcp_http::auth::is_tailscale_ip(&ip)
+        && crate::mcp_http::auth::is_tailscale_ip(ip)
     {
-        return build_connect_url("https", fqdn, port, &token);
+        return ("https", fqdn.clone(), port);
     }
-
-    build_connect_url("http", &ip, port, &token)
+    ("http", ip.to_string(), port)
 }
 
 /// Get Tailscale daemon status for the frontend Settings panel.
@@ -2748,10 +2759,18 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
                     }
-                    // Kill all SSH tunnel processes so ports are freed for restart
+                    // Kill all SSH tunnel processes so ports are freed for restart.
+                    // Waited (bounded by GRACEFUL_SHUTDOWN_TIMEOUT), not
+                    // fire-and-forget: shutdown_all() only sends each
+                    // supervisor a signal and returns immediately, and since
+                    // this process is about to exit, nothing would otherwise
+                    // be left running long enough to confirm the SSH child
+                    // processes are actually gone before we do.
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                         state.secrets.clear();
-                        state.tunnel_manager.shutdown_all();
+                        tauri::async_runtime::block_on(
+                            state.tunnel_manager.shutdown_all_and_wait(),
+                        );
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
                         }
@@ -2772,12 +2791,19 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
 /// Build a connect URL for QR-code authentication.
 /// Brackets IPv6 addresses for valid URL syntax.
 fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String {
+    format!(
+        "{}?token={token}",
+        build_remote_base_url(scheme, host, port)
+    )
+}
+
+fn build_remote_base_url(scheme: &str, host: &str, port: u16) -> String {
     let host = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
     } else {
         host.to_string()
     };
-    format!("{scheme}://{host}:{port}/?token={token}")
+    format!("{scheme}://{host}:{port}/")
 }
 
 /// Spawn background tasks shared by both desktop and headless modes.
@@ -3947,6 +3973,39 @@ mod tests {
             "the runtime owner must remain parked after start_server returns"
         );
         owner.abort();
+    }
+
+    // Catches: secret-entry links choosing a different scheme/host from pairing,
+    // exposing the pairing token, or failing to bracket IPv6.
+    #[test]
+    fn phone_and_pairing_share_remote_address_policy() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().services.server.port = 9876;
+        *state.tailscale_state.write() = tailscale::TailscaleState::Running {
+            fqdn: "host.tail.example".into(),
+            https_enabled: true,
+        };
+        let tls = std::sync::Arc::new(());
+        *state.tls_listener.write() = std::sync::Arc::downgrade(&tls);
+        for (ip, expected) in [
+            ("100.64.1.2", "https://host.tail.example:9876/"),
+            ("192.168.1.42", "http://192.168.1.42:9876/"),
+            ("fd00::1", "http://[fd00::1]:9876/"),
+        ] {
+            let base = remote_access_base_url(&state, ip);
+            assert_eq!(base, expected);
+            let (scheme, host, port) = remote_access_address(&state, ip);
+            assert_eq!(
+                build_connect_url(scheme, &host, port, "pairing-token"),
+                format!("{base}?token=pairing-token")
+            );
+            assert!(!base.contains("token"));
+        }
+        drop(tls);
+        assert_eq!(
+            remote_access_base_url(&state, "100.64.1.2"),
+            "http://100.64.1.2:9876/"
+        );
     }
 
     #[test]

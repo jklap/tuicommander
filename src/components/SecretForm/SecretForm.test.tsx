@@ -1,5 +1,9 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import QRCode from "qrcode";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,AA==") } }));
+
 import { SecretForm } from "./SecretForm";
 
 describe("SecretForm", () => {
@@ -102,4 +106,84 @@ describe("SecretForm", () => {
 			template: argv,
 		});
 	});
+});
+
+// Catches: the private form displaying a bare path with no usable phone actions.
+it("shares the same absolute nonce URL through link copy and QR", async () => {
+	const url = "https://host.tail.example:9876/index.html#/secret-form?nonce=" + "a".repeat(64);
+	const writeText = vi.fn().mockResolvedValue(undefined);
+	Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+	const view = render(() => (
+		<SecretForm
+			form={{ id: "phone", nonce: "a".repeat(64), reason: "Login", fields: [], argv: null, mobile_url: url }}
+			submit={async () => {}}
+		/>
+	));
+	const link = view.getByRole("link", { name: url, hidden: true });
+	expect(link.getAttribute("href")).toBe(url);
+	expect(link.getAttribute("referrerpolicy")).toBe("no-referrer");
+	fireEvent.click(view.getByRole("button", { name: "Copy form URL", hidden: true }));
+	await waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(url));
+	await waitFor(() =>
+		expect(view.getByAltText("QR code for private secret entry").getAttribute("src")).toBe(
+			"data:image/png;base64,AA==",
+		),
+	);
+	// Catches: rendering the sharp 320px source at full size and overflowing the private window.
+	const qr = view.getByAltText("QR code for private secret entry") as HTMLImageElement;
+	expect(qr.width).toBe(160);
+	expect(qr.height).toBe(160);
+	expect(QRCode.toDataURL).toHaveBeenCalledWith(url, expect.objectContaining({ width: 320 }));
+	fireEvent.click(view.getByRole("button", { name: "Decline" }));
+	expect(view.queryByRole("link", { hidden: true })).toBeNull();
+});
+
+// Catches: disabled remote access still advertising a bare or unusable phone link.
+it("explains disabled remote access without exposing a link or QR", () => {
+	const reason = "Remote Access is off. Enable it in Settings → Remote Access, then request a new form.";
+	const view = render(() => (
+		<SecretForm
+			form={{ id: "off", nonce: "b".repeat(64), reason: "Login", fields: [], argv: null, mobile_unavailable: reason }}
+			submit={async () => {}}
+		/>
+	));
+	expect(view.getByText(reason)).toBeTruthy();
+	expect(view.queryByRole("link", { hidden: true })).toBeNull();
+	expect(view.queryByRole("button", { name: "Copy form URL", hidden: true })).toBeNull();
+	expect(view.queryByAltText("QR code for private secret entry")).toBeNull();
+});
+
+// Catches: a native link navigating the private WebView instead of opening the browser.
+it("routes native link and copy actions to the private window adapters", async () => {
+	const url = "http://[fd00::1]:9876/index.html#/secret-form?nonce=" + "c".repeat(64);
+	const openUrl = vi.fn().mockResolvedValue(undefined);
+	const copyUrl = vi.fn().mockRejectedValue(new Error("clipboard unavailable"));
+	const view = render(() => (
+		<SecretForm
+			form={{ id: "native", nonce: "c".repeat(64), reason: "Login", fields: [], argv: null, mobile_url: url }}
+			submit={async () => {}}
+			openUrl={openUrl}
+			copyUrl={copyUrl}
+		/>
+	));
+	fireEvent.click(view.getByRole("link", { name: url, hidden: true }));
+	expect(openUrl).toHaveBeenCalledExactlyOnceWith(url);
+	fireEvent.click(view.getByRole("button", { name: "Copy form URL", hidden: true }));
+	await waitFor(() => expect(view.getByText("Copy failed. Select and copy the URL manually.")).toBeTruthy());
+	expect(copyUrl).toHaveBeenCalledExactlyOnceWith(url);
+});
+
+// Catches: QR renderer failure taking down entry or hiding the usable fallback URL.
+it("retains the link and copy action when QR generation fails", async () => {
+	vi.mocked(QRCode.toDataURL).mockRejectedValueOnce(new Error("QR unavailable"));
+	const url = "https://host.example/index.html#/secret-form?nonce=" + "d".repeat(64);
+	const view = render(() => (
+		<SecretForm
+			form={{ id: "qr-error", nonce: "d".repeat(64), reason: "Login", fields: [], argv: null, mobile_url: url }}
+			submit={async () => {}}
+		/>
+	));
+	await waitFor(() => expect(view.getByText("QR unavailable. Open or copy the URL instead.")).toBeTruthy());
+	expect(view.getByRole("link", { name: url, hidden: true })).toBeTruthy();
+	expect(view.getByRole("button", { name: "Copy form URL", hidden: true })).toBeTruthy();
 });

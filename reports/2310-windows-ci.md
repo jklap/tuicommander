@@ -1,5 +1,218 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Recorded directory-event repair (2026-10-26, tuic-2310)
+
+The latest completed CI run inspected for this follow-up is `40331854991`,
+commit `e0387dcea460eb362b7fb4739c2e82dc70095ab3`, Windows job `121603040336`.
+The run metadata and complete failed-job output are saved under
+`~/Gits/.tmp/results/tuic-2310-latest-{run.json,failed.log}`. Retrieval used
+`gh run view 40331854991 --log-failed`; no Windows VM was used.
+
+The Windows test summary is 8424 run, 8398 passed, 25 failed and one timed out.
+This is not Windows GREEN. Of the original 24 owners, rows 6, 9, 17 and 23
+still fail; the other 20 eventually pass. Row 15 needs a qualification: it
+passes on retry after a new first-attempt archive-proof error (lines
+15546–15547), not the original invalid Git destination. That retry is not proof
+that this new intermittent symptom is repaired.
+
+| Original rows | Latest native result and retained classification |
+|---|---|
+| 1–5, 7, 10, 19–22, 24 | PASS; fixture causes remain as classified below. |
+| 8, 11, 13–16 | Eventually PASS; the earlier product path-boundary fixes remain in place. Row 15 has the additional retry qualification above. |
+| 12 | PASS in 0.513s; grouped Windows fixture command is still valid. |
+| 6 | All three attempts fail. Direct and shell-mediated Git still exit `0xC0000005` with empty streams. Fault ownership remains unknown. |
+| 9 | All three attempts fail: year/month `Modify(Any)` events trigger exactly 130 extra metadata reads. Product invalidation defect. |
+| 17 | All three attempts fail: project `Modify(Any)` clears the seen-file set and stats both transcripts, instead of only the changed transcript. Product invalidation defect. |
+| 18 | PASS in 0.043s in this run. Earlier native failures and the deterministic replay below still prove the same product invalidation defect. |
+| 23 | Repeat listings take 14.348338s and 13.7463788s on the first two attempts. The third fails during setup because shared `gitconfig` access is denied (line 18068). The latency cause remains open; this later setup error is not latency evidence. |
+
+### Repair and regression evidence
+
+Both production watcher callbacks now feed a named event-recording method.
+The existing warm-cache tests replay the exact `Modify(Any)` directory event
+shapes recorded by native CI, rebased onto real temporary fixture directories.
+They still assert the original observable session ID/token totals and the exact
+metadata-read counts. No assertion or deadline was relaxed.
+
+For RED, the affected source files came from local main
+`977f9364dfc48dfef19dfa986c95a1eaee4ff617`, plus only mechanical callback
+extraction and recorded-event replay. The build ran in the assigned worktree,
+not the protected main checkout; no branch was switched. The assigned branch's
+original source files were restored with the same test patch afterward, so
+unrelated main changes are not included in the commits.
+
+- Native macOS, build-slot + mbx + `scripts/with-test-tmp.sh cargo nextest run
+  --manifest-path src-tauri/Cargo.toml --lib -E
+  'test(codex_warm_discovery_does_not_restat_historical_rollouts) |
+  test(session_stats_warm_refresh_does_not_stat_unchanged_history)'`:
+  **two failed**, summary 0.343s. Codex: 130 extra reads versus zero. Usage:
+  two total reads versus one. Log: `tuic-2310-red-mac.log` in the results folder.
+- rb initially exited 78 for the Mac-only source precondition. After that native
+  RED, the same filter through `RB_FORCE=1 build-slot.sh --remote` also reports
+  **two failed**, summary 0.066s, build 4m30s. Log:
+  `tuic-2310-red-rb-forced.log`. An earlier incorrect `build-slot --force`
+  spelling exited 2 before any remote work; `RB_FORCE=1` is the wrapper's API.
+- The test-only/extraction commit is `5fec97831`. Post-fix GREEN is reserved
+  for batch integration under the managed-story rule; it is not claimed here.
+
+The fix shares one narrow rule in `fs::is_directory_metadata_event`: ignore
+`Modify(Any)` only when its path is still a directory. File events, absent
+paths, create/remove/rename events, and watcher overflow/rescan still follow
+existing invalidation and recovery. This prevents redundant history scans and
+avoids discarding/recreating the Codex index for directory metadata alone.
+The rule is common to both caches so it cannot drift between them.
+
+Adjacent coverage already exists: Codex file replacement/deletion, day-directory
+replacement and expiry; Usage growth/truncation/deletion, dirty-file-only
+refresh and periodic reconciliation. Those tests require batch GREEN alongside
+the two replay tests. Runtime caps remain 4096 pending Codex paths, 16384 Usage
+paths and 30-minute Usage reconciliation. No new state, timer or quota is added.
+
+Regression verdict: the warm-cache contract was introduced with Codex indexing
+in `8d16c1b00d` and Usage dirty-file tracking in `4819a61c58`; neither classified
+directory `Modify(Any)` separately. `19c99bbd98` additionally re-created the
+Codex index on these ancestor events, explaining the second full scan. This
+contract did not work for the recorded Windows event shape; it is not evidence
+of a formerly GREEN Windows path regressing in the current task.
+
+### Remaining acceptance gaps
+
+Row 6 still cannot be honestly classified product versus fixture/runtime
+without identifying the native Git fault or recording a decisive environment
+comparison. Row 23 still needs internal per-checkout timings beyond the existing
+queue/inspection envelope; do not raise its response bound. The latest third
+attempt's shared-Git-config error is separately addressed on current main by
+`b854c18cd5` (per-process stable configuration), but that does not establish the
+cause or repair of the original latency or Git access violation.
+
+The first two original acceptance criteria therefore remain open, as does
+Windows CI GREEN pending Boss's next authorized push. No push, VM build,
+desktop launch or daily-app restart occurred. Rust changes require an authorized
+rebuild/restart to affect the daily application; `to-test.md` retains that check.
+
+## Native lab build attempt (2026-10-26, ci-win-f)
+
+The coordinator supplied a verified host-key file under `~/Gits/.tmp`.
+Its ED25519 fingerprint matched the authorized value. SSH then succeeded with
+strict checking. The lab reports Git `2.55.0.windows.5`, Rust/Cargo `1.97.0`,
+Nextest `0.9.140`, and Visual Studio 2022 Build Tools. Prerequisite evidence:
+`~/Gits/.tmp/results/ci-win-f-prerequisites.log`.
+
+The worktree HEAD `4cd7b83d11d669b55913c08e44f0302405fca598` was transferred
+with a Git bundle, not pushed, and checked out on the lab machine under
+`C:\Users\stefano.straus\Gits\.tmp\ci-win-f\repo`. The pinned plugin
+sources were transferred separately. Frontend and sidecar stubs match CI.
+Process-local Git configuration disables CRLF conversion without changing the
+machine's Git configuration. No installed application was replaced.
+
+The five-row filter selected the original owner tests in packages
+`tuicommander` and `tuic-git`, with default desktop features, `--lib`,
+`--no-fail-fast`, and one test worker. It ran through `with-test-tmp.sh`.
+Test temporary paths were scoped to the task's remote directory. No test
+binary started:
+
+1. Initial dependency resolution failed before compilation. Cargo's Windows
+   Schannel transport reports `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)` for
+   the crates.io sparse index. Evidence: `ci-win-f-native.log` in the results
+   directory. TLS validation was not disabled.
+2. All 1006 registry packages in the lockfile were present in the Mac's
+   existing Cargo cache. Their archives and corresponding sparse-index entries
+   were copied to an isolated task-local Cargo home on Windows. No Cargo
+   configuration or credential file was copied. Offline resolution succeeded,
+   and the build reached the root library test compilation, which failed with
+   `rustc-LLVM ERROR: out of memory` / `Allocation failed`, native status
+   `0xc0000409`. Evidence: `ci-win-f-offline.log`.
+3. A measured resource query reports `TotalVisibleMemorySize=6290484` KiB
+   and `TotalVirtualMemorySize=10304116` KiB. A retry using the same artifacts
+   and `CARGO_BUILD_JOBS=1` failed at the same root library test compilation
+   with the same out-of-memory error. Evidence: `ci-win-f-memory.log` and
+   `ci-win-f-serial.log`. No profile, feature, compiler flag, target directory,
+   assertion or deadline was changed to evade that failure.
+4. A narrower row-6-only attempt selected package `tuic-git` with the same
+   target directory. Its dependency graph required additional compilation;
+   it failed linking `schemars_derive` with `LNK1318: Unexpected PDB error;
+   LIMIT (12)`. Evidence: `ci-win-f-gitonly.log`. The owner test did not run.
+   This is a build-prerequisite failure, not row 6's Git access violation.
+   Its internal cause is not established.
+
+A subsequent resource/cleanup prerequisite connection failed authentication:
+`Permission denied (publickey,password,keyboard-interactive)`; evidence:
+`ci-win-f-resources.log`. No further credential attempts were made. The remote
+checkout, isolated Cargo home, build artifacts and transfer files remain under
+`C:\Users\stefano.straus\Gits\.tmp\ci-win-f`; authentication must be restored
+to remove that task-owned directory. Every foreground remote build command
+returned before this failure; no persistent server was started.
+
+Rows 6, 9, 17, 18 and 23 retain their previous classifications. None of their
+owner tests executed on the lab machine, so no Windows RED, new fault-module
+attribution, watcher repair, performance diagnosis or GREEN result is claimed.
+Continuation requires restored SSH authentication and sufficient resources to
+compile the root test binary, or an authorized matching native test artifact.
+The linker failure also remains an explicit prerequisite to resolve. The
+initial host-key blocker below is historical and has been resolved.
+
+## Native lab prerequisite follow-up (2026-10-26, ci-win-f)
+
+Merged local `main` into the assigned worktree as authorized; resulting HEAD
+before this report update: `a6e27481a1cbe2ab88267e7dff8aadd1cf635eb5`.
+The bounded background port check succeeded on its first attempt. Evidence:
+`~/Gits/.tmp/results/ci-win-f-port-wait.log`.
+
+The authenticated SSH prerequisite then failed before any remote command ran:
+
+```text
+No ED25519 host key is known for uvmwindowsag2.dmz.lab.local and you have requested strict checking.
+Host key verification failed.
+```
+
+SSH exited 255 with `StrictHostKeyChecking=yes`, a 12-second connection
+limit and one connection attempt. Credentials were loaded from the authorized
+environment file into process environment only; no credential was printed or
+written. Existing host verification was not disabled or bypassed. The next
+prerequisite is an operator-verified host key for this machine and authority to
+use a known-hosts file under `~/Gits`.
+
+No bundle, checkout, build, test, Event Log query or environment comparison ran
+on Windows. No remote files or processes were created, so no remote cleanup was
+needed. Rows 6, 9, 17, 18 and 23 retain the classifications and native evidence
+gaps in the preceding report: row 6 ownership remains unknown; rows 9/17/18
+still need native RED and repair; row 23 still needs native internal profiling.
+There is no new product diagnosis or Windows RED/GREEN claim.
+
+## Native lab prerequisite follow-up (2026-10-25, ci-win-e)
+
+The authorized Windows lab connection failed before any remote command ran.
+The launcher loaded `WINDOWS_*` credentials into its process environment only,
+used password-assisted SSH with existing host-key verification, one connection
+attempt and a 12-second connection deadline. SSH exited 255:
+
+```text
+ssh: connect to host uvmwindowsag2.dmz.lab.local port 22: Operation timed out
+```
+
+Evidence: `~/Gits/.tmp/results/ci-win-e-connect.log`. No credentials were
+written to the log. No checkout, test, Event Log query or environment comparison
+ran on Windows. This repeats the connection prerequisite failure recorded in
+the earlier native lab attempt; it does not reproduce any test failure.
+
+| Row | Classification retained | Missing native evidence |
+|---|---|---|
+| 6 | U: intermittent native Git subprocess fault; owner unknown | Owner-test reproduction on main, faulting module from Event Log/WER, and controlled comparison of successful `git_cmd` versus failing hook environment. |
+| 9 | P: over-broad date-directory event invalidation, from existing CI evidence | Requested lab reproduction and Windows RED for a repair. |
+| 17 | P: over-broad project-directory event invalidation, from existing CI evidence | Requested lab reproduction and Windows RED for a repair. |
+| 18 | P: same project-directory invalidation as row 17 | Requested lab reproduction and Windows RED for a repair. |
+| 23 | P: response-time contract violated; internal cause open | Requested lab reproduction and per-checkout internal profiling; first-attempt 120-second timeout remains unexplained. |
+
+No production code, tests, assertions or deadlines changed. No speculative fix,
+Rust build, GREEN claim, push or merge was made. A reachable authorized Windows
+machine with this task's checkout/toolchain is required to continue.
+`story-close.sh --check` refused criterion 1: each of the 24 panics must be
+classified as product or fixture with code/log reasons. The classification
+criterion remains unchecked; the connection failure proves no new criterion.
+
+The repository instruction-link check passed for both instruction pairs.
+
+
 ## Scope and evidence
 
 Run 40134469538, commit `ff47f4a6788d675734b539ac331eae90a3ec1a39`, Windows-x64. Sources: `windows-failures.md`, `windows.log`, and `windows-annotations.json` under `~/Gits/.tmp/results/ci-ff47/`; current source was inspected against the failing commit. No native Windows runtime is available. Classification is not a claim that Windows GREEN has been observed.

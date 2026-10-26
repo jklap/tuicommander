@@ -139,3 +139,11 @@
   outline: 1px solid var(--search-match-border);
   border-radius: 2px;
 }
+
+.selectionActions {
+  position: fixed;
+  z-index: 9000;
+  display: flex;
+  gap: 4px;
+  max-width: calc(100vw - 8px);
+}

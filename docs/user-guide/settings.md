@@ -2,6 +2,8 @@
 
 Repository Settings separates identity, inherited worktree overrides, Design Mode, scripts, team sharing, and reset. Nullable controls retain their global-default choice. Reset clears override fields, including scripts, but retains repository identity and its Design Mode URL. Team exports never include scripts. The Dev Server URL and setup, run, and archive script fields have contextual help; hover or focus a help badge to read it, or click to keep it open.
 
+General places ego immediately after Local tools (the local tools card is desktop-only). MCP uses the shared Settings row typography and label/help spacing for capabilities and shows retained legacy denials as a warning.
+
 Agents Settings shows the selected machine in the header. Run configuration editors keep explicit Save and Cancel actions. Terminal-agent permissions and filesystem sandbox remain separate from AI Chat ACP settings; launch instructions still save on blur.
 
 Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts places its searchable actions in Shortcut groups, before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
@@ -237,6 +239,11 @@ repository and worktree defaults.
 | **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
 | **Repository Bindings** | Which account each workspace repo resolves to |
 
+Git & GitHub requests `repo project` during OAuth login. A connected account with
+known scopes that omit `project` shows **Log in again for Projects**. This renews
+consent without requiring logout first. Existing repository permissions do not
+change; external tokens and organization access must be updated separately.
+
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring. The `gh` CLI login is not used.
 
 ## AI
@@ -250,7 +257,7 @@ keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
 
-**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. **Turn all launch instructions off** suppresses the complete text, including additions. When mdkb is installed, a fixed "Code search" rule (search with MDKB first) follows the modules; it has no toggle and is absent without mdkb.
+**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Each module has a (?) control that explains its instructions and the agent behavior they enable. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. Changing a module refreshes the generated preview without detaching Settings or resetting the page scroll position. **Turn all launch instructions off** suppresses the complete text, including additions. When mdkb is installed, a fixed "Code search" rule (search with MDKB first) follows the modules; it has no toggle and is absent without mdkb.
 
 **Add instructions** and **Add instructions for <agent>** open empty user-addition fields, not copies of the generated text. TUIC appends global additions and then agent additions after enabled modules. Save on blur; clear a layer with **Clear global additions** or **Clear agent additions**. Empty adds nothing. `{VER}` becomes the TUIC version.
 

@@ -393,6 +393,96 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					</Show>
 				</SectionCard>
 			</Show>
+			<SectionCard
+				title={t("general.heading.ego", "ego")}
+				help={
+					<span id={SETTINGS_SECTION_EGO}>
+						<InfoBadge>
+							{t(
+								"general.hint.aiChatInfo",
+								"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
+							)}
+						</InfoBadge>
+					</span>
+				}
+			>
+				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
+				<Show
+					when={isTauri()}
+					fallback={
+						<SettingInput
+							settingId="app.ego_executable"
+							row
+							label={t("general.label.egoExecutable", "ego executable")}
+							value={settingsStore.state.egoExecutable}
+							onInput={(v) => settingsStore.setEgoExecutable(v)}
+							placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+							hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
+						/>
+					}
+				>
+					<SettingRow
+						label={t("general.label.egoExecutable", "ego executable")}
+						hint={
+							settingsStore.isAcpConfigured()
+								? t("general.hint.egoConfigured", "Configured at {path}", { path: settingsStore.state.egoExecutable })
+								: t(
+										"general.hint.egoExecutableEmpty",
+										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+									)
+						}
+					>
+						{() => (
+							<div>
+								<Button data-setting-id="app.ego_executable" class={s.testBtn} onClick={handleSelectEgo}>
+									{t("general.btn.selectEgo", "Select…")}
+								</Button>
+								<Show when={settingsStore.isAcpConfigured()}>
+									<Button
+										data-setting-id="app.ego_executable"
+										class={s.testBtn}
+										onClick={() => settingsStore.setEgoExecutable("")}
+									>
+										{t("general.btn.clearEgo", "Clear")}
+									</Button>
+								</Show>
+							</div>
+						)}
+					</SettingRow>
+				</Show>
+				<SettingInput
+					settingId="app.ego_profile"
+					row
+					label={t("general.label.egoProfile", "ego profile")}
+					value={settingsStore.state.egoProfile}
+					onInput={(name) => settingsStore.setEgoProfile(name)}
+					placeholder={t("general.placeholder.egoProfile", "coordinator")}
+					hint={t(
+						"general.hint.egoProfile",
+						"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
+					)}
+				/>
+				<SettingInput
+					settingId="app.ai_chat_workspace"
+					row
+					label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
+					value={workspaceDraft()}
+					onInput={(path) => {
+						setWorkspaceDraft(path);
+						if (settingsStore.setAiChatWorkspace(path)) setWorkspaceRefused(false);
+					}}
+					onBlur={() => setWorkspaceRefused(settingsStore.state.aiChatWorkspace !== workspaceDraft().trim())}
+					placeholder={homeDirectory()}
+					hint={
+						workspaceRefused()
+							? t("general.hint.aiChatWorkspaceRefused", "The AI Chat workspace must be an absolute path.")
+							: t(
+									"general.hint.aiChatWorkspace",
+									"Folder AI Chat runs in. Leave empty for the home directory of the machine running ego. A missing folder is created.",
+								)
+					}
+				/>
+			</SectionCard>
 			<Show when={props.onOpenAiChat}>
 				<SectionCard
 					title="AI chat defaults"
@@ -636,96 +726,6 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</ExpertSetting>
 			</SectionCard>
 
-			<SectionCard
-				title={t("general.heading.ego", "ego")}
-				help={
-					<span id={SETTINGS_SECTION_EGO}>
-						<InfoBadge>
-							{t(
-								"general.hint.aiChatInfo",
-								"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
-							)}
-						</InfoBadge>
-					</span>
-				}
-			>
-				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
-				<Show
-					when={isTauri()}
-					fallback={
-						<SettingInput
-							settingId="app.ego_executable"
-							row
-							label={t("general.label.egoExecutable", "ego executable")}
-							value={settingsStore.state.egoExecutable}
-							onInput={(v) => settingsStore.setEgoExecutable(v)}
-							placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
-							hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
-						/>
-					}
-				>
-					<SettingRow
-						label={t("general.label.egoExecutable", "ego executable")}
-						hint={
-							settingsStore.isAcpConfigured()
-								? t("general.hint.egoConfigured", "Configured at {path}", { path: settingsStore.state.egoExecutable })
-								: t(
-										"general.hint.egoExecutableEmpty",
-										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
-									)
-						}
-					>
-						{() => (
-							<div>
-								<Button data-setting-id="app.ego_executable" class={s.testBtn} onClick={handleSelectEgo}>
-									{t("general.btn.selectEgo", "Select…")}
-								</Button>
-								<Show when={settingsStore.isAcpConfigured()}>
-									<Button
-										data-setting-id="app.ego_executable"
-										class={s.testBtn}
-										onClick={() => settingsStore.setEgoExecutable("")}
-									>
-										{t("general.btn.clearEgo", "Clear")}
-									</Button>
-								</Show>
-							</div>
-						)}
-					</SettingRow>
-				</Show>
-				<SettingInput
-					settingId="app.ego_profile"
-					row
-					label={t("general.label.egoProfile", "ego profile")}
-					value={settingsStore.state.egoProfile}
-					onInput={(name) => settingsStore.setEgoProfile(name)}
-					placeholder={t("general.placeholder.egoProfile", "coordinator")}
-					hint={t(
-						"general.hint.egoProfile",
-						"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
-					)}
-				/>
-				<SettingInput
-					settingId="app.ai_chat_workspace"
-					row
-					label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
-					value={workspaceDraft()}
-					onInput={(path) => {
-						setWorkspaceDraft(path);
-						if (settingsStore.setAiChatWorkspace(path)) setWorkspaceRefused(false);
-					}}
-					onBlur={() => setWorkspaceRefused(settingsStore.state.aiChatWorkspace !== workspaceDraft().trim())}
-					placeholder={homeDirectory()}
-					hint={
-						workspaceRefused()
-							? t("general.hint.aiChatWorkspaceRefused", "The AI Chat workspace must be an absolute path.")
-							: t(
-									"general.hint.aiChatWorkspace",
-									"Folder AI Chat runs in. Leave empty for the home directory of the machine running ego. A missing folder is created.",
-								)
-					}
-				/>
-			</SectionCard>
 			<SectionCard title={t("developerTools.heading.ide", "IDE")}>
 				<SettingSelect
 					settingId="app.ide"

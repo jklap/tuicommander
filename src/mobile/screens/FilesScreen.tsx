@@ -1,6 +1,8 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { Button, Input, Select } from "../../components/ui";
 import { t } from "../../i18n";
+import { aiChatTabs } from "../../stores/aiChatTabs";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
@@ -9,6 +11,7 @@ import { isAbsolutePath, joinPath, pathStripPrefix } from "../../utils/pathUtils
 import { repoImageUrl } from "../../utils/repoImageUrl";
 import {
 	insertTweakBlockComment,
+	insertTweakComment,
 	parseTweakComments,
 	type TweakComment,
 	toggleCheckbox,
@@ -27,6 +30,7 @@ interface FileEntry {
 const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
 interface FilesScreenProps {
+	onOpenAiChat?: () => void;
 	sessions?: SessionInfo[];
 	initialSessionId?: string;
 	openerTuicSession?: string;
@@ -427,6 +431,25 @@ export function FilesScreen(props: FilesScreenProps) {
 	const toggleTask = (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) =>
 		void reviewWrite(() => toggleCheckbox(content(), sourceLine, mark, sourceCol));
 
+	// Event handlers read this value outside the render owner. Create its memo
+	// here, rather than letting a JSX conditional create computations per read.
+	const chatReference = createMemo(() => {
+		if (!props.onOpenAiChat || !aiChatTabs.active("global")) return undefined;
+		return {
+			source: content(),
+			path: joinPath(repo() ?? "", file() ?? ""),
+			insert: (reference: string) => {
+				const session = aiChatTabs.active("global");
+				if (!session) return;
+				aiChatDraft.insertReference(session, reference);
+				props.onOpenAiChat?.();
+			},
+		};
+	});
+
+	const saveInlineComment = (comment: TweakComment, occurrence: number) =>
+		reviewWrite(() => insertTweakComment(content(), comment, occurrence));
+
 	const saveBlockComment = (comment: TweakComment, range: { start: number; end: number }) =>
 		reviewWrite(() => insertTweakBlockComment(content(), comment, range));
 
@@ -646,6 +669,8 @@ export function FilesScreen(props: FilesScreenProps) {
 								<div class={styles.markdownView}>
 									<ReviewableMarkdown
 										content={content()}
+										onSaveInlineComment={saveInlineComment}
+										chatReference={chatReference()}
 										imageSrc={markdownImageSrc}
 										onCheckboxToggle={toggleTask}
 										onSaveBlockComment={saveBlockComment}

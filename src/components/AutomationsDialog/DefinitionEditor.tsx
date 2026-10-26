@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import type { AutomationsStore } from "../../stores/automations";
 import { repositoriesStore } from "../../stores/repositories";
@@ -9,8 +9,18 @@ import s from "./AutomationsDialog.module.css";
 import { ScheduleFields } from "./ScheduleFields";
 import { TemplatePicker } from "./TemplatePicker";
 
-export function DefinitionEditor(props: { store: AutomationsStore }) {
+export function DefinitionEditor(props: { store: AutomationsStore; focusProfile?: boolean }) {
 	const store = props.store;
+	const [profiles, setProfiles] = createSignal<string[]>([]);
+	const [profileError, setProfileError] = createSignal("");
+	let picker: HTMLSelectElement | undefined;
+	onMount(() => {
+		if (props.focusProfile) picker?.focus();
+		void store
+			.profiles()
+			.then(setProfiles)
+			.catch((cause) => setProfileError(String(cause)));
+	});
 	const knownRepos = () => repositoriesStore.getOrderedRepos();
 	return (
 		<Show when={store.draft()}>
@@ -38,12 +48,25 @@ export function DefinitionEditor(props: { store: AutomationsStore }) {
 							</label>
 							<label>
 								{t("automations.runConfig", "Run config")}
-								<Input
+								<Select
+									ref={picker}
 									value={draft().run_config}
-									onInput={(event) => store.edit({ run_config: event.currentTarget.value })}
-								/>
+									onChange={(event) => store.edit({ run_config: event.currentTarget.value })}
+								>
+									<option value="">{t("automations.chooseProfile", "Choose a saved profile")}</option>
+									{/* Keep the selected option mounted when the asynchronous catalogue arrives. */}
+									<Show when={draft().run_config}>
+										<option value={draft().run_config}>{draft().run_config}</option>
+									</Show>
+									<For each={profiles().filter((name) => name !== draft().run_config)}>
+										{(name) => <option value={name}>{name}</option>}
+									</For>
+								</Select>
 							</label>
 						</div>
+						<Show when={profileError()}>
+							<p role="alert">{profileError()}</p>
+						</Show>
 						<p class={s.hint}>
 							{t(
 								"automations.permissions",

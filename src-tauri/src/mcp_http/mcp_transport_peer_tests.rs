@@ -205,8 +205,8 @@ async fn initialize_omits_duplicate_launch_markers_for_roots_and_children() {
     );
 }
 
-// Catches: dedup keyed on the full text, so a peer joining between reconnects
-// (the text embeds the live peer count) adds an inspector row per reconnect.
+// Catches: live peer inventory leaking into cached instructions, or a peer join
+// adding an inspector row instead of counting another identical initialize.
 #[cfg(unix)]
 #[tokio::test]
 async fn reconnect_with_changed_peer_count_keeps_one_served_row() {
@@ -218,11 +218,12 @@ async fn reconnect_with_changed_peer_count_keeps_one_served_row() {
     register_peer(&state, TEST_UUID_B, "joiner", "mcp-joiner");
     post_fresh_initialize(&state).await;
     let rows = served_rows(&state);
-    assert_ne!(
-        before[0], rows[0].text,
-        "the peer count must change the text"
-    );
+    assert_eq!(before.len(), 1, "{before:?}");
     assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        before[0], rows[0].text,
+        "a joining peer must not change cached instructions"
+    );
     assert_eq!(rows[0].count, 2);
     assert!(rows[0].last_seen_ms >= rows[0].first_seen_ms);
 }

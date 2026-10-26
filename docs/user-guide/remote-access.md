@@ -856,9 +856,11 @@ Remote host cards name DNS, refused connections, timeout, TLS, and authenticatio
 
 ## Private secret entry on a phone
 
-A desktop secret request shows a one-time entry path in its private window.
-Open that path on your trusted TUICommander server address and enter only the
-requested fields. Entry uses the existing server authentication and transport;
+A desktop secret request shows a full one-time URL in its private window.
+Open **Open on a trusted browser or phone** to select or copy the URL, open the
+link, or scan its QR code. The address uses the same network and HTTPS policy as
+Remote Mobile Connection. If Remote Access is off, enable it in Settings and
+request a new form. Enter only the requested fields. Entry uses the existing server authentication and transport;
 use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
 See [Private secret forms](secrets.md).
 

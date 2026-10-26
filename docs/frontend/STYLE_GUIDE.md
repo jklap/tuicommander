@@ -598,6 +598,13 @@ Terminal scrollbar overridden to 8px with `!important`.
   outline-offset: 2px;
 }
 ```
+Shared `Input` and `Textarea` use an accent border plus a 1px inset accent
+shadow instead of an offset outline. This forms one continuous border-hugging
+focus band. Invalid text fields retain their error border and inset accent focus
+indicator. In forced-colour mode, a system-colour outline with no gap replaces
+the shadow. Buttons, selects, switches, sliders and swatches retain their offset
+keyboard focus rings.
+
 Excluded on toggle buttons and mic button.
 
 ### Disabled
@@ -724,7 +731,8 @@ arrange the wrapping picker but must not resize its swatches.
 
 - Use native `aria-invalid="true"` on `Input`, `Select` and `Textarea` for an
   error-token border. Link existing validation text with `aria-describedby`.
-  The shared keyboard focus outline remains visible and unchanged.
+  The shared keyboard focus indicator remains visible; text fields keep their
+  inset accent band beside the error border.
 - Use `Button variant="removalToggle"` only for an on/off action where clicking
   the pressed state removes or uninstalls the active integration. Set native
   `aria-pressed` from owner state. Pressed uses the success border; enabled

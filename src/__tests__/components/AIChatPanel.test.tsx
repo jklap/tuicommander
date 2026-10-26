@@ -456,8 +456,8 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	// Catches: orphan Copy controls reserving an empty full-width row beneath each reply.
-	it("anchors assistant Copy beside the reply, keeps user bubbles compact and tool counts on one line", async () => {
+	// Catches: out-of-flow assistant actions escaping their message, oversized user bubbles, or wrapping tool counts.
+	it("keeps assistant actions in flow, user bubbles compact and tool counts on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -487,9 +487,9 @@ describe("AIChatPanel: transcript actions", () => {
 			await settle();
 			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
 			const actions = assistantCopy.parentElement!;
-			expect(getComputedStyle(actions).position).toBe("absolute");
-			expect(getComputedStyle(actions).left).toBe("0px");
-			expect(getComputedStyle(actions).top).toBe("100%");
+			// The real-browser aiChatGeometry regression measures containment and
+			// nonintersection; this DOM environment only verifies normal flow.
+			expect(["absolute", "fixed"]).not.toContain(getComputedStyle(actions).position);
 			// A user bubble hugs its text: its Copy sits outside the bubble instead of
 			// holding an invisible row that made "che model usi?" look two lines tall.
 			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
@@ -700,7 +700,7 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
 		expect(mockOpenFile).not.toHaveBeenCalled();
 	});
-	it("copies the raw user message, assistant answer, and fenced code", async () => {
+	it("copies whole messages including fenced code without redundant code-only actions", async () => {
 		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "Question <one>" });
@@ -717,7 +717,8 @@ describe("AIChatPanel: transcript actions", () => {
 		await settle();
 		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Question <one>");
 		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Answer **two**\n\n```sh\necho three\n```");
-		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("echo three");
+		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).not.toContain("echo three");
+		expect(container.querySelector("button[data-copy-code]")).toBeNull();
 	});
 
 	it("opens web links externally and file links through the terminal file opener", async () => {
@@ -1596,6 +1597,20 @@ describe("AIChatPanel: parallel tabs", () => {
 		(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
 		await settle();
 		expect(loadsOf(SECOND_SESSION)).toBe(2);
+	});
+
+	// Catches: reference handoff replacing a draft, sending it, or losing focus across mobile remount.
+	it("appends a document reference and focuses the composer after it mounts without sending", async () => {
+		aiChatDraft.activate(SESSION);
+		aiChatDraft.set("Existing question");
+		aiChatDraft.insertReference(SESSION, "/repo/map.md:6-6\n\n> Repeated");
+		const { container } = await renderPanel();
+		await settle();
+		const editor = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(editor.value).toBe("Existing question\n\n/repo/map.md:6-6\n\n> Repeated");
+		expect(document.activeElement).toBe(editor);
+		expect(editor.selectionStart).toBe(editor.value.length);
+		expect(client.prompt).not.toHaveBeenCalled();
 	});
 
 	it("keeps a terminal context-menu draft queued before the first session opens", async () => {

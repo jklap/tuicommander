@@ -10,6 +10,18 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Markdown references in AI Chat",
+		description:
+			"Select a passage in a Markdown file and choose Send to AI Chat to stage its path, source lines and quote in your open conversation without sending.",
+		shortcut: null,
+	},
+	{
+		feature: "Compose queue count",
+		description:
+			"The collapsed Compose button counts queued commands and messages. Hover or focus it for a breakdown, or open Compose to inspect the queue.",
+		shortcut: `${mod}+I`,
+	},
+	{
 		feature: "Native story notes",
 		description:
 			"Select a story to read Notes and evidence or append a permanent note. Refresh notes loads entries added by agents or other windows without changing the story revision.",

@@ -1,10 +1,64 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentOverlay } from "../../components/MarkdownTab/CommentOverlay";
+import { ContentRenderer } from "../../components/ui/ContentRenderer";
 
 afterEach(() => cleanup());
+
+describe("Markdown reference visible source boundaries", () => {
+	// Catches: hidden link delimiters introducing spaces, or reference ids consuming a visible occurrence.
+	it.each([
+		{
+			bug: "keeps a selection spanning a link and its adjacent punctuation available",
+			source: "See [the guide](https://example.com).",
+			selector: "p",
+			reference: "/repo/map.md:1-1\n\n> See the guide.",
+		},
+		{
+			bug: "ignores reference link ids before a selected repeated table cell",
+			source: "| Name |\n| --- |\n| [docs][Repeated] |\n| Repeated |\n\n[Repeated]: https://example.com\n",
+			selector: "tbody tr:last-child td",
+			reference: "/repo/map.md:4-4\n\n> Repeated",
+		},
+	])("$bug", ({ source, selector, reference }) => {
+		let content!: HTMLDivElement;
+		render(() => (
+			<ContentRenderer
+				content={source}
+				commentableBlocks
+				contentRef={(el) => {
+					content = el;
+				}}
+			/>
+		));
+		const insert = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onDelete={vi.fn()}
+				chatReference={{ source, path: "/repo/map.md", insert }}
+			/>
+		));
+		const selected = content.querySelector(selector)!;
+		const range = document.createRange();
+		range.selectNodeContents(selected);
+		range.getClientRects = () => [] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => ({ right: 100, top: 20, height: 20 }) as DOMRect;
+		const selection = window.getSelection()!;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		fireEvent.mouseUp(selected);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action, "visible selected text must remain available as a reference").not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith(reference);
+		selection.removeAllRanges();
+	});
+});
 
 describe("CommentOverlay block gutter", () => {
 	// Catches: an item-relative action covering markers/checkboxes as list indentation changes.
@@ -325,5 +379,89 @@ describe("CommentOverlay edit actions", () => {
 		expect(document.body.querySelector("textarea")).toBe(textarea);
 		fireEvent.keyDown(textarea, { key: "Escape" });
 		expect(document.body.querySelector("textarea")).toBeNull();
+	});
+});
+
+describe("Markdown selection chat reference", () => {
+	// Catches: invisible link destinations consuming the selected cell's rendered occurrence ordinal.
+	it.each([
+		["[Guide](docs/Repeated.md)\n\n| Name |\n| --- |\n| **Repeated** |\n", 5],
+		["# Map\n\n| Name |\n| --- |\n| [Guide](docs/Repeated.md) |\n| **Repeated** |\n", 6],
+		["# Map\n\n| Name |\n| --- |\n| [Repeated](docs/Repeated.md) |\n| **Repeated** |\n", 6],
+	] as const)("ignores invisible link destinations when locating a selected table cell: %s", (source, line) => {
+		let content!: HTMLDivElement;
+		render(() => (
+			<ContentRenderer
+				content={source}
+				commentableBlocks
+				contentRef={(el) => {
+					content = el;
+				}}
+			/>
+		));
+		const range = document.createRange();
+		range.selectNodeContents(content.querySelector("strong")!.firstChild!);
+		const rect = { left: 100, right: 160, top: 100, bottom: 120, height: 20 } as DOMRect;
+		range.getClientRects = () => [rect] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => rect;
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(range);
+		const insert = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onDelete={vi.fn()}
+				chatReference={{ source, path: "/repo/map.md", insert }}
+			/>
+		));
+		fireEvent.mouseUp(content);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action).not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith(`/repo/map.md:${line}-${line}\n\n> Repeated`);
+		window.getSelection()!.removeAllRanges();
+	});
+	// Catches: using rendered table offsets (or the first repeated cell) as source line offsets.
+	it("sends the selected table cell and its source row line to the composer without saving", () => {
+		const content = document.createElement("div");
+		content.innerHTML =
+			"<table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Repeated</td></tr><tr><td><strong>Repeated</strong></td></tr></tbody></table>";
+		document.body.append(content);
+		const text = content.querySelector("strong")!.firstChild!;
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		const rect = { left: 100, right: 160, top: 100, bottom: 120, height: 20 } as DOMRect;
+		range.getClientRects = () => [rect] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => rect;
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(range);
+		const insert = vi.fn();
+		const save = vi.fn();
+		const [available, setAvailable] = createSignal(false);
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={save}
+				onDelete={vi.fn()}
+				chatReference={
+					available()
+						? { source: "# Map\n\n| Name |\n| --- |\n| Repeated |\n| **Repeated** |\n", path: "/repo/map.md", insert }
+						: undefined
+				}
+			/>
+		));
+		fireEvent.mouseUp(content);
+		expect(document.body.querySelector('[aria-label="Send to AI Chat"]')).toBeNull();
+		expect(document.body.querySelector('[aria-label="Add inline comment"]')).not.toBeNull();
+		setAvailable(true);
+		fireEvent.mouseUp(content);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action).not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith("/repo/map.md:6-6\n\n> Repeated");
+		expect(save).not.toHaveBeenCalled();
+		window.getSelection()!.removeAllRanges();
+		content.remove();
 	});
 });
