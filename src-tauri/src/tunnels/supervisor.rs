@@ -297,7 +297,7 @@ async fn supervision_loop(
 
         if let Some(wait_result) = ready {
             // Process died before its forwards were ready.
-            reap_process_group(pgid).await;
+            reap_process_group(pgid, tokio::time::Instant::now() + KILL_GRACE).await;
             let stderr = stderr_tail_snapshot(&stderr_tail);
             let code = wait_result.ok().and_then(|s| s.code());
             let reason = classify_exit(&stderr, code);
@@ -342,7 +342,7 @@ async fn supervision_loop(
 
         // ssh exited on its own (network drop, auth failure): its leader is
         // gone but a `ProxyCommand` descendant may not be.
-        reap_process_group(pgid).await;
+        reap_process_group(pgid, tokio::time::Instant::now() + KILL_GRACE).await;
         let stderr = stderr_tail_snapshot(&stderr_tail);
         let code = wait_result.ok().and_then(|s| s.code());
         let reason = classify_exit(&stderr, code);
@@ -481,6 +481,11 @@ fn stderr_tail_snapshot(tail: &Option<Arc<Mutex<Vec<u8>>>>) -> String {
     }
 }
 
+/// Grace between SIGTERM and SIGKILL for a tunnel's process group: one budget
+/// for the leader and every member together, so a shutdown fits inside
+/// `GRACEFUL_SHUTDOWN_TIMEOUT`.
+const KILL_GRACE: Duration = Duration::from_secs(5);
+
 /// After the group leader (ssh) has exited on its own, make sure no member of
 /// its dedicated process group outlives it.
 ///
@@ -488,35 +493,34 @@ fn stderr_tail_snapshot(tail: &Option<Arc<Mutex<Vec<u8>>>>) -> String {
 /// keeps working for as long as any member lives, so a `ProxyCommand`
 /// descendant that survived its parent is still reachable here. The common
 /// case (no survivors) costs one `kill` that returns ESRCH. Otherwise SIGTERM,
-/// poll up to 5s (same grace as `graceful_kill`), then SIGKILL. Must run
-/// before the exit is acted on (status, retry/backoff) so a retry never
-/// overlaps stale descendants and `Stopped` implies the group is gone.
-async fn reap_process_group(pgid: Option<u32>) {
+/// poll until `deadline`, then SIGKILL. Must run before the exit is acted on
+/// (status, retry/backoff) so a retry never overlaps stale descendants and
+/// `Stopped` implies the group is gone.
+async fn reap_process_group(pgid: Option<u32>, deadline: tokio::time::Instant) {
     #[cfg(unix)]
     {
-        let Some(pgid) = pgid.and_then(|id| i32::try_from(id).ok()) else {
+        use tuic_core::process_tree::{
+            kill_process_group, process_group_exists, terminate_process_group,
+        };
+        // `pgid` was the PID of a child we spawned into its own group via
+        // `process_group(0)`, so only that group is reached; `false` (ESRCH,
+        // no members left) is the expected no-op.
+        let Some(pgid) = pgid else {
             return;
         };
-        // SAFETY: `pgid` was the PID of a child we spawned into its own group
-        // via `process_group(0)`; signalling `-pgid` only reaches that group,
-        // and ESRCH (no members left) is the expected no-op.
-        if unsafe { libc::kill(-pgid, libc::SIGTERM) } != 0 {
+        if !terminate_process_group(pgid) {
             return;
         }
-        for _ in 0..100 {
+        while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
-            // SAFETY: signal 0 only probes for existence.
-            if unsafe { libc::kill(-pgid, 0) } != 0 {
+            if !process_group_exists(pgid) {
                 return;
             }
         }
-        // SAFETY: as above.
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
-        }
+        kill_process_group(pgid);
     }
     #[cfg(not(unix))]
-    let _ = pgid;
+    let _ = (pgid, deadline);
 }
 
 /// Send SIGTERM, wait 5s, escalate to SIGKILL.
@@ -536,20 +540,24 @@ async fn reap_process_group(pgid: Option<u32>) {
 /// firing the signal and returning) matters for the same reason on both
 /// platforms: `stop_and_wait`/`stop_and_take_task` treat "this function
 /// returned" as "the OS process is gone," and only awaiting `wait()` actually
-/// establishes that.
+/// establishes that. A group member that survives the leader is reaped
+/// afterwards through `reap_process_group`, against the same `KILL_GRACE`
+/// deadline as the leader, so a leader exiting late in its grace cannot add a
+/// second full grace and push the shutdown past `GRACEFUL_SHUTDOWN_TIMEOUT`.
 async fn graceful_kill(child: &mut tokio::process::Child) {
+    // Captured before any `wait()`, after which `child.id()` is `None`.
+    #[cfg(unix)]
+    let pgid = child.id();
+    #[cfg(unix)]
+    let deadline = tokio::time::Instant::now() + KILL_GRACE;
     #[cfg(unix)]
     if let Some(id) = child.id() {
         match i32::try_from(id) {
-            Ok(pid) => {
-                // SAFETY: `pid` is from `child.id()` which returns the OS PID
-                // of a child process we spawned (into its own process group,
-                // via `process_group(0)`) and have not yet waited on.
-                // SIGTERM has no preconditions beyond a valid PID/group id.
-                // Negating it targets the whole group instead of just `pid`.
-                unsafe {
-                    libc::kill(-pid, libc::SIGTERM);
-                }
+            Ok(_) => {
+                // `id` is the PID of a child we spawned (into its own process
+                // group, via `process_group(0)`) and have not yet waited on,
+                // so it names that group: signal all of it, not just `id`.
+                tuic_core::process_tree::terminate_process_group(id);
             }
             Err(_) => {
                 tracing::warn!(
@@ -587,27 +595,30 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
         }
         let _ = child.kill().await;
         let _ = child.wait().await;
-        return;
     }
 
-    // Wait up to 5s for clean exit after SIGTERM, then escalate to SIGKILL.
+    // Wait out the grace for clean exit after SIGTERM, then escalate to SIGKILL.
     #[cfg(unix)]
     tokio::select! {
         _ = child.wait() => {}
-        () = tokio::time::sleep(Duration::from_secs(5)) => {
+        () = tokio::time::sleep_until(deadline) => {
             if let Some(id) = child.id()
-                && let Ok(pid) = i32::try_from(id)
+                && i32::try_from(id).is_ok()
             {
-                // SAFETY: see above — same PID/group, still not yet waited on.
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
+                // Same group as above, still not yet waited on.
+                tuic_core::process_tree::kill_process_group(id);
             } else {
                 let _ = child.kill().await;
             }
             let _ = child.wait().await;
         }
     }
+    // The leader is reaped, but a member that ignores SIGTERM (a `ProxyCommand`
+    // with `trap '' TERM`) can outlive it when the leader itself exited inside
+    // the grace period. Reap the rest of the group before returning, so
+    // `Stopped` and a confirmed `stop_and_wait` mean the whole group is gone.
+    #[cfg(unix)]
+    reap_process_group(pgid, deadline).await;
 }
 
 /// ETXTBSY (26 on Linux) — exec on a file still open for writing.
@@ -946,6 +957,73 @@ mod tests {
             unsafe { libc::kill(grandchild, libc::SIGKILL) };
         }
         assert!(!alive, "forked grandchild {grandchild} survived shutdown");
+    }
+
+    /// Catches: `graceful_kill` returning once the leader exits while a group
+    /// member that ignores SIGTERM lives on. The fake ssh dies on SIGTERM, but
+    /// its forked grandchild has `trap '' TERM`; `Stopped` and a confirmed
+    /// `stop_and_wait` must both mean that grandchild is gone too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_reaps_a_term_ignoring_grandchild_before_stopped() {
+        let root = crate::test_support::test_temp_root();
+        let child_marker = root.join("term_ignoring_grandchild_ssh_child.pid");
+        let _ = std::fs::remove_file(&child_marker);
+        let posix = format!(
+            "sh -c \"trap '' TERM; sleep 3600\" &\necho $! > '{}'\nwait",
+            child_marker.display()
+        );
+        let script = fake_ssh_script("term_ignoring_grandchild", &posix, "exit /b 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        let grandchild = crate::test_support::wait_for_pid_marker(&child_marker).await;
+        assert!(
+            unsafe { libc::kill(grandchild, 0) } == 0,
+            "grandchild should be alive before shutdown"
+        );
+
+        assert!(sup.stop_and_wait().await, "shutdown must be confirmed");
+        assert!(
+            matches!(sup.status(), TunnelStatus::Stopped { .. }),
+            "expected Stopped, got {:?}",
+            sup.status()
+        );
+        crate::test_support::assert_pid_gone(
+            grandchild,
+            "TERM-ignoring grandchild survived shutdown",
+        );
+    }
+
+    /// Catches (G3): the leader exiting late in its own TERM grace while a group
+    /// member ignores TERM. The leader wait and the group reap used to have 5s
+    /// each, so shutdown took ~9s and `stop_and_wait` overran
+    /// `GRACEFUL_SHUTDOWN_TIMEOUT`; they now share one deadline.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn late_exiting_leader_and_term_ignoring_member_stop_within_the_timeout() {
+        let root = crate::test_support::test_temp_root();
+        let child_marker = root.join("late_leader_ssh_child.pid");
+        let _ = std::fs::remove_file(&child_marker);
+        let posix = format!(
+            "trap 'sleep 4; exit 0' TERM\nsh -c \"trap '' TERM; sleep 3600\" &\necho $! > '{}'\nwait",
+            child_marker.display()
+        );
+        let script = fake_ssh_script("late_leader_term_ignoring_member", &posix, "exit /b 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        let member = crate::test_support::wait_for_pid_marker(&child_marker).await;
+
+        let started = std::time::Instant::now();
+        assert!(
+            sup.stop_and_wait().await,
+            "shutdown overran GRACEFUL_SHUTDOWN_TIMEOUT after {:?}",
+            started.elapsed()
+        );
+        crate::test_support::assert_pid_gone(member, "TERM-ignoring member survived shutdown");
     }
 
     /// Catches: ssh exiting on its own (network drop, auth failure) leaving a

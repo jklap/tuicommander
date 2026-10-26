@@ -790,11 +790,14 @@ mod tests {
         let manager = Arc::new(TunnelManager::new(audit));
         let marker = crate::test_support::test_temp_root().join("shutdown_in_flight_ssh.pid");
         let _ = std::fs::remove_file(&marker);
-        let script = fake_ssh_script(&format!(
-            "echo $$ > '{}'\nexec sleep 3600",
-            marker.display()
-        ));
-        let ssh_path = script.path().to_path_buf();
+        // The shared, pre-warmed script, not this module's `fake_ssh_script`:
+        // that one keeps its write fd open, and Linux refuses to exec a file
+        // open for writing (ETXTBSY), so ssh would never run there.
+        let ssh_path = crate::test_support::fake_ssh_script(
+            "manager_shutdown_in_flight",
+            &format!("echo $$ > '{}'\nexec sleep 3600", marker.display()),
+            "exit /b 0",
+        );
         let profile = test_profile("shutdown-while-starting");
         let id = profile.id.clone();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -871,6 +874,43 @@ mod tests {
         assert!(!spawned.load(Ordering::SeqCst), "nothing may be spawned");
     }
 
+    /// Catches: `shutdown_all_and_wait` confirming while a group member that
+    /// ignores SIGTERM is still alive. The leader dies on SIGTERM at once, so
+    /// waiting on it alone returns with the grandchild running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_all_and_wait_reaps_a_term_ignoring_grandchild() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        let marker = crate::test_support::test_temp_root().join("manager_term_ignoring_child.pid");
+        let _ = std::fs::remove_file(&marker);
+        // Shared, pre-warmed script: this test awaits the exec (see
+        // `fake_ssh_script`'s doc comment in this module).
+        let ssh_path = crate::test_support::fake_ssh_script(
+            "manager_term_ignoring_grandchild",
+            &format!(
+                "sh -c \"trap '' TERM; sleep 3600\" &\necho $! > '{}'\nwait",
+                marker.display()
+            ),
+            "exit /b 0",
+        );
+        start_with_fake_ssh(&manager, test_profile("term-ignoring"), ssh_path)
+            .await
+            .unwrap();
+        let grandchild = crate::test_support::wait_for_pid_marker(&marker).await;
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            manager.shutdown_all_and_wait(),
+        )
+        .await
+        .expect("shutdown_all_and_wait is bounded");
+        crate::test_support::assert_pid_gone(
+            grandchild,
+            "TERM-ignoring grandchild survived shutdown_all_and_wait",
+        );
+    }
+
     /// Catches: the lost-publication cleanup being owned by the (abortable)
     /// `start_with` future. Aborting the caller — the remote-runtime supervisor's
     /// `dispose` does — dropped the wait, the in-flight counter hit zero, and
@@ -883,11 +923,17 @@ mod tests {
         let manager = Arc::new(TunnelManager::new(audit));
         let marker = crate::test_support::test_temp_root().join("abort_mid_cleanup_ssh.pid");
         let _ = std::fs::remove_file(&marker);
-        let script = fake_ssh_script(&format!(
-            "echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600",
-            marker.display()
-        ));
-        let ssh_path = script.path().to_path_buf();
+        // Shared, pre-warmed script: this test awaits the exec, which this
+        // module's `fake_ssh_script` cannot provide on Linux (ETXTBSY: its
+        // write fd is still open). See that helper's doc comment.
+        let ssh_path = crate::test_support::fake_ssh_script(
+            "manager_abort_mid_cleanup",
+            &format!(
+                "echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600",
+                marker.display()
+            ),
+            "exit /b 0",
+        );
         let marker_in_spawn = marker.clone();
         let profile = test_profile("abort-mid-cleanup");
         let id = profile.id.clone();
