@@ -66,3 +66,69 @@ describe("automation notification navigation", () => {
 		});
 	});
 });
+
+// Catches: a dead creator leaving the human with an opaque failure notice.
+it("legacy dead-creator failure includes its reason in the bell", () => {
+	const bell = vi.spyOn(toastsStore, "addToBell").mockReturnValue(1);
+	const reason = "Automation run configuration 'claude' not found";
+	presentAutomationNotice({
+		notice: true,
+		run: { ...runFixture("pre-spawn", "a1"), status: "failed", reason, session_id: null },
+	});
+	expect(bell).toHaveBeenCalledWith(
+		"Sentry · failed",
+		expect.stringContaining(reason),
+		"error",
+		"/repo",
+		expect.any(Object),
+		undefined,
+	);
+	bell.mockRestore();
+});
+
+// Catches: boot remaining silent until Runs opens, and profile deletion waiting for
+// another fire instead of reacting to the persisted settings event.
+it("reports legacy profiles at startup and reports a new break after repair", async () => {
+	const { createSettingsRefreshCoordinator } = await import("../../services/settingsRefresh");
+	const { startAutomationProfileNotices } = await import("../../services/automationNotifications");
+	const { definition } = await import("../automationsFixtures");
+	let events: Record<string, (payload: unknown) => void> = {};
+	const coordinator = createSettingsRefreshCoordinator(async (handlers) => {
+		events = handlers;
+		return () => {};
+	});
+	const bell = vi.spyOn(toastsStore, "addToBell").mockReturnValue(1);
+	const invalid = [
+		{
+			definition: { ...definition, run_config: "claude" },
+			next_run_ms: null,
+			last_status: null,
+			run_config_error: "Automation run configuration 'claude' not found",
+		},
+	];
+	const list = vi.fn().mockResolvedValue(invalid);
+	const stop = startAutomationProfileNotices(fakeAdapter({ list }), coordinator);
+	try {
+		await vi.waitFor(() => expect(bell).toHaveBeenCalledTimes(1));
+		expect(bell).toHaveBeenCalledWith(
+			"Sentry · configuration error",
+			expect.stringContaining("claude"),
+			"error",
+			"/repo",
+			expect.objectContaining({ label: "Fix" }),
+		);
+		bell.mock.calls[0][4]?.onClick();
+		expect(automationsUi.requestedDefinition()).toBe("a1");
+		events["settings-changed"]({ section: "agents", generation: 1, persisted: true, applied: true });
+		await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+		expect(bell).toHaveBeenCalledTimes(1);
+		list.mockResolvedValueOnce([]);
+		events["settings-changed"]({ section: "agents", generation: 2, persisted: true, applied: true });
+		await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+		events["settings-changed"]({ section: "agents", generation: 3, persisted: true, applied: true });
+		await vi.waitFor(() => expect(bell).toHaveBeenCalledTimes(2));
+	} finally {
+		stop();
+		bell.mockRestore();
+	}
+});

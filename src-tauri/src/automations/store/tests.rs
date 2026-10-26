@@ -503,3 +503,61 @@ fn retention_prunes_bounded_batches_without_replaying_consumed_schedules() {
     assert_eq!(store.prune(now, None).unwrap(), 0);
     assert_eq!(store.scheduled_cursor("daily").unwrap(), Some(123));
 }
+
+// Catches: grouping only the visible page, merging distinct errors, or hiding successful runs.
+#[test]
+fn grouped_history_counts_failures_before_paging_without_rewriting_history() {
+    let (_dir, owner) = owner();
+    let store = owner.store();
+    for at in 1..=14 {
+        let run = manual(store, at * 10);
+        store
+            .transition(
+                &run.id,
+                RunStatus::Failed,
+                RunDetails {
+                    reason: Some("Automation run configuration 'claude' not found".into()),
+                    ..Default::default()
+                },
+                at * 10 + 1,
+            )
+            .unwrap();
+    }
+    let changed = manual(store, 150);
+    store
+        .transition(
+            &changed.id,
+            RunStatus::Failed,
+            RunDetails {
+                reason: Some("Workspace missing".into()),
+                ..Default::default()
+            },
+            151,
+        )
+        .unwrap();
+    for at in [160, 170] {
+        let run = manual(store, at);
+        store
+            .transition(&run.id, RunStatus::Completed, Default::default(), at + 1)
+            .unwrap();
+    }
+    let groups = store.grouped_history(None, 100, 0).unwrap();
+    assert_eq!(groups.len(), 4);
+    assert_eq!(groups[0]["status"], "completed");
+    assert_eq!(groups[1]["status"], "completed");
+    assert_eq!(groups[2]["reason"], "Workspace missing");
+    assert_eq!(groups[3]["failure_count"], 14);
+    assert_eq!(groups[3]["created_ms"], 140);
+    assert_eq!(
+        store.grouped_history(None, 1, 3).unwrap(),
+        vec![groups[3].clone()]
+    );
+    assert_eq!(store.history(None, 100, 0).unwrap().len(), 17);
+    assert!(
+        store
+            .grouped_history(Some("deleted"), 100, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.grouped_history(None, 101, 0).is_err());
+}

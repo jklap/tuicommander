@@ -801,6 +801,30 @@ The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<Tool
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
 The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
+**Instruction stability contract.** Terminal sessions and peer inventory never appear in
+initialize instructions: opening, closing, renaming or moving a terminal, or
+registering/removing a peer, must not change their bytes for the same caller and
+configuration. Read `session action=list` for current terminal ids, paths and
+worktree branches. Read `agent action=list_peers` for current peers; its `peers`
+array gives the current count. This keeps live inventory out of clients' cached
+system prefixes; it does not claim a provider cache hit.
+
+The fields retained in instructions are the application version, caller-specific
+protocol/launch guidance and marker settings, tool-discovery mode, registered
+native tool names, available upstream server names and tool counts, and configured
+repository totals/groups/remote-connection counts. These describe the installed
+protocol, caller policy or tool/configuration surface, not terminal activity.
+Configuration edits, application upgrades, caller identity/parentage changes and
+upstream capability/availability changes can still change that surface; the
+contract is not a permanent snapshot of tool capabilities.
+
+All instruction surfaces share `render_mcp_instructions`: HTTP `POST /mcp`
+initialize uses `build_mcp_instructions_for_session`; modern `server/discover`
+uses `build_mcp_instructions_for_mode`; `GET /mcp/instructions` uses
+`build_mcp_instructions`. The IPC listener serves the same `build_router` routes
+on Unix sockets and Windows named pipes, and `tuic mcp` initializes that server
+through IPC. There is no separate CLI instruction renderer.
+
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 When intent markers are enabled for the connecting agent, initialize instructions require `intent:` on its own line, at the start of every user task and on material phase changes. "On its own line" is in the instruction because the ack sentence is required to open that same first message: an agent that runs the two together leaves the token mid-row, where the parser has to reach for it (see `docs/backend/output-parser.md` → Intent). The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
@@ -818,7 +842,7 @@ on its first turn. Deferred tool discovery can expose them later.
 
 | Surface | Transport receipt | Model visibility | Owns |
 |---|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, live state |
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, a capability map, cross-tool rules, configuration/capability summaries |
 | tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
 
 **Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with

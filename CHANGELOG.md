@@ -7,8 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
+### Added
+
+- Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
+
+- Keep isolated agent-test runtime temp outside ego’s shared scratch grant so AI Chat can prove its confined filesystem perimeter without changing grants (#2364-0737).
+- Report unresolved automation profiles at desktop startup and after profile changes, include failure reasons in the bell, and group identical run failures with a direct profile repair action (#2360-f7ca).
+- Keep MCP initialize instructions unchanged by live terminal and peer churn; current inventory remains available through session and agent tools (#2362-95a9).
+- Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
+
+- Show readable story transition labels, criterion numbers and text, and compact session actors with full-ID tooltips (#2355-bb93).
+
+- Keep the toolbar repository filter and manual sidebar density controls blue while active, independent of shared button stylesheet order (#2353-9fca).
 
 - Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
 - Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
@@ -180,6 +192,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
 - Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo global workspace suppresses them.
 - Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
+- Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
+- Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state.
+- Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
+- Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the host limit (103 bytes on macOS, 107 on Linux) and the longest `TMPDIR` that would hold it; `TUIC_SOCKET` is client-only and does not move the listener, and the doomed bind retries are skipped.
+- Run the git processes of every Rust test binary that links `tuic-test-support` against a fixed hermetic gitconfig (it points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, and drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail those tests. `tuic-ipc`'s one git-running test does not link it and is not covered.
+- Resolve a repository's default branch from the HEAD of the main checkout's tracked remote or any other remote (including remotes with slashes in the name) when `origin` has none and neither a configured base nor a local `main`/`master` decides it. A remote default whose short name is shadowed by a local branch or a tag keeps its full `refs/remotes/...` name, `fetch_if_remote` splits `<remote>/<branch>` against the configured remotes instead of at the first slash, and the answer no longer depends on which linked worktree the caller passes.
+- Kill an SSH tunnel's whole process group (not just the `ssh` child) on shutdown and wait, bounded, for confirmed exit on app quit, so forked `ProxyCommand` grandchildren are no longer orphaned.
+- A ghost terminal tab (its terminal entry is gone) no longer keeps a split pane open: the pane collapses when the terminal is removed, and closing a sibling tab ignores ghost terminal, diff, Markdown and editor tabs when deciding whether a pane is empty. A pane whose only tab is a ghost diff, Markdown or editor tab is still not swept until another tab in it closes. Reset Panel Sizes now also rebuilds the active Global Workspace layout (keeping the focused terminal), and switching workspace scope reconciles the active terminal without stealing selection from a docked non-terminal tab.
+- Merge-and-archive and Update-from-base (merge strategy) no longer fail with "Not possible to fast-forward" for users whose Git config sets `merge.ff=only` or whose target branch's `branch.<target>.mergeOptions` selects `--ff-only`; the explicit UI policy uses `--no-ff` when `merge.ff` is false, otherwise `--ff`, overriding branch fast-forward flags without parsing Git options.
 
 ## [2.0.0-beta.1] - 2026-10-22
 

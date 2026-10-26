@@ -36,6 +36,22 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(binary.stat() if binary.exists() else None, before,
                          "dry run must neither create nor replace an existing warm executable")
 
+    def test_runtime_temp_does_not_overlap_ego_scratch_grant(self):
+        # Bug caught (2364): inherited TMPDIR under the intentional shared
+        # scratch grant prevents ego from proving its negative filesystem probe.
+        scratch_grant = Path.home() / "Gits/.tmp"
+        for instance in ["agent-test", "agent-test-2364", "a" * 63]:
+            with self.subTest(instance=instance):
+                plan = self.plan(f"AGENT_TEST_INSTANCE={instance}", TMPDIR=str(scratch_grant))
+                temporary = Path(plan["environment"]["TMPDIR"])
+                self.assertTrue(temporary.is_relative_to(Path.home() / "Gits"))
+                self.assertFalse(temporary.is_relative_to(scratch_grant),
+                                 "ego negative probe must run outside the shared scratch grant")
+                self.assertEqual(Path(plan["socket"]).parent, temporary)
+                self.assertEqual(Path(plan["pid_file"]).parent, temporary)
+                self.assertEqual(Path(plan["stop_fifo"]).parent, temporary)
+                self.assertLess(len(os.fsencode(plan["socket"])), 104)
+
     def test_github_preset_reuses_login_namespace_despite_agent_overrides(self):
         # Bug caught: each GitHub live-check agent selects a fresh credential
         # namespace and asks for login again instead of reusing agent-test-ghlive.

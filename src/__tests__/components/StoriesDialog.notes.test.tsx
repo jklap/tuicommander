@@ -143,7 +143,7 @@ it("catches a late append response clearing another story's draft or publishing 
 	fireEvent.click(ui.getByRole("button", { name: "Append note" }));
 	fireEvent.click(ui.getByRole("button", { name: /Second story/ }));
 	await ui.findByRole("heading", { name: "Second story" });
-	const secondInput = ui.getByLabelText("Add note") as HTMLTextAreaElement;
+	const secondInput = (await ui.findByLabelText("Add note")) as HTMLTextAreaElement;
 	expect(secondInput.value).toBe("");
 	fireEvent.input(secondInput, { target: { value: "Second draft" } });
 	finish({ type: "note", value: { ...historical, id: "late", text: "First draft" } });

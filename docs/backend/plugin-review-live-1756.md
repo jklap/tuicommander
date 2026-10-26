@@ -65,7 +65,7 @@ After the native frontend answers an evaluator readiness probe, run from the sam
 
 ```sh
 node scripts/plugin-review-desktop-e2e.mjs \
-  "$HOME/Gits/.tmp/tuic-at/416e20482e26b1f5/tuic-mcp-416e20482e26b1f5.sock" \
+  "$HOME/Gits/.tuic/tuic-at/416e20482e26b1f5/tuic-mcp-416e20482e26b1f5.sock" \
   agent-test-ghlive --isolated-desktop
 ```
 

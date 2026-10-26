@@ -150,3 +150,10 @@ Clickable file paths in terminal output (absolute and relative paths with known 
 | `suggest_followups` | `true` | Show suggested follow-up actions from agents |
 | `bell_style` | `"visual"` | Terminal bell: "none", "visual", "sound", "both" |
 | `prevent_sleep_when_busy` | `false` | Prevent system sleep while terminal is busy |
+
+### Collapsed Compose queue count
+
+The CLI Compose button shows a muted count pill for all pending FIFO entries,
+including user commands and TUIC messages. It hides at zero and follows the
+backend session state without opening the editor. Hover or keyboard focus loads
+the command/message breakdown; the count remains available if details fail.

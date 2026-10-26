@@ -1777,7 +1777,7 @@ Returns status and metrics for all upstream MCP servers (connecting, ready, circ
 GET /mcp/instructions
 ```
 
-Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
+Returns server guidance for the MCP bridge binary as `{"instructions": "..."}`. It uses the same producer as MCP initialize, without live terminal or peer inventory. Configuration and capability changes can change the guidance; use `session action=list` and `agent action=list_peers` for current inventory.
 
 ## Filesystem Endpoints
 
@@ -3142,7 +3142,8 @@ extraction errors.
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
 | `run_now` | `id` | Full persisted run, including status and reason |
-| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0) | Newest-first run snapshots, including deleted definitions |
+| `profiles` | None | Saved run profile names for the addressed backend, sorted by name |
+| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0), `group_failures` (default false) | Newest-first run snapshots, including deleted definitions. Grouping collapses failures with the same definition, repository, profile and reason before pagination; returns the newest representative plus `failure_count`. Other states remain separate. Individual ledger records and summaries do not change. |
 | `worktree_preview` | Saved run `id` | `{automation_id,run_id,repository,workspace,workspace_id,can_remove,reason,safety}` |
 | `cleanup_worktree` | Saved run `id` | `{removed:true,run_id,branch_delete_warning}`; unsafe workspaces return an error |
 | `summary` | `window`: `24h` or `7d` | `{total,by_status}` over elapsed UTC windows |

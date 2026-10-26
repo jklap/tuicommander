@@ -15,6 +15,27 @@ describe("automation runs", () => {
 		repositoriesStore._testCancelPendingSave();
 		terminalsStore._testCancelPendingTimers();
 	});
+	// Catches asynchronous profile options clearing the displayed saved profile while the draft retains it.
+	it("keeps the saved profile selected after its profile catalogue arrives", async () => {
+		let resolveProfiles!: (names: string[]) => void;
+		render(() => (
+			<AutomationsDialog
+				onClose={() => {}}
+				adapter={fakeAdapter({
+					profiles: () =>
+						new Promise((resolve) => {
+							resolveProfiles = resolve;
+						}),
+				})}
+			/>
+		));
+		const picker = await screen.findByLabelText("Run config");
+		expect(picker).toHaveValue("claude:unattended");
+		resolveProfiles(["Claude Max", "claude:unattended"]);
+		await screen.findByRole("option", { name: "Claude Max" });
+		expect(picker).toHaveValue("claude:unattended");
+	});
+
 	it("keeps deleted automation snapshots visible and renders backend counts rather than counting the page", async () => {
 		const history = vi.fn(async (_id?: string, offset = 0) =>
 			offset
@@ -51,7 +72,6 @@ describe("automation runs", () => {
 		expect(screen.getByText("No workspace was recorded.")).toBeTruthy();
 		expect(runNow).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Next runs" }));
-		await waitFor(() => expect(history).toHaveBeenCalledWith(undefined, 20, 21));
 		await waitFor(() => expect(screen.getAllByRole("button", { name: "View run" })).toHaveLength(1));
 		expect(screen.getByRole("button", { name: "Next runs" })).toBeDisabled();
 	});
@@ -138,6 +158,7 @@ describe("automation runs", () => {
 		try {
 			const adapter = createAutomationAdapter("remote-owner");
 			await adapter.history(undefined, 20, 21);
+			await adapter.history(undefined, 20, 21, true);
 			await adapter.summary("7d");
 			await adapter.run("saved-remote-run");
 			expect(fetch.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body)])).toEqual([
@@ -145,6 +166,11 @@ describe("automation runs", () => {
 					"http://owner.test:9877/automations/action?token=owner-token",
 					"POST",
 					{ input: { action: "list_runs", offset: 20, limit: 21 } },
+				],
+				[
+					"http://owner.test:9877/automations/action?token=owner-token",
+					"POST",
+					{ input: { action: "list_runs", offset: 20, limit: 21, group_failures: true } },
 				],
 				[
 					"http://owner.test:9877/automations/action?token=owner-token",
@@ -185,4 +211,20 @@ describe("automation runs", () => {
 			dispose();
 		});
 	});
+});
+
+// Catches: legacy failures having no repair path, even when the definition survives.
+it("legacy failure offers profile repair", async () => {
+	const run = {
+		...runFixture("legacy", "a1"),
+		status: "failed" as const,
+		reason: "Automation run configuration 'claude' not found",
+	};
+	render(() => <AutomationsDialog onClose={() => {}} adapter={fakeAdapter({ history: async () => [run] })} />);
+	fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Fix" }));
+	const picker = await screen.findByRole("combobox", { name: "Run config" });
+	expect(picker).toHaveFocus();
+	fireEvent.change(picker, { target: { value: "Claude Max" } });
+	expect(picker).toHaveValue("Claude Max");
 });

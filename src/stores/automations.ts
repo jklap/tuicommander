@@ -11,16 +11,25 @@ import type {
 } from "../components/AutomationsDialog/contract";
 import { randomId } from "../utils/randomId";
 
+const [requestedDefinition, setRequestedDefinition] = createSignal<string | null>(null);
 const [requestedRun, setRequestedRun] = createSignal<string | null>(null);
 const [visible, setVisible] = createSignal(false);
 export const automationsUi = {
 	visible,
 	requestedRun,
+	requestedDefinition,
+	openDefinition: (id: string) => {
+		setRequestedRun(null);
+		setRequestedDefinition(id);
+		setVisible(true);
+	},
 	open: () => {
+		setRequestedDefinition(null);
 		setRequestedRun(null);
 		setVisible(true);
 	},
 	openRun: (id: string) => {
+		setRequestedDefinition(null);
 		setRequestedRun(id);
 		setVisible(true);
 	},
@@ -54,7 +63,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		setError("");
 		try {
 			const [history, day, week] = await Promise.all([
-				adapter.history(undefined, offset, pageSize + 1),
+				adapter.history(undefined, offset, pageSize + 1, true),
 				adapter.summary("24h"),
 				adapter.summary("7d"),
 			]);
@@ -180,6 +189,28 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		}
 	}
 	return {
+		profiles: adapter.profiles,
+		async openDefinition(id: string) {
+			const epoch = ++selectionEpoch;
+			historyEpoch++;
+			invalidatePreview();
+			setDraft(undefined);
+			setRuns([]);
+			setHistoryLoading(false);
+			setError("");
+			try {
+				const current = await adapter.list();
+				if (epoch !== selectionEpoch) return false;
+				setItems(current);
+				const definition = current.find((item) => item.definition.id === id)?.definition;
+				if (!definition) throw new Error("This automation was deleted. Its run history is read-only.");
+				select(definition);
+				return true;
+			} catch (cause) {
+				if (epoch === selectionEpoch) setError(message(cause));
+				return false;
+			}
+		},
 		templates: adapter.templates,
 		applyTemplate: (id: string) =>
 			mutate(async () => {

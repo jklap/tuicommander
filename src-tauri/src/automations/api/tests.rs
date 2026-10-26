@@ -511,3 +511,22 @@ async fn create_cron_with_omitted_or_empty_timezone_keeps_host_default() {
         before
     );
 }
+
+// Catches: picker choices leaking unsupported agent types or losing HTTP/IPC profile names.
+#[test]
+fn automation_profiles_uses_the_same_saved_profiles_as_validation() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let definitions = DefinitionStore::at_path(dir.path().join("automations.json"));
+    let runs = RunStore::open_at(&dir.path().join("runs.sqlite3")).unwrap();
+    let profiles = saved_profile_config();
+    let reply = execute_stored_configured(
+        &definitions,
+        &runs,
+        AutomationAction::Profiles {},
+        Utc::now(),
+        Caller::Client,
+        Some(&profiles),
+    )
+    .unwrap();
+    assert_eq!(reply, json!(["Review profile"]));
+}

@@ -679,6 +679,18 @@ pub fn git_cmd_forks(cwd: &Path) -> usize {
     GIT_CMD_FORKS.get(cwd).map(|n| *n).unwrap_or(0)
 }
 
+/// Policy for an explicit UI-requested merge: allow diverged history, while
+/// preserving `merge.ff=false` users' merge commits. Git parses its own boolean
+/// config and all non-policy mergeOptions; TUIC does not tokenize Git options.
+/// This command-line policy intentionally overrides branch fast-forward flags.
+pub fn requested_merge_ff_policy(cwd: &Path) -> &'static str {
+    let no_ff = git_cmd(cwd)
+        .args(["config", "--type=bool", "--get", "merge.ff"])
+        .run_silent()
+        .is_some_and(|out| out.stdout.trim() == "false");
+    if no_ff { "--no-ff" } else { "--ff" }
+}
+
 /// Create a git command builder rooted at the given directory.
 pub fn git_cmd(cwd: &Path) -> GitCmd {
     #[cfg(any(test, feature = "test-support"))]
@@ -800,11 +812,13 @@ mod tests {
     fn setup_test_repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().to_path_buf();
-        Command::new("git")
+        let init = Command::new("git")
             .current_dir(&path)
             .args(["init"])
             .output()
             .expect("git init");
+        assert!(init.status.success(), "git init failed: {init:?}");
+        assert_repo_root(&path);
         Command::new("git")
             .current_dir(&path)
             .args(["config", "user.email", "test@test.com"])
@@ -816,6 +830,33 @@ mod tests {
             .output()
             .expect("git config name");
         (dir, path)
+    }
+
+    /// Panic unless `path` is itself a git work-tree root. A failed `git init`
+    /// under a parent repo would otherwise let later `git config` writes land
+    /// in that parent's `.git/config`.
+    fn assert_repo_root(path: &Path) {
+        let out = Command::new("git")
+            .current_dir(path)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .expect("git rev-parse");
+        let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let want = std::fs::canonicalize(path).expect("canonicalize");
+        assert!(
+            out.status.success() && std::fs::canonicalize(&top).is_ok_and(|t| t == want),
+            "{} is not its own repo root (toplevel: {top:?})",
+            path.display()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not its own repo root")]
+    fn assert_repo_root_fires_for_non_repo_dir_under_a_repo() {
+        // The crate's own checkout is a repo; a not-yet-initialised subdir of
+        // a temp dir inside it resolves to the parent, which must be rejected.
+        let parent = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        assert_repo_root(parent.path());
     }
 
     /// A child that outlives any deadline these tests set.

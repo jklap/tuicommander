@@ -1,4 +1,15 @@
-import { type Component, createEffect, createMemo, createSignal, For, on, onMount, Show, untrack } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onMount,
+	Show,
+	Suspense,
+	untrack,
+} from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
@@ -1874,16 +1885,25 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												</Button>
 											</div>
 										</Show>
-										<Show when={`${props.project}:${story().id}`} keyed>
-											{(_storyKey) => (
-												<StoryNotes
-													project={props.project}
-													storyId={story().id}
-													revision={story().revision}
-													busy={busy()}
-												/>
-											)}
-										</Show>
+										{/* Notes load independently; never suspend the host's whole-dialog lazy boundary. */}
+										<Suspense
+											fallback={
+												<p class={s.muted} role="status">
+													{t("stories.notes.loading", "Loading notes…")}
+												</p>
+											}
+										>
+											<Show when={`${props.project}:${story().id}`} keyed>
+												{(_storyKey) => (
+													<StoryNotes
+														project={props.project}
+														storyId={story().id}
+														revision={story().revision}
+														busy={busy()}
+													/>
+												)}
+											</Show>
+										</Suspense>
 									</>
 								)}
 							</Show>
