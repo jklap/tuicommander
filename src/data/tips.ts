@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Markdown references in AI Chat",
+		description:
+			"Select a passage in a Markdown file and choose Send to AI Chat to stage its path, source lines and quote in your open conversation without sending.",
+		shortcut: null,
+	},
+	{
 		feature: "Compose queue count",
 		description:
 			"The collapsed Compose button counts queued commands and messages. Hover or focus it for a breakdown, or open Compose to inspect the queue.",
