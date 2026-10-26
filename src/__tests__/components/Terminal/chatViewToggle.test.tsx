@@ -41,6 +41,7 @@ vi.mock("../../../invoke", () => ({
 }));
 
 import { Terminal } from "../../../components/Terminal/Terminal";
+import { applySessionStateEvent } from "../../../hooks/useAgentPolling";
 import { terminalsStore } from "../../../stores/terminals";
 
 /**
@@ -49,8 +50,8 @@ import { terminalsStore } from "../../../stores/terminals";
  * (see the comment above that `<Show>` in Terminal.tsx).
  */
 describe("chat view toggle", () => {
-	// Catches: the Show-keyed disposal freeze / lost scroll when switching to chat.
-	it("toggle_hides_canvas_without_unmounting_it", async () => {
+	// Catches: the Show-keyed disposal freeze, and a collapsed control that omits the shared FIFO count.
+	it("toggle_hides_canvas_without_unmounting_it_and_preserves_collapsed_fifo_count", async () => {
 		await import("../../../components/ComposePanel/ComposePanel");
 		const id = terminalsStore.add({
 			sessionId: "live-session",
@@ -83,6 +84,9 @@ describe("chat view toggle", () => {
 		const canvas = await findByTestId("canvas");
 		const hiddenAncestor = () => canvas.closest('[class*="contentHidden"]');
 		expect(hiddenAncestor()).toBeNull();
+		// A complete backend snapshot includes peer wake notices in the same FIFO count.
+		applySessionStateEvent({ session_id: "live-session", state: { agent_type: "claude", queued_commands: 1 } });
+		expect(rendered.getByText("1")).toBeTruthy();
 
 		terminalsStore.setViewMode(id, "chat");
 		await Promise.resolve();
@@ -95,5 +99,8 @@ describe("chat view toggle", () => {
 		terminalsStore.setViewMode(id, "cli");
 		await Promise.resolve();
 		expect(rendered.container.querySelector('[class*="composeHint"]')).not.toBeNull();
+		expect(rendered.getByText("1")).toBeTruthy();
+		applySessionStateEvent({ session_id: "live-session", state: { agent_type: "claude" } });
+		expect(rendered.queryByText("1")).toBeNull();
 	});
 });

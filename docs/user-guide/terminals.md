@@ -380,7 +380,8 @@ The Compose panel can leave work for an agent without steering its current turn:
 - The collapsed **Compose** button shows a small muted count for all waiting
   items, including commands and peer/orchestrator messages in the same FIFO.
   It disappears when the queue is empty. Hover or focus the button to see the
-  command/message breakdown.
+  command/message breakdown. On touch screens, open Compose and tap **N queued**
+  to inspect the waiting items; opening Compose does not expand the list.
 - In the open panel, **N queued** opens the queue list. Remove one entry there,
   or use **Clear all** to discard all waiting entries, including TUIC notices.
   Removing a mail notice does not delete the peer message from its inbox.

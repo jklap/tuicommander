@@ -1,7 +1,9 @@
 ## Collapsed Compose queue pill (2339-056c)
 
 - [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
-- [ ] Compare the Compose-area screenshot with variant B at desktop and 390px touch widths. The isolated agent-test desktop crop is under `~/Gits/.tmp/tuic-2339-visual/`; native resizing refused `core:window:allow-set-size`, so no mobile-width screenshot or visual-comparison pass is claimed.
+- [x] Coordinator-authorized browser fixture at `1200×844` and `390×844`: captured only the real Compose controls at counts 0 and 3, driven through `applySessionStateEvent` and the terminal store. Pixel comparison against the approved B mock has mean channel error below 0.5/255 for all four captures. Evidence and comparison metrics: `~/Gits/.tmp/tuic-2339-browser/`.
+- [x] At 390px, activating Compose opens the editor and **3 queued**, not the queue list. Activating **3 queued** then exposes all three command/notice/initial-prompt entries. The compact command/message title itself is hover/focus-only; touch users reach the detailed list through these existing controls. Verified with browser button clicks, not physical touchscreen input. No gesture was added.
+- [x] The real Terminal boundary regression fails on baseline `8039973d39085a255e0641db17f9cf12a4958ba6` because collapsed Compose has no rendered `1`; the current Terminal and ComposeToggle files pass all 6 tests. The disposable baseline export, verification Vite server and named browser sessions were removed or stopped.
 
 ## Development backend staleness (2332-3eef) — Rust restart required
 
