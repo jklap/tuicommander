@@ -414,6 +414,25 @@ as four flat tabs), three separate leaks around that rule:
   arrange logic. Terminals no branch claims yet, and the manual Global Workspace,
   keep the old live-layout behavior.
 
+## Implicit "Close" Must Target What Is On Screen, Not `activeGroupId`
+
+Found 2026-10-26 from a live report: Cmd+W with "main 1" in front closed other terminals,
+twice. A tmux-shim agent swarm had built a split, and "main 1" — a terminal in no pane group
+— rendered full-page over it (an *orphan overlay*, `TerminalArea.tsx`). `closeActiveTabOrPane`
+only asked `paneLayoutStore.isSplit()`, so it ran `closeActivePane()` against the hidden
+split's `activeGroupId` — the most recently spawned agent pane, which destroys every terminal
+in that group. Each press ate the next-newest agent pane.
+
+`utils/activeOrphanTab.ts` is the single source for the overlay predicate
+(`getActiveOrphanTabId`, also what `TerminalArea` hides the split with) and for the close
+decision (`resolveCloseTarget`/`closeActiveTarget`): an orphan terminal/diff/markdown/editor
+tab over a split closes *that tab*; otherwise a split closes its active pane and a non-split
+closes the active terminal. Every implicit entry point (keyboard, command palette, native menu,
+terminal context menu) goes through `closeActiveTabOrPane`; entry points that name a tab
+(tab-strip and pane sub-tab "Close Tab") call `closeTerminal(id)` directly and were never
+affected. Any new implicit-close entry point must go through `closeActiveTarget` — never
+call `closeActivePane()` on its own, and never decide "split vs. not" without the orphan check.
+
 ## SolidJS `<For>` Index Staleness
 
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
