@@ -53,7 +53,8 @@ mid-session `/rename` reaches the receiving end — Claude Code's hook payload c
 the CURRENT title on every fire, and `SessionStart`'s own title is only ever the
 session's title as of its very first fire. `SessionEnd`'s re-scrape of the full
 session-metadata trio plus title exists so the exit-resume-banner feature
-(`pty.rs`'s `clear_agent_type_on_confirmed_shell`) has the session's identity/title
+(`pty.rs`'s `snapshot_resumable_session_on_agent_exit`, run when the foreground
+observation confirms the shell is back) has the session's identity/title
 available at the exact moment the turn ends, not just at its start. `reason` is
 scraped raw and unclassified (Claude Code's `SessionEnd` reason string isn't a
 documented closed set) — recorded for diagnostics only, never a gate on whether a
