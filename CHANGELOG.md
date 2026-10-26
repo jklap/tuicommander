@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
+
 - Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
 - Start allowlisted GitHub issue intake polling on the owning headless daemon without a UI, retain it across client filter/stop calls, and report unregistered intake repositories (#2323-c294).
 - Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
