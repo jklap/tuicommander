@@ -1,3 +1,7 @@
+## Private mdkb staging (2367-6c08) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend, the next elevated mdkb installation uses a fresh private staging directory and removes it on success or failure. The rb planted-path RED and 12 targeted GREEN tests verify staging without a privileged install. This peer did not restart the daily app or invoke elevation; Rust changes do not hot-reload.
+
 ## Stable MCP instructions (2362-95a9) — Rust restart required
 
 - [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
