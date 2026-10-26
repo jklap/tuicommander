@@ -1080,7 +1080,9 @@ one configured ego binary and speaks ACP to it, per
   within one panel. Open tabs and the selected tab survive hide/show and detach;
   closing a tab leaves its durable ego conversation available in the picker.
   Selecting a saved tab attaches or replays it without sending a message, with
-  connecting status or a failure reason and Retry. Provider retries show one live
+  connecting status or a failure reason and Retry. Reopening the panel also
+  attaches the selected saved tab and automatically replaces a missing conversation;
+  other load failures remain visible. Provider retries show one live
   countdown from the received delay, with cause and attempt number; zero reads
   “retrying now”. Recovery or final failure clears the retry status.
   Tabs use conversation titles
