@@ -200,3 +200,6 @@ ORCHESTRATOR.md
 .claude/settings.local.json
 .claude/worktrees/
 .claude/*.lock
+trigger_mic
+trigger_mic.swift
+.pnpm-store/
