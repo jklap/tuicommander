@@ -2,6 +2,7 @@ import { batch, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { showNativeNotice } from "../services/nativeNotifications";
+import { notificationsStore } from "./notifications";
 import { repositoriesStore } from "./repositories";
 import { terminalsStore } from "./terminals";
 import { toastsStore } from "./toasts";
@@ -216,7 +217,11 @@ export function createProgressStore() {
 	/// lines. Rows of one repo ask together, so asks closer than the gap collapse
 	/// into one trailing refresh.
 	async function refreshSidebarFlow(project: string): Promise<void> {
-		const wait = SIDEBAR_FLOW_MIN_GAP_MS - (Date.now() - (sidebarFlowFetchedAt.get(project) ?? 0));
+		const elapsed = Date.now() - (sidebarFlowFetchedAt.get(project) ?? 0);
+		// A last read stamped in the future means the clock went back: read now. Waiting
+		// out the skew could exceed setTimeout's 2^31-1 ms limit, which fires after 1 ms
+		// and re-arms the trailing timer in a busy loop.
+		const wait = elapsed < 0 ? 0 : SIDEBAR_FLOW_MIN_GAP_MS - elapsed;
 		if (wait > 0) {
 			if (!sidebarFlowTrailing.has(project)) {
 				sidebarFlowTrailing.set(
@@ -367,12 +372,15 @@ export function createProgressStore() {
 			repositoriesStore.get(payload.repo_path)?.displayName ??
 			payload.repo_path.split(/[\\/]/).pop() ??
 			payload.repo_path;
-		void showNativeNotice({
-			title: `${projectName} · Progress ${entry.type}`,
-			body: entry.text,
-			key: `progress:${payload.repo_path}:${entry.type}:${entry.text}`,
-			target: { kind: "progress", project: payload.repo_path, ptyId: entry.ptyId ?? null },
-		});
+		if (!notificationsStore.isSessionSilenced(entry.ptyId)) {
+			void showNativeNotice({
+				title: `${projectName} · Progress ${entry.type}`,
+				body: entry.text,
+				key: `progress:${payload.repo_path}:${entry.type}:${entry.text}`,
+				target: { kind: "progress", project: payload.repo_path, ptyId: entry.ptyId ?? null },
+				isCurrent: () => !notificationsStore.isSessionSilenced(entry.ptyId),
+			});
+		}
 		toastsStore.add(
 			// The repo badge already names the project (it is passed below), so a
 			// title of "<project> · <step>" printed it twice and spent half the

@@ -1448,10 +1448,9 @@ pub(crate) struct NotificationConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates audio device for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("x-choice-resolver" = "audio_outputs"))]
     pub(crate) audio_device: Option<String>,
-    /// Drop the completion chime for sessions created over MCP/HTTP (`session
-    /// create`, `agent spawn`). An orchestration of many agents otherwise turns
-    /// every finished worker into a beep. Visual signals (activity item, badge,
-    /// OS notification) are unaffected.
+    /// Mute sounds and native notices for parented sessions; retain the legacy
+    /// completion-chime mute for unparented MCP/HTTP-created sessions. Activity,
+    /// bell entries and urgent cards are unaffected.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates silence remote completions for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) silence_remote_completions: bool,
@@ -2954,49 +2953,46 @@ where
     /// Apply only the fields changed by this caller to the latest locked file.
     /// Arrays are replaced as values; a null delta removes an object key.
     pub(crate) fn save_delta(&self, base: &T, desired: &T) -> Result<(), String> {
-        self.save_delta_with(base, desired, false)
-    }
-
-    /// Keep invalid existing JSON available for recovery instead of defaulting it.
-    #[cfg(feature = "dictation")]
-    pub(crate) fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String> {
-        self.save_delta_with(base, desired, true)
-    }
-
-    /// Repair a caller's malformed load without overwriting a valid document
-    /// another process saved since that load. Both cases are decided under one lock.
-    #[cfg(any(feature = "dictation", test))]
-    pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
-        let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
-        let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
-        let delta = json_merge_delta(&base_json, &desired_json);
-        let _guard = CONFIG_WRITE_LOCK.lock();
-        let _file_lock = self.acquire_file_lock()?;
-        match load_json_config_strict_from_path::<T>(&self.path) {
-            Ok(mut latest) => {
-                let Some(delta) = delta else { return Ok(()) };
-                apply_typed_json_merge_delta(&mut latest, &delta)?;
-                self.write_atomic(&latest)
-            }
-            Err(_) => self.write_atomic(desired),
-        }
-    }
-
-    fn save_delta_with(&self, base: &T, desired: &T, strict: bool) -> Result<(), String> {
         let base = serde_json::to_value(base).map_err(|e| e.to_string())?;
         let desired = serde_json::to_value(desired).map_err(|e| e.to_string())?;
         let Some(delta) = json_merge_delta(&base, &desired) else {
             return Ok(());
         };
-        let apply = move |latest: &mut T| {
+        self.update_with(move |latest: &mut T| {
             apply_typed_json_merge_delta(latest, &delta)?;
             Ok(((), true))
+        })
+    }
+
+    /// Apply a caller delta to the domain-normalized latest document, under
+    /// both locks. Derived defaults must not disappear when unchanged in a form.
+    #[cfg(any(feature = "dictation", test))]
+    pub(crate) fn save_delta_normalized(
+        &self,
+        base: &T,
+        desired: &T,
+        recover_invalid: bool,
+        normalize: impl FnOnce(T) -> T,
+    ) -> Result<(), String> {
+        let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
+        let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
+        let delta = json_merge_delta(&base_json, &desired_json);
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        let latest = match load_json_config_strict_from_path::<T>(&self.path) {
+            Ok(latest) => latest,
+            Err(_) if recover_invalid => return self.write_atomic(desired),
+            Err(error) => return Err(error),
         };
-        if strict {
-            self.update_with_strict(apply)
-        } else {
-            self.update_with(apply)
+        let before = serde_json::to_value(&latest).map_err(|e| e.to_string())?;
+        let mut latest = normalize(latest);
+        if let Some(delta) = delta {
+            apply_typed_json_merge_delta(&mut latest, &delta)?;
         }
+        if serde_json::to_value(&latest).map_err(|e| e.to_string())? != before {
+            self.write_atomic(&latest)?;
+        }
+        Ok(())
     }
 
     /// Write `value` unconditionally, taking only the cross-process file lock — no
@@ -10331,8 +10327,13 @@ mod tests {
         fs::write(&path, b"{broken").unwrap();
         let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
         let desired = serde_json::json!({"setting": "chosen"});
-        file.save_delta_recovering(&serde_json::json!({}), &desired)
-            .unwrap();
+        file.save_delta_normalized(
+            &serde_json::json!({}),
+            &desired,
+            true,
+            std::convert::identity,
+        )
+        .unwrap();
         let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(stored, desired);
         assert_eq!(corrupt_backups(dir.path()).len(), 1);
@@ -10345,9 +10346,11 @@ mod tests {
         let path = dir.path().join("recovery.json");
         fs::write(&path, br#"{"other":"new"}"#).unwrap();
         let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
-        file.save_delta_recovering(
+        file.save_delta_normalized(
             &serde_json::json!({}),
             &serde_json::json!({"setting": "chosen"}),
+            true,
+            std::convert::identity,
         )
         .unwrap();
         let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();

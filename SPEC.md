@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
+
 The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
 
 Native story list service (#2174-6b3f): optional state/priority/story_type filters combine server-side. Optional limit 1–100 and a plan/filter-bound keyset cursor page id-ordered records with additive next_cursor; absent limit preserves full filtered reads. Dispatch retains the existing complete plan and priority/id order.
@@ -42,7 +44,7 @@ Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLI
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tool names are removed without aliases; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
 
-**Version:** 2.0.0-beta.2
+**Version:** 2.0.0-beta.3
 **Last Updated:** 2026-09-16
 
 ## Shared form controls — Implemented (#1815-01c9)
@@ -661,6 +663,11 @@ Repository state is persisted by the Rust backend in `repositories.json`, in
 the single platform config directory shared by debug and release builds,
 written through the locked/atomic `ConfigFile` path.
 
+The desktop and headless HTTP routers share GitHub poller controls and repository
+status, PR and issue reads. Poller startup and event delivery do not require a
+WebView; TCP authentication and the trusted local Unix transport are unchanged.
+GitHub account/auth and mutation routes are not part of this shared surface.
+
 At bootstrap, `tuic-remote` may select one immutable named application instance
 with `--instance <id>`. Omitting it preserves the existing platform config path,
 keyring tuple (`tuicommander`/`vault`), and migrations. A named ID is a lowercase
@@ -717,6 +724,7 @@ Some frontend-only stores persist to localStorage:
 - [x] GitHub integration
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
+- [x] Optional subagent sounds and OS notifications through the existing silence control; preserve Activity, bell entries and urgent user cards
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
 - [x] Agent task_get/task_cancel share the existing task service, spawning-owner checks and immutable outcomes; task cancellation leaves the PTY alive. The current task tool stays until catalogue cutover (#2064-6385).
 - [x] Page retained MCP terminal output through text/byte offsets, with continuation instructions and eviction-gap reporting

@@ -457,9 +457,14 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
         })
         .collect();
 
-    // Count repos with cached GitHub status (successfully queried).
-    // `entry_count` is eventually consistent — fine for a diagnostic gauge.
-    let repos_monitored = state.git_cache.github_status.entry_count() as u32;
+    // Transition history belongs to the running poller, not to its expiring
+    // query payload cache. Empty successful snapshots count as monitored too.
+    let repos_monitored = state
+        .github
+        .poller
+        .lock()
+        .as_ref()
+        .map_or(0, |poller| poller.monitored_repo_count() as u32);
 
     GitHubDiagnostics {
         circuit_breaker_open,
@@ -1180,6 +1185,7 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
         *state.github.poller.lock() = Some(crate::github_poller::GitHubPoller {
             cmd_tx,
+            previous_prs: Default::default(),
             stop: std::sync::Arc::new(tokio::sync::Notify::new()),
         });
 

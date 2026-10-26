@@ -85,6 +85,18 @@ editable configuration defaults. See
 [Development Setup](../guides/development-setup.md#isolated-agent-desktop-checks-macos)
 for the resource audit, dry-run and stop commands.
 
+`make agent-test-github` and `make agent-test-github-stop` reuse the persistent
+`agent-test-ghlive` instance on port `19887` for authorized GitHub live checks.
+They pin both values rather than inheriting a per-agent instance override. This
+keeps the existing login available across worktrees and rebuilds without copying
+credentials or changing generic verification defaults. Only one coordinated owner
+may run this instance at a time. Its debug vault is stored in
+`~/.tuicommander-dev/instances/agent-test-ghlive/credentials.json`; configuration
+and account metadata stay in the platform config directory. Stop removes runtime
+PID/FIFO files only. A different instance name selects a different vault, not a
+fresh build of the same login. See the development guide's
+[persistent login procedure](../guides/development-setup.md#persistent-github-live-check-login).
+
 Which target defaults to what is deliberate and guarded. `make test` is the
 throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
 is Boss's daily driver and carries **no** instance, because switching it looks
@@ -598,7 +610,7 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 | `sounds.error` | `bool` | `true` | Play on error |
 | `sounds.completion` | `bool` | `true` | Play on completion |
 | `sounds.warning` | `bool` | `true` | Play on warning |
-| `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
+| `silence_remote_completions` | `bool` | `true` | Mute sounds and OS notices for parented sessions; retain the completion-chime mute for unparented HTTP/MCP sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 | `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
 
@@ -1038,6 +1050,8 @@ Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation c
 | `auto_send` | `bool` | `true` | Auto-submit after transcription |
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(base, config)`
+
+Voice saves resolve legacy engine defaults on the latest locked document before applying the caller’s delta. This preserves an unchanged engine choice without clobbering another client’s explicit choice. Isolated speech-output agent-test instances force effective hands-free listening off even if the saved file enables it.
 
 ### Config Defaults (read-only, no file)
 

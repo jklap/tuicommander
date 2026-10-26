@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import * as handsFree from "../../actions/handsFreeConversation";
 import { listDemo } from "../../components/Tasks/list/demo";
@@ -11,6 +11,8 @@ import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { storiesUi } from "../../stores/storiesUi";
 import { mockInvoke } from "../mocks/tauri";
+
+afterEach(() => repositoriesStore._testCancelPendingSave());
 
 /** Turn dictation on the way the app does: by reading the backend config. */
 async function enableDictation() {

@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 
+### Fixed
+
+- Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
+
+- Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
+
+## [2.0.0-beta.3] - 2026-10-26
+
+- Serve shared GitHub poller controls and repository status, PR and issue reads from headless `tuic-remote`, with the existing transport authentication (#2345-49f0).
+
+- Warn in development when Cargo dep-info inputs or a rebuilt executable outdate the running Rust backend; keep unrelated frontend-only landings quiet (#2332-3eef).
+- Keep final agent API failures red through idle and failed auto-retry; detect wrapped Claude connection loss/auth/JSON errors, Codex native and legacy final errors, and ego provider-failure receipts (#2335-9c03).
+
+- Remove inherited rustup proxy state from new terminals so repository toolchain pins apply; preserve explicit run-config toolchain overrides (#2318-4b44).
+- Extend the existing orchestration silence control to all sounds and OS notifications from agent-spawned sessions, while preserving Activity, bell entries and urgent user cards (#2341-be90).
+- Keep the GitHub monitored-repository count independent of expiring query results, and prevent queued or late poll requests from restoring retired monitoring entries (#2336-da0a).
+
+- Isolate repository-local settings read failures so healthy repositories refresh and unavailable repositories retain their last successful values (#2336-da0a).
+
+- Default Markdown reviews to the agent that opened the document on desktop and mobile, while preserving an explicit review-agent choice (#2329-dc53).
+
+- Keep Markdown list comment actions outside the full list so nested bullets, numbers and task checkboxes stay unobstructed (#2330-6ef8).
+- Align Workflow Designer actions and draggable palette controls with shared desktop and touch geometry; preserve draft rows and graph cards (#2259-9345).
+- Keep SSH discovery Probe actions separated with shared settings row spacing, and hide remote update actions when the current build clears the out-of-date warning (#2337-6a62).
+
+### Fixed
+
+- Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
+- Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
 
@@ -140,6 +169,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
 
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
+- Stop a remote's `HEAD` symref (e.g. `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch named after the remote, and classify `is_remote` from the full refname so remotes not named `origin` and local branches such as `origin/foo` or `feature/HEAD` are reported correctly (branch switcher, Git Panel Branches tab, base-ref picker, graph decorations).
+- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
+- `make build` / `make build-dmg` no longer fail locally with a missing-private-key error: updater artifact signing (`createUpdaterArtifacts`) is skipped when `TAURI_SIGNING_PRIVATE_KEY` is unset; CI/release builds that set the key are unchanged.
+- Fix plugin updates failing with "Failed to backup data/" on Linux: the `data/` backup now lives inside the plugins directory (same filesystem) instead of the OS temp dir, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file instead of a predictable path in shared `/tmp`.
+- Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so repeated activations no longer queue several frames and a late frame cannot focus a detached wrapper.
+- Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
+- Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo global workspace suppresses them.
+- Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
 
 ## [2.0.0-beta.1] - 2026-10-22
 

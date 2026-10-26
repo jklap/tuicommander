@@ -11,7 +11,10 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 }));
 
 vi.mock("../../invoke", () => ({ invoke: invokeMock }));
-vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
+vi.mock("../../stores/toasts", () => ({
+	toastsStore: { add: toastAdd },
+	setToastBellMirrorResolver: vi.fn(),
+}));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn() } }));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
@@ -23,6 +26,7 @@ vi.mock("../../stores/repositories", () => ({
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		state: { activeId: "tab-a", terminals: { "tab-a": { sessionId: "pty-a", repoPath: "/repo", name: "Agent A" } } },
+		get: () => undefined,
 	},
 }));
 

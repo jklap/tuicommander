@@ -73,6 +73,7 @@ choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
 Tap a file link in the transcript to open it in **Files**. A directory link
 opens that directory in **Files**. Links use the AI Chat workspace as their base.
+Saved tabs are attached before a message is sent, including when Chat is reopened after switching mobile tabs. If ego no longer has a saved conversation, Chat opens a fresh one automatically and removes only the stale local tab. Other load failures remain visible for explicit retry; they do not replace history.
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 
@@ -100,6 +101,9 @@ tabs and the selected tab are restored after restarting TUICommander, and their
 history is replayed when ego starts. Selecting a saved tab connects and loads it
 without sending a message. The panel shows **Connecting conversation…** while
 it attaches, or the failure reason and **Retry** if it cannot open the conversation.
+Reopening the panel on an existing connection also attaches the selected saved tab.
+If ego no longer has that conversation, Chat opens a fresh one automatically,
+without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 
