@@ -73,6 +73,7 @@ choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
 Tap a file link in the transcript to open it in **Files**. A directory link
 opens that directory in **Files**. Links use the AI Chat workspace as their base.
+Saved tabs are attached before a message is sent, including when Chat is reopened after switching mobile tabs. If ego no longer has a saved conversation, Chat opens a fresh one automatically and removes only the stale local tab. Other load failures remain visible for explicit retry; they do not replace history.
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 

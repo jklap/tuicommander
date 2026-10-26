@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
 
@@ -225,6 +226,18 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 	};
 }
 
+/** Mirror acpClient.newSession: its successful result includes a refreshed
+ * snapshot retaining the connection's other attachments. */
+async function openSession(session: string): Promise<string> {
+	const current = acpStore.connection(CONNECTION)?.attachments ?? [];
+	acpStore.applySnapshot(
+		snapshot({
+			attachments: [...current.filter((row) => row.sessionId !== session), attachment({ sessionId: session })],
+		}),
+	);
+	return session;
+}
+
 let sequence = 0;
 
 /** One event frame, as the stream would deliver it. */
@@ -303,10 +316,7 @@ beforeEach(() => {
 		acpStore.markStreaming(CONNECTION);
 		return opened;
 	});
-	client.newSession.mockImplementation(async () => {
-		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
-		return SESSION;
-	});
+	client.newSession.mockImplementation(() => openSession(SESSION));
 	client.listSessions.mockResolvedValue({ sessions: [], nextCursor: null });
 	// A replacement is a fresh process: nothing is attached until it loads.
 	client.reconnect.mockImplementation(async () => {
@@ -902,7 +912,9 @@ describe("AIChatPanel: one chat across repositories", () => {
 	});
 
 	it("starts one ego on the first message, in the workspace root, and a second tab reuses it", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = renderSwitchable();
 		await settle();
 		await send(container, "hello");
@@ -920,7 +932,9 @@ describe("AIChatPanel: one chat across repositories", () => {
 	});
 
 	it("keeps the same tabs and the same chat when the repository changes", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container, setRepo } = renderSwitchable();
 		await settle();
 		await send(container, "hello");
@@ -1005,6 +1019,96 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
 		expect(client.newSession).not.toHaveBeenCalled();
 		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	// Catches: launch commits a saved id before load succeeds, so the next send
+	// treats that unconfirmed connection/session pair as an attached conversation.
+	it("never sends to a saved conversation after its attachment was refused", async () => {
+		aiChatTabs.add("global", SECOND_SESSION);
+		client.loadSession.mockRejectedValue(new Error("MCP admission refused"));
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.send("First attempt");
+			await chat.send("Second attempt");
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(chat.error()).toContain("MCP admission refused");
+			expect(client.newSession).not.toHaveBeenCalled();
+			dispose();
+		});
+	});
+
+	// Catches: a remounted mobile Chat combines the module's connection with a
+	// different localStorage tab and sends before that tab has ever been loaded.
+	it("attaches the selected saved tab after remount before sending", async () => {
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.startSession();
+			dispose();
+		});
+		aiChatTabs.add("global", SECOND_SESSION);
+		client.loadSession.mockImplementation(async (_id, session) => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: session })] }));
+		});
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await settle();
+			await chat.send("Phone reply");
+			expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Phone reply", [], ROOT);
+			dispose();
+		});
+	});
+
+	// Catches: a stale mobile-local tab permanently traps Chat on a session that
+	// ego no longer stores; exercise both IPC and the browser HTTP error envelope.
+	it.each(["ipc", "http"])("replaces a missing saved conversation before sending over %s", async (transport) => {
+		aiChatTabs.add("global", SECOND_SESSION);
+		client.loadSession.mockRejectedValue(
+			transport === "ipc"
+				? missingSession
+				: new Error(`RPC acp_session_load failed: 502 ${JSON.stringify(missingSession)}`),
+		);
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.send("Recover my phone chat");
+			expect(client.newSession).toHaveBeenCalledExactlyOnceWith(CONNECTION, CHAT_ROOT);
+			expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION, "Recover my phone chat", [], ROOT);
+			expect(aiChatTabs.ids("global")).toEqual([SESSION]);
+			expect(chat.error()).toBeNull();
+			expect(chat.configOptions()).toEqual([MODEL_OPTION]);
+			dispose();
+		});
+	});
+
+	// Catches: explicit tab selection has a separate load path and must not
+	// keep a disappeared conversation pending after the first-send path recovers.
+	it("replaces a missing explicitly selected conversation without sending", async () => {
+		aiChatTabs.add("global", SECOND_SESSION);
+		client.loadSession.mockRejectedValue(missingSession);
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.selectSession(SECOND_SESSION);
+			expect(chat.sessionId()).toBe(SESSION);
+			expect(chat.error()).toBeNull();
+			expect(client.newSession).toHaveBeenCalledTimes(1);
+			expect(client.prompt).not.toHaveBeenCalled();
+			dispose();
+		});
 	});
 
 	function restoreTabs(): void {
@@ -1378,7 +1482,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	});
 
 	it("keeps both tabs and transcripts when the panel is hidden and shown", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const [visible, setVisible] = createSignal(true);
 		const { container } = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
 		await settle();
@@ -1405,13 +1511,18 @@ describe("AIChatPanel: parallel tabs", () => {
 	/** Two tabs on a live connection where neither has an attachment yet, then
 	 *  hidden and shown so the bound-root path replays them. */
 	async function unattachedTabs(visible: () => boolean, setVisible: (value: boolean) => void) {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const view = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
 		await settle();
 		for (const _ of [SESSION, SECOND_SESSION]) {
 			(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 			await settle();
 		}
+		// Simulate the backend dropping attachments, rather than making a
+		// successful session/new violate its refreshed-snapshot contract.
+		acpStore.applySnapshot(snapshot());
 		setVisible(false);
 		setVisible(true);
 		await settle();
@@ -1535,7 +1646,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect((second.container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Different draft");
 	});
 	it("keeps parked drafts with their chat tabs and expands parked long paste after restoration", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		const longPaste = Array.from({ length: 201 }, (_, index) => `word${index}`).join(" ");
@@ -1562,7 +1675,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
 	it("middle-click closes the chosen tab — catches missing auxclick handling", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
@@ -1694,7 +1809,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	});
 
 	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
@@ -1724,7 +1841,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(client.disconnect).not.toHaveBeenCalled();
 	});
 	it("opens a new tab with the focused-panel shortcut", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector("textarea") as HTMLTextAreaElement).dispatchEvent(
@@ -1735,7 +1854,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	});
 
 	it("keeps separate ACP transcripts and composer drafts while switching and closing tabs", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		await settle();
 		feed(
@@ -1778,7 +1899,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	});
 
 	it("restores both tabs and their transcripts after the panel mounts in a new document", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const first = await renderPanel();
 		await settle();
 		(first.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
@@ -2460,7 +2583,7 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		first.unmount();
 
-		await renderPanel();
+		renderIdlePanel();
 		await settle();
 
 		expect(client.connect).toHaveBeenCalledTimes(1);
@@ -3267,7 +3390,9 @@ describe("elicitationFields", () => {
 
 describe("AIChatPanel: a gap", () => {
 	it("replays every open tab after the ACP connection is replaced", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
@@ -3383,7 +3508,9 @@ describe("AIChatPanel: the session's own knobs", () => {
 
 	// Catches: a new tab keeps a blank select after its options arrive.
 	it("shows the current choice when a second tab receives its options after opening", async () => {
-		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		client.newSession
+			.mockImplementationOnce(() => openSession(SESSION))
+			.mockImplementationOnce(() => openSession(SECOND_SESSION));
 		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
@@ -3842,7 +3969,10 @@ describe("AIChatPanel: fork at message", () => {
 		const { container } = await renderPanel();
 		await settle();
 		acpStore.applySnapshot(
-			snapshot({ capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true } }),
+			snapshot({
+				attachments: [attachment()],
+				capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true },
+			}),
 		);
 		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
 		client.forkSession.mockResolvedValue(CHILD_SESSION);

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Attach restored mobile AI Chat tabs before sending, and open a fresh conversation when ego no longer has the saved session (#2348-8927).
+
 ## [2.0.0-beta.3] - 2026-10-26
 
 - Serve shared GitHub poller controls and repository status, PR and issue reads from headless `tuic-remote`, with the existing transport authentication (#2345-49f0).
