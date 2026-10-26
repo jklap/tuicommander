@@ -75,6 +75,7 @@ fn select_tabs(
         .max_by_key(|(_, root)| normalized(root).len())
         .map(|(repo, _)| repo)
         .ok_or("No registered repository contains this session directory")?;
+    let mut seen = std::collections::HashSet::new();
     Ok(tabs
         .iter()
         .filter_map(|tab| {
@@ -113,6 +114,7 @@ fn select_tabs(
                 opener_tuic_session: tab.opener_tuic_session.clone(),
             })
         })
+        .filter(|tab| seen.insert(normalized(&tab.absolute_path)))
         .collect())
 }
 

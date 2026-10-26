@@ -3393,8 +3393,13 @@ Detached checkout visibility: the sidebar shows directory name, short HEAD SHA a
 The session overflow loads a read-only usage block when opened. Claude and Codex
 show shared account quota for the live process profile. ego shows only the exact
 PID-bound session row from its v3 usage report, including separate API-equivalent
-estimates and unknown cost reasons. Unknown model, usage and stale data are
-labelled explicitly. Remote sessions use their owning daemon, never a local account.
+estimates and unknown cost reasons. Available model metadata is shown; missing
+model metadata does not obscure valid account quota. Unknown usage and stale data
+are labelled explicitly. Remote sessions use their owning daemon, never a local account.
+Desktop quota cards and the mobile menu use one presenter for provider/plan, window,
+percentage used and client-local reset times. The session menu scrolls inside the
+remaining session pane, below banners and above navigation. Markdown entries are
+unique by absolute file path; files in different worktrees remain separate.
 
 Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
 
