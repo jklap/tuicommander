@@ -75,7 +75,11 @@ export const TerminalChatTranscript: Component<{
 				busy={() => false}
 				observeToolDuration={false}
 				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
-				emptyMessage="No messages in this conversation yet."
+				emptyMessage={
+					chatViewStore.state.cursors[props.sessionId]?.epoch == null
+						? "Loading conversation…"
+						: "No messages in this conversation yet."
+				}
 			/>
 		</div>
 	);
