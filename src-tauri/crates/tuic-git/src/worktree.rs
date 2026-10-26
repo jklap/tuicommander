@@ -904,14 +904,40 @@ pub fn merged_pr_proof_from_pages(
 /// local default branch routinely trails, and the local default branch itself
 /// (it may hold merges not yet pushed). Missing refs are skipped.
 fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
-    [
-        format!("refs/remotes/origin/{default_branch}"),
-        format!("refs/heads/{default_branch}"),
-        format!("refs/remotes/{default_branch}"),
+    // A fully qualified default (see `get_remote_default_branch`) is already exact.
+    if default_branch.starts_with("refs/") {
+        return Some(default_branch.to_string())
+            .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
+            .into_iter()
+            .collect();
+    }
+    // A local default that tracks a non-origin remote (`develop` ->
+    // `upstream/develop`) trails that upstream exactly as it would trail
+    // `origin/<default>`, so its configured upstream is a base too.
+    let upstream = git_cmd(repo)
+        .args([
+            "for-each-ref",
+            "--format=%(upstream)",
+            &format!("refs/heads/{default_branch}"),
+        ])
+        .run_silent()
+        .map(|out| out.stdout.trim().to_string())
+        .filter(|upstream| upstream.starts_with("refs/remotes/"));
+    let mut bases: Vec<String> = Vec::new();
+    for base in [
+        Some(format!("refs/remotes/origin/{default_branch}")),
+        upstream,
+        Some(format!("refs/heads/{default_branch}")),
+        Some(format!("refs/remotes/{default_branch}")),
     ]
     .into_iter()
-    .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
-    .collect()
+    .flatten()
+    {
+        if !bases.contains(&base) && rev_at(repo, &format!("{base}^{{commit}}")).is_ok() {
+            bases.push(base);
+        }
+    }
+    bases
 }
 
 /// Human-readable form of `integration_bases`, for messages.
@@ -976,18 +1002,25 @@ fn classify_branch_merge(
         .map_err(|error| format!("could not inspect branch history: {error}"))?
         .stdout;
     let mut entries = reflog.lines().collect::<Vec<_>>();
-    let creation = entries
-        .pop()
-        .ok_or("branch creation is absent from reflog")?;
-    let (_, creation_message) = creation
-        .split_once('\t')
-        .ok_or("branch creation has no reflog message")?;
-    let source = creation_message.strip_prefix("branch: Created from ");
-    let from_default = source.is_some_and(|source| {
-        source == "HEAD"
-            || source == default_branch
-            || source == format!("refs/heads/{default_branch}")
-    });
+    // An empty reflog (expired by `gc.reflogExpire=now`, a `reflog expire`, or
+    // a ref created without one) only means the branch's origin is unknown. It
+    // cannot prove the branch merely followed the default branch, so skip the
+    // `InSync` shortcut and let the ancestry/patch/PR/remote checks below
+    // decide, instead of reporting the whole workspace as Unknown.
+    let from_default = match entries.pop() {
+        None => false,
+        Some(creation) => {
+            let (_, creation_message) = creation
+                .split_once('\t')
+                .ok_or("branch creation has no reflog message")?;
+            let source = creation_message.strip_prefix("branch: Created from ");
+            source.is_some_and(|source| {
+                source == "HEAD"
+                    || source == default_branch
+                    || source == format!("refs/heads/{default_branch}")
+            })
+        }
+    };
     let pull_upstream_is_default = entries
         .iter()
         .any(|entry| entry.ends_with("\tpull: Fast-forward"))
@@ -4308,6 +4341,27 @@ fn remote_head_branch(repo_path: &str, remote: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The name the remote-HEAD step of [`get_remote_default_branch`] returns for
+/// `<remote>/<branch>` when no local branch of that name exists: the
+/// qualified `<remote>/<branch>`, or `refs/remotes/<remote>/<branch>` when a
+/// ref, tag or local branch literally named `<remote>/<branch>` would shadow it.
+/// git resolves a short name through <name>, refs/<name>, refs/tags/<name>,
+/// refs/heads/<name> and only then refs/remotes/<name>; `integration_bases`,
+/// `list_base_ref_options` and `fetch_if_remote` accept the full name.
+/// Existence only (no `^{commit}`) for the shadow: a blob/tree tag or a
+/// non-commit `refs/<short>` shadows the name just the same.
+fn remote_default_reference(repo: &Path, remote: &str, branch: &str) -> Option<String> {
+    rev_at(repo, &format!("refs/remotes/{remote}/{branch}^{{commit}}")).ok()?;
+    let shadowed = ["refs/", "refs/heads/", "refs/tags/"]
+        .iter()
+        .any(|p| rev_at(repo, &format!("{p}{remote}/{branch}")).is_ok());
+    Some(if shadowed {
+        format!("refs/remotes/{remote}/{branch}")
+    } else {
+        format!("{remote}/{branch}")
+    })
+}
+
 /// Resolve a verified integration branch without network access.
 /// Prefer the main checkout's configured base, main/master, a remote's HEAD,
 /// then the main checkout's attached HEAD (never a linked checkout's HEAD).
@@ -4317,7 +4371,8 @@ fn remote_head_branch(repo_path: &str, remote: &str) -> Option<String> {
 /// (`branch.<name>.remote`); every other remote in `git remote` order. So a
 /// repo whose only or primary remote is `upstream` (or a fork setup) resolves.
 /// A remote's branch with no local branch of that name is returned qualified
-/// (`<remote>/<branch>`).
+/// (`<remote>/<branch>`, or `refs/remotes/<remote>/<branch>` when another ref
+/// shadows that short name: [`remote_default_reference`]).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     let repo = Path::new(repo_path);
     let verified = |branch: &str| -> Option<String> {
@@ -4388,7 +4443,7 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     for remote in remotes.into_iter().filter(|r| seen.insert(r.clone())) {
         if let Some(branch) = remote_head_branch(repo_path, &remote)
             && let Some(reference) = verified(&format!("refs/heads/{branch}"))
-                .or_else(|| verified(&format!("refs/remotes/{remote}/{branch}")))
+                .or_else(|| remote_default_reference(repo, &remote, &branch))
         {
             return Ok(reference);
         }
@@ -4397,12 +4452,13 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     if let Some(reference) = main_branch.as_deref().and_then(verified) {
         return Ok(reference);
     }
-    Err("Cannot resolve default branch: no valid configured base, main/master, origin/HEAD, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
+    Err("Cannot resolve default branch: no valid configured base, main/master, remote HEAD, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
 /// Local refs are a no-op. Returns Ok(()) on success or if the ref is local.
 pub fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), String> {
+    let ref_name = ref_name.strip_prefix("refs/remotes/").unwrap_or(ref_name);
     // A "/" alone does NOT mean remote — local branches routinely contain slashes
     // (e.g. "POC-0001/merge-radar", "feature/foo"). Only fetch when the ref actually
     // resolves as a remote-tracking ref under refs/remotes/.
@@ -4418,18 +4474,44 @@ pub fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), String> {
     if !is_remote_ref {
         return Ok(());
     }
-    if let Some(slash_pos) = ref_name.find('/') {
-        let remote = &ref_name[..slash_pos];
-        let branch = &ref_name[slash_pos + 1..];
-        if !remote.is_empty() && !branch.is_empty() {
-            git_cmd(Path::new(repo_path))
-                .timeout(FETCH_TIMEOUT)
-                .args(["fetch", remote, branch])
-                .run()
-                .map_err(|e| format!("Failed to fetch {ref_name}: {e}"))?;
-        }
+    if let Some((remote, branch)) = split_remote_ref(repo_path, ref_name) {
+        git_cmd(Path::new(repo_path))
+            .timeout(FETCH_TIMEOUT)
+            .args(["fetch", &remote, &branch])
+            .run()
+            .map_err(|e| format!("Failed to fetch {ref_name}: {e}"))?;
     }
     Ok(())
+}
+
+/// Split `<remote>/<branch>` against the configured remotes. Both halves may
+/// contain slashes (`my/fork` + `release/1.x`), so splitting on the first `/`
+/// would fetch the wrong remote.
+fn split_remote_ref(repo_path: &str, ref_name: &str) -> Option<(String, String)> {
+    let remotes = git_cmd(Path::new(repo_path))
+        .args(["remote"])
+        .run_silent()?;
+    let mut candidates = remotes
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let branch = ref_name.strip_prefix(r)?.strip_prefix('/')?;
+            (!branch.is_empty()).then(|| (r.to_string(), branch.to_string()))
+        });
+    let first = candidates.next()?;
+    // Remotes `my` and `my/fork` both own `refs/remotes/my/fork/release/1.x`
+    // (branch `fork/release/1.x` vs `release/1.x`). Guessing could fetch the
+    // wrong remote over the tracking ref, so refuse to split.
+    if candidates.next().is_some() {
+        tracing::warn!(
+            source = "worktree",
+            "remote ref {ref_name} matches several configured remotes; not fetching"
+        );
+        return None;
+    }
+    Some(first)
 }
 
 /// Persist the base ref for a branch in git config.
@@ -4539,7 +4621,7 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
 
         if full_ref.starts_with("refs/heads/") {
             local_names.insert(short_name.clone());
-            if short_name != default_branch {
+            if short_name != default_branch && full_ref != default_branch {
                 local_refs.push(BaseRefOption {
                     name: short_name,
                     kind: "local".to_string(),
@@ -4553,7 +4635,9 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
             if full_ref.ends_with("/HEAD") {
                 continue;
             }
-            if short_name == default_branch {
+            // A shadowed remote default is qualified (`refs/remotes/upstream/develop`);
+            // it is listed once, first, as the default.
+            if short_name == default_branch || full_ref == default_branch {
                 continue;
             }
             remote_refs.push(BaseRefOption {
@@ -7626,6 +7710,185 @@ mod tests {
     }
 
     #[test]
+    fn remote_default_branch_stays_qualified_when_a_local_branch_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A local branch literally named `upstream/develop`: git resolves the
+        // short name to it before refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["branch", "upstream/develop"])
+            .run()
+            .unwrap();
+        let path = repo.path().to_string_lossy().into_owned();
+        let got = get_remote_default_branch(&path).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+        assert_eq!(
+            integration_bases(repo.path(), &got),
+            vec!["refs/remotes/upstream/develop".to_string()]
+        );
+        let options = list_base_ref_options(path).unwrap();
+        assert_eq!(options[0].name, got);
+        assert!(options[0].is_default);
+        assert_eq!(
+            options
+                .iter()
+                .filter(|o| o.name.ends_with("upstream/develop"))
+                .count(),
+            2,
+            "the shadowing local branch stays listed separately: {options:?}"
+        );
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_tag_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A tag literally named `upstream/develop` wins over
+        // refs/remotes/upstream/develop for the short name.
+        git_cmd(repo.path())
+            .args(["tag", "upstream/develop"])
+            .run()
+            .unwrap();
+        let path = repo.path().to_string_lossy().into_owned();
+        let got = get_remote_default_branch(&path).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+        assert_eq!(
+            integration_bases(repo.path(), &got),
+            vec!["refs/remotes/upstream/develop".to_string()]
+        );
+        let options = list_base_ref_options(path).unwrap();
+        assert_eq!(options[0].name, got);
+        assert!(options[0].is_default);
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_non_commit_tag_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A tag pointing at a tree never peels to a commit, but still wins
+        // name resolution over refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["tag", "upstream/develop", "HEAD^{tree}"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_stays_qualified_when_a_top_level_ref_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // refs/upstream/develop outranks refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["update-ref", "refs/upstream/develop", "HEAD"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_keeps_a_local_branch_that_tracks_the_remote_branch() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        git_cmd(repo.path())
+            .args(["branch", "--track", "develop", "upstream/develop"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "develop");
+    }
+
+    #[test]
+    fn integration_bases_include_a_non_origin_upstream_the_local_default_trails() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        git_cmd(repo.path())
+            .args(["branch", "--track", "develop", "upstream/develop"])
+            .run()
+            .unwrap();
+        // upstream/develop moves on (a feature merged there); local develop
+        // has not been pulled yet.
+        git_cmd(src.path())
+            .args(["checkout", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(src.path())
+            .args(["commit", "--allow-empty", "-m", "merged upstream"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "upstream"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "develop");
+        // The local default trails its upstream, so the upstream must stay an
+        // integration base exactly as origin/<default> does for origin.
+        let bases = integration_bases(repo.path(), &got);
+        assert!(
+            bases.contains(&"refs/remotes/upstream/develop".to_string()),
+            "{bases:?}"
+        );
+        assert!(
+            bases.contains(&"refs/heads/develop".to_string()),
+            "{bases:?}"
+        );
+    }
+
+    #[test]
+    fn remote_default_branch_is_the_same_from_a_linked_worktree() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        let base = base_branch_of(repo.path());
+        // `aaa` sorts first in `git remote`, but the main checkout tracks `zzz`.
+        add_remote(repo.path(), src.path(), "aaa", Some("main"));
+        add_remote(repo.path(), src.path(), "zzz", Some("develop"));
+        git_cmd(repo.path())
+            .args(["config", &format!("branch.{base}.remote"), "zzz"])
+            .run()
+            .unwrap();
+        let linked_parent = TempDir::new().unwrap();
+        let linked = linked_parent.path().join("linked");
+        git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "linked-branch",
+                &linked.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let from_main = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        let from_linked = get_remote_default_branch(&linked.to_string_lossy()).unwrap();
+        assert_eq!(from_main, "zzz/develop");
+        assert_eq!(from_linked, from_main);
+    }
+
+    #[test]
+    fn list_base_ref_options_lists_a_qualified_remote_default_once_as_remote() {
+        let src = remote_source();
+        let repo = trunk_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        let refs = list_base_ref_options(repo.path().to_string_lossy().to_string()).unwrap();
+        assert_eq!(refs[0].name, "upstream/develop");
+        assert_eq!(refs[0].kind, "remote");
+        assert!(refs[0].is_default);
+        assert_eq!(
+            refs.iter().filter(|r| r.name == "upstream/develop").count(),
+            1
+        );
+    }
+
+    #[test]
     fn remote_default_branch_falls_back_locally_without_remotes() {
         let repo = setup_test_repo();
         git_cmd(repo.path())
@@ -9250,6 +9513,72 @@ branch refs/heads/feat
         assert_ne!(old, expected);
         fetch_if_remote(&repo.to_string_lossy(), "origin/main").unwrap();
         assert_eq!(rev_at(&repo, "refs/remotes/origin/main").unwrap(), expected);
+    }
+
+    #[test]
+    fn fetch_if_remote_handles_a_remote_name_containing_a_slash() {
+        let src = setup_test_repo();
+        git_cmd(src.path())
+            .args(["checkout", "-b", "release/1.x"])
+            .run()
+            .unwrap();
+        let repo = setup_test_repo();
+        git_cmd(repo.path())
+            .args(["remote", "add", "my/fork", &src.path().to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "my/fork"])
+            .run()
+            .unwrap();
+        commit_file(src.path(), "next.txt", "next\n");
+        let expected = rev_at(src.path(), "HEAD").unwrap();
+        fetch_if_remote(&repo.path().to_string_lossy(), "my/fork/release/1.x").unwrap();
+        assert_eq!(
+            rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn fetch_if_remote_does_not_guess_between_overlapping_remote_names() {
+        let src = setup_test_repo();
+        git_cmd(src.path())
+            .args(["checkout", "-b", "release/1.x"])
+            .run()
+            .unwrap();
+        let repo = setup_test_repo();
+        let url = src.path().to_string_lossy().into_owned();
+        git_cmd(repo.path())
+            .args(["remote", "add", "my/fork", &url])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "my/fork"])
+            .run()
+            .unwrap();
+        // `my` could equally own refs/remotes/my/fork/release/1.x. `git remote
+        // add` refuses the overlap, but a hand-edited config can express it.
+        git_cmd(repo.path())
+            .args(["config", "remote.my.url", &url])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args([
+                "config",
+                "remote.my.fetch",
+                "+refs/heads/*:refs/remotes/my/*",
+            ])
+            .run()
+            .unwrap();
+        let old = rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap();
+        commit_file(src.path(), "next.txt", "next\n");
+        fetch_if_remote(&repo.path().to_string_lossy(), "my/fork/release/1.x").unwrap();
+        assert_eq!(
+            rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap(),
+            old,
+            "an ambiguous remote/branch split must not fetch"
+        );
     }
 
     #[test]
@@ -11331,6 +11660,39 @@ branch refs/heads/feat
             !admin.exists(),
             "confirmed removal must prune the registration"
         );
+    }
+
+    /// `gc.reflogExpire=now` (or `git reflog expire --expire=now --all`) leaves
+    /// every branch with an empty reflog. That used to fail classification with
+    /// "branch creation is absent from reflog" and show the workspace as Unknown.
+    #[test]
+    fn a_branch_with_an_empty_reflog_is_still_classified() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let merged = add_worktree(&repo, "empty-reflog-merged");
+        let ahead = add_worktree(&repo, "empty-reflog-ahead");
+        // A real change: an empty commit has no patch, so it reads as integrated.
+        fs::write(ahead.join("own.txt"), "own work\n").expect("write file");
+        git_cmd(&ahead)
+            .args(["add", "own.txt"])
+            .run()
+            .expect("git add");
+        git_cmd(&ahead)
+            .args(["commit", "-m", "own work"])
+            .run()
+            .expect("commit on branch");
+        for branch in ["empty-reflog-merged", "empty-reflog-ahead"] {
+            fs::write(repo.join(".git/logs/refs/heads").join(branch), "").expect("empty reflog");
+        }
+
+        let status = inspect_workspace_lifecycle(&repo, "empty-reflog-merged");
+        assert_eq!(status.error, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert!(merged.exists());
+
+        let status = inspect_workspace_lifecycle(&repo, "empty-reflog-ahead");
+        assert_eq!(status.error, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
     }
 
     #[test]

@@ -172,10 +172,9 @@ pub(crate) fn update_from_base_impl(
             match git_cmd(&repo_path)
                 .args(["merge", &base, "--no-edit"])
                 // A `merge.ff=only` config must not fail this explicitly requested merge.
-                .args(crate::git_cli::merge_ff_override(
-                    &repo_path,
-                    Some(branch_name),
-                ))
+                // `git merge` applies the mergeOptions of the branch checked out in
+                // `repo_path`, which is not necessarily `branch_name`.
+                .args(crate::git_cli::merge_ff_override_for_head(&repo_path))
                 .run()
             {
                 Ok(_) => Ok(format!("Merged {base} into {branch_name}")),
@@ -1259,6 +1258,101 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
+    /// One branch whose reflog is gone used to fail the whole snapshot with
+    /// "branch creation is absent from reflog", so the frontend never got the
+    /// worktree list and stopped reconciling its sidebar rows with git.
+    #[tokio::test]
+    async fn repo_structure_survives_a_branch_with_no_reflog() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        let base = String::from_utf8(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["branch", "--show-current"])
+                .output()
+                .expect("current branch")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+        git(&["switch", "-q", "-c", "no-reflog"]);
+        // A real change: an empty commit has no patch, so main's classifier reads it
+        // as integrated (merged) and the assertion below would test nothing useful.
+        std::fs::write(path.join("own.txt"), "own work\n").expect("write file");
+        git(&["add", "own.txt"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "own commit",
+        ]);
+        git(&["switch", "-q", &base]);
+        std::fs::remove_file(path.join(".git/logs/refs/heads/no-reflog")).expect("remove reflog");
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let structure = get_repo_structure_impl(&state, path.to_string_lossy().to_string())
+            .await
+            .expect("an unclassifiable branch must not fail the structure snapshot");
+
+        assert!(!structure.worktree_paths.is_empty());
+        assert!(!structure.merged_branches.contains(&"no-reflog".to_string()));
+    }
+
+    /// `update_from_base` with the merge strategy must merge a diverged base even
+    /// when `merge.ff=only` and the checked-out branch's `mergeOptions` say
+    /// `--ff-only`: the explicit `--ff` it forwards is the last word.
+    #[test]
+    fn update_from_base_merge_succeeds_on_diverged_history_under_ff_only() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().to_string();
+        let git = |args: &[&str]| {
+            git_cmd(&path).args(args).run().unwrap();
+        };
+        git(&["branch", "-M", "main"]);
+        git(&["checkout", "-b", "feat"]);
+        std::fs::write(path.join("feat.txt"), "feat").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "feat work"]);
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("main.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "main moves on"]);
+        git(&["checkout", "feat"]);
+        git(&["config", "branch.feat.tuicommander-base", "main"]);
+        git(&["config", "merge.ff", "only"]);
+        git(&["config", "branch.feat.mergeOptions", "--ff-only"]);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let msg = update_from_base_impl(&state, &repo, "feat", Some("merge"))
+            .unwrap_or_else(|e| panic!("diverged merge under --ff-only: {e}"));
+        assert_eq!(msg, "Merged main into feat");
+        assert!(path.join("main.txt").exists());
+        assert!(path.join("feat.txt").exists());
+        let parents = git_cmd(&path)
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        assert_eq!(parents, 2, "a diverged merge makes a merge commit");
+    }
+
     // Catches a cached sidebar dirty badge surviving watcher invalidation.
     #[tokio::test]
     async fn monitoring_gitpoll_diff_cache_refreshes_dirty_badges_after_invalidation() {
