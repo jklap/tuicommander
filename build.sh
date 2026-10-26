@@ -25,6 +25,7 @@ UPDATE_PLUGINS="${UPDATE_PLUGINS:-yes}"
 
 BUILD_PATH="src-tauri/target/release/bundle/macos"
 APP_PATH="$BUILD_PATH/TUICommander.app"
+APP_DEST_DIR="$HOME/Applications"
 DMG_PATH=" src-tauri/target/release/bundle/dmg/"
 
 if [ -n "$RUN_ALL" ]; then
@@ -133,11 +134,10 @@ if [ -n "$BUILD" ]; then
         echo -e "  ${BOLD_RED}Build failed${OFF}"
         exit 1
     fi
-    (cd src-tauri && cargo clean)
 
     if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
-        # TODO: can we inject into the app???
-        git log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset %d' "$HASH_OLDER" "$HASH" > "$APP_PATH/Contents/Resources/git.log"
+        # TODO: can we inject it into the app??
+        git log --pretty=format:'%h %s%d' "$HASH_OLDER" "$HASH" > "$APP_PATH/Contents/Resources/git.log"
     fi
 
     # enable debug level logging in the app's Info.plist
@@ -288,16 +288,15 @@ if [ -n "$BUILD" ]; then
     # rename the app itself for reference
     mv "$APP_PATH" "$BUILD_PATH/TUICommander_${NIGHTLY}.app"
     #mv "$DMG_PATH/TUICommander_${NIGHTLY}_aarch64.dmg" .
-    mv "$BUILD_PATH/TUICommander_${NIGHTLY}.app" "$HOME/Applications/"
-    rm -f "$HOME/Applications/TUICommander.app"
-    ln -s "$HOME/Applications/TUICommander_${NIGHTLY}.app" "$HOME/Applications/TUICommander.app"
+    mv "$BUILD_PATH/TUICommander_${NIGHTLY}.app" "$APP_DEST_DIR/"
+    rm -f "$APP_DEST_DIR/TUICommander.app"
+    ln -s "$APP_DEST_DIR/TUICommander_${NIGHTLY}.app" "$APP_DEST_DIR/TUICommander.app"
+    open "$APP_DEST_DIR"
     # TODO: prune old versions
 
     if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
-        # TODO: can we inject into the app???
-
         # output log
-        git log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset %d' "$HASH_OLDER" "$HASH"
+        git --no-pager log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset%d' "$HASH_OLDER" "$HASH"
 
         echo "Old SHA: $HASH_OLDER"
         echo "New SHA: $HASH"
@@ -313,6 +312,8 @@ if [ -n "$BUILD" ]; then
             echo -e "${BOLD_RED}Unknown repo format: ${REPO}, skipping changes display${OFF}"
         fi
     fi
+
+    (cd src-tauri && cargo clean)
 fi
 
 exit 0
