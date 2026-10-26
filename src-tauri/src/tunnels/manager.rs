@@ -219,7 +219,7 @@ impl TunnelManager {
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
                 let cleanup = tokio::spawn(async move {
                     if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
-                    tracing::warn!(source = "tunnel_manager", tunnel_id = id, "Tunnel shutdown cleanup was not confirmed before timeout");
+                    tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
                 }
                     let _ = done_tx.send(());
                 });
@@ -378,7 +378,7 @@ impl TunnelManager {
             let task = handle.lock().supervisor.stop_and_take_task();
             if let Some(task) = task {
                 if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
-                    tracing::warn!(source = "tunnel_manager", tunnel_id = id, "Tunnel shutdown cleanup was not confirmed before timeout");
+                    tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
                 }
             }
         }
