@@ -55,12 +55,10 @@ const TEST_GITCONFIG: &str = "\
 /// files and signing settings leak in the same way. A test that needs a
 /// specific global setting still sets `GIT_CONFIG_GLOBAL` itself, after this.
 fn isolate_git_config(root: &std::path::Path) {
-    let path = root.join("gitconfig");
-    // Every test process of a nextest run writes this at once: write a private
-    // copy and rename it into place, so no git ever reads a half-written file.
-    let staging = root.join(format!("gitconfig.{}.tmp", std::process::id()));
-    std::fs::write(&staging, TEST_GITCONFIG).expect("write the test gitconfig");
-    std::fs::rename(&staging, &path).expect("install the test gitconfig");
+    // Each live process owns its pathname. Starting another nextest worker must
+    // not change the mtime used by an existing worker's Git config cache.
+    let path = root.join(format!("gitconfig.{}", std::process::id()));
+    std::fs::write(&path, TEST_GITCONFIG).expect("write the test gitconfig");
     // SAFETY: called from the process constructor, before libtest starts threads.
     unsafe {
         std::env::set_var("GIT_CONFIG_GLOBAL", &path);
@@ -415,6 +413,22 @@ mod tests {
         if std::env::var_os(HOSTILE_MARKER).is_some() {
             assert_only_test_gitconfig();
         }
+    }
+
+    // Catches: another nextest process replacing our config and invalidating Git caches.
+    #[test]
+    fn child_constructor_preserves_parent_git_config_metadata() {
+        let path = std::path::PathBuf::from(std::env::var_os("GIT_CONFIG_GLOBAL").unwrap());
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", HOSTILE_CHILD, "--nocapture"])
+            .env(HOSTILE_MARKER, "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), super::TEST_GITCONFIG);
+        assert_eq!(std::fs::metadata(path).unwrap().modified().unwrap(), before);
     }
 
     /// Re-run this test binary with a hostile inherited git environment (the
