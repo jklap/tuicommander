@@ -162,6 +162,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
 - Stop a remote's `HEAD` symref (e.g. `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch named after the remote, and classify `is_remote` from the full refname so remotes not named `origin` and local branches such as `origin/foo` or `feature/HEAD` are reported correctly (branch switcher, Git Panel Branches tab, base-ref picker, graph decorations).
+- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
