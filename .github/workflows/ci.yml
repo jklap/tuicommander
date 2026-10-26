@@ -78,9 +78,9 @@ jobs:
       - run: scripts/check-gitlink-reachable.sh
       - run: TMPDIR="$RUNNER_TEMP" scripts/test-check-gitlink-reachable.sh
 
-  frontend:
+  frontend-checks:
     timeout-minutes: 20
-    name: Frontend (typecheck + tests)
+    name: Frontend checks
     runs-on: ubuntu-22.04
     steps:
       # The plugins submodule carries the built-in plugin sources that
@@ -107,6 +107,9 @@ jobs:
       - name: Remote daemon release workflow contracts
         run: python3 .github/workflows/tests/test-remote-daemon-release.py
 
+      - name: Frontend shard workflow contracts
+        run: python3 .github/workflows/tests/test-frontend-shards.py
+
       - name: Shell tests
         run: make test-shell
 
@@ -122,8 +125,56 @@ jobs:
           node scripts/third-party-notices.mjs --self-test
           node scripts/third-party-notices.mjs --check --only js
 
+  # The isolated suite took 1134-1141s on hosted Linux, versus 327s locally,
+  # and later exceeded 20 minutes while still progressing. Partition the full
+  # suite across runners, not extra workers competing on the same four vCPUs.
+  frontend-tests:
+    timeout-minutes: 20
+    name: Frontend tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Runner resources
+        run: |
+          node -e 'const os = require("node:os"); console.log({node: process.version, cpus: os.cpus().length, parallelism: os.availableParallelism(), memoryGiB: os.totalmem() / 2 ** 30})'
+
+      # File-level timings stay visible without a line per passing test.
+      # Keep isolation, async-leak detection and the config's four-worker cap.
       - name: Tests
-        run: bash scripts/with-test-tmp.sh pnpm exec vitest run --reporter=verbose
+        run: bash scripts/with-test-tmp.sh pnpm exec vitest run --reporter=default --shard=${{ matrix.shard }}/4
+
+  # Preserve the existing required check name. A failed/cancelled/skipped shard
+  # must fail this gate, not cause it to be skipped and accepted as successful.
+  frontend:
+    timeout-minutes: 5
+    name: Frontend (typecheck + tests)
+    runs-on: ubuntu-22.04
+    needs: [frontend-checks, frontend-tests]
+    if: always()
+    steps:
+      - name: Require checks and every test shard
+        env:
+          CHECKS_RESULT: ${{ needs.frontend-checks.result }}
+          TESTS_RESULT: ${{ needs.frontend-tests.result }}
+        run: test "$CHECKS_RESULT" = success && test "$TESTS_RESULT" = success
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
