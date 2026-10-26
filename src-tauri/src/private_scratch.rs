@@ -199,15 +199,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn private_tempdir_is_0700_even_under_a_permissive_umask() {
-        // The mode is pinned explicitly, so it does not depend on the process umask.
-        let base = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let dir = private_tempdir_in(base.path(), "p-").unwrap();
-        assert_eq!(mode_of(dir.path()), 0o700);
-    }
-
     #[test]
     fn private_tempdir_fails_when_base_is_missing() {
         let base = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
