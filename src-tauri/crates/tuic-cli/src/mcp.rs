@@ -314,6 +314,40 @@ mod tests {
         );
     }
 
+    /// Catches: `*t > 0` filter mutated so a zero timeout_ms is accepted as a
+    /// real wait (zero read timeout), or the 60 s default dropped.
+    #[test]
+    fn a_zero_wait_timeout_uses_the_default_read_timeout() {
+        for tool in ["agent", "session"] {
+            assert_eq!(
+                mcp_read_timeout(tool, &json!({"action": "wait", "timeout_ms": 0})),
+                Some(std::time::Duration::from_secs(65))
+            );
+            assert_eq!(
+                mcp_read_timeout(tool, &json!({"action": "wait"})),
+                Some(std::time::Duration::from_secs(65))
+            );
+        }
+    }
+
+    /// Catches: the +5 s margin mutated to a product or dropped, and the
+    /// 300 s cap lost.
+    #[test]
+    fn the_wait_read_timeout_is_the_wait_plus_five_seconds() {
+        assert_eq!(
+            mcp_read_timeout("agent", &json!({"action": "wait", "timeout_ms": 10_000})),
+            Some(std::time::Duration::from_secs(15))
+        );
+        assert_eq!(
+            mcp_read_timeout("session", &json!({"action": "wait", "timeout_ms": 1})),
+            Some(std::time::Duration::from_millis(5_001))
+        );
+        assert_eq!(
+            mcp_read_timeout("agent", &json!({"action": "wait", "timeout_ms": 900_000})),
+            Some(std::time::Duration::from_secs(305))
+        );
+    }
+
     #[test]
     fn managed_cli_identity_is_sent_as_the_bridge_header() {
         let headers = mcp_headers(Some("mcp-1"), Some("peer-1"), "4242");
