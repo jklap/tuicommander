@@ -1174,6 +1174,70 @@ mod tests {
         assert_eq!(summary.detached_worktrees, structure.detached_worktrees);
     }
 
+    /// Catches a sibling branch switch leaving the cached sidebar on the old
+    /// branch when its ref survives and unrelated prunable registrations remain.
+    #[tokio::test]
+    async fn sidebar_2351_switch_with_retained_ref_and_prunable_checkouts() {
+        let run_git = |cwd: &Path, args: &[&str]| git_cmd(cwd).args(args).run().unwrap().stdout;
+        let (_dir, path) = setup_test_repo_with_commit();
+        let linked = tempfile::tempdir().unwrap();
+        let checkout = linked.path().join("poc-00001-slack-flap");
+        let old = "POC-00001-slack-flap";
+        let new = "POC-00003/endpoint-capability-audit";
+        run_git(
+            &path,
+            &["worktree", "add", "-b", old, checkout.to_str().unwrap()],
+        );
+        // These are detached, as in the colleague's porcelain, not missing
+        // branch workspaces. Discovery must not fail the whole refresh on them.
+        for i in 0..4 {
+            let missing = linked.path().join(format!("review-old-{i}"));
+            run_git(
+                &path,
+                &["worktree", "add", "--detach", missing.to_str().unwrap()],
+            );
+            std::fs::remove_dir_all(missing).unwrap();
+        }
+        let porcelain = run_git(&path, &["worktree", "list", "--porcelain"]);
+        assert_eq!(porcelain.matches("prunable ").count(), 4, "{porcelain}");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo = path.to_string_lossy().into_owned();
+        let initial = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
+        assert!(initial.worktree_paths.contains_key(old));
+        assert_eq!(initial.worktree_diagnostics.len(), 4);
+        let mut events = state.event_bus.subscribe();
+        crate::repo_watcher::start_watching(&repo, &state).unwrap();
+        run_git(&checkout, &["switch", "-c", new]);
+        assert!(!run_git(&path, &["for-each-ref", &format!("refs/heads/{old}")]).is_empty());
+
+        let refreshed = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) =
+                    events.recv().await
+                    && repo_path == repo
+                {
+                    let fresh = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
+                    if fresh.worktree_paths.contains_key(new) {
+                        return fresh;
+                    }
+                }
+            }
+        })
+        .await;
+        crate::repo_watcher::stop_watching(&repo, &state);
+        let fresh = refreshed.expect("branch switch must invalidate the cached sidebar inventory");
+        assert!(!fresh.worktree_paths.contains_key(old));
+        assert_eq!(fresh.worktree_paths[new].branch, new);
+        assert_eq!(Path::new(&fresh.worktree_paths[new].path), checkout);
+        assert_eq!(fresh.worktree_diagnostics.len(), 4);
+        assert!(tuic_git::worktree::resolve_removable_workspace(&path, old).is_err());
+        tuic_git::worktree::remove_worktree_by_workspace_id(&repo, new, false, None, false)
+            .expect("the current sidebar row must be removable");
+        assert!(!checkout.exists());
+        assert!(!run_git(&path, &["for-each-ref", &format!("refs/heads/{old}")]).is_empty());
+    }
+
     /// Progressive loading splits one refresh into `get_repo_structure` (phase 1)
     /// then `get_repo_diff_stats` (phase 2), and both need the branch→path map.
     /// Each was forking `git worktree list` for itself, so every repo-changed
