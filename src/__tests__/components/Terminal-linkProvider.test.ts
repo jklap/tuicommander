@@ -49,6 +49,16 @@ describe("linkProvider regexes", () => {
 			expect(matchAll("see ../lib/utils.py")).toEqual(["../lib/utils.py"]);
 		});
 
+		// Catches: punctuation trimming changing the target of a final parent-directory segment.
+		it("preserves parent-directory targets while excluding a following sentence period", () => {
+			expect(matchAll("browse ../.. and /repo/src/.. and C:\\repo\\src\\..")).toEqual([
+				"../..",
+				"/repo/src/..",
+				"C:\\repo\\src\\..",
+			]);
+			expect(matchAll("browse ../../...")).toEqual(["../../.."]);
+		});
+
 		it("matches ~/ home paths", () => {
 			expect(matchAll("cat ~/Documents/notes.md")).toEqual(["~/Documents/notes.md"]);
 		});
