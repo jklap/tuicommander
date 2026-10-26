@@ -1,0 +1,9 @@
+# not restricted to the root as this will also then allow for worktrees
+# include all the directories down to bundle which is what we want to keep
++ src-tauri/target/
++ src-tauri/target/release/
++ src-tauri/target/release/bundle/
++ src-tauri/target/release/bundle/**
+# and then exclude everything else in target
+- src-tauri/target/**
+- node_modules/
