@@ -54,6 +54,10 @@ export TMPDIR="$TEST_TMP/"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export TUIC_TEST_TMP_ROOT="$TEST_TMP"
 export TUIC_TEST_HOST_TMPDIR="$TEST_TMP_HOST"
+# A throwaway HOME for the test processes, like `make check`'s Rust steps.
+# cargo-mutants runs nextest, whose setup script applies it to the tests only
+# (cargo, rustup and mbx below keep the real HOME). TUIC_TEST_FAKE_HOME=0 opts out.
+export TUIC_TEST_FAKE_HOME="${TUIC_TEST_FAKE_HOME:-1}"
 SRC="$ROOT/.tmp/mutants-src"
 DIFF="$ROOT/.tmp/mutants.diff"
 

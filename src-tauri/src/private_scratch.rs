@@ -182,4 +182,37 @@ mod tests {
         assert!(write_private_file(dir.path(), "link", b"y", 0o600).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"victim");
     }
+
+    #[test]
+    fn staged_dir_is_removed_on_panic() {
+        let base = tempfile::tempdir().unwrap();
+        let seen = std::sync::Mutex::new(None);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let staged =
+                stage_for_elevated_copy(base.path(), "mdkb-install-", "bin", b"x").unwrap();
+            *seen.lock().unwrap() = Some(staged.path().parent().unwrap().to_path_buf());
+            panic!("elevated copy blew up");
+        }));
+        assert!(result.is_err());
+        let dir = seen.lock().unwrap().clone().unwrap();
+        assert!(
+            !dir.exists(),
+            "unwinding drops the guard and removes the dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_tempdir_is_0700_even_under_a_permissive_umask() {
+        // The mode is pinned explicitly, so it does not depend on the process umask.
+        let base = tempfile::tempdir().unwrap();
+        let dir = private_tempdir_in(base.path(), "p-").unwrap();
+        assert_eq!(mode_of(dir.path()), 0o700);
+    }
+
+    #[test]
+    fn private_tempdir_fails_when_base_is_missing() {
+        let base = tempfile::tempdir().unwrap();
+        assert!(private_tempdir_in(&base.path().join("absent"), "p-").is_err());
+    }
 }

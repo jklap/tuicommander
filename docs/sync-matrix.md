@@ -850,9 +850,10 @@ When changing where tests, the wrapper, fixtures, scripts or agent skills put sc
 
 | File | What to update |
 |------|----------------|
-| `scripts/with-test-tmp.sh` | Resolution order and prune rules; keep `scripts/test-with-test-tmp-prune.sh` / `-readonly-home.sh` in step |
+| `scripts/with-test-tmp.sh` | Resolution order, prune rules and the opt-ins (`TUIC_TEST_FAKE_HOME`, `TUIC_TEST_ISOLATE_GIT_CONFIG`, the macOS+sccache `CC`/`CXX` pin, the macOS `AR` pin); keep `scripts/test-with-test-tmp-prune.sh` / `-readonly-home.sh` / `-fake-home.sh` / `-git-config.sh` and `scripts/test-tmp-lib-functions.sh` in step, and the fake-HOME handling in `src-tauri/scripts/nextest-test-tmp.{sh,ps1}`, the Makefile's `check`/`cov`, `scripts/mutants.sh` and `.github/workflows/ci.yml` |
+| `scripts/check-gate.sh` | Background `make check` into a log file streamed by the script itself (no pipe, no process substitution), the INT/TERM/EXIT trap that stops make, and the `mktemp` template; `scripts/test-check-gate.sh` (stub make) and `.claude/skills/check-gate/SKILL.md` |
 | `src-tauri/crates/tuic-test-support/src/lib.rs` | `host_temp_dir`/`test_base`/`test_temp_root`, the socket root (`t.XXXXXX`, marker, exit cleanup), the budget constants (`SUN_PATH_USABLE`, `MAX_TEST_SOCKET_NAME`, `MAX_SOCKET_ROOT_LEN`, `MAX_SOCKET_HOST_LEN`), `SocketSpelling`/`in_dir`, `socket_test_can_run`; `tests/socket_root.rs`, `tests/temp_roots.rs`, the budget table in `docs/guides/development-setup.md` |
-| `scripts/test-tmp-lib.sh` | Shared shell resolver (wrapper, nextest setup, `mutants.sh`, shell tests) and its FNV-1a checkout hash; `scripts/test-with-test-tmp-roots.sh` |
+| `scripts/test-tmp-lib.sh` | Shared shell resolver (wrapper, nextest setup, `mutants.sh`, shell tests) and its FNV-1a checkout hash; `scripts/test-with-test-tmp-roots.sh`. Its `tuic_git_isolate_config` file must match `tuic-test-support`'s `TEST_GITCONFIG` (`scripts/test-with-test-tmp-git-config.sh` fails otherwise) |
 | `src-tauri/scripts/nextest-test-tmp.{sh,ps1}` | Same default as the wrapper when no root was chosen (the `.ps1` reimplements the hash) |
 | `scripts/test-tmp-root.mjs` | Node-side resolver for `vitest.config.ts` and `scripts/check-frontend-cycles.mjs` |
 | `scripts/check-no-home-gits.mjs` | Scan roots, patterns and the allow-list |
@@ -870,6 +871,7 @@ When adding or removing a process-inspection call site, or the logged `ps` fallb
 |------|----------------|
 | `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); wired into `make check` and `.github/workflows/ci.yml` |
 | `docs/backend/pty.md` | Native process snapshot, the `ps` fallback and its removal plan |
+| `src-tauri/crates/tuic-test-support/{build.rs,src/identity_probe_main.rs}` | The identity probe tests install as a named foreground process (and as a local `ps` stand-in); its personalities, `tests/identity_probe.rs`, and the paragraph in `docs/guides/development-setup.md` → Testing |
 
 ### Config-instance scoping (`TUIC_APP_INSTANCE`)
 When changing which make target launches against which configuration directory:

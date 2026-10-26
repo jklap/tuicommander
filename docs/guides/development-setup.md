@@ -300,6 +300,29 @@ Test scratch comes from your temp directory, never from `$HOME`:
 apply that order. The checkout hash is FNV-1a 64 of the checkout's physical path,
 the same in every one, so parallel worktrees never share a default root.
 
+Two opt-ins of `scripts/with-test-tmp.sh` change what a wrapped command sees
+beyond its temp dirs:
+
+| Variable | Effect | Set by |
+|---|---|---|
+| `TUIC_TEST_FAKE_HOME=1` | `HOME=<root>/home` for the command. `CARGO_HOME`/`RUSTUP_HOME` are pinned to the real home first (from the passwd entry when `HOME` is unset), so cargo keeps its registry and toolchains. The nextest setup script applies the same flag to the test processes only, so `TUIC_TEST_FAKE_HOME=1 cargo nextest run` works without the wrapper too. On Windows the setup script sets `HOME` alone (the `dirs` crate reads Known Folders there) | `make check`'s and `make cov`'s Rust test steps, `scripts/mutants.sh`, CI's Linux/macOS Rust test steps |
+| `TUIC_TEST_ISOLATE_GIT_CONFIG=1` | git reads `<root>/gitconfig` (the same content as `tuic-test-support`'s `TEST_GITCONFIG`) and no system config, instead of yours. Not the default: `pnpm audit`, `cargo audit` and the submodule checks need your credential helper, `url.*.insteadOf` and proxy settings | `make test-shell` |
+
+On macOS with `sccache` on `PATH` the wrapper also exports `CC=cc CXX=c++` (unless
+you set them), so meson does not wrap its compiler with sccache, whose socket
+would not fit `sun_path` under the long per-run `TMPDIR`. Nowhere else: `CC` is
+part of the native build fingerprint.
+
+On macOS the wrapper also exports `AR` as the real toolchain `ar` (what `xcrun --find ar`
+prints), unless you set it. `/usr/bin/ar` is a shim that runs `xcrun`; where `xcrun` cannot
+write its lookup cache (the agent sandbox) a cache miss prints `couldn't create cache file`
+*before* the usage text, and meson accepts Apple's `ar` only when stderr starts with
+`usage` — so the bundled WebRTC build (`tuic-dictation`) fails with `Unknown linker(s): ar`
+whenever the environment is one `xcrun` has not cached. Which environments are cached
+changes over time, so this does not depend on the cache. (A separate, intermittent sandbox
+failure: the proxy sometimes truncates meson's abseil download, which surfaces as
+`Incorrect hash for source`; re-running the build succeeds.)
+
 `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` still puts scratch in the
 checkout, but only as an explicit opt-in: it is unsafe wherever writes to the
 checkout's `.git/hooks` or `.git/config` are denied (observed in the agent
@@ -315,8 +338,22 @@ bytes and the host temp dir at most 72:
 | `$TMPDIR` | bytes | longest test socket | result |
 |---|---|---|---|
 | macOS default (`/var/folders/xx/…/T`) | 49 | 80 | fits, 23 bytes spare |
-| agent sandbox | 72 | 103 | fits, 0 bytes spare |
+| agent sandbox | 72 | 103 | fits, 0 bytes spare — for self-named sockets only (fixed-name ones go `UNCHECKED`, below) |
 | long CI-like | 90 | 121 | fails with the budget message |
+| agent sandbox, short symlink (`/tmp/srtmon.XXXXXXXX`) | 20 | 51 | fits, 52 bytes spare |
+
+The host temp dir can be spelled two ways for the same directory: the sandbox's
+real path (72 bytes) and a short symlink to it (20 bytes). Both hold every socket
+this repo names itself, but only the short one holds mdkb's own staging socket
+(`HOME/.mdkb/daemon-hook.sock.<pid>.tmp`, a name the tests cannot shorten; it needs
+a host temp dir of at most 54 bytes). In the long spelling that test (and any other
+entry in `tuic_test_support::FIXED_NAME_SOCKETS`) would print `UNCHECKED` and pass
+without running. `tuic-test-support`'s `socket_environment` test is the runtime
+blocker for that: it fails, naming the sockets, the host temp dir and its length,
+unless the run uses a shorter `TMPDIR`, sets `TUIC_TEST_SOCKET_ROOT`, or accepts
+the gap with `TUIC_ALLOW_UNCHECKED_SOCKET_TESTS=1`. It also pins the outcome for
+both layouts, so a change to the budget constants cannot move the line silently.
+Add every new fixed-name socket test's path to `FIXED_NAME_SOCKETS`.
 
 Over budget, the panic names the host temp dir and its length, the would-be root
 length, the 81/72-byte budgets and `TUIC_TEST_SOCKET_ROOT=<short private dir>`;
@@ -357,6 +394,20 @@ with a reason) or the shrink-only per-file counts in
 the same change, `node scripts/check-no-hardcoded-tmp.mjs --write-baseline`) but
 never up. New tests use a fake root that never exists rather than a `/tmp/...`
 string.
+
+A test that needs a process with a particular name in the foreground (`claude`,
+`bash`, `tuic-remote`, a `claude/versions/2.1.5` layout) installs
+`tuic_test_support::install_identity_probe(dir, name)`: a small std-only program
+(`src-tauri/crates/tuic-test-support/src/identity_probe_main.rs`) that the
+crate's `build.rs` compiles with the build's own `rustc`. Never copy `/bin/cat`,
+`/bin/sh` or `/bin/sleep` instead: the agent sandbox SIGKILLs a relocated Apple
+platform binary ("Killed: 9"), and a symlink, a script or `exec -a` reports the
+wrong executable to `proc_pidpath`/`/proc/<pid>/exe`. The probe needs no
+`codesign`. With no arguments it echoes stdin until EOF (alive while its stdin is
+open, like `cat`); `--print <words…>` prints them; installed as `ps` (or run with
+`--ps`) it answers `-p <pid> -o comm=` natively, for a test that runs
+remote-side shell text such as `verified_kill` locally where `/bin/ps` cannot run.
+Covered by `crates/tuic-test-support/tests/identity_probe.rs`.
 
 ### Live peer-mail wake canary
 
