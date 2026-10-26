@@ -9,11 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 ### Added
 
+- Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).
+
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
 
 - Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
+- Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
+- Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).
 
 - Keep AI Chat message actions below their answer without overlapping the next message; use compact Copy and Fork controls and remove redundant code-block Copy buttons (#2366-0408).
 
@@ -32,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
 
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
+- Stage elevated mdkb installs and Linux `.deb`/`.rpm` installs in fresh private 0700 temp directories instead of predictable `/tmp` paths another local user could pre-create or swap.
 
 ## [2.0.0-beta.3] - 2026-10-26
 
