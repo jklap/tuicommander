@@ -1,3 +1,8 @@
+## Collapsed Compose queue pill (2339-056c)
+
+- [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
+- [ ] Compare the Compose-area screenshot with variant B at desktop and 390px touch widths. The isolated agent-test desktop crop is under `~/Gits/.tmp/tuic-2339-visual/`; native resizing refused `core:window:allow-set-size`, so no mobile-width screenshot or visual-comparison pass is claimed.
+
 ## Development backend staleness (2332-3eef) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.

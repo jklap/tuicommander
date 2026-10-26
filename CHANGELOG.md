@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
+
 ### Fixed
 
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).

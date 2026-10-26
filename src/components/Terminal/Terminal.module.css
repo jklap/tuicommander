@@ -110,25 +110,23 @@
   bottom: 0;
   left: 12px;
   z-index: 10;
-  display: flex;
-  align-items: center;
-  padding: 2px 10px;
-  font-size: 11px;
+  gap: 4px;
   font-family: var(--font-ui);
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  cursor: pointer;
   opacity: 0.5;
-  user-select: none;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s ease;
 }
 
-.composeHint:hover {
+.composeHint:hover,
+.composeHint:focus-visible {
   opacity: 1;
-  color: var(--fg-primary);
+}
+
+.composeQueueCount {
+  color: var(--fg-secondary);
+  background: var(--bg-highlight);
+  border-radius: var(--radius-sm);
+  padding-inline: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Shown in place of CanvasTerminal once the backend session has exited. */
