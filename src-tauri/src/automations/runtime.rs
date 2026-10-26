@@ -467,7 +467,7 @@ mod tests {
             ..Default::default()
         };
         let (paths, errors) = intake_poll_paths(&state, &intake);
-        assert!(paths.is_empty());
+        assert_eq!(paths, Vec::<String>::new());
         let error = &errors[0];
         assert!(
             error.contains("missing/repository") && error.contains("not registered"),
@@ -480,7 +480,7 @@ mod tests {
     async fn empty_intake_does_not_start_poller() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let (paths, errors) = intake_poll_paths(&state, &Default::default());
-        assert!(errors.is_empty());
+        assert_eq!(errors, Vec::<String>::new());
         crate::github_poller::set_intake_paths(&state, paths).unwrap();
         assert!(state.github.poller.lock().is_none());
     }
