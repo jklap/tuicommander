@@ -981,18 +981,25 @@ fn classify_branch_merge(
         .map_err(|error| format!("could not inspect branch history: {error}"))?
         .stdout;
     let mut entries = reflog.lines().collect::<Vec<_>>();
-    let creation = entries
-        .pop()
-        .ok_or("branch creation is absent from reflog")?;
-    let (_, creation_message) = creation
-        .split_once('\t')
-        .ok_or("branch creation has no reflog message")?;
-    let source = creation_message.strip_prefix("branch: Created from ");
-    let from_default = source.is_some_and(|source| {
-        source == "HEAD"
-            || source == default_branch
-            || source == format!("refs/heads/{default_branch}")
-    });
+    // An empty reflog (expired by `gc.reflogExpire=now`, a `reflog expire`, or
+    // a ref created without one) only means the branch's origin is unknown. It
+    // cannot prove the branch merely followed the default branch, so skip the
+    // `InSync` shortcut and let the ancestry/patch/PR/remote checks below
+    // decide, instead of reporting the whole workspace as Unknown.
+    let from_default = match entries.pop() {
+        None => false,
+        Some(creation) => {
+            let (_, creation_message) = creation
+                .split_once('\t')
+                .ok_or("branch creation has no reflog message")?;
+            let source = creation_message.strip_prefix("branch: Created from ");
+            source.is_some_and(|source| {
+                source == "HEAD"
+                    || source == default_branch
+                    || source == format!("refs/heads/{default_branch}")
+            })
+        }
+    };
     let pull_upstream_is_default = entries
         .iter()
         .any(|entry| entry.ends_with("\tpull: Fast-forward"))
@@ -11157,6 +11164,39 @@ branch refs/heads/feat
             !admin.exists(),
             "confirmed removal must prune the registration"
         );
+    }
+
+    /// `gc.reflogExpire=now` (or `git reflog expire --expire=now --all`) leaves
+    /// every branch with an empty reflog. That used to fail classification with
+    /// "branch creation is absent from reflog" and show the workspace as Unknown.
+    #[test]
+    fn a_branch_with_an_empty_reflog_is_still_classified() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let merged = add_worktree(&repo, "empty-reflog-merged");
+        let ahead = add_worktree(&repo, "empty-reflog-ahead");
+        // A real change: an empty commit has no patch, so it reads as integrated.
+        fs::write(ahead.join("own.txt"), "own work\n").expect("write file");
+        git_cmd(&ahead)
+            .args(["add", "own.txt"])
+            .run()
+            .expect("git add");
+        git_cmd(&ahead)
+            .args(["commit", "-m", "own work"])
+            .run()
+            .expect("commit on branch");
+        for branch in ["empty-reflog-merged", "empty-reflog-ahead"] {
+            fs::write(repo.join(".git/logs/refs/heads").join(branch), "").expect("empty reflog");
+        }
+
+        let status = inspect_workspace_lifecycle(&repo, "empty-reflog-merged");
+        assert_eq!(status.error, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof, Some("ancestry"));
+        assert!(merged.exists());
+
+        let status = inspect_workspace_lifecycle(&repo, "empty-reflog-ahead");
+        assert_eq!(status.error, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
     }
 
     #[test]
