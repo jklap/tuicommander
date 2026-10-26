@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Keep MCP initialize instructions unchanged by live terminal and peer churn; current inventory remains available through session and agent tools (#2362-95a9).
+- Keep Plans and Stories visible when changing plans, stories or filters while notes load (#2354-a8a3).
+
+- Show readable story transition labels, criterion numbers and text, and compact session actors with full-ID tooltips (#2355-bb93).
+
+- Keep the toolbar repository filter and manual sidebar density controls blue while active, independent of shared button stylesheet order (#2353-9fca).
 
 - Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
 - Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.

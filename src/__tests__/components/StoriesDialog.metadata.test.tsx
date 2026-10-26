@@ -66,9 +66,69 @@ it("story_detail_shows_claim_session_and_history — catches: detail that drops 
 	const metadata = within(screen.getByRole("region", { name: "Story metadata" }));
 	expect(metadata.getByText("API worker")).toBeTruthy();
 	expect(metadata.getByText("session-1")).toBeTruthy();
-	await waitFor(() => expect(screen.getByRole("region", { name: "Transition history" })).toHaveTextContent("block"));
+	await waitFor(() => expect(screen.getByRole("region", { name: "Transition history" })).toHaveTextContent("Blocked"));
 	expect(metadata.getByText("Revision 7")).toBeTruthy();
 });
+it("transition history renders human labels — catches: raw JSON, zero-based criteria and closed-session UUIDs", async () => {
+	const { StoryMetadata } = await import("../../components/StoriesDialog/StoryMetadata");
+	const closedId = "5a18a948-8050-4185-838c-e7b879fb3884";
+	vi.mocked(invoke).mockResolvedValue({
+		type: "transitions",
+		value: [
+			{
+				storyId: "s1",
+				revision: 3,
+				command: { check_criterion: 0 },
+				actor: { type: "managed_session", session_id: closedId },
+			},
+		],
+	});
+	render(() => <StoryMetadata project="/repo" story={story} />);
+	const history = within(screen.getByRole("region", { name: "Transition history" }));
+	expect(await history.findByText("Criterion 1 checked: Works")).toBeTruthy();
+	expect(history.getByText("5a18a948")).toHaveAttribute("title", closedId);
+	expect(history.queryByText(closedId)).toBeNull();
+	expect(history.queryByText('{"check_criterion":0}')).toBeNull();
+});
+
+it("labels every command and preserves actor identities — catches: omitted variants, missing criteria and JSON fallback", async () => {
+	const { StoryMetadata } = await import("../../components/StoriesDialog/StoryMetadata");
+	const cases: [string | Record<string, unknown>, string][] = [
+		["start_manual", "Started manually"],
+		["submit_qa", "Submitted for QA"],
+		["reject_qa", "QA rejected"],
+		["submit_review", "Submitted for review"],
+		["approve", "Approved"],
+		["reject_review", "Review rejected"],
+		["block", "Blocked"],
+		["unblock", "Unblocked"],
+		["wont_fix", "Cancelled"],
+		[{ uncheck_criterion: 0 }, "Criterion 1 unchecked: Works"],
+		[{ check_criterion: 99 }, "Criterion 100 checked"],
+		[{ set_criterion_manual: { index: 0, manual: true } }, "Criterion 1 marked manual: Works"],
+		[{ set_criterion_manual: { index: 0, manual: false } }, "Criterion 1 no longer manual: Works"],
+		[{ future_command: { secret: 123 } }, "Future command"],
+		["future_action", "Future action"],
+	];
+	vi.mocked(invoke).mockResolvedValue({
+		type: "transitions",
+		value: cases.map(([command], i) => ({
+			storyId: "s1",
+			revision: i + 1,
+			command,
+			actor: i === 0 ? { type: "managed_session", session_id: "session-1" } : { type: i === 1 ? "human" : "local_api" },
+		})),
+	});
+	render(() => <StoryMetadata project="/repo" story={story} />);
+	const history = within(screen.getByRole("region", { name: "Transition history" }));
+	await history.findByText("Started manually");
+	for (const [, label] of cases) expect.soft(history.queryByText(label), label).toBeTruthy();
+	expect(history.getByText("API worker")).toHaveAttribute("title", "session-1");
+	expect(history.getByText("· Human")).toBeTruthy();
+	expect(history.getAllByText("· Local API").length).toBeGreaterThan(0);
+	expect(screen.getByRole("region", { name: "Transition history" }).textContent).not.toContain("{");
+});
+
 it("creates a plan-step story — catches: silently saving a selected plan step as native", async () => {
 	render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 	await screen.findByRole("heading", { name: "Build API" });
@@ -111,7 +171,7 @@ it("does not show another story's late history — catches: a slow selection ove
 		value: [{ storyId: "s1", revision: 7, command: "block", actor: { type: "human" } }],
 	});
 	await Promise.resolve();
-	expect(screen.queryByText("block")).toBeNull();
+	expect(screen.queryByText("Blocked")).toBeNull();
 	expect(screen.getByText("Unclaimed")).toBeTruthy();
 	expect(screen.queryByText("Step 4")).toBeNull();
 });

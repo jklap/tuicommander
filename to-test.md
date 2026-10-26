@@ -1,6 +1,9 @@
 ## Stable MCP instructions (2362-95a9) — Rust restart required
 
 - [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
+## Plans and Stories selection (2354-a8a3)
+
+- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
 
 ## Collapsed Compose queue pill (2339-056c)
 
