@@ -8,6 +8,58 @@ import { ContentRenderer } from "../../components/ui/ContentRenderer";
 
 afterEach(() => cleanup());
 
+describe("Markdown reference visible source boundaries", () => {
+	// Catches: hidden link delimiters introducing spaces, or reference ids consuming a visible occurrence.
+	it.each([
+		{
+			bug: "keeps a selection spanning a link and its adjacent punctuation available",
+			source: "See [the guide](https://example.com).",
+			selector: "p",
+			reference: "/repo/map.md:1-1\n\n> See the guide.",
+		},
+		{
+			bug: "ignores reference link ids before a selected repeated table cell",
+			source: "| Name |\n| --- |\n| [docs][Repeated] |\n| Repeated |\n\n[Repeated]: https://example.com\n",
+			selector: "tbody tr:last-child td",
+			reference: "/repo/map.md:4-4\n\n> Repeated",
+		},
+	])("$bug", ({ source, selector, reference }) => {
+		let content!: HTMLDivElement;
+		render(() => (
+			<ContentRenderer
+				content={source}
+				commentableBlocks
+				contentRef={(el) => {
+					content = el;
+				}}
+			/>
+		));
+		const insert = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onDelete={vi.fn()}
+				chatReference={{ source, path: "/repo/map.md", insert }}
+			/>
+		));
+		const selected = content.querySelector(selector)!;
+		const range = document.createRange();
+		range.selectNodeContents(selected);
+		range.getClientRects = () => [] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => ({ right: 100, top: 20, height: 20 }) as DOMRect;
+		const selection = window.getSelection()!;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		fireEvent.mouseUp(selected);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action, "visible selected text must remain available as a reference").not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith(reference);
+		selection.removeAllRanges();
+	});
+});
+
 describe("CommentOverlay block gutter", () => {
 	// Catches: an item-relative action covering markers/checkboxes as list indentation changes.
 	it("keeps the list hover action outside the outer list at every nesting depth", () => {
