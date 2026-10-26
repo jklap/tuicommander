@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
 - Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.
 - Resolve worktree removal through the same fresh inventory as the sidebar, including symbolic branch names; deleting an alias keeps its target branch (#2334-ca53).
 - Return `removed` after idempotent secret removal instead of the ambiguous `missing`; document backend-wide names and reconnect lifetime (#1520-46b1).
@@ -164,6 +165,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
 
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
+- Stop a remote's `HEAD` symref (e.g. `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch named after the remote, and classify `is_remote` from the full refname so remotes not named `origin` and local branches such as `origin/foo` or `feature/HEAD` are reported correctly (branch switcher, Git Panel Branches tab, base-ref picker, graph decorations).
+- Stop falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown: the mdkb client now treats that as "no daemon" instead of connecting to a socket any local user could plant.
+- `make build` / `make build-dmg` no longer fail locally with a missing-private-key error: updater artifact signing (`createUpdaterArtifacts`) is skipped when `TAURI_SIGNING_PRIVATE_KEY` is unset; CI/release builds that set the key are unchanged.
+- Fix plugin updates failing with "Failed to backup data/" on Linux: the `data/` backup now lives inside the plugins directory (same filesystem) instead of the OS temp dir, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file instead of a predictable path in shared `/tmp`.
+- Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so repeated activations no longer queue several frames and a late frame cannot focus a detached wrapper.
+- Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
+- Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo global workspace suppresses them.
+- Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
