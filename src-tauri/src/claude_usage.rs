@@ -2367,7 +2367,7 @@ mod tests {
         assert_eq!(token.as_deref(), Some("tok"));
         let plan = plan.expect("plan should be present even without scopes");
         assert_eq!(plan.rate_limit_tier, None);
-        assert!(plan.scopes.is_empty());
+        assert_eq!(plan.scopes, Vec::<String>::new());
     }
 
     #[test]

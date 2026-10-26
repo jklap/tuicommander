@@ -759,7 +759,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 						{(_) => {
 							const extra = (): ExtraUsage | null => apiData()?.extra_usage ?? null;
 							const enabled = () => extra()?.is_enabled === true;
-							const util = () => extra()?.utilization ?? 0;
+							const util = (): number | null => extra()?.utilization ?? null;
 							const limit = () => extra()?.monthly_limit;
 							const used = () => extra()?.used_credits;
 							return (
@@ -780,7 +780,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 											when={limit() != null && used() != null}
 											fallback={
 												<div class={s.extraBody}>
-													<span class={s.extraValue}>{Math.round(util()).toString()}%</span>
+													<span class={s.extraValue}>{util() == null ? "Unavailable" : `${Math.round(util()!)}%`}</span>
 													<span class={s.extraSub}>(credit detail available via primary API only)</span>
 												</div>
 											}
@@ -790,13 +790,18 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 													{formatCount(used()!)} / {formatCount(limit()!)}
 													<span class={s.extraUnit}> credits</span>
 												</span>
-												<div class={s.extraBar}>
-													<div
-														class={`${s.extraFill} ${rateClass(util())}`}
-														style={{ transform: `scaleX(${Math.min(100, util()) / 100})` }}
-													/>
-												</div>
-												<span class={s.extraSub}>{util().toFixed(1)}% used</span>
+												<Show
+													when={util() != null}
+													fallback={<span class={s.extraSub}>Usage percentage unavailable</span>}
+												>
+													<div class={s.extraBar}>
+														<div
+															class={`${s.extraFill} ${rateClass(util()!)}`}
+															style={{ transform: `scaleX(${Math.min(100, util()!) / 100})` }}
+														/>
+													</div>
+													<span class={s.extraSub}>{util()!.toFixed(1)}% used</span>
+												</Show>
 											</div>
 										</Show>
 										<Show when={extra()?.resets_at}>
