@@ -1,4 +1,6 @@
-import { createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
+import { qrCodeDataUrl } from "../../utils/qrCode";
+import { Button } from "../ui/Button";
 import "./SecretForm.css";
 
 export interface SecretField {
@@ -13,6 +15,7 @@ export interface PrivateForm {
 	fields: SecretField[];
 	argv: string[] | null;
 	mobile_url?: string | null;
+	mobile_unavailable?: string | null;
 	cwd?: string | null;
 }
 export interface SecretSubmission {
@@ -22,9 +25,26 @@ export interface SecretSubmission {
 	template: string[] | null;
 }
 
-export function SecretForm(props: { form: PrivateForm; submit: (submission: SecretSubmission) => Promise<void> }) {
+export function SecretForm(props: {
+	form: PrivateForm;
+	submit: (submission: SecretSubmission) => Promise<void>;
+	copyUrl?: (url: string) => Promise<void>;
+	openUrl?: (url: string) => Promise<void>;
+}) {
 	const [closed, setClosed] = createSignal(false);
 	const [message, setMessage] = createSignal("");
+	const [copyStatus, setCopyStatus] = createSignal("");
+	const [qr] = createResource(() => !closed() && props.form.mobile_url, qrCodeDataUrl);
+	const copyUrl = async () => {
+		const url = props.form.mobile_url;
+		if (!url) return;
+		try {
+			await (props.copyUrl ? props.copyUrl(url) : navigator.clipboard.writeText(url));
+			setCopyStatus("Copied");
+		} catch {
+			setCopyStatus("Copy failed. Select and copy the URL manually.");
+		}
+	};
 	const inputs = new Map<string, HTMLInputElement>();
 	let remember: HTMLInputElement | undefined;
 	const finish = async (declined: boolean) => {
@@ -107,11 +127,44 @@ export function SecretForm(props: { form: PrivateForm; submit: (submission: Secr
 						)}
 					</For>
 				</Show>
-				<Show when={props.form.mobile_url}>
-					<details>
+				<Show when={props.form.mobile_url || props.form.mobile_unavailable}>
+					<details class="secret-phone">
 						<summary>Open on a trusted browser or phone</summary>
-						<p>Open this path on your trusted TUICommander server address. Use HTTPS to protect entry in transit.</p>
-						<pre>{props.form.mobile_url}</pre>
+						<Show when={props.form.mobile_url} fallback={<p>{props.form.mobile_unavailable}</p>}>
+							<p>Scan or open this one-time link on a trusted device. Use HTTPS to protect entry in transit.</p>
+							<a
+								class="secret-phone-url"
+								href={props.form.mobile_url!}
+								target="_blank"
+								rel="noopener noreferrer"
+								referrerpolicy="no-referrer"
+								onClick={(event) => {
+									if (!props.openUrl) return;
+									event.preventDefault();
+									void props
+										.openUrl(props.form.mobile_url!)
+										.catch(() => setCopyStatus("Could not open the browser. Copy the URL instead."));
+								}}
+							>
+								{props.form.mobile_url}
+							</a>
+							<Button aria-label="Copy form URL" onClick={() => void copyUrl()}>
+								Copy URL
+							</Button>
+							<p role="status">{copyStatus()}</p>
+							<Show
+								when={!qr.error && qr()}
+								fallback={<p>{qr.error ? "QR unavailable. Open or copy the URL instead." : "Generating QR…"}</p>}
+							>
+								<img
+									class="secret-phone-qr"
+									src={qr()!}
+									alt="QR code for private secret entry"
+									width={320}
+									height={320}
+								/>
+							</Show>
+						</Show>
 					</details>
 				</Show>
 				<p role="alert">{message()}</p>

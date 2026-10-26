@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Make private secret-form phone links selectable, absolute, clickable and copyable, with a shared QR code and guidance when Remote Access is off (#2378-c2eb).
+
 - Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
 - Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).

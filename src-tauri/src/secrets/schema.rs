@@ -27,6 +27,8 @@ pub(crate) struct Form {
     pub fields: Vec<Field>,
     pub argv: Option<Vec<String>>,
     pub mobile_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobile_unavailable: Option<String>,
     pub cwd: Option<String>,
 }
 
@@ -61,6 +63,7 @@ impl Form {
             fields,
             argv: None,
             mobile_url: None,
+            mobile_unavailable: None,
             cwd: None,
         })
     }

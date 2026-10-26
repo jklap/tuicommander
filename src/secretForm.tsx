@@ -1,5 +1,5 @@
 /* This form module deliberately does not import App, debugGlobals, appLogger, stores,
- * heartbeat, crash handlers, plugins or the terminal. It has no opener bridge. */
+ * heartbeat, crash handlers, plugins or the terminal. Only explicit phone-link actions can copy or open its backend-issued URL. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { render } from "solid-js/web";
@@ -14,7 +14,17 @@ if (!native) history.replaceState(null, "", `${window.location.pathname}#/secret
 export async function startSecretForm(root: HTMLElement): Promise<void> {
 	try {
 		const form: PrivateForm = native ? await invoke<PrivateForm>("secret_form_bootstrap") : await readForm();
-		render(() => <SecretForm form={form} submit={submit} />, root);
+		render(
+			() => (
+				<SecretForm
+					form={form}
+					submit={submit}
+					copyUrl={native ? (url) => invoke("write_clipboard_text", { text: url }) : undefined}
+					openUrl={native ? (url) => invoke("open_default_app", { target: url, kind: "url" }) : undefined}
+				/>
+			),
+			root,
+		);
 	} catch {
 		root.textContent = "Private form unavailable or expired. Ask for a new request.";
 	}

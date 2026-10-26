@@ -60,8 +60,15 @@ No raw output is logged, journalled, or added to a terminal ring.
 
 ## HTTP and phone entry
 
-The private window shows a one-time entry path. Open it on your trusted
-TUICommander server address. The path carries a nonce in its fragment; the form
+The private window shows a full one-time URL under **Open on a trusted browser
+or phone**. Select its text, use **Copy URL**, open the link, or scan its QR code.
+The address uses the same network and HTTPS policy as Remote Mobile Connection;
+it does not contain the pairing session token. If Remote Access is off or no
+network address is available, the window gives setup guidance instead of a link.
+Enable it in **Settings → Remote Access**, then request a new form.
+Account-vault entry stays native-only and has no phone link.
+
+The URL carries a nonce in its fragment; the form
 removes it from history immediately. A nonce is bound to one open form and is
 consumed only by a valid submit. Replay and guessed nonces are rejected.
 Responses are not cached or frameable.
