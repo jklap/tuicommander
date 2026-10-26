@@ -116,14 +116,14 @@ describe("GeneralTab developer tools sections", () => {
 	});
 
 	// Catches: regrouping local tools moves ego into that card or removes its native picker.
-	it("keeps Local tools first and ego before IDE, with the desktop picker", async () => {
+	it("keeps ego immediately after Local tools, with the desktop picker", async () => {
 		const view = render(() => <GeneralTab />);
 
 		await view.findByText("Installed at /usr/local/bin/tuic");
 		const headings = headingTexts(view.container);
 		expect(headings[0]).toBe("Local tools");
-		expect(headings[headings.indexOf("Updates") + 1]).toBe("ego");
-		expect(headings[headings.indexOf("ego") + 1]).toBe("IDE");
+		expect(headings[1]).toBe("ego");
+		expect(headings.indexOf("IDE")).toBeGreaterThan(headings.indexOf("ego"));
 		const ego = view.getByRole("region", { name: "ego" });
 		expect(within(ego).getByText("ego executable")).toBeTruthy();
 		expect(ego.querySelector("input[placeholder='/usr/local/bin/ego']")).toBeNull();

@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Align MCP capability labels, help and migration warnings with other Settings rows, and place ego immediately after Local tools in General (#2374-cfc7).
+
+- Keep Settings scroll and focus stable while launch instruction previews refresh, and explain each launch module with contextual help (#2373-2313).
+
 - Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
 - Include saved profile discovery in the compact automation tool guide and preserve its full help guidance (#2370-bf4a).

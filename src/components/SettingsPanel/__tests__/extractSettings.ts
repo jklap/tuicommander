@@ -198,7 +198,7 @@ function platformSpans(src: string): { start: number; end: number; platform: Cli
 
 export function extractTab(src: string): ExtractedTab {
 	// Contextual explanations contain no controls and repeat the row identity only for lookup.
-	src = src.replace(/<ContextualHelp\b[^>]*\/>/g, "");
+	src = src.replace(/<(?:ContextualHelp|InfoBadge)\b[^>]*\/?>/g, "");
 	const out: ExtractedTab = { sections: [], settings: [], dynamic: 0 };
 	const spans = expertSpans(src);
 	const expertKeyAt = (at: number) => spans.find((span) => at > span.start && at < span.end)?.configKey;

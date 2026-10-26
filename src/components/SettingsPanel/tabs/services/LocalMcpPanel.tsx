@@ -190,13 +190,16 @@ export const LocalMcpPanel: Component = () => {
 					</SettingRow>
 				</ExpertSetting>
 				<Show when={nativeToolsLoaded()}>
-					<div class={s.group}>
-						<label>
-							Capabilities <ContextualHelp label="Capabilities" />
-						</label>
+					<div class={s.settingRow}>
+						<div class={s.settingRowText}>
+							<div class={s.helpLabel}>
+								<label>Capabilities</label>
+								<ContextualHelp label="Capabilities" />
+							</div>
+						</div>
 					</div>
 					<Show when={migrationUnknownTools().length}>
-						<p role="status" class={s.hint}>
+						<p role="status" class={`${s.hint} ${layout.nativeToolWarning}`}>
 							Unknown legacy MCP denials need review: {migrationUnknownTools().join(", ")}. These names were retained,
 							not discarded.
 						</p>

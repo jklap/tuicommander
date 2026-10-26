@@ -94,3 +94,11 @@ describe("shared Settings vocabulary extraction", () => {
 		]);
 	});
 });
+
+it("catches help badge names becoming dynamic setting labels", () => {
+	const result = extractTab(
+		'<h3>Launch modules</h3><ModuleToggle label="Markers" /><InfoBadge label={helpName}>Explanation</InfoBadge>',
+	);
+	expect(result.settings).toEqual([{ text: "Markers", section: "Launch modules" }]);
+	expect(result.dynamic).toBe(0);
+});
