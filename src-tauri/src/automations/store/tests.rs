@@ -553,11 +553,9 @@ fn grouped_history_counts_failures_before_paging_without_rewriting_history() {
         vec![groups[3].clone()]
     );
     assert_eq!(store.history(None, 100, 0).unwrap().len(), 17);
-    assert!(
-        store
-            .grouped_history(Some("deleted"), 100, 0)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        store.grouped_history(Some("deleted"), 100, 0).unwrap(),
+        [] as [serde_json::Value; 0]
     );
     assert!(store.grouped_history(None, 101, 0).is_err());
 }
