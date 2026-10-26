@@ -15,7 +15,14 @@ use std::path::{Path, PathBuf};
 /// `mkdir` semantics, so a pre-created directory of the same prefix is
 /// skipped, never adopted.
 pub(crate) fn private_tempdir_in(base: &Path, prefix: &str) -> io::Result<tempfile::TempDir> {
-    tempfile::Builder::new().prefix(prefix).tempdir_in(base)
+    let dir = tempfile::Builder::new().prefix(prefix).tempdir_in(base)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Measured on Linux, 2026-10-26: the directory was 0775 without this chmod.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
 }
 
 /// Write `bytes` to a new file `name` inside `dir` (which must be private),
