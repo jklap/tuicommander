@@ -15,21 +15,12 @@ use std::path::{Path, PathBuf};
 /// `mkdir` semantics, so a pre-created directory of the same prefix is
 /// skipped, never adopted.
 pub(crate) fn private_tempdir_in(base: &Path, prefix: &str) -> io::Result<tempfile::TempDir> {
-    let dir = tempfile::Builder::new().prefix(prefix).tempdir_in(base)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // tempfile already creates 0700; pin it so a permissive umask or a
-        // future default can never widen it.
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(dir)
+    tempfile::Builder::new().prefix(prefix).tempdir_in(base)
 }
 
 /// Write `bytes` to a new file `name` inside `dir` (which must be private),
 /// refusing to open anything that already exists (no symlink or planted file
-/// is ever followed), then read it back and compare, so the caller knows the
-/// staged content is exactly what it downloaded.
+/// is ever followed).
 pub(crate) fn write_private_file(
     dir: &Path,
     name: &str,
@@ -52,22 +43,6 @@ pub(crate) fn write_private_file(
     }
     let mut file = options.open(&path)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-
-    let meta = std::fs::symlink_metadata(&path)?;
-    if !meta.file_type().is_file() {
-        return Err(io::Error::other(format!(
-            "staged {} is no longer a regular file",
-            path.display()
-        )));
-    }
-    if std::fs::read(&path)? != bytes {
-        return Err(io::Error::other(format!(
-            "staged {} does not match what was written",
-            path.display()
-        )));
-    }
     Ok(path)
 }
 
