@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveMarkdownEditor } from "../../components/MarkdownTab/LiveMarkdownEditor";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
@@ -204,6 +205,27 @@ describe("Live keeps files byte for byte", () => {
 });
 
 describe("Live rendered blocks open as source", () => {
+	it("keeps a surviving diagram comment clickable after another block comment is deleted", async () => {
+		// Catches: metadata cleanup strips a surviving diagram comment that cannot be paired as a PRE again.
+		mermaidRender.mockResolvedValue({ svg: "<svg></svg>" });
+		const diagramMarker = "<!--tweak:block:c_diagram @2026-10-26T12:00:00.000Z\nKeep diagram note-->\n";
+		const paragraphMarker = "<!--tweak:block:c_remove @2026-10-26T12:00:00.000Z\nDelete paragraph note-->\n";
+		const fence = "```mermaid\ngraph TD;\n  A-->B;\n```\n\n";
+		const [source, setSource] = createSignal(`${diagramMarker}${fence}${paragraphMarker}After.\n`);
+		const { container } = render(() => <ContentRenderer content={source()} commentableBlocks />);
+		const diagram = await waitFor(() => {
+			const el = container.querySelector<HTMLElement>(".mermaid-diagram");
+			expect(el?.dataset.tweakId).toBe("c_diagram");
+			return el!;
+		});
+		setSource(`${diagramMarker}${fence}After.\n`);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		expect(container.querySelector(".mermaid-diagram")).toBe(diagram);
+		expect(diagram.classList.contains("tweak-block-highlight")).toBe(true);
+		expect(diagram.dataset.tweakId).toBe("c_diagram");
+		expect(diagram.dataset.tweakComment).toBe("Keep diagram note");
+	});
+
 	it("opens a table as its source text and renders it again on Escape", async () => {
 		// catches: a table that cannot be edited because only paragraph-like blocks open an editor
 		const table = "| a | b |\n|---|---|\n| 1 | 2 |";
