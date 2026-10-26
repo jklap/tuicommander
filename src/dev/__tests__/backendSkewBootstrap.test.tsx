@@ -13,15 +13,17 @@ it("shows backend restart warning on application load when served backend inputs
 	document.body.innerHTML = '<div id="app"></div>';
 	Object.assign(window, {
 		__TAURI_INTERNALS__: {},
-		__TUIC_DEV_BACKEND__: { fingerprint: "compiled-backend", git_hash: "compiled-sha" },
+		__TUIC_DEV_BACKEND__: { exe: "/cargo/debug/app", started_at_ms: 123, git_hash: "compiled-sha" },
 	});
 	vi.stubGlobal(
 		"fetch",
 		vi.fn().mockResolvedValue(
 			new Response(
 				JSON.stringify({
-					fingerprint: "served-backend",
-					git_hash: "served-sha",
+					status: "stale",
+					key: "newer-input",
+					backend_id: "compiled-sha/entry",
+					tree_id: "served-sha/input",
 				}),
 			),
 		),

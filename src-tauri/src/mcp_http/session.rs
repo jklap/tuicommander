@@ -75,8 +75,6 @@ pub(super) async fn app_version() -> Json<super::types::VersionResponse> {
     Json(super::types::VersionResponse {
         version: env!("CARGO_PKG_VERSION"),
         git_hash: env!("BUILD_GIT_HASH"),
-        #[cfg(debug_assertions)]
-        backend_fingerprint: env!("TUIC_BACKEND_FINGERPRINT"),
     })
 }
 

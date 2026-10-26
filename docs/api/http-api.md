@@ -2,13 +2,18 @@
 
 ## Build identity
 
-`GET /api/version` returns `version` and `git_hash`. Debug builds also return
-`backend_fingerprint`, a content hash of tracked backend build inputs. Release
-builds omit this field. The desktop debug WebView receives the same compiled
-fingerprint and SHA in `window.__TUIC_DEV_BACKEND__` before frontend scripts run.
-Vite alone serves `GET /__tuic_backend_identity` with the current source-tree
-`fingerprint` and `git_hash`, uncached. This development endpoint is not part of
-the packaged HTTP server.
+`GET /api/version` returns `version` and `git_hash` in all builds. The desktop
+debug WebView also receives `window.__TUIC_DEV_BACKEND__` before frontend scripts:
+`exe` (current executable), `build_exe` (original Cargo artifact when the copy
+runner is used), `bridge_exe` (the used bridge build artifact, when present),
+`started_at_ms` (application-entry Unix milliseconds), and `git_hash`.
+
+Vite alone serves `GET /__tuic_backend_identity?backend=<URL-encoded launch JSON>`,
+uncached. It returns `status` (`current`, `stale`, or `unavailable`), a dismissal
+`key`, and, when available, `backend_id`, `tree_id`, and the checked input count.
+It reads Cargo's final binary dep-info and compares mtimes. This development
+endpoint is not part of the packaged HTTP server; release builds expose neither
+the launch global nor the warning module.
 
 Planner Ideas use the same `StoryAction` envelope as plans and stories: `add_idea {text,source?}`, `list_ideas`, and `update_idea {idea_id,text}`. IPC `story_action_command`, HTTP `POST /stories/action?path=<project>` (`{action:<StoryAction>,sessionId?:string}`), CLI `tuic story`, and MCP `workflow action=story input=<StoryAction>` share the Rust owner. Add/update return `{type:"idea",value:<camelCase Idea>}`; list returns `{type:"ideas",value:[...]}`. The project sets `repoPath`; list also includes global Ideas, while update requires project ownership. Source defaults to the bound session id or `local-api`. Text is trimmed to a nonblank maximum of 16000 characters; source is nonblank with a maximum of 256. Writes use the strict locked `notes.json` owner and publish payload-free `ideas-changed` on desktop and `/events` SSE. UI `save_notes(base,config)` / `PUT /config/notes` applies per-id and per-field intent instead of replacing stale arrays. See [Ideas through the planner](../user-guide/native-stories.md#ideas-through-the-planner).
 

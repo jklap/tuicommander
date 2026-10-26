@@ -26,6 +26,8 @@ pub(crate) mod audio_enumeration;
 pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
+#[cfg(all(debug_assertions, feature = "desktop"))]
+pub mod dev_backend;
 pub(crate) mod launch_instructions;
 pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
@@ -1831,10 +1833,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
         tauri::plugin::Builder::<tauri::Wry, ()>::new("dev-backend-identity")
             .js_init_script(format!(
                 "window.__TUIC_DEV_BACKEND__ = {};",
-                serde_json::json!({
-                    "fingerprint": env!("TUIC_BACKEND_FINGERPRINT"),
-                    "git_hash": env!("BUILD_GIT_HASH"),
-                })
+                dev_backend::identity()
             ))
             .build(),
     );

@@ -1,3 +1,7 @@
+## Development backend staleness (2332-3eef) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
+
 ## Rustup PTY environment (2318-4b44) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, open a fresh terminal and confirm `env | grep RUSTUP_TOOLCHAIN` prints nothing, repository toolchain pins apply, and an explicit run-config `RUSTUP_TOOLCHAIN` still wins. Verified in isolated `agent-test-2318`: the parent carried `stable`, the fresh terminal had no proxy keys, and a throwaway repository selected its pinned `1.98.1`. Both targeted tests passed on macOS and rb. The isolated app was stopped; Rust changes do not hot-reload into the daily app.
@@ -2969,5 +2973,3 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual Rust rebuild/restart, verify GitHub Status keeps the monitored-repository count after query-cache expiry, removes deleted repository paths, and resets it when monitoring stops (#2336-da0a). This change does not hot-reload.
 - [x] #2336-da0a: On 2026-10-25, isolated `agent-test-2336` Tasks loaded 140 public GitHub items through the production provider and plugin HTTP transport with no account credential. An instance-only CONNECT proxy rejection settled with an error and retained stale results. Restoring the proxy and selecting Refresh loaded 140 items again and removed the stale/error indicators. A separate mute-proxy check settled after 30.004 seconds with a timeout and stale results. Native-window screenshots and timestamped DOM/provider evidence are in `~/Gits/.tmp/results/tuic-2336-{baseline,drop,recovery,mute}*`. This did not reproduce the historical loading hang or verify authenticated native GitHub polling.
 - [ ] [HUMAN] #2336-da0a: Log in through the isolated instance's GitHub device flow, configure an unreachable remote, and verify authenticated local sidebar PR/issue data and recovery after an instance-only network interruption. No daily credentials were read or copied; the daily app was not restarted.
-
-- [ ] #2332-3eef: After a deliberate `make dev` restart, confirm the dev backend identity is loaded. A later tracked Rust edit plus frontend HMR shows a dismissible restart warning; a frontend-only commit does not. Do not restart a live backend until ready to end its sessions.

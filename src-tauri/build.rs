@@ -24,42 +24,6 @@ fn main() {
         .unwrap_or_default();
     println!("cargo:rustc-env=BUILD_GIT_HASH={}", hash.trim());
 
-    // Development already requires Node/Vite. One implementation fingerprints
-    // both sides; release builds neither run it nor embed the identity.
-    if cfg!(debug_assertions) {
-        let identity = std::process::Command::new("node")
-            .arg("../scripts/backend-build-identity.mjs")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok());
-        // Source archives and rb replicas have no Git index; Rust-only builds
-        // may have no Node. Keep those buildable, with an explicitly unavailable
-        // identity rather than a fabricated match in a development WebView.
-        if let Some(identity) = identity {
-            for input in identity["inputs"].as_array().expect("identity inputs") {
-                println!(
-                    "cargo:rerun-if-changed=../{}",
-                    input.as_str().expect("input path")
-                );
-            }
-            println!(
-                "cargo:rustc-env=TUIC_BACKEND_FINGERPRINT={}",
-                identity["fingerprint"].as_str().expect("fingerprint")
-            );
-        } else {
-            println!(
-                "cargo:warning=Development backend identity unavailable (requires Node and a Git index)"
-            );
-            println!("cargo:rustc-env=TUIC_BACKEND_FINGERPRINT=");
-        }
-        // Track added/removed source files as well as changes to known inputs.
-        println!("cargo:rerun-if-changed=src");
-        println!("cargo:rerun-if-changed=crates");
-        println!("cargo:rerun-if-changed=patches");
-        println!("cargo:rerun-if-changed=../scripts/backend-build-identity.mjs");
-    }
-
     // Expose target triple for sidecar path resolution at runtime
     println!(
         "cargo:rustc-env=TUIC_TARGET_TRIPLE={}",

@@ -6,14 +6,12 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-it("does not nag after frontend-only landings and clears a resolved mismatch on HMR", async () => {
-	const reply = vi
-		.fn()
-		.mockResolvedValue(new Response(JSON.stringify({ fingerprint: "same", git_hash: "frontend-commit" })));
+it("does not nag after frontend-only landings and clears resolved staleness on HMR", async () => {
+	const reply = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "current", key: "same" })));
 	vi.stubGlobal("fetch", reply);
 	let update: (() => void) | undefined;
 	const stop = startBackendSkewWarning(
-		{ fingerprint: "same", git_hash: "backend-commit" },
+		{ exe: "/cargo/debug/app", started_at_ms: 123, git_hash: "backend-commit" },
 		{
 			on: (_event, callback) => {
 				update = callback;
@@ -22,11 +20,16 @@ it("does not nag after frontend-only landings and clears a resolved mismatch on 
 		},
 	);
 	await vi.waitFor(() => expect(reply).toHaveBeenCalledOnce());
+	// Catches: the Vite check loses the running executable/start-time binding.
+	const launch = JSON.parse(new URL(reply.mock.calls[0][0], "http://localhost").searchParams.get("backend") ?? "null");
+	expect(launch).toMatchObject({ exe: "/cargo/debug/app", started_at_ms: 123 });
 	expect(document.querySelector('[role="alert"]')).toBeNull();
-	reply.mockResolvedValue(new Response(JSON.stringify({ fingerprint: "changed", git_hash: "backend-change" })));
+	reply.mockResolvedValue(
+		new Response(JSON.stringify({ status: "stale", key: "changed", backend_id: "old", tree_id: "new" })),
+	);
 	update?.();
 	await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
-	reply.mockResolvedValue(new Response(JSON.stringify({ fingerprint: "same", git_hash: "reverted" })));
+	reply.mockResolvedValue(new Response(JSON.stringify({ status: "current", key: "rebuilt" })));
 	update?.();
 	await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
 	stop();
@@ -36,12 +39,14 @@ it("keeps a dismissed mismatch quiet across HMR but warns for a new backend tree
 	const reply = vi
 		.fn()
 		.mockImplementation(() =>
-			Promise.resolve(new Response(JSON.stringify({ fingerprint: "changed", git_hash: "sha" }))),
+			Promise.resolve(
+				new Response(JSON.stringify({ status: "stale", key: "changed", backend_id: "old", tree_id: "new" })),
+			),
 		);
 	vi.stubGlobal("fetch", reply);
 	let update: (() => void) | undefined;
 	const stop = startBackendSkewWarning(
-		{ fingerprint: "old", git_hash: "sha" },
+		{ exe: "/cargo/debug/app", started_at_ms: 123, git_hash: "sha" },
 		{
 			on: (_event, callback) => {
 				update = callback;
@@ -54,7 +59,9 @@ it("keeps a dismissed mismatch quiet across HMR but warns for a new backend tree
 	update?.();
 	await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(2));
 	expect(document.querySelector('[role="alert"]')).toBeNull();
-	reply.mockResolvedValue(new Response(JSON.stringify({ fingerprint: "another", git_hash: "sha" })));
+	reply.mockResolvedValue(
+		new Response(JSON.stringify({ status: "stale", key: "another", backend_id: "old", tree_id: "newer" })),
+	);
 	update?.();
 	await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
 	stop();
@@ -63,7 +70,7 @@ it("keeps a dismissed mismatch quiet across HMR but warns for a new backend tree
 it("warns for a pre-feature backend instead of silently treating missing identity as a match", async () => {
 	vi.stubGlobal(
 		"fetch",
-		vi.fn().mockResolvedValue(new Response(JSON.stringify({ fingerprint: "tree", git_hash: "sha" }))),
+		vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "unavailable", key: "unavailable" }))),
 	);
 	// Real Vite exposes off(); Vitest's default hot stub does not.
 	const stop = startBackendSkewWarning(undefined, { on: vi.fn(), off: vi.fn() });

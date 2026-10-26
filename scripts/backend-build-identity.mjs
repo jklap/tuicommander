@@ -1,49 +1,95 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-
-// This help is compiled into agent_hook_launch, despite its fixture location.
-const runtimeFixture = "src-tauri/tests/fixtures/agent-help/claude-2026-10-04.txt";
-const nonRuntimeFiles = new Set([
-	"src-tauri/src/settings/catalogue_tests.rs",
-	"src-tauri/patches/alacritty_terminal/README.md",
-]);
-
-/** Shared by the debug Rust build and Vite: HEAD alone also changes for UI-only landings. */
-export function backendBuildIdentity(cwd = root) {
-	// Backend inputs include embedded scripts and native build files with arbitrary
-	// extensions. Exclude known non-runtime trees, never allowlist source suffixes.
-	const files = execFileSync("git", ["ls-files", "-z", "--", "src-tauri", "scripts/backend-build-identity.mjs"], { cwd })
-		.toString().split("\0").filter((file) =>
-			file && (file === runtimeFixture || (!nonRuntimeFiles.has(file) &&
-				!/(?:^|\/)(?:fixtures|tests|testdata|test_data|benches|docs|binaries|gen|history|dist|target|\.tmp)\//.test(file))))
-		.sort();
-	const hash = createHash("sha256");
-	const inputs = [];
-	for (const file of files) {
-		try {
-			if (!statSync(join(cwd, file)).isFile()) continue;
-			const bytes = readFileSync(join(cwd, file));
-			hash.update(`${file}\0${bytes.length}\0`);
-			hash.update(bytes);
-			inputs.push(file);
-		} catch (error) {
-			// A tracked deletion is a different tree, not an unreadable build.
-			if (error.code !== "ENOENT") throw error;
-		}
+// Cargo's final <binary>.d lists the local unit graph, unlike an individual
+// rustc .d. Parse Make escaping, including paths containing spaces or Windows
+// drive letters; the target separator is a colon followed by whitespace.
+function dependencies(text) {
+	const line = text.replace(/\\\r?\n/g, "").split(/\r?\n/)[0];
+	const separator = line.search(/:\s/);
+	if (separator < 0) throw new Error("Invalid Cargo dep-info");
+	const words = [];
+	let word = "";
+	const input = line.slice(separator + 1);
+	for (let i = 0; i < input.length; i++) {
+		const char = input[i];
+		if (char === "\\" && /[\s\\#]/.test(input[i + 1] ?? "")) word += input[++i];
+		else if (/\s/.test(char)) {
+			if (word) words.push(word);
+			word = "";
+		} else if (char === "$" && input[i + 1] === "$") { word += "$"; i++; }
+		else word += char;
 	}
-	if (!inputs.some((file) => file === "src-tauri/Cargo.toml")) throw new Error("Backend build inputs are unavailable");
-	return {
-		fingerprint: hash.digest("hex"),
-		git_hash: execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd }).toString().trim(),
-		inputs,
-	};
+	if (word) words.push(word);
+	if (!words.length) throw new Error("Empty Cargo dep-info");
+	return words;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	process.stdout.write(JSON.stringify(backendBuildIdentity()));
+function localPath(root, path) {
+	const rel = relative(root, path);
+	return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Development-only Cargo staleness check; never compiles or restarts anything. */
+export function backendBuildIdentity(cwd, backend) {
+	const unavailable = { status: "unavailable", key: "unavailable" };
+	if (!backend?.exe || !Number.isFinite(backend.started_at_ms)) return unavailable;
+	try {
+		const root = resolve(cwd);
+		const exe = backend.build_exe || backend.exe;
+		if (!isAbsolute(exe)) return unavailable;
+		const artifacts = [exe, ...(backend.bridge_exe ? [backend.bridge_exe] : [])];
+		const key = createHash("sha256");
+		let stale = false;
+		let newest = 0;
+		let count = 0;
+		for (const artifact of artifacts) {
+			if (!isAbsolute(artifact)) return unavailable;
+			const binary = statSync(artifact);
+			if (!binary.isFile()) return unavailable;
+			if (artifact === exe && binary.mtimeMs > backend.started_at_ms) stale = true;
+			key.update(`${artifact}\0${binary.mtimeMs}\0${binary.size}\0`);
+			const depInfo = artifact.replace(/\.exe$/i, "") + ".d";
+			const inputs = new Set(dependencies(readFileSync(depInfo, "utf8")).map((file) => {
+				// Cargo's final binary dep-info uses absolute paths. Fail closed
+				// rather than resolve an unexpected relative path against Vite.
+				if (!isAbsolute(file)) throw new Error("Relative Cargo dependency");
+				return resolve(file);
+			}));
+			const visited = new Set();
+			for (const file of [...inputs]) {
+				let dir = dirname(file);
+				while (localPath(root, dir) && !visited.has(dir)) {
+					visited.add(dir);
+					const manifest = join(dir, "Cargo.toml");
+					if (existsSync(manifest)) inputs.add(manifest);
+					if (dir === root) break;
+					dir = dirname(dir);
+				}
+			}
+			inputs.add(join(root, "src-tauri/Cargo.lock"));
+			for (const file of [...inputs].sort()) {
+				const info = statSync(file);
+				key.update(`${file}\0${info.mtimeMs}\0${info.size}\0`);
+				newest = Math.max(newest, info.mtimeMs);
+				if (info.mtimeMs > binary.mtimeMs) stale = true;
+				count++;
+			}
+		}
+		let gitHash = "dev";
+		try { gitHash = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
+		catch { /* A source archive can still have valid Cargo dep-info. */ }
+		return {
+			status: stale ? "stale" : "current",
+			key: key.digest("hex"),
+			backend_id: `${backend.git_hash || "dev"}/${Math.trunc(backend.started_at_ms).toString(36)}`,
+			tree_id: `${gitHash}/${Math.trunc(newest).toString(36)}`,
+			inputs: count,
+		};
+	} catch {
+		// Missing exe, dep-info or inputs can never establish a match.
+		return unavailable;
+	}
 }

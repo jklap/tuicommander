@@ -1,98 +1,124 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { after, before, test } from "node:test";
 import { backendBuildIdentity } from "./backend-build-identity.mjs";
 
-test("frontend-only commits do not request a backend restart, but dirty Rust and lockfile changes do", () => {
-	const root = mkdtempSync(join(tmpdir(), "backend-identity-"));
-	const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
-	try {
-		mkdirSync(join(root, "src-tauri/src"), { recursive: true });
-		writeFileSync(join(root, "src-tauri/Cargo.toml"), "[package]\nname='fixture'\n");
-		writeFileSync(join(root, "src-tauri/Cargo.lock"), "version = 4\n");
-		writeFileSync(join(root, "src-tauri/src/lib.rs"), "fn command() {}\n");
-		writeFileSync(join(root, "frontend.ts"), "old UI\n");
-		git("init", "--quiet");
-		git("add", ".");
-		const commit = () => git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "test: record fixture");
-		commit();
-		const initial = backendBuildIdentity(root);
-		writeFileSync(join(root, "frontend.ts"), "new UI\n");
-		git("add", "."); commit();
-		const uiOnly = backendBuildIdentity(root);
-		assert.notEqual(uiOnly.git_hash, initial.git_hash);
-		assert.equal(uiOnly.fingerprint, initial.fingerprint);
-		writeFileSync(join(root, "src-tauri/src/lib.rs"), "fn new_command() {}\n");
-		const rust = backendBuildIdentity(root);
-		assert.equal(rust.git_hash, uiOnly.git_hash);
-		assert.notEqual(rust.fingerprint, uiOnly.fingerprint);
-		writeFileSync(join(root, "src-tauri/Cargo.lock"), "version = 4\n# changed dependencies\n");
-		assert.notEqual(backendBuildIdentity(root).fingerprint, rust.fingerprint);
-	} finally { rmSync(root, { recursive: true, force: true }); }
-});
+let root;
+let backend;
+let inputs;
+let binaryTime;
+const touch = (file) => utimesSync(file, new Date(binaryTime + 2000), new Date(binaryTime + 2000));
+const check = () => backendBuildIdentity(root, backend);
+const depInfoPath = (exe) => exe.replace(/\.exe$/i, "") + ".d";
 
-// Catches: an extension allowlist ignores embedded extraction JavaScript or
-// native compilation inputs while the running backend retains their old bytes.
-test("embedded extraction scripts and native build inputs change the backend fingerprint", () => {
-	const root = mkdtempSync(join(tmpdir(), "backend-embedded-inputs-"));
-	const inputs = [
-		"src-tauri/src/design_mode/extract.js",
-		"src-tauri/patches/webrtc/src/audio.cc",
-		"src-tauri/patches/webrtc/src/wrapper.hpp",
-		"src-tauri/patches/webrtc/meson.build",
-	];
-	const excluded = [
-		"src-tauri/src/fixtures/capture.json",
-		"src-tauri/docs/backend.md",
-		"src-tauri/binaries/tuic-bridge",
-	];
+// Cargo, not a handwritten dependency list, provides the external-system fixture.
+// This tiny build runs through the caller's mbx shim and build-slot admission.
+before(() => {
+	root = mkdtempSync(join(tmpdir(), "backend dep-info "));
 	const write = (file, content) => {
-		mkdirSync(join(root, file, ".."), { recursive: true });
+		mkdirSync(dirname(join(root, file)), { recursive: true });
 		writeFileSync(join(root, file), content);
 	};
-	const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
-	try {
-		write("src-tauri/Cargo.toml", "[package]\nname='fixture'\n");
-		for (const file of [...inputs, ...excluded]) write(file, "original compiled input\n");
-		git("init", "--quiet");
-		git("add", ".");
-		git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "test: record backend fixture");
-		let previous = backendBuildIdentity(root).fingerprint;
-		for (const file of inputs) {
-			write(file, "changed compiled input\n");
-			const changed = backendBuildIdentity(root).fingerprint;
-			assert.notEqual(changed, previous, `${file} must invalidate the compiled backend identity`);
-			previous = changed;
-		}
-		for (const file of excluded) write(file, "changed non-runtime data\n");
-		assert.equal(backendBuildIdentity(root).fingerprint, previous, "excluded non-runtime trees must remain quiet");
-	} finally { rmSync(root, { recursive: true, force: true }); }
+	write("src-tauri/Cargo.toml", '[package]\nname="skew-fixture"\nversion="0.1.0"\nedition="2021"\n[workspace]\n[dependencies]\nlocal-input={path="local-input"}\n');
+	write("src-tauri/local-input/Cargo.toml", '[package]\nname="local-input"\nversion="0.1.0"\nedition="2021"\n');
+	write("src-tauri/local-input/src/lib.rs", 'pub const VALUE: &str = "local";\n');
+	write("src-tauri/src/main.rs", 'fn main() { std::hint::black_box((include_str!("../../plugins/plan/main.js"), include_str!("../tests/fixtures/agent-help/ego.txt"), local_input::VALUE)); println!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()); }\n#[cfg(test)]\nmod catalogue_tests;\n');
+	write("src-tauri/src/catalogue_tests.rs", '#[test] fn test_only() {}\n');
+	write("src-tauri/src/bin/tuic-bridge.rs", 'fn main() { println!("{}", include_str!("../../../browser-extension/design-mode/main.js")); }\n');
+	write("plugins/plan/main.js", "compiled plan asset\n");
+	write("src-tauri/tests/fixtures/agent-help/ego.txt", "compiled fallback help\n");
+	write("browser-extension/design-mode/main.js", "compiled bridge asset\n");
+	write("src/frontend.ts", "frontend only\n");
+	write("src-tauri/README.md", "not compiled\n");
+	const output = execFileSync("cargo", ["build", "--manifest-path", join(root, "src-tauri/Cargo.toml"), "--message-format=json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], cwd: join(root, "src-tauri"), env: { ...process.env, TMPDIR: join(homedir(), "Gits/.tmp/") } });
+	const artifacts = output.trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.reason === "compiler-artifact" && entry.executable);
+	const copies = {};
+	for (const artifact of artifacts) {
+		const source = artifact.executable;
+		const destination = join(root, "built", basename(source));
+		mkdirSync(dirname(destination), { recursive: true });
+		copyFileSync(source, destination);
+		const time = statSync(source).mtime;
+		utimesSync(destination, time, time);
+		const depInfo = source.replace(/\.exe$/, "") + ".d";
+		copyFileSync(depInfo, destination.replace(/\.exe$/, "") + ".d");
+		copies[artifact.target.name] = destination;
+	}
+	// Keep the pre-redesign implementation callable for the recorded RED replay.
+	execFileSync("git", ["init", "--quiet"], { cwd: root });
+	execFileSync("git", ["add", "src-tauri/Cargo.toml", "src-tauri/src", "plugins", "browser-extension"], { cwd: root });
+	execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "test: record compiler fixture"], { cwd: root });
+	const exe = copies["skew-fixture"];
+	binaryTime = statSync(exe).mtimeMs;
+	const startedAt = Number(execFileSync(exe, { encoding: "utf8" }).trim());
+	assert.ok(Number.isFinite(startedAt) && startedAt >= binaryTime);
+	backend = { exe, started_at_ms: startedAt, bridge_exe: copies["tuic-bridge"], git_hash: "compiled" };
+	inputs = ["plugins/plan/main.js", "src-tauri/tests/fixtures/agent-help/ego.txt", "browser-extension/design-mode/main.js", "src-tauri/local-input/src/lib.rs", "src-tauri/local-input/Cargo.toml", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"];
+	// Verify that these assets really reached the compiler-generated dep-info.
+	assert.match(readFileSync(depInfoPath(exe), "utf8"), /plugins\/plan\/main\.js/);
+	assert.match(readFileSync(depInfoPath(backend.bridge_exe), "utf8"), /browser-extension\/design-mode\/main\.js/);
 });
-// Catches: directory exclusions hide compiled fallback help, or known test/docs
-// inputs produce a restart warning despite unchanged runtime code.
-for (const [name, file, runtime] of [
-	["catches silent skew when compiled Claude fallback help changes", "src-tauri/tests/fixtures/agent-help/claude-2026-10-04.txt", true],
-	["catches false restart warning after test-only catalogue changes", "src-tauri/src/settings/catalogue_tests.rs", false],
-	["catches false restart warning after patch README changes", "src-tauri/patches/alacritty_terminal/README.md", false],
-]) {
-	test(name, () => {
-		const root = mkdtempSync(join(tmpdir(), "backend-runtime-boundary-"));
-		const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
-		try {
-			mkdirSync(join(root, file, ".."), { recursive: true });
-			writeFileSync(join(root, "src-tauri/Cargo.toml"), "[package]\nname='fixture'\n");
-			writeFileSync(join(root, file), "original input\n");
-			git("init", "--quiet");
-			git("add", ".");
-			git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "test: record runtime boundary");
-			const before = backendBuildIdentity(root).fingerprint;
-			writeFileSync(join(root, file), "changed input\n");
-			const after = backendBuildIdentity(root).fingerprint;
-			if (runtime) assert.notEqual(after, before, "compiled runtime fallback help must invalidate backend identity");
-			else assert.equal(after, before, "non-runtime input must not request a restart");
-		} finally { rmSync(root, { recursive: true, force: true }); }
-	});
-}
+after(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+
+// Catches: source-path allowlists omit embedded fixture/out-of-tree assets or path crates.
+test("warns for every compiler-recorded runtime input and local Cargo manifest or lockfile", () => {
+	assert.equal(check().status, "current");
+	for (const file of inputs) {
+		const path = join(root, file);
+		const original = statSync(path);
+		touch(path);
+		assert.equal(check().status, "stale", `${file} must request a restart`);
+		utimesSync(path, original.atime, original.mtime);
+	}
+});
+
+// Catches: test-only modules, documentation and unrelated frontend saves request restarts.
+test("keeps non-compiled frontend, test and README churn quiet", () => {
+	for (const file of ["src/frontend.ts", "src-tauri/src/catalogue_tests.rs", "src-tauri/README.md"]) touch(join(root, file));
+	assert.equal(check().status, "current");
+});
+
+// Catches: a rebuilt executable is treated as the binary still held by the process.
+test("warns when the original build executable is replaced after process entry", () => {
+	const original = statSync(backend.exe);
+	utimesSync(backend.exe, new Date(backend.started_at_ms + 1000), new Date(backend.started_at_ms + 1000));
+	assert.equal(check().status, "stale");
+	utimesSync(backend.exe, original.atime, original.mtime);
+});
+
+// Catches: the macOS copy runner checks its protected copy instead of Cargo's artifact.
+test("uses the copy runner original executable binding even when current_exe has no dep-info", () => {
+	const result = backendBuildIdentity(root, { ...backend, exe: join(root, "protected-copy"), build_exe: backend.exe });
+	assert.equal(result.status, "current");
+});
+
+// Catches: missing artifact metadata silently reports a match.
+test("reports unavailable for missing executable, dep-info, or pre-feature backend", () => {
+	assert.equal(backendBuildIdentity(root).status, "unavailable");
+	assert.equal(backendBuildIdentity(root, { ...backend, exe: join(root, "missing") }).status, "unavailable");
+	for (const exe of [backend.exe, backend.bridge_exe]) {
+		const dep = depInfoPath(exe);
+		renameSync(dep, dep + ".saved");
+		try { assert.equal(check().status, "unavailable"); }
+		finally { renameSync(dep + ".saved", dep); }
+	}
+});
+
+// Catches: bridge inputs are incorrectly compared to the older main executable.
+test("compares bridge source to the bridge build rather than the main build", () => {
+	const source = join(root, "browser-extension/design-mode/main.js");
+	const oldSource = statSync(source);
+	const oldBridge = statSync(backend.bridge_exe);
+	try {
+		touch(source);
+		const rebuilt = new Date(binaryTime + 4000);
+		utimesSync(backend.bridge_exe, rebuilt, rebuilt);
+		assert.equal(check().status, "current");
+	} finally {
+		utimesSync(source, oldSource.atime, oldSource.mtime);
+		utimesSync(backend.bridge_exe, oldBridge.atime, oldBridge.mtime);
+	}
+});

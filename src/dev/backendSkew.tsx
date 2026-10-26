@@ -4,7 +4,10 @@ import { Button } from "../components/ui/Button";
 import styles from "./backendSkew.module.css";
 
 interface BuildIdentity {
-	fingerprint: string;
+	exe: string;
+	build_exe?: string;
+	bridge_exe?: string;
+	started_at_ms: number;
 	git_hash: string;
 }
 
@@ -58,20 +61,26 @@ export function startBackendSkewWarning(
 		const request = ++generation;
 		try {
 			const sourceOrigin = new URL(import.meta.url).origin;
-			const response = await fetch(`${sourceOrigin}/__tuic_backend_identity`, { cache: "no-store" });
+			const query = encodeURIComponent(JSON.stringify(backend ?? null));
+			const response = await fetch(`${sourceOrigin}/__tuic_backend_identity?backend=${query}`, { cache: "no-store" });
 			if (!response.ok) return;
-			const tree = (await response.json()) as BuildIdentity;
-			if (stopped || request !== generation || !tree.fingerprint || !tree.git_hash) return;
-			if (backend?.fingerprint === tree.fingerprint) {
+			const tree = (await response.json()) as {
+				status: "current" | "stale" | "unavailable";
+				key: string;
+				backend_id?: string;
+				tree_id?: string;
+			};
+			if (stopped || request !== generation || !tree.key) return;
+			if (tree.status === "current") {
 				dismissed = "";
 				setWarning("");
 				return;
 			}
-			currentKey = tree.fingerprint;
+			currentKey = tree.key;
 			if (dismissed === currentKey) return;
 			setWarning(
-				backend?.fingerprint
-					? `Backend ${backend.git_hash}/${backend.fingerprint.slice(0, 12)} · tree ${tree.git_hash}/${tree.fingerprint.slice(0, 12)} · Restart tauri dev`
+				tree.status === "stale"
+					? `Backend ${tree.backend_id} · tree ${tree.tree_id} · Restart tauri dev`
 					: "Backend identity unavailable · Restart tauri dev once",
 			);
 		} catch {

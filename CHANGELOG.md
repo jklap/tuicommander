@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Warn in development when hot-reloaded UI sees backend sources newer than the running Rust build; use content fingerprints to keep frontend-only landings quiet (#2332-3eef).
+- Warn in development when Cargo dep-info inputs or a rebuilt executable outdate the running Rust backend; keep unrelated frontend-only landings quiet (#2332-3eef).
 
 - Remove inherited rustup proxy state from new terminals so repository toolchain pins apply; preserve explicit run-config toolchain overrides (#2318-4b44).
 - Extend the existing orchestration silence control to all sounds and OS notifications from agent-spawned sessions, while preserving Activity, bell entries and urgent user cards (#2341-be90).

@@ -45,16 +45,17 @@ const devServerIdentity = (): Plugin => ({
   name: "tuic-dev-identity",
   apply: "serve",
   configureServer(server: ViteDevServer) {
-    server.middlewares.use("/__tuic_backend_identity", (_req, res) => {
+    server.middlewares.use("/__tuic_backend_identity", (req, res) => {
       try {
-        const { fingerprint, git_hash } = backendBuildIdentity(server.config.root);
+        const query = new URL(req.url ?? "/", "http://localhost").searchParams.get("backend");
+        const identity = backendBuildIdentity(server.config.root, query ? JSON.parse(query) : undefined);
         res.setHeader("content-type", "application/json");
         res.setHeader("cache-control", "no-store");
-        res.end(JSON.stringify({ fingerprint, git_hash }));
+        res.end(JSON.stringify(identity));
       } catch (error) {
         server.config.logger.error(`Backend identity failed: ${error}`);
-        res.statusCode = 503;
-        res.end();
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ status: "unavailable", key: "unavailable" }));
       }
     });
     server.middlewares.use("/__tuic_dev_root", (_req, res) => {
