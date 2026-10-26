@@ -2,7 +2,7 @@
 
 ## Result and boundary
 
-The TUIC attachment defect is fixed. The targeted frontend checks pass. The isolated browser recovered the stale tab to a new attached ego session. The full live criterion is **blocked by an independent ego perimeter error**, so this story is not complete.
+The TUIC attachment defect is fixed. The targeted frontend checks pass. The isolated mobile browser recovered the stale tab to a new attached ego session and received a successful `OK` reply. Model and Mode were published. The initial perimeter blocker was resolved by narrowing the isolated test configuration to a scratch repository. The coordinator's separate critic is still required.
 
 No ego source, daily TUIC process, daily configuration, GitHub state, or installed binary was changed. The named `agent-test-2348` instance used port 19878. Its ego wrapper used a separate EGO_HOME under `~/Gits/.tmp/2348-ego/home`.
 
@@ -72,4 +72,24 @@ Evidence: `~/Gits/.tmp/2348-browser/backend-after-open.json`, `live-after.json`,
 
 Risk: **medium** — shared default binding, asynchronous replay and desktop/mobile consumers. The coordinator must run the separate critic on the committed branch. The missing-session classifier deliberately accepts only the recorded ego load refusal; a future wire-message change fails closed rather than replacing a conversation on an unrelated error.
 
-Complete the live criterion after the ego/agent-test perimeter prerequisite is resolved by its owner. Do not mark this story complete from the targeted tests alone.
+## Successful isolated rerun — 2026-10-26
+
+The coordinator authorized a single scratch-repository test setup. A fresh repository at `~/Gits/.tmp/2348-scratch` became the isolated TUIC `ai_chat_workspace`. Changing only that setting still reproduced the perimeter refusal. Read-only source inspection found the broad default in ego's `crates/ego-cli/src/run/profile_roots.rs:134`: when roots have no explicit source and confinement is not Adaptive, startup supplies `~/Gits`. The agent-test launcher itself fixes TMPDIR to its runtime directory (`scripts/agent-test.py:64`), so a caller TMPDIR assignment would not change the child environment.
+
+The isolated EGO_HOME configuration was then narrowed explicitly through `ego config set 'roots=[{path="/Users/stefano.straus/Gits/.tmp/2348-scratch",access="read-write"}]'`. This reduces the granted perimeter; it does not disable the probe or change confinement. No system-temp override, ego source change, or daily configuration change was needed. CLI `-c` placement attempts were rejected by ego's parser and were removed from the test launcher before the successful run.
+
+The isolated home initially had no model or subscription credential. The test-only launcher loaded the authorized OpenRouter key into its process environment without printing or storing it. The model catalogue was refreshed for OpenRouter, and the isolated configuration selected `openrouter/openai/gpt-6-luna`. No unrelated model or tool turn was run.
+
+The browser used named session `ego-2348-retry`, the isolated backend on port 19878, and a seeded stale selected tab `0b466823-0736-5dcc-ad6e-fb87430c21ce`. Opening mobile Chat recovered it to session `8bedf16a-ab67-5450-af19-44666112e988` on connection `01a1772b-287a-726b-9568-0b76872528e9`. The logs record the missing id's `session/load`, followed by `session/new`. Sending `Reply with OK only. Do not use tools.` returned the assistant reply `OK` without an attachment or perimeter error.
+
+The backend snapshot records the new attachment as idle with cwd equal to the scratch repository. Its config options publish Model=`openrouter/openai/gpt-6-luna`, Reasoning effort=`medium`, Mode=`default`, and Sandbox=`adaptive`. The mobile status displays `gpt-6-luna · medium · default`. A 390×844 browser capture records the recovered transcript and status. The active `global` tab group contains only the replacement id. The unused scratch-path group seeded during setup still contains the old id; mobile's global Chat does not read that group. The session query selected the old id and the backend log proves its refused load and replacement. This proves mobile browser behavior, not physical-phone touch behavior.
+
+Evidence under `~/Gits/.tmp/2348-browser/`:
+
+- `backend-narrow.json`: real connection, attachment, and full published config options.
+- `retry-transcript.txt`: successful assistant `OK` and model/mode status.
+- `retry-live.json`: URL, mobile viewport, browser-local tabs, and visible text.
+- `recovered-success-mobile.png`: mobile viewport screenshot.
+- `narrow-effective.json`: isolated root configuration inspection before model setup.
+
+Run logs: `~/Gits/.tmp/2348-agent-narrow.log` and `2348-up-narrow.log`. The named browser tab and both task-owned browser daemons were closed. `make agent-test-stop AGENT_TEST_INSTANCE=agent-test-2348 AGENT_TEST_PORT=19878` stopped the isolated app. The coordinator must still run the separate critic; this rerun adds live evidence, not another application change.
