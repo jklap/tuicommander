@@ -209,6 +209,8 @@ ORCHESTRATOR.md
 # Website: film is a release asset fetched at deploy; review screenshots stay local
 website/public/video/
 website/.review/
+.obsidian/
+
 # Personal Claude Code state (`.claude/` itself is tracked: agents, hooks, skills).
 # The hook debug log rotates to dated names (`hook-debug.log.YYYY-MM-DD`) that
 # `*.log` does not match, and has reached 1.6 GB in a day.
@@ -216,3 +218,6 @@ website/.review/
 .claude/settings.local.json
 .claude/worktrees/
 .claude/*.lock
+trigger_mic
+trigger_mic.swift
+.pnpm-store/

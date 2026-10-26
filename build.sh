@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+
+OFF='\033[0m'
+RED='\033[0;31m'
+BRIGHT_RED='\033[0;91m'
+BRIGHT_YELLOW='\033[0;93m'
+GREEN='\033[0;32m'
+BLUE='\033[0;94m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD_RED='\033[1;31m'
+BOLD_GREEN='\033[1;32m'
+BOLD_BLUE='\033[1;34m'
+BOLD_PURPLE='\033[1;35m'
+BOLD_CYAN='\033[1;36m'
+BOLD_YELLOW='\033[1;33m'
+BOLD_UNDERLINED='\033[1;4m'
+BOLD='\033[1m'
+
+RUN_ALL="${RUN_ALL:-}"
+BUILD="${BUILD:-yes}"
+SIGN="${SIGN:-yes}"
+CHECK_SIGNING="${CHECK_SIGNING:-yes}"
+UPDATE_PLUGINS="${UPDATE_PLUGINS:-yes}"
+
+BUILD_PATH="src-tauri/target/release/bundle/macos"
+APP_PATH="$BUILD_PATH/TUICommander.app"
+APP_DEST_DIR="$HOME/Applications"
+DMG_PATH=" src-tauri/target/release/bundle/dmg/"
+
+if [ -n "$RUN_ALL" ]; then
+    # Typecheck
+    pnpm exec tsc --noEmit
+
+    # Tests + coverage
+    # Runs the same suite as `pnpm exec vitest run` plus coverage collection, enforcing
+    # the floor thresholds in vitest.config.ts (see that file's comment) — one pass
+    # instead of running the whole suite twice.
+    pnpm exec vitest run --coverage --reporter=verbose
+
+    # Plugin tests
+    # Self-test first: it always passes today (exercises its own fixtures),
+    # so it can't mask a self-test regression behind the real check's
+    # expected failure below (the plugins submodule currently has zero
+    # tests, so `test:plugins` failing here is the known, tracked state).
+    pnpm test:plugins:test && pnpm test:plugins
+
+    # Architecture cycles
+    pnpm architecture:cycles && pnpm architecture:cycles:test
+
+    # No literal NUL bytes in source
+    pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+fi
+
+if [ -n "$BUILD" ]; then
+    # checking building requirements:
+    # brew: sccache, pnpm, rustup, agent-browser, gh, nvm
+    # cargo: tauri-cli, cargo-llvm-cov, cargo-audit, cargo-crap, mdbook
+    # cargo: --locked cargo-nextest
+    # brew (optional): mdkb, rtk
+    if ! [ -x "$(command -v sccache)" ]; then
+        echo -e "${BOLD_RED}Missing sccache${OFF}"
+        exit 1
+    fi
+
+    HASH=$(git rev-parse --short HEAD)
+    DIRTY=""
+    if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules)" ]; then
+        DIRTY="-dirty"
+    fi
+
+    # TODO: make sure tuic is actually pointing to the running version?
+    RUNNING_VER=$(tuic --version 2> /dev/null | awk '{print $2}')
+    # 1.7.7-nightly.20260930.2c3bda965-dirty
+    if [[ "$RUNNING_VER" =~ nightly\.([0-9]{4})([0-9]{2})([0-9]{2})\.([a-z0-9]{9})(-dirty)? ]]; then
+        HASH_OLDER="${BASH_REMATCH[4]}"
+    else
+        echo -e "${BOLD_RED}Could not parse nightly version from '${RUNNING_VER}', skipping changes display${OFF}"
+    fi
+
+    # NOTE: the below logic was stolen from the "nightly.yml" GHA
+    # Append nightly timestamp to current version (strip any existing -nightly suffix first)
+    RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
+    VERSION="${RAW_VERSION%%-nightly*}"
+    #NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').t$(date '+%H%M')c"
+    NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').${HASH}${DIRTY}"
+    echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
+
+    # Snapshot the files we patch, before (orig) and after (patched), so we can
+    # tell post-build whether anything besides our own patch touched them
+    BACKUP_DIR="$(mktemp -d)" || { echo -e "  ${BOLD_RED}Unable to create backup dir${OFF}"; exit 1; }
+    mkdir -p "${BACKUP_DIR}/orig" "${BACKUP_DIR}/patched"
+    PATCHED_FILES=("src-tauri/tauri.conf.json" "src-tauri/Cargo.toml")
+    for f in "${PATCHED_FILES[@]}"; do
+        cp -p "$f" "${BACKUP_DIR}/orig/$(basename "$f")"
+    done
+
+    # Patch tauri.conf.json: version + add nightly updater endpoint
+    NIGHTLY="${NIGHTLY}" \
+    NIGHTLY_EP="https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json" \
+    yq -i -o=json -P '
+        .version = strenv(NIGHTLY) |
+        .plugins.updater.endpoints |= (
+            select(contains([strenv(NIGHTLY_EP)])) // ([strenv(NIGHTLY_EP)] + .)
+        )
+    ' src-tauri/tauri.conf.json
+    echo "Patched tauri.conf.json"
+
+    # Patch Cargo.toml version
+    sed -I '' "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml"
+
+    for f in "${PATCHED_FILES[@]}"; do
+        cp -p "$f" "${BACKUP_DIR}/patched/$(basename "$f")"
+    done
+
+    export RUSTC_WRAPPER="sccache"
+    export CMAKE_C_COMPILER_LAUNCHER="sccache"
+    export CMAKE_CXX_COMPILER_LAUNCHER="sccache"
+
+    # do a local signing of the app (and the sidecars)
+    export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+
+    # Note: we can't build the dmg while under a sandbox unless we use CI=true
+    # but CI=true also:
+    # sets frozen-lockfile=true
+    # Suppresses UI Progress Bars
+    # Skips AppleScript UI Styling
+    # Bypasses Prompts
+    # Treats Warnings as Errors
+    # Terminal Color Striping
+    # Reason: build_dmg.sh uses Finder applescript to pretty up the dmg which isn't allowed via the sandbox
+    make build
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}Build failed${OFF}"
+        exit 1
+    fi
+
+    if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
+        # TODO: can we inject it into the app??
+        git log --pretty=format:'%h %s%d' "$HASH_OLDER" "$HASH" > "$APP_PATH/Contents/Resources/git.log"
+    fi
+
+    # enable debug level logging in the app's Info.plist
+    /usr/libexec/PlistBuddy \
+        -c "Add :LSEnvironment dict" \
+        -c "Add :LSEnvironment:RUST_LOG string 'info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug'" \
+        "$APP_PATH/Contents/Info.plist"
+
+    echo -e "${GREEN}Restoring version files${OFF}"
+
+    # Files we patched ourselves: if the build left them byte-identical to our
+    # patched snapshot, put the pre-patch original back. Anything else means
+    # the build changed them too, so leave them for review.
+    restore_if_unchanged() {
+        local FILE="$1" NAME
+        NAME="$(basename "$FILE")"
+        if cmp -s "$FILE" "${BACKUP_DIR}/patched/${NAME}"; then
+            cp -p "${BACKUP_DIR}/orig/${NAME}" "$FILE"
+        else
+            echo -e "  ${BOLD_RED}${FILE} changed during the build beyond the version patch, leaving it${OFF}"
+        fi
+    }
+
+    restore_if_unchanged "src-tauri/tauri.conf.json"
+    restore_if_unchanged "src-tauri/Cargo.toml"
+    rm -rf "$BACKUP_DIR"
+
+    # Cargo.lock isn't patched by us (cargo rewrites its version), so keep the
+    # textual check: restore only if every changed line is a version line
+    diff_check() {
+        local FILE="$1"
+        git diff --quiet \
+            -I '(^version =|"version": |download/nightly)' \
+            --ignore-cr-at-eol \
+            -- \
+            "$FILE"
+        if [ $? -eq 0 ]; then
+            git restore -- "$FILE"
+        fi
+    }
+
+    diff_check "src-tauri/Cargo.lock"
+fi
+
+if [ -n "$SIGN" ]; then
+    echo -e "${GREEN}codesign: ${BOLD_GREEN}TUICommander.app${OFF}"
+    # sign post changes to Info.plist
+    codesign \
+        --force \
+        --deep \
+        --sign "$APPLE_SIGNING_IDENTITY" \
+        --identifier "com.tuic.commander" \
+        --entitlements "src-tauri/Entitlements.plist" \
+        --options runtime \
+        "$APP_PATH"
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+fi
+
+if [ -n "$CHECK_SIGNING" ]; then
+    echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --verify \
+        --verbose \
+        "$APP_PATH" 2>&1 \
+        | grep --color=always -E 'valid on disk|satisfies its Designated Requirement|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --display \
+        --check-notarization \
+        --entitlements - \
+        --xml \
+        --requirements - \
+        --verbose=4 \
+        "$APP_PATH" 2>&1 \
+        | grep --color=always -E 'CodeDirectory.*|Signature.*|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}notarization verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --display \
+        --check-notarization \
+        -vvv \
+        "$APP_PATH" 2>&1 \
+        | grep --color=always -E 'CodeDirectory.*|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Gatekeeper verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    spctl \
+        --assess \
+        --verbose \
+        "$APP_PATH" 2>&1 \
+        | grep --color=always -E 'rejected|$'
+    if [ $? -ne 0 ] && [ "$APPLE_SIGNING_IDENTITY" != '-' ]; then
+        # we only care about the Gatekeeper check if it's not a local dev signing
+        echo -e "${BOLD_RED}Failed Gatekeeper check"
+        exit 1
+    fi
+
+    # spot checks, all should be good, only report if not
+    { codesign --verify "$APP_PATH/Contents/MacOS/tuic" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-bridge" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-hook" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-remote" ; \
+    } || { echo "Unable to verify status of all sidecar code-signing"; exit 1; }
+fi
+
+
+if [ -n "$UPDATE_PLUGINS" ]; then
+    echo -e "${GREEN}Updating plugins${OFF}"
+    rsync -ahhF \
+        --info=flist,progress2,stats3 \
+        --delete \
+        plugins/build-cleaner \
+        plugins/md-kanban \
+        plugins/mdkb-dashboard \
+        plugins/plan \
+        plugins/rtk-dashboard \
+        plugins/stories-ticker \
+        plugins/tuic-vscode-icons \
+        plugins/wiz-kanban \
+        plugins/csv-preview \
+        plugins/docx-preview \
+        plugins/xlsx-preview \
+        examples/plugins/repo-dashboard \
+        examples/plugins/claude-status \
+        examples/plugins/report-watcher \
+        --exclude "main.test.js" \
+        ~/Library/Application\ Support/com.tuic.commander/plugins/
+fi
+
+if [ -n "$BUILD" ]; then
+    #open "src-tauri/target/release/bundle/"
+
+    # rename the app itself for reference
+    mv "$APP_PATH" "$BUILD_PATH/TUICommander_${NIGHTLY}.app"
+    #mv "$DMG_PATH/TUICommander_${NIGHTLY}_aarch64.dmg" .
+    mv "$BUILD_PATH/TUICommander_${NIGHTLY}.app" "$APP_DEST_DIR/"
+    rm -f "$APP_DEST_DIR/TUICommander.app"
+    ln -s "$APP_DEST_DIR/TUICommander_${NIGHTLY}.app" "$APP_DEST_DIR/TUICommander.app"
+    open "$APP_DEST_DIR"
+    # TODO: prune old versions
+
+    if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
+        # output log
+        git --no-pager log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset%d' "$HASH_OLDER" "$HASH"
+
+        echo "Old SHA: $HASH_OLDER"
+        echo "New SHA: $HASH"
+
+        # git@personal:jklap/tuicommander.git
+        REPO=$(git remote -v | grep fetch | awk '{print $2}')
+        if [[ "$REPO" =~ git@.*:(.*)\.git ]]; then
+            REPO="${BASH_REMATCH[1]}"
+            REPO_URL="https://github.com/${REPO}"
+            DIFF_URL="${REPO_URL}/compare/${HASH_OLDER}...${HASH}"
+            echo -e "Changes: ${BOLD_GREEN}${DIFF_URL}${OFF}"
+        else
+            echo -e "${BOLD_RED}Unknown repo format: ${REPO}, skipping changes display${OFF}"
+        fi
+    fi
+
+    (cd src-tauri && cargo clean)
+fi
+
+exit 0
+
+
+# Import macOS signing certificate
+DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
+DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+
+KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+
+security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+CERT_PATH=$RUNNER_TEMP/cert.p12
+echo "$DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+security import "$CERT_PATH" \
+    -k "$KEYCHAIN_PATH" \
+    -P "$DEVELOPER_ID_CERT_PASSWORD" \
+    -T /usr/bin/codesign
+rm -f "$CERT_PATH"
+
+security set-key-partition-list -S apple-tool:,apple:,codesign: \
+    -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application:" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+# Write Apple API key file for notarization
+NOTARIZE_KEY_BASE64: ${{ secrets.NOTARIZE_KEY_BASE64 }}
+NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}
+
+KEY_PATH="$RUNNER_TEMP/AuthKey_${NOTARIZE_KEY_ID}.p8"
+echo "$NOTARIZE_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+APPLE_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
+APPLE_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+APPLE_API_ISSUER: ${{ secrets.NOTARIZE_ISSUER_ID }}
+APPLE_API_KEY: ${{ secrets.NOTARIZE_KEY_ID }}
+TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+#
+### build
+#
+
+# Cleanup macOS keychain
+security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
+
+exit 0
