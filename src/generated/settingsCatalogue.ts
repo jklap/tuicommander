@@ -5411,7 +5411,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.notifications.silence_remote_completions.help",
       "label": "silence remote completions",
       "schema": {
-        "description": "Drop the completion chime for sessions created over MCP/HTTP (`session\ncreate`, `agent spawn`). An orchestration of many agents otherwise turns\nevery finished worker into a beep. Visual signals (activity item, badge,\nOS notification) are unaffected.",
+        "description": "Mute sounds and native notices for parented sessions; retain the legacy\ncompletion-chime mute for unparented MCP/HTTP-created sessions. Activity,\nbell entries and urgent cards are unaffected.",
         "type": "boolean",
         "default": true
       },
