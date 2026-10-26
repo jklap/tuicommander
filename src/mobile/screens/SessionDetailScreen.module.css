@@ -121,6 +121,14 @@ button[data-control-layout="row"].headerInfo {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
 }
 
+/* The session pane already excludes navigation, banners and safe areas. */
+.sessionMenu {
+  max-height: calc(100% - 64px);
+  overscroll-behavior: contain;
+}
+
+.overflow > * { flex-shrink: 0; }
+
 .overflowInfo {
   display: flex;
   align-items: center;

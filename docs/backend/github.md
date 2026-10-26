@@ -584,3 +584,9 @@ passes through `graphql_request` and the same response-adoption function used by
 `poll_one_account`, and checks both PR and issue output. The fixture records its
 request, timestamp and source; it contains no headers or credentials. It is not
 a recorded missing-scope or organization-policy response.
+
+### Machine-owned issue intake
+
+The automation runtime retains every resolved allowlist entry and logs each missing or ambiguous registration separately. A bad entry does not clear valid intake paths.
+
+The shared poller keeps intake and client issue delivery separate. For an intake path, the same GraphQL request includes an unfiltered `intakeIssues: issues(...)` selection and the normal client-filtered `issues(...)` selection. GitHub applies assigned, created and mentioned predicates with the resolved account viewer; no local approximation or second network poll is used. Disabled client issues publish an empty client snapshot. Unfiltered snapshots use an internal event consumed only by the automation runtime and excluded from SSE; desktop and SSE receive the same filtered client snapshot. Each issue connection retains the existing 30-node bound (at most 60 issue nodes per overlapping repository when both selections are enabled).

@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
+
 Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
 
 The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
@@ -3391,8 +3393,13 @@ Detached checkout visibility: the sidebar shows directory name, short HEAD SHA a
 The session overflow loads a read-only usage block when opened. Claude and Codex
 show shared account quota for the live process profile. ego shows only the exact
 PID-bound session row from its v3 usage report, including separate API-equivalent
-estimates and unknown cost reasons. Unknown model, usage and stale data are
-labelled explicitly. Remote sessions use their owning daemon, never a local account.
+estimates and unknown cost reasons. Available model metadata is shown; missing
+model metadata does not obscure valid account quota. Unknown usage and stale data
+are labelled explicitly. Remote sessions use their owning daemon, never a local account.
+Desktop quota cards and the mobile menu use one presenter for provider/plan, window,
+percentage used and client-local reset times. The session menu scrolls inside the
+remaining session pane, below banners and above navigation. Markdown entries are
+unique by absolute file path; files in different worktrees remain separate.
 
 Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
 

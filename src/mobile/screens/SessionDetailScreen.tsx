@@ -452,7 +452,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</Button>
 			</header>
 			<Show when={moreOpen()}>
-				<div class={styles.overflow}>
+				<div class={`${styles.overflow} ${styles.sessionMenu}`} role="region" aria-label="Session actions">
 					<Show when={voice.available()}>
 						<Button
 							variant="ghost"

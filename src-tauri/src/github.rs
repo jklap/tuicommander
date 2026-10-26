@@ -930,6 +930,25 @@ pub(crate) async fn get_all_batch_impl(
     pr_hide_drafts: bool,
     state: &AppState,
 ) -> Result<BatchPollResult, String> {
+    get_all_batch_with_intake_impl(
+        paths,
+        include_merged,
+        filter_mode,
+        pr_hide_drafts,
+        state,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn get_all_batch_with_intake_impl(
+    paths: &[String],
+    include_merged: bool,
+    filter_mode: &str,
+    pr_hide_drafts: bool,
+    state: &AppState,
+    intake: bool,
+) -> Result<BatchPollResult, String> {
     use crate::github_account::{
         GitHubAccountRegistry, RepoBindingStore, RepoResolution, resolve_repo_account,
     };
@@ -988,6 +1007,7 @@ pub(crate) async fn get_all_batch_impl(
 
     let mut pr_results: std::collections::HashMap<String, Vec<BranchPrStatus>> = Default::default();
     let mut issue_results: std::collections::HashMap<String, Vec<GitHubIssue>> = Default::default();
+    let mut intake_results = std::collections::HashMap::new();
 
     for (_id, (account, repos_all)) in by_account {
         // Skip accounts with no token or an open breaker (per-account isolation).
@@ -1033,6 +1053,8 @@ pub(crate) async fn get_all_batch_impl(
             pr_hide_drafts,
             &mut pr_results,
             &mut issue_results,
+            intake,
+            &mut intake_results,
         )
         .await
         {
@@ -1047,6 +1069,7 @@ pub(crate) async fn get_all_batch_impl(
     }
 
     Ok(BatchPollResult {
+        intake_issues: intake_results,
         prs: pr_results,
         issues: issue_results,
     })
@@ -1109,6 +1132,8 @@ async fn poll_one_account(
     pr_hide_drafts: bool,
     pr_results: &mut std::collections::HashMap<String, Vec<BranchPrStatus>>,
     issue_results: &mut std::collections::HashMap<String, Vec<GitHubIssue>>,
+    intake: bool,
+    intake_results: &mut std::collections::HashMap<String, Vec<GitHubIssue>>,
 ) -> Result<(), String> {
     // Always fetch viewer login — needed for both issue filtering and viewer PR search.
     let viewer = match get_viewer_login_for(state, account, prefetched_token).await {
@@ -1127,8 +1152,14 @@ async fn poll_one_account(
     };
     let include_issues = !matches!(filter_mode, "" | "disabled");
 
-    let (query, aliases) =
-        build_unified_batch_query(repos, include_merged, filter_mode, &viewer, pr_hide_drafts);
+    let (query, aliases) = tuic_git::github::build_unified_batch_query_with_intake(
+        repos,
+        include_merged,
+        filter_mode,
+        &viewer,
+        pr_hide_drafts,
+        intake,
+    );
     let response = graphql_with_retry(
         state,
         account,
@@ -1138,6 +1169,20 @@ async fn poll_one_account(
     )
     .await?;
 
+    if intake {
+        for (alias, path) in &aliases {
+            if let Some(nodes) = response["data"][alias]["intakeIssues"]["nodes"].as_array() {
+                intake_results.insert(
+                    path.clone(),
+                    nodes.iter().filter_map(parse_issue_node).collect(),
+                );
+                // A disabled or unresolved-viewer client must also clear any stale badge.
+                if !include_issues {
+                    issue_results.insert(path.clone(), Vec::new());
+                }
+            }
+        }
+    }
     adopt_batch_response(
         state,
         account,
@@ -7525,6 +7570,8 @@ mod pr_panel_mutant_tests {
             false,
             &mut prs,
             &mut issues,
+            false,
+            &mut std::collections::HashMap::new(),
         )
         .await
         .expect_err("an open breaker must fail the poll");
