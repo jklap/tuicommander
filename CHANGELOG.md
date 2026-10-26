@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Remove the detached double blue focus ring from shared text fields, including Markdown comment popovers, while preserving keyboard focus on other controls (#2377-e02e).
+- Align MCP capability labels, help and migration warnings with other Settings rows, and place ego immediately after Local tools in General (#2374-cfc7).
+
+- Keep Settings scroll and focus stable while launch instruction previews refresh, and explain each launch module with contextual help (#2373-2313).
 
 - Keep sentence periods out of detected terminal file paths so cwd-relative Markdown links open correctly (#2372-b60e).
 - Remove stale Markdown block and list-item comment highlights after deletion, so deleted comments cannot reopen (#2371-1fbd).
@@ -60,6 +63,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep SSH discovery Probe actions separated with shared settings row spacing, and hide remote update actions when the current build clears the out-of-date warning (#2337-6a62).
 
 ### Fixed
+
+- Keep warm Codex discovery and Claude Usage caches reusable when Windows reports directory metadata notifications; retain file updates and directory replacement recovery (#2310-6e76).
 
 - Restore SQLite Viewer database loading and save feedback, and Wiz Kanban toast feedback, through the documented plugin host-message envelope (#2340-ede3).
 - Preserve the resolved speech engine when saving voice settings, so an inactive external command cannot silently replace the Italian Edge voice.

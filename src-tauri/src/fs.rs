@@ -79,6 +79,17 @@ pub(crate) fn system32_exe(exe: &str) -> String {
     }
 }
 
+/// Windows reports `Modify(Any)` for existing directory metadata as well as
+/// for file content. Event-driven file caches must not treat that notification
+/// as a subtree replacement: child events identify changed files. Missing paths,
+/// create/remove/rename events and watcher rescan flags still require recovery.
+pub(crate) fn is_directory_metadata_event(kind: &notify::EventKind, path: &Path) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Modify(notify::event::ModifyKind::Any)
+    ) && path.is_dir()
+}
+
 /// A directory entry returned by `list_directory`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
