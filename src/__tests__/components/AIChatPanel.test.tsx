@@ -1068,6 +1068,32 @@ describe("AIChatPanel: parallel tabs", () => {
 		});
 	});
 
+	// Catches: remount replays the selected missing tab without recovery, leaving
+	// the desktop panel failed and its model controls pending until user action.
+	it("recovers a missing selected saved tab on desktop remount without user action", async () => {
+		const first = await renderPanel();
+		first.unmount();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.resetMemory();
+		client.loadSession.mockRejectedValue(missingSession);
+		client.newSession.mockClear();
+		client.newSession.mockImplementation(() => openSession(CHILD_SESSION));
+
+		const { container } = renderIdlePanel();
+		await settle();
+
+		expect(container.textContent).not.toContain("session not found");
+		expect(container.querySelector("textarea")).not.toBeNull();
+		expect(container.textContent).toContain("Opus");
+		expect(container.querySelector(`button[data-chat-session="${CHILD_SESSION}"]`)?.getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION, CHILD_SESSION]);
+		expect(client.loadSession).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(client.newSession).toHaveBeenCalledExactlyOnceWith(CONNECTION, CHAT_ROOT);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
 	// Catches: a stale mobile-local tab permanently traps Chat on a session that
 	// ego no longer stores; exercise both IPC and the browser HTTP error envelope.
 	it.each(["ipc", "http"])("replaces a missing saved conversation before sending over %s", async (transport) => {

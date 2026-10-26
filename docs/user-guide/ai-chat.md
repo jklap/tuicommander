@@ -101,6 +101,9 @@ tabs and the selected tab are restored after restarting TUICommander, and their
 history is replayed when ego starts. Selecting a saved tab connects and loads it
 without sending a message. The panel shows **Connecting conversation…** while
 it attaches, or the failure reason and **Retry** if it cannot open the conversation.
+Reopening the panel on an existing connection also attaches the selected saved tab.
+If ego no longer has that conversation, Chat opens a fresh one automatically,
+without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 

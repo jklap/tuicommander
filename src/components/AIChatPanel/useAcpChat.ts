@@ -231,9 +231,10 @@ export function createAcpChat(
 		return connectingDefault;
 	}
 
-	/** Selecting a saved tab is an explicit request to attach, even before
-	 *  the first message. Only the latest selection may change the visible tab. */
-	async function selectSession(session: AcpSessionId): Promise<void> {
+	/** Selecting a saved tab requests attachment before the first message.
+	 *  Remounts preserve refused loads; explicit selections may retry them.
+	 *  Only the latest selection may change the visible tab. */
+	async function selectSession(session: AcpSessionId, explicit = true): Promise<void> {
 		if (session === sessionId() && attachment() && !connecting() && !failedSession) return;
 		const request = ++selection;
 		const isCurrent = () => request === selection;
@@ -262,7 +263,7 @@ export function createAcpChat(
 					setError("This agent cannot load saved conversations.");
 					return;
 				}
-				const loaded = await loadSelected(current.connectionId, session, target, true, isCurrent);
+				const loaded = await loadSelected(current.connectionId, session, target, explicit, isCurrent);
 				if (!loaded || !isCurrent()) return;
 				attached = loaded;
 			}
@@ -456,8 +457,10 @@ export function createAcpChat(
 			const target = root();
 			if (!target) return;
 			for (const tab of aiChatTabs.ids(TABS)) {
-				if (!launches()[tab] && !current.launch && !acpStore.attachment(current.connectionId, tab))
-					void replay("replaying a chat tab", current.connectionId, tab, target);
+				if (!launches()[tab] && !current.launch && !acpStore.attachment(current.connectionId, tab)) {
+					if (tab === selected) void selectSession(tab, false);
+					else void replay("replaying a chat tab", current.connectionId, tab, target);
+				}
 			}
 		});
 	});
