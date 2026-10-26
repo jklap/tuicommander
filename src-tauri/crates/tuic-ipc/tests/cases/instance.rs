@@ -99,7 +99,7 @@ fn unix_socket_path_check_counts_raw_bytes_including_non_utf8() {
     let multibyte = format!("/{}", "é".repeat((max - 1) / 2));
     assert_eq!(multibyte.len(), max);
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte)).is_ok());
-    let multibyte_over = format!("/{}", "é".repeat((max + 1) / 2));
+    let multibyte_over = format!("/{}", "é".repeat(max.div_ceil(2)));
     assert_eq!(multibyte_over.len(), max + 2);
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte_over)).is_err());
     // 0xFF is invalid UTF-8; a lossy conversion would turn it into a 3-byte U+FFFD.

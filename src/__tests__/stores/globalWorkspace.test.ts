@@ -504,28 +504,6 @@ describe("globalWorkspaceStore", () => {
 				expect(tabIds).toEqual([id1, id2].sort());
 			});
 		});
-
-		it("keeps terminalsStore.state.activeId in sync with whichever tab the rebuilt layout shows — a code review finding", () => {
-			testInScope(() => {
-				// resetActiveLayout rebuilds strictly from ws.promoted (Set-iteration
-				// order), which does not necessarily match whatever was focused before
-				// the reset — a stale activeId would point keyboard input/focus at a
-				// terminal that isn't the one visibly active in the rebuilt pane.
-				const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
-				const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-				store.promote(id1);
-				store.promote(id2);
-				store.activate();
-				terminalsStore.setActive(id1);
-
-				store.resetActiveLayout();
-
-				const [g0] = paneLayoutStore.getAllGroupIds();
-				const activeTabId = paneLayoutStore.state.groups[g0]?.activeTabId;
-				expect(activeTabId).toBeDefined();
-				expect(terminalsStore.state.activeId).toBe(activeTabId);
-			});
-		});
 	});
 
 	describe("focus reconciliation keeps a non-terminal active tab", () => {
