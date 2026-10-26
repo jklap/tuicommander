@@ -382,16 +382,15 @@ impl TunnelManager {
 
         if let TunnelSlot::Running(handle) = handle {
             let task = handle.lock().supervisor.stop_and_take_task();
-            if let Some(task) = task {
-                if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task)
+            if let Some(task) = task
+                && tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task)
                     .await
                     .is_err()
-                {
-                    tracing::warn!(
-                        source = "tunnel_manager",
-                        "Tunnel shutdown cleanup was not confirmed before timeout"
-                    );
-                }
+            {
+                tracing::warn!(
+                    source = "tunnel_manager",
+                    "Tunnel shutdown cleanup was not confirmed before timeout"
+                );
             }
         }
         let _ = self.audit.lock().insert(
