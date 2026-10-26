@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentOverlay } from "../../components/MarkdownTab/CommentOverlay";
+import { ContentRenderer } from "../../components/ui/ContentRenderer";
 
 afterEach(() => cleanup());
 
@@ -330,6 +331,45 @@ describe("CommentOverlay edit actions", () => {
 });
 
 describe("Markdown selection chat reference", () => {
+	// Catches: invisible link destinations consuming the selected cell's rendered occurrence ordinal.
+	it.each([
+		["[Guide](docs/Repeated.md)\n\n| Name |\n| --- |\n| **Repeated** |\n", 5],
+		["# Map\n\n| Name |\n| --- |\n| [Guide](docs/Repeated.md) |\n| **Repeated** |\n", 6],
+		["# Map\n\n| Name |\n| --- |\n| [Repeated](docs/Repeated.md) |\n| **Repeated** |\n", 6],
+	] as const)("ignores invisible link destinations when locating a selected table cell: %s", (source, line) => {
+		let content!: HTMLDivElement;
+		render(() => (
+			<ContentRenderer
+				content={source}
+				commentableBlocks
+				contentRef={(el) => {
+					content = el;
+				}}
+			/>
+		));
+		const range = document.createRange();
+		range.selectNodeContents(content.querySelector("strong")!.firstChild!);
+		const rect = { left: 100, right: 160, top: 100, bottom: 120, height: 20 } as DOMRect;
+		range.getClientRects = () => [rect] as unknown as DOMRectList;
+		range.getBoundingClientRect = () => rect;
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(range);
+		const insert = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onDelete={vi.fn()}
+				chatReference={{ source, path: "/repo/map.md", insert }}
+			/>
+		));
+		fireEvent.mouseUp(content);
+		const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+		expect(action).not.toBeNull();
+		fireEvent.click(action!);
+		expect(insert).toHaveBeenCalledWith(`/repo/map.md:${line}-${line}\n\n> Repeated`);
+		window.getSelection()!.removeAllRanges();
+	});
 	// Catches: using rendered table offsets (or the first repeated cell) as source line offsets.
 	it("sends the selected table cell and its source row line to the composer without saving", () => {
 		const content = document.createElement("div");

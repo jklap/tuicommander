@@ -7,6 +7,7 @@
  *   Mount once inside MarkdownTab. Pass `contentRef` (the rendered markdown
  *   container) and callbacks for save/delete that operate on the raw source.
  */
+import { marked, type Token } from "marked";
 import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import {
@@ -201,7 +202,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const rect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
 		const chat = props.chatReference;
 		const text = sel.toString().trim();
-		const match = chat && findSourceMatch(chat.source, text, occurrenceOrdinal(props.contentRef, range, text));
+		const match = chat && selectionSourceMatch(chat.source, props.contentRef, range, text);
 		if (chat && match) {
 			const first = chat.source.slice(0, match.start).split("\n").length;
 			const last = chat.source.slice(0, match.end).split("\n").length;
@@ -614,6 +615,50 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 // ── Helpers ──
 
 const BLOCK_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "BLOCKQUOTE", "PRE", "TD", "TH"]);
+
+/** Keep source coordinates, but exclude link syntax that has no rendered text. */
+function visibleLinkSource(source: string): string {
+	const chars = source.split("");
+	const hide = (start: number, end: number) => {
+		for (let i = start; i < end; i++) {
+			if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+		}
+	};
+	const visit = (tokens: Token[], offset: number) => {
+		for (const token of tokens) {
+			if (token.type === "link") {
+				const labelStart = token.raw.indexOf(token.text);
+				hide(offset, offset + labelStart);
+				hide(offset + labelStart + token.text.length, offset + token.raw.length);
+				visit(token.tokens!, offset + labelStart);
+			} else if (token.type === "image" || token.type === "html") {
+				hide(offset, offset + token.raw.length);
+			} else if ("tokens" in token && token.tokens) {
+				const childStart = token.raw.indexOf(token.tokens.map((child: Token) => child.raw).join(""));
+				if (childStart >= 0) visit(token.tokens, offset + childStart);
+			}
+			offset += token.raw.length;
+		}
+	};
+	visit(marked.Lexer.lexInline(source), 0);
+	return chars.join("");
+}
+
+function selectionSourceMatch(source: string, root: HTMLElement, range: Range, text: string) {
+	const element =
+		range.startContainer.nodeType === Node.ELEMENT_NODE
+			? (range.startContainer as Element)
+			: range.startContainer.parentElement;
+	const block = element?.closest<HTMLElement>("[data-comment-source-start][data-comment-source-end]");
+	const start = block && root.contains(block) ? Number(block.dataset.commentSourceStart) : 0;
+	const end = block && root.contains(block) ? Number(block.dataset.commentSourceEnd) : source.length;
+	const match = findSourceMatch(
+		visibleLinkSource(source.slice(start, end)),
+		text,
+		occurrenceOrdinal(block ?? root, range, text),
+	);
+	return match ? { start: start + match.start, end: start + match.end } : null;
+}
 
 /**
  * 0-based ordinal of `selectionText` among identical rendered occurrences: the
