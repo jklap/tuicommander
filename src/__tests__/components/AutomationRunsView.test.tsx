@@ -15,6 +15,27 @@ describe("automation runs", () => {
 		repositoriesStore._testCancelPendingSave();
 		terminalsStore._testCancelPendingTimers();
 	});
+	// Catches asynchronous profile options clearing the displayed saved profile while the draft retains it.
+	it("keeps the saved profile selected after its profile catalogue arrives", async () => {
+		let resolveProfiles!: (names: string[]) => void;
+		render(() => (
+			<AutomationsDialog
+				onClose={() => {}}
+				adapter={fakeAdapter({
+					profiles: () =>
+						new Promise((resolve) => {
+							resolveProfiles = resolve;
+						}),
+				})}
+			/>
+		));
+		const picker = await screen.findByLabelText("Run config");
+		expect(picker).toHaveValue("claude:unattended");
+		resolveProfiles(["Claude Max", "claude:unattended"]);
+		await screen.findByRole("option", { name: "Claude Max" });
+		expect(picker).toHaveValue("claude:unattended");
+	});
+
 	it("keeps deleted automation snapshots visible and renders backend counts rather than counting the page", async () => {
 		const history = vi.fn(async (_id?: string, offset = 0) =>
 			offset
