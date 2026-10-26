@@ -218,7 +218,9 @@ impl TunnelManager {
                 // an abort cannot land in the gap.
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
                 let cleanup = tokio::spawn(async move {
-                    let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+                    if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
+                    tracing::warn!(source = "tunnel_manager", tunnel_id = id, "Tunnel shutdown cleanup was not confirmed before timeout");
+                }
                     let _ = done_tx.send(());
                 });
                 {
@@ -375,7 +377,9 @@ impl TunnelManager {
         if let TunnelSlot::Running(handle) = handle {
             let task = handle.lock().supervisor.stop_and_take_task();
             if let Some(task) = task {
-                let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+                if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
+                    tracing::warn!(source = "tunnel_manager", tunnel_id = id, "Tunnel shutdown cleanup was not confirmed before timeout");
+                }
             }
         }
         let _ = self.audit.lock().insert(
@@ -439,7 +443,9 @@ impl TunnelManager {
                 let _ = cleanup.await;
             }
         };
-        let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await;
+        if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await.is_err() {
+            tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
+        }
     }
 }
 

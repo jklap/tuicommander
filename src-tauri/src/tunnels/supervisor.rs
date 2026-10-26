@@ -539,35 +539,17 @@ async fn reap_process_group(pgid: Option<u32>) {
 /// establishes that.
 async fn graceful_kill(child: &mut tokio::process::Child) {
     #[cfg(unix)]
-    if let Some(id) = child.id() {
-        match i32::try_from(id) {
-            Ok(pid) => {
-                // SAFETY: `pid` is from `child.id()` which returns the OS PID
-                // of a child process we spawned (into its own process group,
-                // via `process_group(0)`) and have not yet waited on.
-                // SIGTERM has no preconditions beyond a valid PID/group id.
-                // Negating it targets the whole group instead of just `pid`.
-                unsafe {
-                    libc::kill(-pid, libc::SIGTERM);
-                }
-            }
-            Err(_) => {
-                tracing::warn!(
-                    source = "tunnel_supervisor",
-                    raw_pid = id,
-                    "PID overflows i32, escalating to SIGKILL"
-                );
-                // No usable signed PID to negate for a group-kill here — fall
-                // back to killing just the direct child via tokio's own
-                // PID-agnostic `Child::kill()`. This overflow case is
-                // exceedingly unlikely on any real system (PIDs stay far
-                // below `i32::MAX`), so the (rare, theoretical) grandchild
-                // gap this leaves is accepted rather than engineered around.
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return;
-            }
+    {
+        let pgid = child.id();
+        if pgid.is_some_and(|id| i32::try_from(id).is_err()) {
+            tracing::warn!(source = "tunnel_supervisor", "PID overflows i32; killing direct child");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return;
         }
+        // Reap the leader concurrently with group cleanup. Leader exit must not
+        // skip descendant escalation, and both share one five-second budget.
+        let _ = tokio::join!(child.wait(), reap_process_group(pgid));
     }
     #[cfg(not(unix))]
     {
@@ -589,24 +571,7 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
         let _ = child.wait().await;
     }
 
-    // Wait up to 5s for clean exit after SIGTERM, then escalate to SIGKILL.
-    #[cfg(unix)]
-    tokio::select! {
-        _ = child.wait() => {}
-        () = tokio::time::sleep(Duration::from_secs(5)) => {
-            if let Some(id) = child.id()
-                && let Ok(pid) = i32::try_from(id)
-            {
-                // SAFETY: see above — same PID/group, still not yet waited on.
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-            } else {
-                let _ = child.kill().await;
-            }
-            let _ = child.wait().await;
-        }
-    }
+
 }
 
 /// ETXTBSY (26 on Linux) — exec on a file still open for writing.
@@ -951,6 +916,60 @@ mod tests {
         assert!(!alive, "forked grandchild {grandchild} survived shutdown");
     }
 
+    /// Catches: `graceful_kill` signalling only the direct child. The fake ssh
+    /// forks `sleep` (a grandchild that SIGTERM to the shell alone never
+    /// reaches); the whole process group must die before `stop_and_wait`
+    /// returns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_kills_term_ignoring_descendant_after_leader_exits() {
+        let root = crate::test_support::test_temp_root();
+        let child_marker = root.join("term_ignoring_descendant_ssh_child.pid");
+        let _ = std::fs::remove_file(&child_marker);
+        let posix = format!(
+            "trap 'exit 0' TERM\nsh -c 'trap \"\" TERM; echo $$ > \"{}\"; exec sleep 3600' &\nwait",
+            child_marker.display()
+        );
+        let script = fake_ssh_script("term_ignoring_descendant", &posix, "exit /b 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        let grandchild: i32 = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&child_marker)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    return pid;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake SSH forked its grandchild");
+        assert!(
+            unsafe { libc::kill(grandchild, 0) } == 0,
+            "grandchild should be alive before shutdown"
+        );
+
+        assert!(sup.stop_and_wait().await, "shutdown must be confirmed");
+
+        // Allow only for init reaping the orphan; the group signal itself has
+        // already been delivered and the shell reaped by `stop_and_wait`.
+        let mut alive = true;
+        for _ in 0..40 {
+            alive = unsafe { libc::kill(grandchild, 0) } == 0;
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if alive {
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        }
+        assert!(!alive, "forked grandchild {grandchild} survived shutdown");
+    }
+
     /// Catches: ssh exiting on its own (network drop, auth failure) leaving a
     /// forked descendant (a `ProxyCommand`) alive in the dedicated process
     /// group. The fake ssh forks `sleep` and exits; once the supervisor has
@@ -1054,6 +1073,7 @@ mod tests {
             status,
             shutdown_tx: Some(shutdown_tx),
             ssh_binary: script,
+            task: None, // This test owns and awaits the task directly below.
         };
 
         tokio::time::sleep(Duration::from_millis(1500)).await;
