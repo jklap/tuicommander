@@ -1234,7 +1234,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</section>
 					</div>
 				</Show>
-				<Show when={!showRuns() && !showDesigner() && !readFailed()}>
+				<Show when={!showRuns() && !showDesigner()}>
 					<Show when={editingPlan()} keyed>
 						{(plan) => (
 							<section class={s.editorContent} aria-label={t("stories.planEdit.open", "Edit plan")}>
@@ -1336,7 +1336,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							</Show>
 						</section>
 					</Show>
-					<Show when={!editingPlan() && !newStory()}>
+					<Show when={!editingPlan() && !newStory() && !readFailed()}>
 						<div class={s.content} classList={{ [s.kanbanContent]: storiesUi.view() === "kanban" }}>
 							<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 								<div class={s.columnHeader}>

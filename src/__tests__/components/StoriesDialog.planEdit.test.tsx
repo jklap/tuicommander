@@ -138,17 +138,20 @@ it("catches disabled Save hiding its reason or submitting an invalid patch", asy
 	const save = ui.getByRole("button", { name: "Save" });
 	expect(save).toBeDisabled();
 	expect(save).toHaveAccessibleDescription("Change the title or document to save.");
+	expect(save).toHaveAttribute("title", "Change the title or document to save.");
 	expect(ui.getByText("Change the title or document to save.")).not.toBeVisible();
 	fireEvent.submit(ui.getByRole("form", { name: "Edit plan" }));
 	expect(updates()).toHaveLength(0);
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: " " } });
 	expect(save).toHaveAccessibleDescription("Enter a plan title to save.");
+	expect(save).toHaveAttribute("title", "Enter a plan title to save.");
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: "Valid" } });
 	fireEvent.change(ui.getByRole("combobox", { name: "Repository plan document" }), {
 		target: { value: "__other_source__" },
 	});
 	fireEvent.input(ui.getByLabelText("Plan document or link"), { target: { value: " " } });
 	expect(save).toHaveAccessibleDescription("Choose a plan document or paste a link to save.");
+	expect(save).toHaveAttribute("title", "Choose a plan document or paste a link to save.");
 	fireEvent.submit(ui.getByRole("form", { name: "Edit plan" }));
 	expect(updates()).toHaveLength(0);
 });
@@ -226,14 +229,29 @@ it("catches Retry after a project read failure discarding an unsaved plan draft"
 	fireEvent.click(await ui.findByRole("button", { name: "Edit plan" }));
 	await waitFor(() => expect(ui.getByRole("button", { name: "Refresh" })).not.toBeDisabled());
 	fireEvent.input(ui.getByLabelText("Plan title"), { target: { value: "Unsaved migration decision" } });
+	fireEvent.change(ui.getByRole("combobox", { name: "Repository plan document" }), {
+		target: { value: "__other_source__" },
+	});
+	fireEvent.input(ui.getByLabelText("Plan document or link"), { target: { value: "https://example.com/draft" } });
 	unavailable = true;
 	fireEvent.click(ui.getByRole("button", { name: "Refresh" }));
 	await ui.findByRole("alert");
 	fireEvent.click(ui.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(ui.queryByRole("status")).toBeNull());
+	expect((ui.getByLabelText("Plan title") as HTMLTextAreaElement).value).toBe("Unsaved migration decision");
 	unavailable = false;
+	plan = { ...plan, revision: 8 };
 	fireEvent.click(ui.getByRole("button", { name: "Retry" }));
 	const title = await ui.findByLabelText("Plan title");
 	expect((title as HTMLTextAreaElement).value).toBe("Unsaved migration decision");
+	expect((ui.getByLabelText("Plan document or link") as HTMLTextAreaElement).value).toBe("https://example.com/draft");
 	expect(updates()).toHaveLength(0);
+	fireEvent.click(ui.getByRole("button", { name: "Save" }));
+	await waitFor(() => expect(updates()).toHaveLength(1));
+	expect(updates()[0][1]).toMatchObject({
+		action: {
+			expected_revision: 7,
+			patch: { title: "Unsaved migration decision", source: "https://example.com/draft" },
+		},
+	});
 });

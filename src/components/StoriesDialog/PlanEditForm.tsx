@@ -145,7 +145,13 @@ export function PlanEditForm(props: {
 				{saveReason()}
 			</p>
 			<div class={s.inline}>
-				<Button variant="primary" type="submit" disabled={!!saveReason()} aria-describedby={saveHintId}>
+				<Button
+					variant="primary"
+					type="submit"
+					disabled={!!saveReason()}
+					title={saveReason()}
+					aria-describedby={saveHintId}
+				>
 					{t("stories.edit.save", "Save")}
 				</Button>
 				<Button type="button" disabled={props.busy} onClick={props.onCancel}>
