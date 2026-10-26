@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0-beta.3] - 2026-10-26
+
 - Serve shared GitHub poller controls and repository status, PR and issue reads from headless `tuic-remote`, with the existing transport authentication (#2345-49f0).
 
 - Warn in development when Cargo dep-info inputs or a rebuilt executable outdate the running Rust backend; keep unrelated frontend-only landings quiet (#2332-3eef).
