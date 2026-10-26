@@ -1,3 +1,7 @@
+## Plans and Stories selection (2354-a8a3)
+
+- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
+
 ## Collapsed Compose queue pill (2339-056c)
 
 - [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
