@@ -26,6 +26,8 @@ pub(crate) mod audio_enumeration;
 pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
+#[cfg(all(debug_assertions, feature = "desktop"))]
+pub mod dev_backend;
 pub(crate) mod launch_instructions;
 pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
@@ -1826,6 +1828,15 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(!agent_test::active());
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("dev-backend-identity")
+            .js_init_script(format!(
+                "window.__TUIC_DEV_BACKEND__ = {};",
+                dev_backend::identity()
+            ))
+            .build(),
+    );
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())

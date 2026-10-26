@@ -1,5 +1,10 @@
 # MCP & HTTP Server
 
+## Headless GitHub monitoring
+
+Both routers mount one shared GitHub monitoring surface: poller start/stop, visibility, immediate poll, path updates, issue filter and API-debug controls; repository status (`/repo/github`), PR snapshots (`/repo/prs`, `/repo/prs/batch`) and issues (`/repo/issues`). The poller does not require an AppHandle. It publishes through the event bus and `/events` SSE without a window. TCP keeps the existing authentication and request-boundary middleware; the trusted Unix socket uses the local router. GitHub account/auth, mutation and AI routes stay outside this shared surface. A credential-free no-remote smoke proves transport and lifecycle, not authenticated GitHub fetching.
+
+
 Planner Ideas use the same `StoryAction` envelope as plans and stories: `add_idea {text,source?}`, `list_ideas`, and `update_idea {idea_id,text}`. IPC `story_action_command`, HTTP `POST /stories/action?path=<project>` (`{action:<StoryAction>,sessionId?:string}`), CLI `tuic story`, and MCP `workflow action=story input=<StoryAction>` share the Rust owner. Add/update return `{type:"idea",value:<camelCase Idea>}`; list returns `{type:"ideas",value:[...]}`. The project sets `repoPath`; list also includes global Ideas, while update requires project ownership. Source defaults to the bound session id or `local-api`. Text is trimmed to a nonblank maximum of 16000 characters; source is nonblank with a maximum of 256. Writes use the strict locked `notes.json` owner and publish payload-free `ideas-changed` on desktop and `/events` SSE. UI `save_notes(base,config)` / `PUT /config/notes` applies per-id and per-field intent instead of replacing stale arrays. See [Ideas through the planner](../user-guide/native-stories.md#ideas-through-the-planner).
 
 Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
@@ -2249,7 +2254,13 @@ The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop â€
 ## Secret form security boundary
 
 `secret` supports `request`, `run` and `remove`; no action reads values. The
-backend owns the zeroizing store and process spawn. Native-window bootstrap
+backend owns the zeroizing store and process spawn. Values are shared by name
+across that backend's callers, not keyed by MCP connection or TUIC session;
+MCP disconnect/reconnect leaves them intact. `remove` returns the requested
+`names` and `status: "removed"` after idempotent deletion, even for absent names.
+Older builds returned `missing` to describe the post-deletion state, not a lookup
+failure. `run` still returns `missing` when a requested value is unavailable.
+Native-window bootstrap
 privately distributes a per-form capability. Browser entry uses
 `/index.html#/secret-form?nonce=<capability>` on the existing application router,
 with the same authentication and transport policy. Requests require a desktop

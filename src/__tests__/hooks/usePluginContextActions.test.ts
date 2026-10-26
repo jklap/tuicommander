@@ -10,6 +10,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: mockAppLogger }));
 vi.mock("../../stores/promptLibrary", () => ({ promptLibraryStore: mockPromptLibraryStore }));
 
 import { usePluginContextActions } from "../../hooks/usePluginContextActions";
+import { activityStore } from "../../stores/activityStore";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import type { SavedPrompt } from "../../stores/promptLibrary";
 import { toastsStore } from "../../stores/toasts";
@@ -44,6 +45,8 @@ describe("usePluginContextActions", () => {
 		dispose?.();
 		dispose = undefined;
 		contextMenuActionsStore.clear();
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		activityStore._testCancelPendingSave();
 	});
 
 	it("registers smart prompts with their target-specific behavior", async () => {

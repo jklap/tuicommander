@@ -1487,6 +1487,15 @@ impl ChunkProcessor {
             "busy" | "prompt" => (SHELL_BUSY, "busy"),
             _ => return,
         };
+        // Native busy is evidence that the harness really started work. A
+        // submitted prompt (or idle after a failed turn) is not recovery.
+        // ego has no spinner StatusLine, so relying on that event alone leaves
+        // its successful later turns permanently red.
+        if payload == "busy"
+            && let Some(mut session) = state.session_maps.session_states.get_mut(session_id)
+        {
+            session.last_error = None;
+        }
         transition_explicit_shell_state(state, session_id, target, label, true);
     }
 
@@ -2805,6 +2814,13 @@ impl ChunkProcessor {
             let suppress_this = suppress_notifications
                 && match event {
                     ParsedEvent::Question { confident, .. } => !*confident,
+                    // Native ego provider termination is a lifecycle receipt,
+                    // not retained screen text resurrected by startup/resize.
+                    ParsedEvent::ApiError { pattern_name, .. }
+                        if pattern_name == "ego-provider-failure" =>
+                    {
+                        false
+                    }
                     ParsedEvent::RateLimit { .. } | ParsedEvent::ApiError { .. } => true,
                     _ => false,
                 };

@@ -519,7 +519,7 @@ pub(super) async fn github_list_accounts() -> Response {
 
 // Desktop-only: the add/remove/resolve impls in github_account.rs are
 // #[cfg(feature = "desktop")] (keychain-backed). The remote daemon never serves
-// GitHub routes (build_remote_router omits them), so gate these handlers to match
+// GitHub account routes (build_remote_router omits them), so gate these handlers to match
 // their impls and keep the always-compiled lib building for tuic-remote (#094-ec55).
 #[cfg(feature = "desktop")]
 pub(super) async fn github_remove_account(

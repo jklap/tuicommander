@@ -297,7 +297,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "notifications",
 		section: "Notification Settings",
-		label: "Silence completions from MCP sessions",
+		label: "Silence subagent sounds and notifications",
 		labelKey: "notifications.label.silenceRemoteCompletions",
 	},
 	{
