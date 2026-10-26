@@ -908,15 +908,33 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
             .into_iter()
             .collect();
     }
-    [
-        format!("refs/remotes/origin/{default_branch}"),
-        format!("refs/heads/{default_branch}"),
-        // A non-origin default is returned qualified (`upstream/develop`).
-        format!("refs/remotes/{default_branch}"),
+    // A local default that tracks a non-origin remote (`develop` ->
+    // `upstream/develop`) trails that upstream exactly as it would trail
+    // `origin/<default>`, so its configured upstream is a base too.
+    let upstream = git_cmd(repo)
+        .args([
+            "for-each-ref",
+            "--format=%(upstream)",
+            &format!("refs/heads/{default_branch}"),
+        ])
+        .run_silent()
+        .map(|out| out.stdout.trim().to_string())
+        .filter(|upstream| upstream.starts_with("refs/remotes/"));
+    let mut bases: Vec<String> = Vec::new();
+    for base in [
+        Some(format!("refs/remotes/origin/{default_branch}")),
+        upstream,
+        Some(format!("refs/heads/{default_branch}")),
+        Some(format!("refs/remotes/{default_branch}")),
     ]
     .into_iter()
-    .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
-    .collect()
+    .flatten()
+    {
+        if !bases.contains(&base) && rev_at(repo, &format!("{base}^{{commit}}")).is_ok() {
+            bases.push(base);
+        }
+    }
+    bases
 }
 
 /// Human-readable form of `integration_bases`, for messages.
@@ -5646,6 +5664,18 @@ mod tests {
         src
     }
 
+    /// A test repo whose only local branch is `work`. Upstream resolves a local
+    /// `main`/`master` before any remote HEAD, so the remote-HEAD tests need a
+    /// repo with neither for the remote lookup to be reached at all.
+    fn trunkless_repo() -> TempDir {
+        let repo = setup_test_repo();
+        git_cmd(repo.path())
+            .args(["branch", "-m", "work"])
+            .run()
+            .unwrap();
+        repo
+    }
+
     /// Add `name` as a remote of `repo` pointing at `src`, fetch it, and (when
     /// `head` is given) point `refs/remotes/<name>/HEAD` at that branch.
     fn add_remote(repo: &Path, src: &Path, name: &str, head: Option<&str>) {
@@ -5838,6 +5868,44 @@ mod tests {
             .unwrap();
         let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
         assert_eq!(got, "develop");
+    }
+
+    #[test]
+    fn integration_bases_include_a_non_origin_upstream_the_local_default_trails() {
+        let src = remote_source();
+        let repo = trunkless_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        git_cmd(repo.path())
+            .args(["branch", "--track", "develop", "upstream/develop"])
+            .run()
+            .unwrap();
+        // upstream/develop moves on (a feature merged there); local develop
+        // has not been pulled yet.
+        git_cmd(src.path())
+            .args(["checkout", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(src.path())
+            .args(["commit", "--allow-empty", "-m", "merged upstream"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "upstream"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "develop");
+        // The local default trails its upstream, so the upstream must stay an
+        // integration base exactly as origin/<default> does for origin.
+        let bases = integration_bases(repo.path(), &got);
+        assert!(
+            bases.contains(&"refs/remotes/upstream/develop".to_string()),
+            "{bases:?}"
+        );
+        assert!(
+            bases.contains(&"refs/heads/develop".to_string()),
+            "{bases:?}"
+        );
     }
 
     #[test]
