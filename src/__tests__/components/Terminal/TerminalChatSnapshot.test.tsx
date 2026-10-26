@@ -20,6 +20,34 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Catches: closing Chat clears the projection but remount fails to render replayed entries.
+it("reopening Chat twice renders existing entries in order", async () => {
+	invokeMock.mockResolvedValue({
+		epoch: 1,
+		nextSeq: 2,
+		reset: true,
+		unknownRows: 0,
+		malformedRows: 0,
+		updates: [
+			{
+				sessionUpdate: "user_message_chunk",
+				messageId: "question",
+				content: { type: "text", text: "Original question" },
+			},
+			{ sessionUpdate: "agent_message_chunk", messageId: "reply", content: { type: "text", text: "Original answer" } },
+		],
+	});
+	for (let mount = 0; mount < 3; mount++) {
+		const view = render(() => (
+			<TerminalChatTranscript sessionId="reopen" terminalAgent="claude" onUnavailable={() => {}} />
+		));
+		await waitFor(() => expect(view.getByLabelText("Chat transcript").textContent).toContain("Original answer"));
+		const text = view.getByLabelText("Chat transcript").textContent!;
+		expect(text.indexOf("Original question")).toBeLessThan(text.indexOf("Original answer"));
+		view.unmount();
+	}
+});
+
 // Catches: every replayed entry republishes partial history and rerenders all
 // preceding rows, making desktop/mobile first open quadratic at 2000 entries.
 it("snapshot replay publishes only the complete transcript", async () => {
