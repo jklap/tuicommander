@@ -462,6 +462,35 @@ describe("MarkdownTab agent review actions", () => {
 		expect(expectedError).toHaveBeenCalledExactlyOnceWith("app", "writeTweakedSource: write failed", expect.any(Error));
 	});
 
+	// Catches: deleting a list marker writes the file but leaves a clickable ghost comment in unchanged HTML.
+	it("deletes an existing list comment without leaving a clickable ghost", async () => {
+		fileContent =
+			CONVENTION_HEADER +
+			"# Open points\n\n- Review this decision\n  <!--tweak:item:c_delete @2026-10-26T12:00:00.000Z\n  Please clarify-->\n- Keep this item\n";
+		mockInvoke.mockImplementation((command: string, args?: { content?: string }) => {
+			if (command === "read_file") return Promise.resolve(fileContent);
+			if (command === "write_file") fileContent = args?.content ?? fileContent;
+			return Promise.resolve(undefined);
+		});
+		const tabId = mdTabsStore.add("/repo", "docs/open-points.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const item = await waitFor(() => {
+			const highlight = container.querySelector<HTMLElement>("li.tweak-block-highlight");
+			expect(highlight).not.toBeNull();
+			return highlight!;
+		});
+		window.getSelection()!.removeAllRanges();
+		fireEvent.click(item);
+		expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Please clarify");
+		fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+		await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+		expect(fileContent).toBe("# Open points\n\n- Review this decision\n- Keep this item\n");
+		await waitFor(() => expect(container.querySelector(".tweak-block-highlight")).toBeNull());
+		expect(container.querySelector("[data-tweak-id]")).toBeNull();
+		fireEvent.click(container.querySelector("li")!);
+		expect(screen.queryByRole("textbox")).toBeNull();
+	});
+
 	// Catches: saving at the whole-list offset or under a neighboring task.
 	it("writes a task comment below the selected bullet in the file", async () => {
 		fileContent = "- first\n- [ ] chosen\n- third\n";
