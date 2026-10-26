@@ -115,3 +115,38 @@ it("discards usage responses for a previous session", async () => {
 	expect(view.container.textContent).not.toContain("sibling/model");
 	expect(view.container.textContent).not.toContain("999 output");
 });
+
+// Catches: unavailable model metadata obscuring otherwise valid account quota.
+it("shows structured quota in plain language without a misleading model unavailable row", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) =>
+		command === "get_session_usage"
+			? {
+					availability: "available",
+					model: null,
+					lines: [],
+					quota_windows: [
+						{
+							provider: "Claude",
+							plan: "Max",
+							window_seconds: 18000,
+							window_name: "primary",
+							used_percent: 2,
+							resets_at: null,
+						},
+					],
+				}
+			: undefined,
+	);
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await waitFor(() => expect(view.getByText("Claude Max plan, 5-hour window: 2% used")).toBeTruthy());
+	expect(view.container.textContent).not.toContain("Model unavailable");
+});
