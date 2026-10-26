@@ -456,8 +456,8 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	// Catches: orphan Copy controls reserving an empty full-width row beneath each reply.
-	it("anchors assistant Copy beside the reply, keeps user bubbles compact and tool counts on one line", async () => {
+	// Catches: out-of-flow assistant actions escaping their message, oversized user bubbles, or wrapping tool counts.
+	it("keeps assistant actions in flow, user bubbles compact and tool counts on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -487,9 +487,9 @@ describe("AIChatPanel: transcript actions", () => {
 			await settle();
 			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
 			const actions = assistantCopy.parentElement!;
-			expect(getComputedStyle(actions).position).toBe("absolute");
-			expect(getComputedStyle(actions).left).toBe("0px");
-			expect(getComputedStyle(actions).top).toBe("100%");
+			// The real-browser aiChatGeometry regression measures containment and
+			// nonintersection; this DOM environment only verifies normal flow.
+			expect(["absolute", "fixed"]).not.toContain(getComputedStyle(actions).position);
 			// A user bubble hugs its text: its Copy sits outside the bubble instead of
 			// holding an invisible row that made "che model usi?" look two lines tall.
 			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
