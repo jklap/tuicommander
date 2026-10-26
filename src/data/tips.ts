@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Compose queue count",
+		description:
+			"The collapsed Compose button counts queued commands and messages. Hover or focus it for a breakdown, or open Compose to inspect the queue.",
+		shortcut: `${mod}+I`,
+	},
+	{
 		feature: "Native story notes",
 		description:
 			"Select a story to read Notes and evidence or append a permanent note. Refresh notes loads entries added by agents or other windows without changing the story revision.",
