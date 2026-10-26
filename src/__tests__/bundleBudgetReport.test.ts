@@ -32,9 +32,14 @@ describe("report-frontend-bundles.mjs --check", () => {
 		dir = mkdtempSync(join(tmpdir(), "bundle-report-"));
 		mkdirSync(join(dir, "dist/assets"), { recursive: true });
 		writeFileSync(join(dir, "dist/assets/index.js"), "export {};\n");
-		writeFileSync(join(dir, "dist/assets/mobile.js"), Buffer.concat(Array.from({ length: Math.ceil(mobileRawBytes / 32) }, (_, i) =>
-			createHash("sha256").update(String(i)).digest(),
-		)).subarray(0, mobileRawBytes));
+		writeFileSync(
+			join(dir, "dist/assets/mobile.js"),
+			Buffer.concat(
+				Array.from({ length: Math.ceil(mobileRawBytes / 32) }, (_, i) =>
+					createHash("sha256").update(String(i)).digest(),
+				),
+			).subarray(0, mobileRawBytes),
+		);
 		writeFileSync(join(dir, "dist/index.html"), '<script src="/assets/index.js"></script>');
 		writeFileSync(join(dir, "dist/mobile.html"), '<script src="/assets/mobile.js"></script>');
 		return spawnSync(process.execPath, [SCRIPT, "--check"], { cwd: dir, encoding: "utf8" });

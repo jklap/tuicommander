@@ -1,8 +1,8 @@
 import { createSignal } from "solid-js";
 import { allLeafIds, type PaneGroup, type PaneLayoutState, paneLayoutStore, removeLeaf } from "./paneLayout";
 import { savedPaneLayouts } from "./savedPaneLayouts";
-import { terminalsStore } from "./terminals";
 import { activateRegisteredPaneTab } from "./tabManager";
+import { terminalsStore } from "./terminals";
 
 /** Scope key for the hand-promoted workspace — the one this store has always
  *  had. Repo paths are the other keys (#e767). */

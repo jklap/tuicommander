@@ -542,7 +542,10 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
     {
         let pgid = child.id();
         if pgid.is_some_and(|id| i32::try_from(id).is_err()) {
-            tracing::warn!(source = "tunnel_supervisor", "PID overflows i32; killing direct child");
+            tracing::warn!(
+                source = "tunnel_supervisor",
+                "PID overflows i32; killing direct child"
+            );
             let _ = child.kill().await;
             let _ = child.wait().await;
             return;
@@ -570,8 +573,6 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
-
-
 }
 
 /// ETXTBSY (26 on Linux) — exec on a file still open for writing.

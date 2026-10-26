@@ -874,12 +874,18 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
     }
     let local_ref = format!("refs/heads/{default_branch}");
     let upstream = git_cmd(repo)
-        .args(["for-each-ref", "--format=%(refname)%09%(upstream)", &local_ref])
+        .args([
+            "for-each-ref",
+            "--format=%(refname)%09%(upstream)",
+            &local_ref,
+        ])
         .run_silent()
-        .and_then(|out| out.stdout.lines().find_map(|line| {
-            let (name, upstream) = line.split_once('\t')?;
-            (name == local_ref && !upstream.is_empty()).then(|| upstream.to_string())
-        }));
+        .and_then(|out| {
+            out.stdout.lines().find_map(|line| {
+                let (name, upstream) = line.split_once('\t')?;
+                (name == local_ref && !upstream.is_empty()).then(|| upstream.to_string())
+            })
+        });
     let mut bases = Vec::new();
     for base in upstream.into_iter().chain([
         format!("refs/remotes/origin/{default_branch}"),
@@ -14139,10 +14145,23 @@ branch refs/heads/feat
     fn branch_merged_into_non_origin_tracking_default_is_removable() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_origin(&repo);
-        git_cmd(&repo).args(["remote", "rename", "origin", "upstream"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["remote", "rename", "origin", "upstream"])
+            .run()
+            .unwrap();
         let main = base_branch_of(&repo);
-        git_cmd(&repo).args(["config", &format!("branch.{main}.remote"), "upstream"]).run().unwrap();
-        git_cmd(&repo).args(["config", &format!("branch.{main}.merge"), &format!("refs/heads/{main}")]).run().unwrap();
+        git_cmd(&repo)
+            .args(["config", &format!("branch.{main}.remote"), "upstream"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "config",
+                &format!("branch.{main}.merge"),
+                &format!("refs/heads/{main}"),
+            ])
+            .run()
+            .unwrap();
         let worktree = add_worktree(&repo, "landed-non-origin");
         commit_file(&worktree, "feature.txt", "landed work\n");
         let main = base_branch_of(&repo);

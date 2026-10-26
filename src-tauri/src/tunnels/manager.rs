@@ -218,9 +218,15 @@ impl TunnelManager {
                 // an abort cannot land in the gap.
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
                 let cleanup = tokio::spawn(async move {
-                    if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
-                    tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
-                }
+                    if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task)
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            source = "tunnel_manager",
+                            "Tunnel shutdown cleanup was not confirmed before timeout"
+                        );
+                    }
                     let _ = done_tx.send(());
                 });
                 {
@@ -377,8 +383,14 @@ impl TunnelManager {
         if let TunnelSlot::Running(handle) = handle {
             let task = handle.lock().supervisor.stop_and_take_task();
             if let Some(task) = task {
-                if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await.is_err() {
-                    tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
+                if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        source = "tunnel_manager",
+                        "Tunnel shutdown cleanup was not confirmed before timeout"
+                    );
                 }
             }
         }
@@ -443,8 +455,14 @@ impl TunnelManager {
                 let _ = cleanup.await;
             }
         };
-        if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await.is_err() {
-            tracing::warn!(source = "tunnel_manager", "Tunnel shutdown cleanup was not confirmed before timeout");
+        if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                source = "tunnel_manager",
+                "Tunnel shutdown cleanup was not confirmed before timeout"
+            );
         }
     }
 }
@@ -895,7 +913,10 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
         let ssh_path = crate::test_support::fake_ssh_script(
             "abort-mid-cleanup",
-            &format!("echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600", marker.display()),
+            &format!(
+                "echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600",
+                marker.display()
+            ),
             "exit /b 0",
         );
         let marker_in_spawn = marker.clone();

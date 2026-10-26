@@ -131,12 +131,19 @@ fn linux_socket_preflight_accepts_real_104_through_107_byte_paths() {
     let dir = tempfile::tempdir_in(root).unwrap();
     for len in 104..=108 {
         let prefix = dir.path().as_os_str().len() + 1;
-        assert!(prefix < 104, "fixture root too long: {}", dir.path().display());
+        assert!(
+            prefix < 104,
+            "fixture root too long: {}",
+            dir.path().display()
+        );
         let path = dir.path().join("s".repeat(len - prefix));
         let bound = UnixListener::bind(&path);
         if len <= 107 {
             let listener = bound.expect("Linux accepts this pathname");
-            assert!(tuic_ipc::check_unix_socket_path(&path).is_ok(), "{len} bytes");
+            assert!(
+                tuic_ipc::check_unix_socket_path(&path).is_ok(),
+                "{len} bytes"
+            );
             drop(listener);
             std::fs::remove_file(path).unwrap();
         } else {

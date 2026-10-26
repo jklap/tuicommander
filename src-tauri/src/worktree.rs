@@ -2328,7 +2328,11 @@ mod tests {
     /// `merge.ff` set repo-locally to `ff` and (optionally) the base branch
     /// advanced past the worktree branch's fork point. Returns the repo, the
     /// worktree branch tip, and the parent count of the base branch's HEAD.
-    fn merge_archive_with_ff_config(ff: &str, diverge: bool, options: Option<&str>) -> (TempDir, String, usize) {
+    fn merge_archive_with_ff_config(
+        ff: &str,
+        diverge: bool,
+        options: Option<&str>,
+    ) -> (TempDir, String, usize) {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let base = base_branch_of(repo.path());
@@ -2346,7 +2350,10 @@ mod tests {
             .run()
             .unwrap();
         if let Some(options) = options {
-            git_cmd(repo.path()).args(["config", &format!("branch.{base}.mergeOptions"), options]).run().unwrap();
+            git_cmd(repo.path())
+                .args(["config", &format!("branch.{base}.mergeOptions"), options])
+                .run()
+                .unwrap();
         }
         let tip = git_cmd(repo.path())
             .args(["rev-parse", "feat-ffcfg"])
@@ -2383,7 +2390,8 @@ mod tests {
     // Catches: a flag-shaped commit message being mistaken for fast-forward policy.
     #[test]
     fn merge_and_archive_preserves_merge_commit_with_flag_like_message() {
-        let (_repo, _tip, parents) = merge_archive_with_ff_config("false", false, Some("-m --ff-only"));
+        let (_repo, _tip, parents) =
+            merge_archive_with_ff_config("false", false, Some("-m --ff-only"));
         assert_eq!(parents, 2, "a message is not a fast-forward policy flag");
     }
 

@@ -425,9 +425,16 @@ mod tests {
             .env(HOSTILE_MARKER, "1")
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), super::TEST_GITCONFIG);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            super::TEST_GITCONFIG
+        );
         assert_eq!(std::fs::metadata(path).unwrap().modified().unwrap(), before);
     }
 
