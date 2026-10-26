@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
+- Claude usage dashboard: the Extra Usage card shows "Unavailable" instead of a misleading 0% when `extra_usage.utilization` is null (e.g. header-derived fallback).
 
 ## [2.0.0-beta.3] - 2026-10-26
 
