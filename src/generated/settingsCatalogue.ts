@@ -13727,6 +13727,11 @@ export const settingsCatalogue = {
       "reason": "Runtime focused group, updated by focus and navigation, not a user preference."
     },
     {
+      "store": "pane_layout",
+      "path": "/agentOwned",
+      "reason": "Runtime marker for a split built by the tmux shim, not a user preference."
+    },
+    {
       "store": "repositories_registration",
       "path": "/repos/{path}/workspaces",
       "reason": "Runtime workspace and terminal restore identities."

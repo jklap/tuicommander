@@ -52,6 +52,9 @@ pub struct PaneLayout {
     pub root: Option<PaneNode>,
     pub groups: BTreeMap<String, PaneGroup>,
     pub active_group_id: Option<String>,
+    /// Set when the tmux shim built this split rather than the user; kept so an
+    /// agent-arranged layout is still treated as agent-owned after a restart.
+    pub agent_owned: bool,
 }
 
 impl PaneLayout {
@@ -178,6 +181,10 @@ pub(super) fn register(cat: &mut Catalogue) {
         (
             "/activeGroupId",
             "Runtime focused group, updated by focus and navigation, not a user preference.",
+        ),
+        (
+            "/agentOwned",
+            "Runtime marker for a split built by the tmux shim, not a user preference.",
         ),
     ] {
         cat.exclusions.push(Exclusion {
