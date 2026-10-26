@@ -53,8 +53,11 @@ pub fn named_alternate_socket_path(id: &str, temp_dir: &Path, pid: u32) -> PathB
     primary.with_file_name(format!("{stem}-{pid}.sock"))
 }
 
-/// The longest Unix socket path Rust's std binds or connects on macOS: a
-/// 104-byte `sun_path` minus its NUL (Linux allows 107; the smaller wins).
+/// Host pathname capacity excluding the terminating NUL.
+#[cfg(target_os = "linux")]
+pub const UNIX_SOCKET_PATH_MAX: usize = 107;
+/// macOS and the conservative fallback use a 104-byte `sun_path`.
+#[cfg(not(target_os = "linux"))]
 pub const UNIX_SOCKET_PATH_MAX: usize = 103;
 
 /// `Err` naming the length, the budget and the way out when `path` is too long

@@ -50,21 +50,21 @@ fn named_alternate_socket_keeps_the_primary_stem_and_appends_the_pid() {
 // and an off-by-one at the 103/104-byte boundary.
 #[test]
 fn unix_socket_path_check_is_exact_at_the_boundary_and_names_the_way_out() {
-    assert_eq!(tuic_ipc::UNIX_SOCKET_PATH_MAX, 103);
+    let max = tuic_ipc::UNIX_SOCKET_PATH_MAX;
     let name = "tuic-mcp-1953e60b4e4d5340-4242.sock";
     let dir = |len: usize| format!("/{}", "d".repeat(len - 1));
     // 103 bytes fits, 104 does not (Rust std refuses it: SUN_LEN).
-    let fits = Path::new(&dir(103 - 1 - name.len())).join(name);
-    assert_eq!(fits.as_os_str().len(), 103);
+    let fits = Path::new(&dir(max - 1 - name.len())).join(name);
+    assert_eq!(fits.as_os_str().len(), max);
     assert!(tuic_ipc::check_unix_socket_path(&fits).is_ok());
-    let over = Path::new(&dir(104 - 1 - name.len())).join(name);
-    assert_eq!(over.as_os_str().len(), 104);
+    let over = Path::new(&dir(max + 1 - 1 - name.len())).join(name);
+    assert_eq!(over.as_os_str().len(), max + 1);
     let message = tuic_ipc::check_unix_socket_path(&over).unwrap_err();
     for needle in [
-        "104 bytes",
-        "103-byte",
+        &format!("{} bytes", max + 1),
+        &format!("{max}-byte"),
         "TMPDIR",
-        "at most 67 bytes",
+        &format!("at most {} bytes", max - 36),
         "start the app with a TMPDIR",
     ] {
         assert!(message.contains(needle), "{needle} missing: {message}");
@@ -77,9 +77,9 @@ fn unix_socket_path_check_is_exact_at_the_boundary_and_names_the_way_out() {
     );
     // The 72-byte sandbox TMPDIR holds the primary with no headroom, never
     // the alternate.
-    let sandbox = format!("/{}", "s".repeat(71));
+    let sandbox = format!("/{}", "s".repeat(max - 32));
     let primary = tuic_ipc::named_socket_path("ipc-cli-regression", Path::new(&sandbox));
-    assert_eq!(primary.as_os_str().len(), 103);
+    assert_eq!(primary.as_os_str().len(), max);
     assert!(tuic_ipc::check_unix_socket_path(&primary).is_ok());
     let alternate =
         tuic_ipc::named_alternate_socket_path("ipc-cli-regression", Path::new(&sandbox), 4242);
@@ -92,23 +92,24 @@ fn unix_socket_path_check_is_exact_at_the_boundary_and_names_the_way_out() {
 #[cfg(unix)]
 #[test]
 fn unix_socket_path_check_counts_raw_bytes_including_non_utf8() {
+    let max = tuic_ipc::UNIX_SOCKET_PATH_MAX;
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     // 52 two-byte chars = 104 bytes but only 52 chars.
-    let multibyte = format!("/{}", "é".repeat(51));
-    assert_eq!(multibyte.len(), 103);
+    let multibyte = format!("/{}", "é".repeat((max - 1) / 2));
+    assert_eq!(multibyte.len(), max);
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte)).is_ok());
-    let multibyte_over = format!("/{}", "é".repeat(52));
-    assert_eq!(multibyte_over.len(), 105);
+    let multibyte_over = format!("/{}", "é".repeat((max + 1) / 2));
+    assert_eq!(multibyte_over.len(), max + 2);
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte_over)).is_err());
     // 0xFF is invalid UTF-8; a lossy conversion would turn it into a 3-byte U+FFFD.
     let mut raw = vec![b'/'];
-    raw.extend(std::iter::repeat_n(0xFFu8, 103));
+    raw.extend(std::iter::repeat_n(0xFFu8, max));
     let raw = OsString::from_vec(raw);
-    assert_eq!(raw.len(), 104);
+    assert_eq!(raw.len(), max + 1);
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&raw)).is_err());
     let mut ok = vec![b'/'];
-    ok.extend(std::iter::repeat_n(0xFFu8, 102));
+    ok.extend(std::iter::repeat_n(0xFFu8, max - 1));
     assert!(tuic_ipc::check_unix_socket_path(Path::new(&OsString::from_vec(ok))).is_ok());
 }
 
@@ -119,4 +120,28 @@ fn unix_socket_path_check_hint_saturates_for_degenerate_paths() {
     let huge = format!("/{}", "n".repeat(200));
     let message = tuic_ipc::check_unix_socket_path(Path::new(&huge)).unwrap_err();
     assert!(message.contains("at most 0 bytes"), "{message}");
+}
+
+// Catches: the macOS preflight limit rejecting Linux paths that really bind.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_socket_preflight_accepts_real_104_through_107_byte_paths() {
+    use std::os::unix::net::UnixListener;
+    let root = std::env::var_os("TUIC_TEST_TMP_ROOT").expect("run through with-test-tmp.sh");
+    let dir = tempfile::tempdir_in(root).unwrap();
+    for len in 104..=108 {
+        let prefix = dir.path().as_os_str().len() + 1;
+        assert!(prefix < 104, "fixture root too long: {}", dir.path().display());
+        let path = dir.path().join("s".repeat(len - prefix));
+        let bound = UnixListener::bind(&path);
+        if len <= 107 {
+            let listener = bound.expect("Linux accepts this pathname");
+            assert!(tuic_ipc::check_unix_socket_path(&path).is_ok(), "{len} bytes");
+            drop(listener);
+            std::fs::remove_file(path).unwrap();
+        } else {
+            assert!(bound.is_err());
+            assert!(tuic_ipc::check_unix_socket_path(&path).is_err());
+        }
+    }
 }
