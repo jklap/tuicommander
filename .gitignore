@@ -224,6 +224,7 @@ ORCHESTRATOR.md
 # Website: film is a release asset fetched at deploy; review screenshots stay local
 website/public/video/
 website/.review/
+.obsidian/
 
 # Keep only the linked workflow rework plan trackable.
 !/plans/
@@ -237,3 +238,6 @@ website/.review/
 .claude/settings.local.json
 .claude/worktrees/
 .claude/*.lock
+trigger_mic
+trigger_mic.swift
+.pnpm-store/

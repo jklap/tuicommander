@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# tuic / tmux — resolve the TUICommander.app that actually owns this shell
+# (or, failing that, the one unambiguous running instance) and exec its
+# bundled `tuic` CLI binary, passing through all args.
+#
+# Install this same file under both names on PATH — either two copies or a
+# symlink (~/bin/tmux -> tuic). Preserves argv0 so `tuic-cli`'s own
+# is_tmux_invocation() dispatch still triggers tmux-compat mode when this
+# is invoked as `tmux`.
+#
+# Lookup order (first hit wins):
+#   1. ancestor walk   — needs `ps`; finds the app that spawned this shell
+#   2. env version     — TUIC_APP_VERSION vs installed bundles; works in a
+#                        sandbox where `ps` is blocked
+#   3. running scan    — needs `ps`; succeeds on exactly one running bundle
+#
+# Failure reporting: "no running TUICommander.app" is only claimed when the
+# process scan actually ran and found nothing. Any other failure (ps blocked,
+# ambiguous bundles, ...) reports what went wrong instead.
+#
+# Testable: every step is a function and `main` only runs when the file is
+# executed, not sourced (see tuic.bats). Docs: tuic-script.md.
+set -euo pipefail
+
+BUNDLE_ID="com.tuic.commander"
+
+invoked_as="tuic"     # basename of argv0; set by main
+bundle=""             # result of a successful lookup
+real_tuic=""          # result of find_executable
+ps_available=1        # cleared by probe_ps when ps cannot be executed
+none_running=0        # set only when a working process scan found no bundle
+notes=()              # why each lookup stage did not produce a bundle
+ambiguous=""          # newline-separated candidates when a stage found several
+ambiguous_what=""     # what the ambiguous candidates are (installed / running)
+
+note() { notes+=("$1"); }
+
+# True only for a real TUICommander.app bundle — checked via Info.plist
+# identifier rather than binary/bundle name, so a renamed build (a second
+# copy under test) still matches.
+is_tuicommander_bundle() {
+  local bundle="$1" plist ident
+  plist="$bundle/Contents/Info.plist"
+  [ -f "$plist" ] || return 1
+  ident=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null) || return 1
+  [ "$ident" = "$BUNDLE_ID" ]
+}
+
+# Probe once whether ps is runnable (it is blocked in the srt sandbox).
+probe_ps() {
+  if ! { ps -o pid= -p "$$" >/dev/null; } 2>/dev/null; then
+    ps_available=0
+  fi
+}
+
+# Walk up the ancestor chain from $1 (loop, since depth varies with however
+# many shells/subshells are stacked) looking for a TUICommander.app main
+# binary. This is the primary lookup: it finds the specific instance that
+# spawned this shell, even when several versions are running side by side.
+# Sets $bundle and returns 0 on success.
+bundle_from_ancestors() {
+  local pid="$1" exe ppid
+  if [ "$ps_available" -eq 0 ]; then
+    note "cannot inspect the process tree: 'ps' is not permitted here (sandboxed?)"
+    return 1
+  fi
+  while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ]; do
+    if ! exe=$({ ps -o comm= -p "$pid"; } 2>/dev/null); then
+      note "process-tree walk stopped: 'ps' failed for pid $pid"
+      return 1
+    fi
+    exe=$(printf '%s' "$exe" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    case "$exe" in
+      */Contents/MacOS/*)
+        local candidate="${exe%/Contents/MacOS/*}"
+        if is_tuicommander_bundle "$candidate"; then
+          bundle="$candidate"
+          return 0
+        fi
+        ;;
+    esac
+    if ! ppid=$({ ps -o ppid= -p "$pid"; } 2>/dev/null); then
+      note "process-tree walk stopped: 'ps' failed for pid $pid"
+      return 1
+    fi
+    pid=$(printf '%s' "$ppid" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  done
+  note "this shell is not a descendant of any TUICommander.app"
+  return 1
+}
+
+# Sandbox-safe lookup: TUICommander injects TUIC_APP_VERSION into every PTY it
+# spawns, so match it against the installed bundles' CFBundleShortVersionString.
+# Needs no process inspection. Sets $bundle on a unique match; sets $ambiguous
+# when several bundles match and none is the canonical TUICommander.app.
+bundle_from_env_version() {
+  local want="${TUIC_APP_VERSION:-}" dir candidate ver matches="" canonical
+  if [ -z "$want" ]; then
+    note "TUIC_APP_VERSION is not set (this shell was not started by TUICommander)"
+    return 1
+  fi
+  for dir in "$HOME/Applications" "/Applications"; do
+    for candidate in "$dir"/*.app; do
+      [ -d "$candidate" ] || continue
+      is_tuicommander_bundle "$candidate" || continue
+      ver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$candidate/Contents/Info.plist" 2>/dev/null) || continue
+      [ "$ver" = "$want" ] || continue
+      matches="$matches$candidate"$'\n'
+    done
+  done
+  matches=$(printf '%s' "$matches" | sed '/^$/d')
+  if [ -z "$matches" ]; then
+    note "TUIC_APP_VERSION=$want matches no installed bundle in ~/Applications or /Applications (app updated or moved since this shell started?)"
+    return 1
+  fi
+  if [ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" -eq 1 ]; then
+    bundle="$matches"
+    return 0
+  fi
+  # Prefer the canonical name when a versioned copy sits beside it.
+  canonical=$(printf '%s\n' "$matches" | grep -E '/TUICommander\.app$' | head -n1) || canonical=""
+  if [ -n "$canonical" ]; then
+    bundle="$canonical"
+    return 0
+  fi
+  ambiguous="$matches"
+  ambiguous_what="installed bundles all match TUIC_APP_VERSION=$want"
+  note "several installed bundles share version $want, so it cannot pick one"
+  return 1
+}
+
+# Fallback for when this shell isn't a descendant of any TUICommander.app
+# (e.g. invoked from an unrelated Terminal.app window). Scans every running
+# process once; succeeds only if exactly one distinct bundle turns up.
+# Sets $none_running ONLY when the scan really ran and found nothing.
+bundle_from_running_instances() {
+  local procs pid exe candidate results="" n
+  if [ "$ps_available" -eq 0 ]; then
+    note "cannot scan running processes: 'ps' is not permitted here (sandboxed?)"
+    return 1
+  fi
+  if ! procs=$({ ps -axo pid=,comm=; } 2>/dev/null); then
+    note "cannot scan running processes: 'ps -ax' failed"
+    return 1
+  fi
+  while read -r pid exe; do
+    case "$exe" in
+      */Contents/MacOS/*)
+        candidate="${exe%/Contents/MacOS/*}"
+        if is_tuicommander_bundle "$candidate"; then
+          results="$results$candidate"$'\n'
+        fi
+        ;;
+    esac
+  done <<< "$procs"
+
+  results=$(printf '%s' "$results" | sort -u | sed '/^$/d')
+  if [ -z "$results" ]; then
+    none_running=1
+    return 1
+  fi
+  n=$(printf '%s\n' "$results" | wc -l | tr -d ' ')
+  if [ "$n" -eq 1 ]; then
+    bundle="$results"
+    return 0
+  fi
+  ambiguous="$results"
+  ambiguous_what="running instances, and this shell isn't a descendant of any of them"
+  note "several TUICommander.app instances are running and none can be tied to this shell"
+  return 1
+}
+
+# Run the lookup stages in order; first hit wins. Sets $bundle on success.
+resolve_bundle() {
+  bundle_from_ancestors "$1" || bundle_from_env_version || bundle_from_running_instances
+}
+
+# Report why no bundle was resolved, then exit 1. Never claims "none running"
+# unless a working process scan proved it.
+fail_lookup() {
+  local n
+  if [ -n "$ambiguous" ]; then
+    echo "$invoked_as: ambiguous — multiple TUICommander.app candidates ($ambiguous_what); refusing to guess:" >&2
+    printf '%s\n' "$ambiguous" | sed 's/^/  /' >&2
+    echo "$invoked_as: run it from a shell started by the intended instance, or remove the extra copies." >&2
+  elif [ "$none_running" -eq 1 ]; then
+    echo "$invoked_as: no running TUICommander.app found (not spawned from one, and none currently running)" >&2
+  else
+    echo "$invoked_as: could not determine which TUICommander.app to use (lookup failed, so one may still be running):" >&2
+    for n in ${notes[@]+"${notes[@]}"}; do
+      echo "  - $n" >&2
+    done
+  fi
+  exit 1
+}
+
+# Pick the binary inside $bundle: a same-named binary (tmux, tuic-bridge...)
+# when the bundle ships one, otherwise the main `tuic`. Sets $real_tuic.
+find_executable() {
+  if [ -f "$bundle/Contents/MacOS/$invoked_as" ]; then
+    real_tuic="$bundle/Contents/MacOS/$invoked_as"
+  else
+    real_tuic="$bundle/Contents/MacOS/tuic"
+  fi
+  if [ ! -x "$real_tuic" ]; then
+    echo "$invoked_as: $bundle has no executable Contents/MacOS/tuic" >&2
+    exit 1
+  fi
+}
+
+main() {
+  shopt -s execfail
+  invoked_as="$(basename -- "$0")"
+  probe_ps
+  resolve_bundle "$PPID" || fail_lookup
+  find_executable
+  exec -a "$invoked_as" "$real_tuic" "$@" || {
+    echo "$invoked_as: failed to exec $real_tuic" >&2
+    exit 126
+  }
+}
+
+# Run only when executed, not when sourced by the test suite.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
