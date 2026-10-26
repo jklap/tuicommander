@@ -40,7 +40,7 @@ def main():
         home.mkdir()
         repo = root / "repo"
         subprocess.run(["git", "init", "--quiet", "--initial-branch=main", str(repo)], check=True)
-        instance = "gh2345-" + root.name
+        instance = "gh2345-" + hashlib.sha256(str(root).encode()).hexdigest()[:16]
         digest = hashlib.sha256(instance.encode()).hexdigest()[:16]
         endpoint = root / ("tuic-mcp-" + digest + ".sock")
         env = {
