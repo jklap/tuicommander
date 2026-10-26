@@ -188,3 +188,26 @@ fn mobile_menu_retains_the_desktop_document_opener() {
         "tuic-b"
     );
 }
+
+// Catches: separate desktop tab ids publishing the same absolute file twice.
+#[test]
+fn menu_deduplicates_absolute_paths_without_collapsing_worktree_files() {
+    let tabs = vec![
+        tab("first", "/repo", "docs/guide.md", None),
+        tab("duplicate", "/repo", "/repo/docs/guide.md", Some("/repo")),
+        tab(
+            "worktree",
+            "/repo",
+            "docs/guide.md",
+            Some("/worktrees/feature"),
+        ),
+    ];
+    let selected = select_tabs(&tabs, "/repo", &config()).unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|tab| tab.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "worktree"]
+    );
+}

@@ -1,4 +1,4 @@
-//! Session-owned, display-ready usage. Never infer account ownership from a workspace.
+//! Session-owned usage. Quota fields are formatted by the shared client presenter. Never infer account ownership from a workspace.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -17,6 +17,16 @@ pub(crate) struct UsageLine {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct QuotaWindow {
+    pub provider: String,
+    pub plan: Option<String>,
+    pub window_seconds: Option<i64>,
+    pub window_name: String,
+    pub used_percent: f64,
+    pub resets_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SessionUsage {
     pub agent: Option<String>,
     pub model: Option<String>,
@@ -27,6 +37,8 @@ pub(crate) struct SessionUsage {
     pub observed_at_ms: Option<u64>,
     pub stale: bool,
     pub lines: Vec<UsageLine>,
+    #[serde(default)]
+    pub quota_windows: Vec<QuotaWindow>,
 }
 
 impl SessionUsage {
@@ -41,6 +53,7 @@ impl SessionUsage {
             observed_at_ms: None,
             stale: false,
             lines: Vec::new(),
+            quota_windows: Vec::new(),
         }
     }
 
@@ -63,7 +76,7 @@ impl SessionUsage {
     }
 
     fn finish(self) -> Self {
-        if self.lines.is_empty() {
+        if self.lines.is_empty() && self.quota_windows.is_empty() {
             Self::unavailable("no reported usage")
         } else {
             self
@@ -320,21 +333,48 @@ fn codex_profile(
     ))
 }
 
-fn quota_line(snapshot: &mut SessionUsage, label: &str, percent: f64, reset: Option<String>) {
+fn quota_window(
+    snapshot: &mut SessionUsage,
+    provider: &str,
+    plan: Option<&str>,
+    name: &str,
+    seconds: Option<i64>,
+    percent: f64,
+    reset: Option<String>,
+) {
     if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
         return;
     }
-    snapshot.line("Account quota", format!("{label} {percent:.1}%"));
-    if let Some(reset) = reset {
-        snapshot.line("Resets", format!("{label}: {reset}"));
-    }
+    snapshot.quota_windows.push(QuotaWindow {
+        provider: provider.into(),
+        plan: plan.map(str::to_owned),
+        window_name: name.into(),
+        window_seconds: seconds,
+        used_percent: percent,
+        resets_at: reset,
+    });
 }
 
 fn claude_quota(quota: crate::claude_usage::UsageApiResponse) -> SessionUsage {
     let mut snapshot = SessionUsage::available("claude", "account_quota", "claude_oauth_usage");
-    for (label, bucket) in [("5h", quota.five_hour), ("7d", quota.seven_day)] {
+    let plan = quota
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.subscription_type.as_deref());
+    for (name, seconds, bucket) in [
+        ("primary", 18000, quota.five_hour),
+        ("secondary", 604800, quota.seven_day),
+    ] {
         if let Some(bucket) = bucket {
-            quota_line(&mut snapshot, label, bucket.utilization, bucket.resets_at);
+            quota_window(
+                &mut snapshot,
+                "Claude",
+                plan,
+                name,
+                Some(seconds),
+                bucket.utilization,
+                bucket.resets_at,
+            );
         }
     }
     snapshot.finish()
@@ -343,20 +383,24 @@ fn claude_quota(quota: crate::claude_usage::UsageApiResponse) -> SessionUsage {
 fn codex_quota(quota: crate::codex_usage::CodexUsageApiResponse) -> SessionUsage {
     let mut snapshot = SessionUsage::available("codex", "account_quota", "codex_app_server");
     if let Some(rate) = quota.rate_limit {
-        for (label, window) in [
+        for (name, window) in [
             ("primary", rate.primary_window),
             ("secondary", rate.secondary_window),
         ] {
             if let Some(window) = window {
-                let label = window
-                    .limit_window_seconds
-                    .map(|s| format!("{}m", s / 60))
-                    .unwrap_or_else(|| label.into());
                 let reset = window
                     .reset_at
                     .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
                     .map(|at| at.to_rfc3339());
-                quota_line(&mut snapshot, &label, window.used_percent, reset);
+                quota_window(
+                    &mut snapshot,
+                    "Codex",
+                    quota.plan_type.as_deref(),
+                    name,
+                    window.limit_window_seconds,
+                    window.used_percent,
+                    reset,
+                );
             }
         }
     }
@@ -452,13 +496,6 @@ fn ego_snapshot(report: &Value, session_id: &str) -> Result<SessionUsage, String
         tokens.push(format!("{count} web searches"));
     }
     snapshot.line("Session usage", tokens.join(" · "));
-    if let Some(at) = snapshot
-        .observed_at_ms
-        .and_then(|at| i64::try_from(at).ok())
-        .and_then(chrono::DateTime::from_timestamp_millis)
-    {
-        snapshot.line("Report as of", at.to_rfc3339());
-    }
     for (key, label) in [
         ("known", "Cost"),
         ("subscription_equivalent", "API-equivalent estimate"),
@@ -751,6 +788,32 @@ cat "$EGO_HOME/report.json""#,
             )
             .is_err()
         );
+    }
+
+    /// Catches: dropping plan/window identity or mixing timestamps into raw display lines.
+    #[test]
+    fn quota_snapshot_preserves_provider_plan_window_and_reset_instant() {
+        let quota = crate::claude_usage::UsageApiResponse {
+            five_hour: Some(crate::claude_usage::RateBucket {
+                utilization: 2.0,
+                resets_at: Some("2026-10-26T11:20:00.093350+00:00".into()),
+            }),
+            plan: Some(crate::claude_usage::PlanInfo {
+                subscription_type: Some("max".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(claude_quota(quota)).unwrap();
+        assert_eq!(
+            value["quota_windows"][0],
+            serde_json::json!({
+                "provider":"Claude", "plan":"max", "window_seconds":18000,
+                "window_name":"primary", "used_percent":2.0,
+                "resets_at":"2026-10-26T11:20:00.093350+00:00"
+            })
+        );
+        assert_eq!(value["lines"], serde_json::json!([]));
     }
 
     /// Catches: an empty provider DTO turning into fabricated 0% quota.

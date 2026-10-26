@@ -1,6 +1,7 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { formatQuotaWindow } from "../../utils/sessionUsageFormatting";
 import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
 import s from "./ClaudeUsageDashboard.module.css";
@@ -737,9 +738,16 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 												style={{ transform: `scaleX(${Math.min(100, item.bucket.utilization) / 100})` }}
 											/>
 										</div>
-										<Show when={item.bucket.resets_at}>
-											<span class={s.rateReset}>Resets in {formatResetTime(item.bucket.resets_at!)}</span>
-										</Show>
+										<span class={s.rateReset}>
+											{formatQuotaWindow({
+												provider: "Claude",
+												plan: apiData()?.plan?.subscription_type ?? null,
+												window_seconds: item.key === "five_hour" ? 18000 : 604800,
+												window_name: item.label,
+												used_percent: item.bucket.utilization,
+												resets_at: item.bucket.resets_at,
+											})}
+										</span>
 									</div>
 								)}
 							</For>

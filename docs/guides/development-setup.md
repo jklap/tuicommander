@@ -148,6 +148,46 @@ denies `show` and `set-focus`; it adds no presentation permission. The daily
 capability file is unchanged. Stop the instance when the check ends to remove
 the floating window. The daily window configuration remains unchanged.
 
+#### Persistent GitHub live-check login
+
+Use one named instance for all authorized GitHub live checks, across stories and
+worktrees. Do not select a new instance name for each agent:
+
+```bash
+make agent-test-github AGENT_TEST_DRY_RUN=1
+make agent-test-github
+# Stop only after the current owner finishes:
+make agent-test-github-stop
+```
+
+These targets always select `agent-test-ghlive` on port `19887`, including when
+`AGENT_TEST_INSTANCE`, `AGENT_TEST_PORT` or `TUIC_*` values are inherited or supplied
+for another story. They reuse the instance used for the authenticated Tasks
+checks. The generic `agent-test` defaults and all isolation guards are unchanged.
+Coordinate ownership before starting or stopping this shared verification
+instance. Its existing supervisor lock rejects a second owner; do not stop
+another agent's run. Stop preserves persistent state.
+
+The agent-test executable is a **debug build**. Its credential adapter uses
+`~/.tuicommander-dev/instances/agent-test-ghlive/credentials.json`, not macOS
+Keychain. App configuration and account metadata remain under
+`~/Library/Application Support/com.tuic.commander/instances/agent-test-ghlive/`.
+The vault service is `tuicommander-instance-agent-test-ghlive`, user `vault`,
+with the GitHub OAuth token in the `account/github.com` slot. A different instance
+selects a different file and vault namespace; it does not reuse this login.
+Rebuilding or changing the worktree does not change either persistent path.
+`agent-test-stop` removes the PID and FIFO only, not credentials or configuration.
+Do not read, copy, reset or delete credential files to move a login between
+instances. Never copy the daily instance's credentials.
+
+Before requesting another Device Flow login, use the instance's normal GitHub
+status UI/API to check its existing account, not its token store. The 2026-10-23
+Tasks worklog records a successful login and restart retention in
+`agent-test-ghlive`. File existence alone does not prove that token is still valid.
+An expired/revoked token or a newly required OAuth scope can still require consent;
+for example, adding Projects write access requires `project`, not the older
+`read:project` scope. Reusing a namespace does not add permissions to an old token.
+
 #### Native visibility regression (authorized macOS runs only)
 
 The unattended `scripts/agent-test-tests.py` checks launcher/configuration and

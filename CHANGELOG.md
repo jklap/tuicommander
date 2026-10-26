@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show a loading state while terminal Chat reopens its transcript instead of briefly claiming that the conversation has no messages (#2331-cea2).
+- Keep the mobile session menu inside the available pane, deduplicate Markdown files, and share readable quota descriptions and local reset times with desktop usage cards.
+- Start allowlisted GitHub issue intake polling on the owning headless daemon without a UI, retain it across client filter/stop calls, and report unregistered intake repositories (#2323-c294).
+- Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
+
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
 
 ## [2.0.0-beta.3] - 2026-10-26
