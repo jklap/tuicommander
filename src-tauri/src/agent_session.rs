@@ -698,6 +698,33 @@ struct CodexUpdates {
     diagnostics: Vec<String>,
 }
 
+impl CodexUpdates {
+    fn record(&mut self, event: notify::Result<notify::Event>) {
+        if let Ok(event) = &event
+            && matches!(event.kind, notify::EventKind::Access(_))
+        {
+            return;
+        }
+        #[cfg(test)]
+        if self.diagnostics.len() < 128 {
+            self.diagnostics.push(format!("event={event:?}"));
+        }
+        match event {
+            Ok(event) if !event.need_rescan() => {
+                for path in event.paths {
+                    if self.paths.len() >= 4096 {
+                        self.paths.clear();
+                        self.rescan = true;
+                        break;
+                    }
+                    self.paths.insert(path);
+                }
+            }
+            _ => self.rescan = true,
+        }
+    }
+}
+
 struct CodexCandidate {
     modified: SystemTime,
     id: String,
@@ -723,29 +750,10 @@ impl CodexIndex {
         let updates = std::sync::Arc::new(std::sync::Mutex::new(CodexUpdates::default()));
         let pending = updates.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if let Ok(event) = &event
-                && matches!(event.kind, notify::EventKind::Access(_))
-            {
-                return;
-            }
-            let mut updates = pending.lock().unwrap_or_else(|e| e.into_inner());
-            #[cfg(test)]
-            if updates.diagnostics.len() < 128 {
-                updates.diagnostics.push(format!("event={event:?}"));
-            }
-            match event {
-                Ok(event) if !event.need_rescan() => {
-                    for path in event.paths {
-                        if updates.paths.len() >= 4096 {
-                            updates.paths.clear();
-                            updates.rescan = true;
-                            break;
-                        }
-                        updates.paths.insert(path);
-                    }
-                }
-                _ => updates.rescan = true,
-            }
+            pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .record(event);
         })
         .and_then(|mut watcher| {
             watcher.watch(root, notify::RecursiveMode::NonRecursive)?;
@@ -2729,6 +2737,18 @@ mod tests {
                 .sum::<usize>()
         };
         let before = count();
+        // Recorded in Windows CI 40331854991: unchanged year/month directories
+        // emit Modify(Any). Replay through the same callback as the real watcher.
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        for directory in [
+            day.parent().unwrap(),
+            day.parent().unwrap().parent().unwrap(),
+        ] {
+            index.updates.lock().unwrap().record(Ok(notify::Event::new(
+                notify::EventKind::Modify(notify::event::ModifyKind::Any),
+            )
+            .add_path(directory.to_path_buf())));
+        }
         for _ in 0..10 {
             assert_eq!(discover().as_deref(), Some(current));
         }
