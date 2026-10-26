@@ -2,6 +2,11 @@
 
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
 
+## Final API failure indicator (2335-9c03) — Rust restart required
+
+- [x] Isolated `agent-test-2335` on port 19975: installed ego 0.1.4 hit a real loopback-induced truncated response, stayed idle with a red tab dot and red sidebar Error icon, then returned green after a complete later turn. Native screenshots and DOM/backend responses are under `orchestrator/reports/tuicommander/img/2026-10-25-2335/`. Verified build: `08978a8ee`. A later retry-reset fix still needs integration validation; this live check does not prove retry exhaustion.
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, verify an unrecovered Claude, Codex or ego provider failure remains red in the tab and sidebar after completion output. Repeat in a narrow split (Claude 36/40 columns including JSON errors, Codex 36/40 columns including legacy retry-exhaustion errors) so final-error text wraps. Native provider countdowns must not mark Error. With TUIC auto-retry enabled, an ignored continue stays red; three failed attempts exhaust the budget. A later successful turn returns to Done. The peer must not restart the daily app; Rust changes do not hot-reload.
 ## Rustup PTY environment (2318-4b44) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, open a fresh terminal and confirm `env | grep RUSTUP_TOOLCHAIN` prints nothing, repository toolchain pins apply, and an explicit run-config `RUSTUP_TOOLCHAIN` still wins. Verified in isolated `agent-test-2318`: the parent carried `stable`, the fresh terminal had no proxy keys, and a throwaway repository selected its pinned `1.98.1`. Both targeted tests passed on macOS and rb. The isolated app was stopped; Rust changes do not hot-reload into the daily app.

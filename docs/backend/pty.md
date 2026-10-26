@@ -17,6 +17,10 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Final provider failures
+
+`ApiError` accumulates in `SessionState.last_error`, independent of question/awaiting state. Idle and completion output do not retract it. Both desktop and browser snapshot consumers render this value as Error. Native ego final-failure notifications are lifecycle receipts and bypass startup/resize history suppression; provider recovery snapshots remain presentation-only. See [Output parser](output-parser.md#final-failures-and-native-retries-2335-9c03) for source-backed formats and retry policy.
+
 ## Frame receipts and shared IPC delays
 
 Each session has its own frame ticker and desktop receipt gate. A closed gate

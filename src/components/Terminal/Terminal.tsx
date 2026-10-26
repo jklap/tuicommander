@@ -275,6 +275,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const RETRY_DELAYS = [5_000, 15_000, 30_000];
 	let retryCount = 0;
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
+	let retryWorkObserved = false;
+	// Reset only after a recovered turn reaches idle. A late pre-error idle
+	// snapshot can briefly have no last_error; it must not cancel the retry.
+	createEffect(() => {
+		const terminal = terminalsStore.get(props.id);
+		if (!terminal || terminal.awaitingInput !== null) return;
+		if (terminal.shellState === "busy") {
+			retryWorkObserved = true;
+		} else if (terminal.shellState === "idle" && retryWorkObserved) {
+			retryCount = 0;
+			retryWorkObserved = false;
+			clearTimeout(retryTimer);
+			retryTimer = undefined;
+		}
+	});
 	let agentDetectTimer: ReturnType<typeof setTimeout> | undefined;
 	let rafHandle = 0;
 	/** Disposer for the bounded zero-size retry, so it cannot outlive the effect run. */
@@ -418,7 +433,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "status-line": {
-					retryCount = 0;
+					// Working evidence cancels a parked injection, not the retry budget.
+					clearTimeout(retryTimer);
+					retryTimer = undefined;
 					terminalsStore.update(props.id, {
 						currentTask: parsed.task_name,
 					});
@@ -500,10 +517,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// A submitted prompt starts a new turn. Clear old choices and allow
 					// new ones even when busy was emitted before this input echo.
 					terminalsStore.update(props.id, { suggestDismissed: false, suggestedActions: null, activeSubTasks: 0 });
-					// User resumed typing — clear any stale error/question badge. See comment
-					// in stores/terminals.ts handleShellStateChange: error state should be
-					// cleared on explicit agent activity, user-input, or process exit.
-					terminalsStore.clearAwaitingInput(props.id);
+					// Input answers a question, but does not prove API recovery. In
+					// particular auto-retry can submit continue without starting work.
+					if (terminalsStore.get(props.id)?.awaitingInput === "question") {
+						terminalsStore.clearAwaitingInput(props.id);
+					}
 					invoke<string | null>("get_last_prompt", { sessionId: targetSessionId })
 						.then((prompt) => {
 							if (prompt !== null) terminalsStore.setLastPrompt(props.id, prompt);
@@ -522,6 +540,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					const label = agent ?? "Agent";
 					const kindLabel = kind === "server" ? "server error" : kind === "auth" ? "auth failure" : "API error";
 					appLogger.error("terminal", `${label}: ${kindLabel} (${patternName})`);
+
+					// Keep failure visible until the backend observes real recovery. An
+					// injected continue that stays idle is not a successful turn.
+					retryWorkObserved = false;
+					terminalsStore.setAwaitingInput(props.id, "error");
 
 					const willAutoRetry =
 						kind === "server" &&
@@ -580,7 +603,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "intent": {
-					retryCount = 0;
 					const term = terminalsStore.get(props.id);
 					const agentType = term?.agentType;
 					const perAgentEnabled = agentType

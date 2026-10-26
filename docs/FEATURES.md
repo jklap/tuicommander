@@ -997,6 +997,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
 - Covers Claude Code, Codex CLI, Gemini CLI, Copilot, and raw API error JSON from providers (OpenAI, Anthropic, Google, OpenRouter, MiniMax)
+- Retains final failures in the red Error state through idle and unsuccessful auto-retry; supports Claude connection-loss prose, Codex native final-error rows and ego native provider-failure notifications. Native recovery countdowns do not set Error.
 - Triggers error notification sound and logs to the Error Log Panel
 
 ### 6.9 Agent Configuration (Settings > Agents)
