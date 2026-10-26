@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Remove the detached double blue focus ring from shared text fields, including Markdown comment popovers, while preserving keyboard focus on other controls (#2377-e02e).
+- Remove the detached double blue focus ring from shared text fields, including Markdown comment popovers, while preserving keyboard focus on other controls (#2377-e02e). Keep the same shared focus appearance in story, plan and workflow editors.
 - Align MCP capability labels, help and migration warnings with other Settings rows, and place ego immediately after Local tools in General (#2374-cfc7).
 
 - Keep Settings scroll and focus stable while launch instruction previews refresh, and explain each launch module with contextual help (#2373-2313).
