@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep isolated agent-test runtime temp outside ego’s shared scratch grant so AI Chat can prove its confined filesystem perimeter without changing grants (#2364-0737).
+
 - Show readable story transition labels, criterion numbers and text, and compact session actors with full-ID tooltips (#2355-bb93).
 
 - Keep the toolbar repository filter and manual sidebar density controls blue while active, independent of shared button stylesheet order (#2353-9fca).

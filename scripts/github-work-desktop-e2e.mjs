@@ -14,7 +14,7 @@ if (process.argv.includes("--help")) {
 }
 if (
 	!socket ||
-	!resolve(socket).startsWith(resolve(homedir(), "Gits/.tmp/tuic-at") + sep) ||
+	!resolve(socket).startsWith(resolve(homedir(), "Gits/.tuic/tuic-at") + sep) ||
 	!account ||
 	!/^[1-9][0-9]*$/.test(issue) ||
 	!/^[1-9][0-9]*$/.test(pr) ||
