@@ -872,14 +872,22 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
             .into_iter()
             .collect();
     }
-    [
+    let upstream = git_cmd(repo)
+        .args(["rev-parse", "--symbolic-full-name", "--verify", &format!("refs/heads/{default_branch}@{{upstream}}")])
+        .run_silent()
+        .map(|out| out.stdout.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let mut bases = Vec::new();
+    for base in upstream.into_iter().chain([
         format!("refs/remotes/origin/{default_branch}"),
         format!("refs/heads/{default_branch}"),
         format!("refs/remotes/{default_branch}"),
-    ]
-    .into_iter()
-    .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
-    .collect()
+    ]) {
+        if !bases.contains(&base) && rev_at(repo, &format!("{base}^{{commit}}")).is_ok() {
+            bases.push(base);
+        }
+    }
+    bases
 }
 
 /// Human-readable form of `integration_bases`, for messages.
@@ -14114,6 +14122,39 @@ branch refs/heads/feat
         let outcome = remove_worktree_by_workspace_id(
             &repo.to_string_lossy(),
             "landed-upstream",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "ancestry");
+        assert!(!worktree.exists());
+    }
+
+    // Catches: a non-origin tracking upstream being lost when local main is stale.
+    #[test]
+    fn branch_merged_into_non_origin_tracking_default_is_removable() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        git_cmd(&repo).args(["remote", "rename", "origin", "upstream"]).run().unwrap();
+        let main = base_branch_of(&repo);
+        git_cmd(&repo).args(["config", &format!("branch.{main}.remote"), "upstream"]).run().unwrap();
+        git_cmd(&repo).args(["config", &format!("branch.{main}.merge"), &format!("refs/heads/{main}")]).run().unwrap();
+        let worktree = add_worktree(&repo, "landed-non-origin");
+        commit_file(&worktree, "feature.txt", "landed work\n");
+        let main = base_branch_of(&repo);
+        git_cmd(&worktree)
+            .args(["push", "upstream", &format!("landed-non-origin:{main}")])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "upstream"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "landed-non-origin");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "landed-non-origin",
             true,
             None,
             false,
