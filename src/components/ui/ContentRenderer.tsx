@@ -105,7 +105,12 @@ export function applyCommentBlockMetadata(container: HTMLElement, source: string
 		let element: HTMLElement | undefined;
 		if (block.tag === "LI") element = listItems[itemIndex++];
 		else {
-			while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
+			while (
+				elementIndex < elements.length &&
+				(elements[elementIndex].classList.contains("mermaid-diagram") ? "PRE" : elements[elementIndex].tagName) !==
+					block.tag
+			)
+				elementIndex++;
 			element = elements[elementIndex++];
 		}
 		if (!element) break;
