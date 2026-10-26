@@ -185,6 +185,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
 - Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state.
 - Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
+- Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the 103-byte limit, the longest `TMPDIR` that would hold it and `TUIC_SOCKET`, and the doomed bind retries are skipped.
 
 ## [2.0.0-beta.1] - 2026-10-22
 
