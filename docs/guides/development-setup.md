@@ -220,6 +220,34 @@ agent-test alongside it, verify both listeners without mutating the daily API,
 and stop only agent-test. Until that proof is recorded, do not claim macOS TCC,
 simultaneous listeners or global-input isolation have been verified live.
 
+### Development backend restart warning
+
+`tauri dev --no-watch` keeps the Rust process running while Vite reloads the UI.
+A short, dismissible warning appears when a Cargo-recorded input is newer than
+its executable, or the backend executable was rebuilt after application entry.
+It shows compact backend/tree identifiers (source SHA plus timestamp token) and
+`Restart tauri dev`. Restart only when you are ready to end the backend session.
+Missing executable or dep-info files, or an older backend without launch identity,
+show `Backend identity unavailable` instead of a silent match.
+
+Vite reads Cargo's final `<binary>.d`, which covers local path crates and embedded
+assets even outside `src-tauri/`. It also checks local package manifests found
+through dependency ancestors and the workspace `Cargo.lock`. There are no source
+extension allowlists or fixture-directory exclusions. The debug bridge built and
+used by `make dev` has its own executable/dep-info check, against its own build
+time. Unrelated frontend, test-only module and documentation edits stay quiet;
+frontend assets embedded by Rust are backend inputs and do warn.
+
+This uses Cargo-style mtimes, not content fingerprints: an edit followed by a
+revert still asks for a restart. Vite checks on load and after HMR, without polling,
+compiling or restarting the backend. The macOS copy runner passes
+`TUIC_DEV_BUILD_EXE` so checks follow the original Cargo artifact rather than its
+protected launch copy. A rebuilt original bridge also requires restart when the
+runner still holds its older protected sibling copy. Without that binding, the running executable needs its
+own sibling `.d`. Vite does not guess an mbx target directory. Source archives
+with build artifacts can work without Git (the SHA is diagnostic only). Release
+builds do not expose launch identity or include the warning module.
+
 ### Browser Mode
 
 When the MCP server is enabled in settings, the frontend can run standalone:

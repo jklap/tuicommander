@@ -1901,6 +1901,7 @@ pub(super) fn handle_ui(
             // Register this tab under the creator's tuic session so it can be
             // closed automatically when that session exits.
             if let Some(ref tuic_session) = caller_tuic {
+                payload["opener_tuic_session"] = serde_json::Value::String(tuic_session.clone());
                 let mut registered = state
                     .session_maps
                     .session_html_tabs
@@ -1930,6 +1931,7 @@ pub(super) fn handle_ui(
                 pinned,
                 focus,
                 origin_repo_path,
+                opener_tuic_session: caller_tuic,
             });
             serde_json::json!({"ok": true, "id": id})
         }

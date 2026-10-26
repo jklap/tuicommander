@@ -66,7 +66,9 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
     // RUSTC_WORKSPACE_WRAPPER, RUSTDOC),
     // build-script metadata (HOST, TARGET, PROFILE, NUM_JOBS, OPT_LEVEL, DEBUG,
     // HOST_CC, HOST_CXX, DEP_*), and mbx's MBX_* session state. Keep user
-    // preferences such as CARGO_HOME.
+    // preferences such as CARGO_HOME. Rustup proxy selection and recursion
+    // state belong to the TUIC launch too: inheriting its selected toolchain
+    // would override the next repository's rust-toolchain.toml.
     for key in [
         "CARGO",
         "CARGO_TARGET_DIR",
@@ -87,6 +89,9 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
         "RUSTC_WRAPPER",
         "RUSTC_WORKSPACE_WRAPPER",
         "RUSTDOC",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTUP_TOOLCHAIN_SOURCE",
+        "RUST_RECURSION_COUNT",
         "HOST",
         "TARGET",
         "PROFILE",

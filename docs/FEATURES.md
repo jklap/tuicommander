@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
+
 The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
 
 Native story API and CLI lists support combined state, priority and type filters, with optional cursor pages of 1–100 records; existing full-list reads and dispatch order are unchanged (#2174-6b3f).
@@ -990,11 +992,12 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Structural tokens stripped from log lines served to PWA/REST consumers via `LogLine::strip_structural_tokens()`
 - Structured `Intent` events emitted for LLM-declared work phase tracking
 - Centralized debounced busy signal with completion notifications for accurate idle/active status
-- HTTP/MCP session origin survives frontend reconnects, keeping orchestration completion chimes muted when configured; BUSY→IDLE and exit share one notification per busy cycle
+- One Notifications control mutes sounds and OS notices for agent-spawned sessions, using backend parentage; Activity, bell entries and urgent cards remain. Parent/user sessions are unaffected, and unparented HTTP/MCP sessions retain the completion-chime-only mute. HTTP/MCP origin survives reconnects; BUSY→IDLE and exit share one notification per busy cycle
 
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
 - Covers Claude Code, Codex CLI, Gemini CLI, Copilot, and raw API error JSON from providers (OpenAI, Anthropic, Google, OpenRouter, MiniMax)
+- Retains final failures in the red Error state through idle and unsuccessful auto-retry; supports Claude connection-loss prose, Codex native final-error rows and ego native provider-failure notifications. Native recovery countdowns do not set Error.
 - Triggers error notification sound and logs to the Error Log Panel
 
 ### 6.9 Agent Configuration (Settings > Agents)
@@ -2593,6 +2596,7 @@ partial work, and their child processes may continue.
 ## 22. Remote Daemon (`tuic-remote`) — Beta
 
 ### 22.1 Overview
+- Shared GitHub poller lifecycle controls, repository status, PR snapshots and issue reads work without a WebView; events use `/events` SSE and TCP keeps the existing authentication. Account/auth and GitHub mutation routes remain outside the headless monitoring surface.
 - Standalone headless binary for running TUICommander on servers without a desktop environment
 - Same HTTP/WebSocket API as the desktop app's remote access feature
 - No Tauri dependency — pure Rust binary

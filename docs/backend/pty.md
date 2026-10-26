@@ -17,6 +17,10 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Final provider failures
+
+`ApiError` accumulates in `SessionState.last_error`, independent of question/awaiting state. Idle and completion output do not retract it. Both desktop and browser snapshot consumers render this value as Error. Native ego final-failure notifications are lifecycle receipts and bypass startup/resize history suppression; provider recovery snapshots remain presentation-only. See [Output parser](output-parser.md#final-failures-and-native-retries-2335-9c03) for source-backed formats and retry policy.
+
 ## Frame receipts and shared IPC delays
 
 Each session has its own frame ticker and desktop receipt gate. A closed gate
@@ -568,7 +572,7 @@ Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current wo
 
 Additionally, `CLAUDECODE` is removed from the environment (`env_remove`) to prevent nested-session detection when TUICommander itself runs inside a Claude Code session. `NO_COLOR` is also removed from every PTY command immediately after construction because it may belong to a Codex parent that launched TUICommander, not to the independent child session. This does not force application color or override explicit command flags; a deliberate per-agent environment may restore `NO_COLOR` after sanitization.
 
-The same PTY command sanitizer removes Cargo package and executable metadata (`CARGO`, `CARGO_MANIFEST_*`, `CARGO_PKG_*`, `CARGO_BIN_NAME`, `CARGO_BIN_EXE_*`, `CARGO_CRATE_NAME`, `CARGO_PRIMARY_PACKAGE`, `CARGO_FEATURE_*`, `CARGO_CFG_*`), build paths and jobserver state (`CARGO_TARGET_DIR`, `CARGO_TARGET_TMPDIR`, `OUT_DIR`, `CARGO_MAKEFLAGS`), build settings (`CARGO_INCREMENTAL`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `RUSTC`, `RUSTC_LINKER`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`, `HOST_CC`, `HOST_CXX`, `HOST`, `TARGET`, `PROFILE`, `NUM_JOBS`, `OPT_LEVEL`, `DEBUG`), build-script dependency metadata (`DEP_*`), and all `MBX_*` keys inherited from TUICommander's Cargo/mbx development launch. Those values describe the TUIC build, not the repository opened in the PTY. User preferences such as `CARGO_HOME` and `CARGO_TERM_COLOR` remain inherited; explicit per-agent or run-config environment values applied after sanitization can restore any removed key when requested.
+The same PTY command sanitizer removes Cargo package and executable metadata (`CARGO`, `CARGO_MANIFEST_*`, `CARGO_PKG_*`, `CARGO_BIN_NAME`, `CARGO_BIN_EXE_*`, `CARGO_CRATE_NAME`, `CARGO_PRIMARY_PACKAGE`, `CARGO_FEATURE_*`, `CARGO_CFG_*`), build paths and jobserver state (`CARGO_TARGET_DIR`, `CARGO_TARGET_TMPDIR`, `OUT_DIR`, `CARGO_MAKEFLAGS`), build settings (`CARGO_INCREMENTAL`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `RUSTC`, `RUSTC_LINKER`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`, `HOST_CC`, `HOST_CXX`, `HOST`, `TARGET`, `PROFILE`, `NUM_JOBS`, `OPT_LEVEL`, `DEBUG`), build-script dependency metadata (`DEP_*`), and all `MBX_*` keys inherited from TUICommander's Cargo/mbx development launch. It also removes rustup proxy state (`RUSTUP_TOOLCHAIN`, `RUSTUP_TOOLCHAIN_SOURCE`, `RUST_RECURSION_COUNT`) so the next repository can select its own toolchain. Those values describe the TUIC build, not the repository opened in the PTY. User preferences such as `RUSTUP_HOME`, `CARGO_HOME`, `RUST_LOG`, `RUST_BACKTRACE`, `CARGO_TERM_COLOR`, `CARGO_TERM_PROGRESS_WHEN` and `CARGO_TERM_PROGRESS_WIDTH` remain inherited; explicit per-agent or run-config environment values applied after sanitization can restore any removed key when requested.
 
 ## Child Process Priority
 

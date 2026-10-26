@@ -29,6 +29,7 @@ const MAX_MOBILE_FILE_BYTES = 1_048_576;
 interface FilesScreenProps {
 	sessions?: SessionInfo[];
 	initialSessionId?: string;
+	openerTuicSession?: string;
 	recoveryRevision?: number;
 	initialRepo?: { worktreePath: string | null; cwd: string | null };
 	initialLink?: { candidate: string; line?: number };
@@ -67,6 +68,7 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [sentCommentIds, setSentCommentIds] = createSignal<Set<string>>(new Set());
 	const [sendingChanges, setSendingChanges] = createSignal(false);
 	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
+	const [agentChosenByUser, setAgentChosenByUser] = createSignal(false);
 	const reviewComments = createMemo(() => parseTweakComments(content()));
 	const hasReviewChanges = () =>
 		editedSinceSend() || reviewComments().some((comment) => !sentCommentIds().has(comment.id));
@@ -89,9 +91,12 @@ export function FilesScreen(props: FilesScreenProps) {
 	);
 	createEffect(() => {
 		const agents = reviewAgents();
-		if (agents.some((agent) => agent.session_id === selectedAgentSession())) return;
+		if (agentChosenByUser() && agents.some((agent) => agent.session_id === selectedAgentSession())) return;
 		setSelectedAgentSession(
-			agents.find((agent) => agent.session_id === props.initialSessionId)?.session_id ?? agents[0]?.session_id ?? "",
+			agents.find((agent) => props.openerTuicSession && agent.tuic_session === props.openerTuicSession)?.session_id ??
+				agents.find((agent) => agent.session_id === props.initialSessionId)?.session_id ??
+				agents[0]?.session_id ??
+				"",
 		);
 	});
 	async function sendChanges() {
@@ -614,7 +619,10 @@ export function FilesScreen(props: FilesScreenProps) {
 											aria-label={t("markdownTab.reviewAgent", "Review agent")}
 											value={selectedAgentSession()}
 											disabled={!reviewAgents().length || sendingChanges()}
-											onChange={(event) => setSelectedAgentSession(event.currentTarget.value)}
+											onChange={(event) => {
+												setAgentChosenByUser(true);
+												setSelectedAgentSession(event.currentTarget.value);
+											}}
 										>
 											<Show when={!reviewAgents().length}>
 												<option value="">{t("markdownTab.noAgents", "No agents")}</option>

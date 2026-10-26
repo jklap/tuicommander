@@ -1,3 +1,22 @@
+## Development backend staleness (2332-3eef) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
+
+## Final API failure indicator (2335-9c03) — Rust restart required
+
+- [x] Isolated `agent-test-2335` on port 19975: installed ego 0.1.4 hit a real loopback-induced truncated response, stayed idle with a red tab dot and red sidebar Error icon, then returned green after a complete later turn. Native screenshots and DOM/backend responses are under `orchestrator/reports/tuicommander/img/2026-10-25-2335/`. Verified build: `08978a8ee`. A later retry-reset fix still needs integration validation; this live check does not prove retry exhaustion.
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, verify an unrecovered Claude, Codex or ego provider failure remains red in the tab and sidebar after completion output. Repeat in a narrow split (Claude 36/40 columns including JSON errors, Codex 36/40 columns including legacy retry-exhaustion errors) so final-error text wraps. Native provider countdowns must not mark Error. With TUIC auto-retry enabled, an ignored continue stays red; three failed attempts exhaust the budget. A later successful turn returns to Done. The peer must not restart the daily app; Rust changes do not hot-reload.
+## Rustup PTY environment (2318-4b44) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, open a fresh terminal and confirm `env | grep RUSTUP_TOOLCHAIN` prints nothing, repository toolchain pins apply, and an explicit run-config `RUSTUP_TOOLCHAIN` still wins. Verified in isolated `agent-test-2318`: the parent carried `stable`, the fresh terminal had no proxy keys, and a throwaway repository selected its pinned `1.98.1`. Both targeted tests passed on macOS and rb. The isolated app was stopped; Rust changes do not hot-reload into the daily app.
+## Subagent notification silence (2341-be90)
+
+- [ ] After the batch integrator runs the targeted notification suites, verify the desktop Notifications control with a parent and a spawned child: on mutes child question/error/completion/attention sounds and OS alerts, off restores them; parent/user tabs remain unchanged. Activity, bell entries and urgent cards must remain visible. Mobile/PWA sounds and push are a separate story by coordinator decision. The Rust edit is comment-only; this change does not require a backend restart.
+## GitHub monitoring retirement (2336-da0a) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the daily backend, remove a monitored repository while a GitHub action is outstanding. Confirm GitHub Status no longer counts it after the action finishes. Queued and late requests are covered by the targeted command-loop regression; the historical empty-sidebar cause remains unproven. This peer did not restart the daily app.
+
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
 - [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.
@@ -2952,5 +2971,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After restarting the Rust backend when ready, keep Ideas open, call planner `add_idea`, and confirm the new repo-scoped Idea appears; edit or mark a different Idea used and confirm both remain after reload. The backend cannot hot-reload into the current session.
 - [ ] #2301-e76f: After rebuilding/restarting the daily Rust backend, delete a throwaway unavailable symlink in File Browser; only the link must disappear. Links to existing files/directories must preserve target contents, and failed deletes must show an error notification.
 
+- [ ] After the next manual restart, open a Markdown document through an agent and confirm Review agent defaults to that opener on desktop and in the mobile Markdown menu; explicit selection must survive session refresh (#2329-dc53). Rust backend changes require restart; do not restart the daily instance automatically.
 - [ ] Story 1996-3cff: after a manual Rust rebuild/restart, confirm one Italian spoken reply uses the selected voice without an extra system voice. Isolated TTS evidence does not establish historical double-voice attribution. Do not restart the daily instance until ready to lose its current session.
 - [ ] After the next planned backend rebuild/restart, request and submit a dummy secret, then remove it from the same MCP session and after a bridge reconnect: both removals return `removed` (including an already absent name). Old binaries return `missing` after successful deletion; MCP reconnect alone does not clear backend-owned values. Native automation was unavailable for story 1520-46b1 (`osascript` assistive access denied).
+
+- [ ] After a manual Rust rebuild/restart, verify GitHub Status keeps the monitored-repository count after query-cache expiry, removes deleted repository paths, and resets it when monitoring stops (#2336-da0a). This change does not hot-reload.
+- [x] #2336-da0a: On 2026-10-25, isolated `agent-test-2336` Tasks loaded 140 public GitHub items through the production provider and plugin HTTP transport with no account credential. An instance-only CONNECT proxy rejection settled with an error and retained stale results. Restoring the proxy and selecting Refresh loaded 140 items again and removed the stale/error indicators. A separate mute-proxy check settled after 30.004 seconds with a timeout and stale results. Native-window screenshots and timestamped DOM/provider evidence are in `~/Gits/.tmp/results/tuic-2336-{baseline,drop,recovery,mute}*`. This did not reproduce the historical loading hang or verify authenticated native GitHub polling.
+- [ ] [HUMAN] #2336-da0a: Log in through the isolated instance's GitHub device flow, configure an unreachable remote, and verify authenticated local sidebar PR/issue data and recovery after an instance-only network interruption. No daily credentials were read or copied; the daily app was not restarted.
+
+- [x] Rebuilt `tuic-remote`: `python3 scripts/test-headless-github.py /absolute/path/to/tuic-remote` verifies isolated Unix-socket GitHub monitoring (#2345-49f0). _(verified: empty paths and a scratch no-remote repository start, return status/data, stop and restart; no authenticated GitHub fetch is claimed. The running desktop backend needs a manual restart to load Rust changes.)_
