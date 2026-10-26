@@ -617,11 +617,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 const BLOCK_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "BLOCKQUOTE", "PRE", "TD", "TH"]);
 
 /** Keep source coordinates, but exclude link syntax that has no rendered text. */
-function visibleLinkSource(source: string): string {
+function visibleLinkSource(source: string, documentSource: string): string {
 	const chars = source.split("");
 	const hide = (start: number, end: number) => {
 		for (let i = start; i < end; i++) {
-			if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+			// The matcher ignores underscores: hidden syntax must not insert visible spaces.
+			if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = "_";
 		}
 	};
 	const visit = (tokens: Token[], offset: number) => {
@@ -640,7 +641,9 @@ function visibleLinkSource(source: string): string {
 			offset += token.raw.length;
 		}
 	};
-	visit(marked.Lexer.lexInline(source), 0);
+	const lexer = new marked.Lexer();
+	lexer.tokens.links = marked.lexer(documentSource).links;
+	visit(lexer.inlineTokens(source), 0);
 	return chars.join("");
 }
 
@@ -653,7 +656,7 @@ function selectionSourceMatch(source: string, root: HTMLElement, range: Range, t
 	const start = block && root.contains(block) ? Number(block.dataset.commentSourceStart) : 0;
 	const end = block && root.contains(block) ? Number(block.dataset.commentSourceEnd) : source.length;
 	const match = findSourceMatch(
-		visibleLinkSource(source.slice(start, end)),
+		visibleLinkSource(source.slice(start, end), source),
 		text,
 		occurrenceOrdinal(block ?? root, range, text),
 	);
