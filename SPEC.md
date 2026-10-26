@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Headless GitHub issue intake (#2323-c294): after executor ownership, the runtime subscribes registered allowlisted github.com repositories to all-issue polling without a client. Repository/settings events and the existing 30-second tick reconcile configuration. Unresolved entries emit an explicit configuration error. Client paths, filters and stop calls do not disable the intake subscription; unrelated client repositories retain their filters.
+
 Development builds show a dismissible restart warning when Cargo dep-info inputs are newer than the backend executable, or that executable was rebuilt after application entry. Main and used bridge inputs are checked independently; unrelated frontend-only changes stay quiet. An edit followed by a revert still warns, as Cargo would rebuild. Missing build artifacts report identity unavailable. Release builds contain no warning module or debug identity (#2332-3eef).
 
 The Plans column exposes Edit plan with Save/Cancel and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).

@@ -445,7 +445,13 @@ pub enum AppEvent {
     GitHubTransition {
         transition: crate::github_poller::PrTransition,
     },
-    /// GitHub issues updated for a repo (from Rust poller)
+    /// Internal machine-owned intake; excluded from client transports.
+    #[serde(rename = "internal-github-intake-issues-update")]
+    GitHubIntakeIssuesUpdate {
+        repo_path: String,
+        issues: Vec<crate::github::GitHubIssue>,
+    },
+    /// GitHub issues updated for a repo (from Rust poller).
     #[serde(rename = "github-issues-update")]
     GitHubIssuesUpdate {
         repo_path: String,
@@ -5572,6 +5578,7 @@ impl AppState {
             | AppEvent::UiTab { .. }
             | AppEvent::GitHubPrUpdate { .. }
             | AppEvent::GitHubTransition { .. }
+            | AppEvent::GitHubIntakeIssuesUpdate { .. }
             | AppEvent::GitHubIssuesUpdate { .. }
             | AppEvent::CloseHtmlTabs { .. }
             | AppEvent::DesignModeChanged { .. }

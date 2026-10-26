@@ -216,6 +216,9 @@ pub(super) async fn sse_events(
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    if matches!(event, AppEvent::GitHubIntakeIssuesUpdate { .. }) {
+                        continue;
+                    }
                     let event_name = event_type_name(&event);
                     let allowed = match filter_rx {
                         Some(ref live) => allows(&live.borrow(), event_name),
@@ -322,6 +325,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::UiTab { .. } => "ui-tab",
         AppEvent::GitHubPrUpdate { .. } => "github-pr-update",
         AppEvent::GitHubTransition { .. } => "github-transition",
+        AppEvent::GitHubIntakeIssuesUpdate { .. } => "internal-github-intake-issues-update",
         AppEvent::GitHubIssuesUpdate { .. } => "github-issues-update",
         AppEvent::CloseHtmlTabs { .. } => "close-html-tabs",
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
@@ -558,6 +562,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::GitHubTransition { transition } => {
             serde_json::to_value(transition).unwrap_or_default()
         }
+        AppEvent::GitHubIntakeIssuesUpdate { .. } => serde_json::Value::Null,
         AppEvent::GitHubIssuesUpdate { repo_path, issues } => {
             serde_json::json!({ "repo_path": repo_path, "issues": issues })
         }
@@ -621,6 +626,43 @@ mod tests {
         AppEvent::DirChanged {
             dir_path: "/dir".into(),
         }
+    }
+
+    // Catches: unfiltered internal intake snapshots leaking onto an unfiltered SSE stream.
+    #[tokio::test]
+    async fn intake_snapshots_never_reach_client_streams() {
+        let state = crate::mcp_http::tests::test_state();
+        let response = sse_events(
+            State(state.clone()),
+            Query(SseQuery {
+                types: None,
+                stream_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        let mut body = response.into_body().into_data_stream();
+        assert!(next_chunk(&mut body).await.unwrap().contains("retry"));
+        state
+            .event_bus
+            .send(AppEvent::GitHubIntakeIssuesUpdate {
+                repo_path: "/private-intake".into(),
+                issues: vec![],
+            })
+            .unwrap();
+        state
+            .event_bus
+            .send(AppEvent::GitHubIssuesUpdate {
+                repo_path: "/client".into(),
+                issues: vec![],
+            })
+            .unwrap();
+        let chunk = next_chunk(&mut body).await.expect("client snapshot");
+        assert!(chunk.contains("event: github-issues-update"), "{chunk}");
+        assert!(
+            chunk.contains("/client") && !chunk.contains("/private-intake"),
+            "{chunk}"
+        );
     }
 
     #[tokio::test]

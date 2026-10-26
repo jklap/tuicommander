@@ -1,12 +1,8 @@
 import { type Component, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import {
-	type CodexRateWindow,
-	type CodexUsageApiResponse,
-	formatResetAfter,
-	windowLabel,
-} from "../../features/codexUsage";
+import { type CodexRateWindow, type CodexUsageApiResponse, windowLabel } from "../../features/codexUsage";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { formatQuotaWindow } from "../../utils/sessionUsageFormatting";
 // Reuses the Claude dashboard's CSS module on purpose: same card grid, same bar,
 // same insight tiles. A second stylesheet would drift on the first theme change.
 import s from "../ClaudeUsageDashboard/ClaudeUsageDashboard.module.css";
@@ -206,9 +202,17 @@ export const CodexUsageDashboard: Component = () => {
 												}}
 											/>
 										</div>
-										<Show when={formatResetAfter(item.window.reset_after_seconds)}>
-											{(reset) => <span class={s.rateReset}>Resets in {reset()}</span>}
-										</Show>
+										<span class={s.rateReset}>
+											{formatQuotaWindow({
+												provider: "Codex",
+												plan: usage()?.plan_type ?? null,
+												window_seconds: item.window.limit_window_seconds,
+												window_name: item.label,
+												used_percent: item.window.used_percent,
+												resets_at:
+													item.window.reset_at == null ? null : new Date(item.window.reset_at * 1000).toISOString(),
+											})}
+										</span>
 									</div>
 								)}
 							</For>

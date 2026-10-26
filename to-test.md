@@ -1,3 +1,7 @@
+## Headless issue intake (2323-c294) — Rust restart required
+
+- [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. Include a missing allowlist entry alongside a valid one: the valid repository must continue polling and each missing entry must be logged. On an overlapping repository, assigned/created/mentioned/disabled client views must retain their filter while intake still receives all issues. This peer did not restart the daily app; Rust changes do not hot-reload.
+
 ## Development backend staleness (2332-3eef) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
@@ -2980,3 +2984,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] [HUMAN] #2336-da0a: Log in through the isolated instance's GitHub device flow, configure an unreachable remote, and verify authenticated local sidebar PR/issue data and recovery after an instance-only network interruption. No daily credentials were read or copied; the daily app was not restarted.
 
 - [x] Rebuilt `tuic-remote`: `python3 scripts/test-headless-github.py /absolute/path/to/tuic-remote` verifies isolated Unix-socket GitHub monitoring (#2345-49f0). _(verified: empty paths and a scratch no-remote repository start, return status/data, stop and restart; no authenticated GitHub fetch is claimed. The running desktop backend needs a manual restart to load Rust changes.)_
+
+- [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
