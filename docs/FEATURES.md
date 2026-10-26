@@ -1091,9 +1091,9 @@ one configured ego binary and speaks ACP to it, per
   or prompts; model/mode controls show pending values until options arrive.
   The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
-- Transcript text and tool output are selectable. User and assistant messages,
-  tool outputs and code blocks have copy actions using the terminal clipboard
-  adapter. Web links open externally; after backend resolution, file paths use
+- Transcript text and tool output are selectable. User and assistant messages
+  and tool outputs have copy actions using the terminal clipboard adapter.
+  Message Copy includes fenced code without a separate code-block button. Web links open externally; after backend resolution, file paths use
   the terminal file opener and directory paths open the file browser, including
   from a detached chat. Transcript focus gives `Cmd/Ctrl+A` (select this
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)

@@ -700,7 +700,7 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
 		expect(mockOpenFile).not.toHaveBeenCalled();
 	});
-	it("copies the raw user message, assistant answer, and fenced code", async () => {
+	it("copies whole messages including fenced code without redundant code-only actions", async () => {
 		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "Question <one>" });
@@ -717,7 +717,8 @@ describe("AIChatPanel: transcript actions", () => {
 		await settle();
 		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Question <one>");
 		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Answer **two**\n\n```sh\necho three\n```");
-		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("echo three");
+		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).not.toContain("echo three");
+		expect(container.querySelector("button[data-copy-code]")).toBeNull();
 	});
 
 	it("opens web links externally and file links through the terminal file opener", async () => {
