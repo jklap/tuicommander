@@ -140,9 +140,19 @@ pub(crate) fn detect() -> TailscaleState {
     }
 }
 
+/// Build every Tailscale invocation through the same process boundary.
+fn cli_command(binary: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(binary);
+    // The macOS app executable also serves as the CLI when this mode is explicit.
+    if binary.ends_with("Tailscale.app/Contents/MacOS/Tailscale") {
+        command.env("TAILSCALE_BE_CLI", "1");
+    }
+    command
+}
+
 /// Detection and peer advice use the same CLI and status source.
 fn status_command() -> Option<std::process::Command> {
-    let mut command = std::process::Command::new(find_binary()?);
+    let mut command = cli_command(&find_binary()?);
     command.args(["status", "--json"]);
     Some(command)
 }
@@ -204,7 +214,7 @@ fn is_valid_fqdn(name: &str) -> bool {
 /// Returns (cert_pem, key_pem) as byte vectors.
 /// Uses platform-specific transport:
 /// - Unix: HTTP over Unix socket at /var/run/tailscale/tailscaled.sock
-/// - Windows: `tailscale cert` CLI (writes to temp files, reads back)
+/// - Windows/macOS: `tailscale cert` CLI (PEM read from stdout)
 pub(crate) async fn provision_cert(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     #[cfg(unix)]
     {
@@ -270,61 +280,39 @@ async fn provision_cert_unix(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 /// where the tailscaled socket is not present.
 async fn provision_cert_cli(fqdn: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let binary = find_binary().ok_or_else(|| anyhow::anyhow!("Tailscale binary not found"))?;
-    run_cert_cli(&binary, &std::env::temp_dir(), fqdn).await
-}
 
-/// Run `tailscale cert` into a fresh private directory under `base` and read
-/// the cert and key back. The private key passes through that directory, so
-/// it is never a predictable shared path (`temp_dir()/tuicommander-certs`
-/// was `/tmp/tuicommander-certs` wherever `TMPDIR` is unset, which another
-/// local user could pre-create to read or replace the key): a random name,
-/// mode 0700, removed when this returns — on the error paths too.
-async fn run_cert_cli(
-    binary: &std::path::Path,
-    base: &std::path::Path,
-    fqdn: &str,
-) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    let dir = crate::private_scratch::private_tempdir_in(base, "tuicommander-certs-")?;
-    let cert_path = dir.path().join("cert.pem");
-    let key_path = dir.path().join("key.pem");
-
-    let cert_path_str = cert_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("cert path is not valid UTF-8: {cert_path:?}"))?;
-    let key_path_str = key_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("key path is not valid UTF-8: {key_path:?}"))?;
-
-    let output = tokio::process::Command::new(binary)
-        .args([
-            "cert",
-            "--cert-file",
-            cert_path_str,
-            "--key-file",
-            key_path_str,
-            fqdn,
-        ])
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("tailscale cert failed: {stderr}");
-    }
-
-    let cert_pem = tokio::fs::read(&cert_path).await?;
-    let key_pem = tokio::fs::read(&key_path).await?;
-
-    let dir_path = dir.path().to_path_buf();
-    if let Err(e) = dir.close() {
-        tracing::warn!(
-            source = "tailscale",
-            dir = %dir_path.display(),
-            "Could not remove the private cert scratch dir: {e}"
-        );
-    }
+    // The signed macOS app CLI is sandboxed and cannot write into the
+    // caller's temp directory. Read PEM from stdout instead; no private key
+    // touches disk, and the same flags work with the standalone CLI.
+    let cert_pem = cert_cli_pem(&binary, fqdn, "--cert-file=-").await?;
+    let key_pem = cert_cli_pem(&binary, fqdn, "--key-file=-").await?;
 
     Ok((cert_pem, key_pem))
+}
+
+/// Request one PEM stream. Setting just one output flag suppresses the other
+/// file entirely (the CLI defaults to files only when both flags are unset).
+async fn cert_cli_pem(
+    binary: &std::path::Path,
+    fqdn: &str,
+    output_flag: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let output = tokio::process::Command::from(cert_command(binary, fqdn, output_flag))
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "tailscale cert failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output.stdout)
+}
+
+fn cert_command(binary: &std::path::Path, fqdn: &str, output_flag: &str) -> std::process::Command {
+    let mut command = cli_command(binary);
+    command.args(["cert", output_flag, fqdn]);
+    command
 }
 
 /// Background loop that re-provisions the TLS certificate every 24 hours.
@@ -413,6 +401,83 @@ mod tests {
         "Version": "1.94.1",
         "BackendState": "Stopped"
     }"#;
+
+    /// Catches the app-bundle fallback starting the GUI instead of the CLI.
+    #[test]
+    fn app_bundle_command_enables_cli_mode() {
+        for binary in [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/Users/test/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ] {
+            let command = cli_command(std::path::Path::new(binary));
+            assert_eq!(command.get_program(), std::ffi::OsStr::new(binary));
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find(|(key, _)| *key == "TAILSCALE_BE_CLI")
+                    .and_then(|(_, value)| value),
+                Some(std::ffi::OsStr::new("1")),
+                "bundle CLI mode missing for {binary}"
+            );
+        }
+    }
+
+    /// Catches a bundle workaround overriding standalone CLI environments.
+    #[test]
+    fn standalone_command_keeps_environment_unchanged() {
+        for binary in [
+            "/opt/homebrew/bin/tailscale",
+            "/usr/bin/tailscale",
+            r"C:\Program Files\Tailscale\tailscale.exe",
+            "/usr/local/bin/Tailscale",
+            "/Applications/Other.app/Contents/MacOS/Tailscale",
+        ] {
+            let command = cli_command(std::path::Path::new(binary));
+            assert_eq!(command.get_program(), std::ffi::OsStr::new(binary));
+            assert_eq!(command.get_envs().count(), 0, "override for {binary}");
+        }
+    }
+
+    /// Catches loss of CLI mode or arguments when cert/peer commands become async.
+    #[test]
+    fn async_command_preserves_bundle_cli_mode_and_arguments() {
+        let mut command = cli_command(std::path::Path::new(
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ));
+        command.args(["status", "--json"]);
+        let command = tokio::process::Command::from(command);
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            ["status", "--json"]
+        );
+        assert_eq!(
+            command
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "TAILSCALE_BE_CLI")
+                .and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
+
+    /// Catches file output returning to the sandboxed app CLI, which fails EPERM.
+    #[test]
+    fn cert_commands_read_one_pem_stream_without_file_writes() {
+        let binary = std::path::Path::new("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+        for output_flag in ["--cert-file=-", "--key-file=-"] {
+            let command = cert_command(binary, "host.ts.net", output_flag);
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                ["cert", output_flag, "host.ts.net"]
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == "TAILSCALE_BE_CLI"
+                        && value == Some(std::ffi::OsStr::new("1")))
+            );
+        }
+    }
 
     #[test]
     fn short_name_advice_uses_recorded_peer_not_local_tailnet_guess() {
@@ -579,95 +644,5 @@ mod tests {
         let response = b"garbage data without headers";
         let result = extract_http_body(response);
         assert!(result.is_err());
-    }
-
-    /// A fake `tailscale` that behaves like `tailscale cert --cert-file C
-    /// --key-file K <fqdn>`, records the mode of the directory it was told to
-    /// write into, then runs `tail` (shell) for its own exit.
-    #[cfg(unix)]
-    fn fake_tailscale(dir: &std::path::Path, record: &std::path::Path, tail: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.join("tailscale");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\n\
-                 [ \"$1\" = cert ] && [ \"$2\" = --cert-file ] && [ \"$4\" = --key-file ] || exit 64\n\
-                 ls -ld \"$(dirname \"$5\")\" | cut -c1-10 > '{record}'\n\
-                 dirname \"$5\" >> '{record}'\n\
-                 {tail}\n",
-                record = record.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        script
-    }
-
-    /// Everything directly under `base` whose name mentions the cert dir.
-    #[cfg(unix)]
-    fn cert_dirs_in(base: &std::path::Path) -> Vec<String> {
-        std::fs::read_dir(base)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name.starts_with("tuicommander-certs"))
-            .collect()
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cert_cli_uses_a_private_dir_and_removes_it() {
-        let bin = tempfile::tempdir().unwrap();
-        let base = tempfile::tempdir().unwrap();
-        // An attacker's pre-created predictable dir must be neither used nor removed.
-        let predictable = base.path().join("tuicommander-certs");
-        std::fs::create_dir(&predictable).unwrap();
-        let record = bin.path().join("record");
-        let fake = fake_tailscale(
-            bin.path(),
-            &record,
-            "printf CERT > \"$3\"; printf KEY > \"$5\"",
-        );
-
-        let (cert, key) = run_cert_cli(&fake, base.path(), "host.tail-abc.ts.net")
-            .await
-            .unwrap();
-        assert_eq!(cert, b"CERT");
-        assert_eq!(key, b"KEY");
-
-        let recorded = std::fs::read_to_string(&record).unwrap();
-        let mut lines = recorded.lines();
-        assert_eq!(lines.next(), Some("drwx------"), "{recorded}");
-        let used = PathBuf::from(lines.next().unwrap());
-        assert_ne!(used, predictable);
-        assert_eq!(used.parent(), Some(base.path()));
-        assert!(!used.exists(), "the private dir is removed after reading");
-        assert_eq!(std::fs::read_dir(&predictable).unwrap().count(), 0);
-        assert_eq!(cert_dirs_in(base.path()), vec!["tuicommander-certs"]);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cert_cli_removes_the_private_dir_when_tailscale_fails() {
-        let bin = tempfile::tempdir().unwrap();
-        let base = tempfile::tempdir().unwrap();
-        let record = bin.path().join("record");
-        // Writes the key, then fails: the key must not be left behind.
-        let failing = fake_tailscale(bin.path(), &record, "printf KEY > \"$5\"; exit 1");
-        assert!(
-            run_cert_cli(&failing, base.path(), "h.ts.net")
-                .await
-                .is_err()
-        );
-        assert!(cert_dirs_in(base.path()).is_empty());
-
-        // Exits 0 without writing anything: the read fails, the dir still goes.
-        let silent = fake_tailscale(bin.path(), &record, "exit 0");
-        assert!(
-            run_cert_cli(&silent, base.path(), "h.ts.net")
-                .await
-                .is_err()
-        );
-        assert!(cert_dirs_in(base.path()).is_empty());
     }
 }
