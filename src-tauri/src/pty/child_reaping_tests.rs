@@ -157,6 +157,9 @@ fn kill_teardown_returns_after_os_reaped_child() {
 
 /// Catches: EOF/close drops the child after try_wait(None), leaving a zombie
 /// when the real process exits later. Also prevents waiting under session locks.
+/// (On this tree the test-only `cleanup_session` does not kill; the production
+/// close path `close_pty_core` does, covered by
+/// `close_pty_core_actually_kills_a_process_that_ignores_everything_but_sigkill`.)
 #[test]
 fn session_removal_reaps_child_that_exits_after_first_poll() {
     for explicit_close in [false, true] {

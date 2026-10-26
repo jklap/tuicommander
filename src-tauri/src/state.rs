@@ -3472,16 +3472,13 @@ impl AppState {
         }
     }
 
-    /// Set a session's tab display name (`PUT /sessions/{id}/name`, or its
-    /// Tauri-command twin `set_session_name`). The single place both
-    /// transports' handlers call through, replacing the hand-duplicated
-    /// storage+guard logic that had drifted apart only in wrapper shape (not
-    /// substance) between `pty/commands.rs` and `mcp_http/session.rs`.
-    ///
-    /// Does NOT emit `session-renamed`: these renames start in the frontend
-    /// (see `AppEvent::SessionRenamed`'s doc comment), and emitting for them
-    /// would echo every name change straight back. Backend-originated renames
-    /// go through `rename_session_from_backend`, which does emit.
+    /// Store a session's tab display name and custom flag, with the
+    /// unchanged-value guard. Storage only: it never emits `session-renamed`
+    /// itself. Callers announce the change: the IPC/HTTP `set_session_name`
+    /// handlers (`PUT /sessions/{id}/name` and its Tauri-command twin) go
+    /// through `rename_session_from_frontend`, which emits only when this
+    /// reports a change; `clear_session_name_from_backend` and the OSC title
+    /// path (`osc_title::apply_osc_title`) announce their own changes too.
     ///
     /// Returns `false` when the session does not exist or nothing changed.
     pub(crate) fn set_session_display_name(
@@ -3527,6 +3524,20 @@ impl AppState {
             .map(|entry| entry.key().clone())
             .filter(|session_id| !self.is_session_visible(session_id))
             .collect()
+    }
+
+    /// Drop every `session_visibility` entry whose session no longer exists, returning how many
+    /// went. Session teardown reaps the entries of ids that WERE sessions, so an id that never
+    /// named one (a client sending a terminal-store id like "term-6") would otherwise stay for the
+    /// life of the process. `apply_session_visibility` no longer records such ids; this clears the
+    /// ones already there and anything else that slips through. Dead sessions' entries are
+    /// irrelevant to the standby sweep, which only walks live sessions.
+    pub(crate) fn prune_orphan_session_visibility(&self) -> usize {
+        let before = self.session_maps.session_visibility.len();
+        self.session_maps
+            .session_visibility
+            .retain(|session_id, _| self.session_maps.sessions.contains_key(session_id));
+        before.saturating_sub(self.session_maps.session_visibility.len())
     }
 
     /// Subscribe to lifecycle events for one PTY session. Subscription happens

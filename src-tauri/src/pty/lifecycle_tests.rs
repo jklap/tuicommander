@@ -6191,21 +6191,20 @@ impl Drop for StandbyJobPty {
 }
 
 // Catches: SIGSTOP hands the terminal to bash and wake SIGCONTs bash, stranding its child.
+// Standby stops the shell's group together with (and before) the job's, so the shell never
+// sees its child stop and cannot take the terminal back while the session is parked.
 #[cfg(unix)]
 #[test]
 fn standby_job_control_wake_keeps_child_runnable_and_foreground() {
     let fixture = StandbyJobPty::new();
     let stopped = standby_session(&fixture.state, "standby-job").unwrap();
     if stopped {
-        // Observe actual shell takeover before waking, rather than racing SIGCHLD.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while fixture.foreground() != fixture.shell {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "shell never reclaimed stopped job's terminal"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            fixture.foreground(),
+            fixture.job,
+            "the stopped shell reclaimed its stopped job's terminal"
+        );
     }
     wake_session(&fixture.state, "standby-job").unwrap();
     assert_eq!(
