@@ -3000,4 +3000,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
 
+- [ ] External PR integration (#129, #132, #139, #140, #144, #146): after landing and a manual Rust rebuild/restart when ready, check enterprise usage fallback, tunnel stop cleanup, non-origin default-branch safe removal, UI-requested merges with `merge.ff=only`, and named-instance IPC socket diagnostics. Targeted Linux regression evidence is recorded in the `tuic-prfix` result report; the daily backend was not restarted and does not hot-reload these changes.
 - [ ] After a manual backend restart, check automation profile repair: invalid saved profiles appear in the bell at desktop startup and after a profile rename/delete; repeated identical failures show a count and Fix opens the current profile picker. Rust changes do not hot-reload (#2360-f7ca).
