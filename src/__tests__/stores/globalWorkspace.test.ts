@@ -546,32 +546,24 @@ describe("globalWorkspaceStore", () => {
 			});
 		});
 
-		it("activate does not steal selection from a docked non-terminal active tab", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "T1" }));
-				store.promote(term);
-				store.setLayout({
-					root: { type: "leaf", id: "g20" },
-					groups: {
-						g20: {
-							id: "g20",
-							tabs: [
-								{ id: term, type: "terminal" },
-								{ id: "md-1", type: "markdown" },
-							],
-							activeTabId: "md-1",
-						},
-					},
-					activeGroupId: "g20",
-				});
-				terminalsStore.setActive(null);
-
-				store.activate();
-
-				expect(terminalsStore.state.activeId).toBeNull();
-				expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe("md-1");
-			});
-		});
+		it("activate restores the real diff selection after deactivation", async () => {
+            const { diffTabsStore } = await import("../../stores/diffTabs");
+            testInScope(() => {
+                const term = terminalsStore.add(makeTerminal({ name: "terminal" }));
+                const diff = diffTabsStore.add("/repo/manual", "file.rs", "M");
+                store.promote(term);
+                store.setLayout({ root: { type: "leaf", id: "g20" }, groups: {
+                    g20: { id: "g20", tabs: [{ id: term, type: "terminal" }, { id: diff, type: "diff" }], activeTabId: diff },
+                }, activeGroupId: "g20" });
+                store.activate();
+                store.deactivate();
+                terminalsStore.setActive(term);
+                store.activate();
+                expect(diffTabsStore.state.activeId).toBe(diff);
+                expect(terminalsStore.state.activeId).toBeNull();
+                expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe(diff);
+            });
+        });
 	});
 
 	describe("auto-deactivation restores repo layout", () => {

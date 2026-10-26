@@ -169,6 +169,13 @@ export function setOnTabAdded(hook: typeof onTabAdded): void {
  * none of them — putting the registry in any one store would make them cyclic.
  */
 const paneDeactivators = new Map<string, () => void>();
+// Restore a saved pane without importing desktop-only content stores into mobile.
+const paneTabActivators = new Map<string, (id: string) => boolean>();
+
+export function activateRegisteredPaneTab(storeName: string, id: string): boolean {
+    return paneTabActivators.get(storeName)?.(id) ?? false;
+}
+
 
 /** Register a store that owns a pane, so activating another pane can deactivate it. */
 export function registerPaneDeactivator(storeName: string, deactivate: () => void): void {
@@ -196,6 +203,13 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 	});
 
 	registerPaneDeactivator(storeName, () => setState("activeId", null));
+    paneTabActivators.set(storeName, (id) => {
+        if (!state.tabs[id]) return false;
+        setState("activeId", id);
+        activatePaneExclusively(storeName);
+        return true;
+    });
+
 
 	return {
 		state,

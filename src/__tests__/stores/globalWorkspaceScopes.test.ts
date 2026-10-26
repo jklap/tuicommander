@@ -129,35 +129,25 @@ describe("globalWorkspaceStore scopes", () => {
 		});
 	});
 
-	it("setScope does not steal selection from a docked non-terminal active tab", () => {
-		testInScope(() => {
-			const manual = terminalsStore.add(makeTerminal({ name: "manual" }));
-			store.promote(manual);
-			store.setLayout({
-				root: { type: "leaf", id: "g30" },
-				groups: {
-					g30: {
-						id: "g30",
-						tabs: [
-							{ id: manual, type: "terminal" },
-							{ id: "md-1", type: "markdown" },
-						],
-						activeTabId: "md-1",
-					},
-				},
-				activeGroupId: "g30",
-			});
-			const repoTerm = terminalsStore.add(makeTerminal({ name: "wt-1" }));
-			store.syncScopeMembers("/repo/a", [repoTerm]);
-			store.setScope("/repo/a");
-			store.activate();
-
-			terminalsStore.setActive(null);
-			store.setScope("__manual__");
-
-			expect(terminalsStore.state.activeId).toBeNull();
-		});
-	});
+	it("restores the real diff selection after a terminal scope round trip", async () => {
+        const { diffTabsStore } = await import("../../stores/diffTabs");
+        testInScope(() => {
+            const manual = terminalsStore.add(makeTerminal({ name: "manual" }));
+            const diff = diffTabsStore.add("/repo/manual", "file.rs", "M");
+            store.promote(manual);
+            store.setLayout({ root: { type: "leaf", id: "g30" }, groups: {
+                g30: { id: "g30", tabs: [{ id: manual, type: "terminal" }, { id: diff, type: "diff" }], activeTabId: diff },
+            }, activeGroupId: "g30" });
+            const repoTerm = terminalsStore.add(makeTerminal({ name: "repo" }));
+            store.syncScopeMembers("/repo/a", [repoTerm]);
+            store.activate();
+            store.setScope("/repo/a");
+            expect(terminalsStore.state.activeId).toBe(repoTerm);
+            store.setScope("__manual__");
+            expect(diffTabsStore.state.activeId).toBe(diff);
+            expect(terminalsStore.state.activeId).toBeNull();
+        });
+    });
 
 	it("forgets a closed terminal in whichever scope holds it", () => {
 		testInScope(() => {

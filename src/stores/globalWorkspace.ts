@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { allLeafIds, type PaneGroup, type PaneLayoutState, paneLayoutStore, removeLeaf } from "./paneLayout";
 import { savedPaneLayouts } from "./savedPaneLayouts";
 import { terminalsStore } from "./terminals";
+import { activateRegisteredPaneTab } from "./tabManager";
 
 /** Scope key for the hand-promoted workspace — the one this store has always
  *  had. Repo paths are the other keys (#e767). */
@@ -100,8 +101,8 @@ function removeTerminalFromLayout(current: PaneLayoutState, termId: string): Pan
 /**
  * Point terminalsStore.activeId at the terminal a workspace layout shows, after
  * the layout was pushed live. A docked NON-terminal active tab (markdown/diff/
- * editor dragged into a workspace pane) owns the selection, so it is left alone:
- * setActive() on a terminal would deactivate that pane (activatePaneExclusively).
+ * editor in a workspace pane) owns the selection and must be reactivated in its
+ * real store. Selecting a terminal would deactivate that pane.
  * Otherwise the active tab if it is a promoted terminal, else the first member.
  */
 function reconcileTerminalFocus(layout: PaneLayoutState | null, members: Set<string>): void {
@@ -109,7 +110,7 @@ function reconcileTerminalFocus(layout: PaneLayoutState | null, members: Set<str
 	const activeTab = activeGroup?.activeTabId;
 	if (activeTab && !members.has(activeTab)) {
 		const entry = activeGroup?.tabs.find((t) => t.id === activeTab);
-		if (entry && entry.type !== "terminal") return;
+		if (entry && entry.type !== "terminal" && activateRegisteredPaneTab(entry.type, entry.id)) return;
 	}
 	const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
 	if (target) terminalsStore.setActive(target);
