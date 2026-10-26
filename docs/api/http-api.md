@@ -1207,7 +1207,7 @@ normal server authentication; the local Unix socket remains trusted local IPC.
 | POST | `/repo/github-poller/set-issue-filter` | `{ "filter": "all" }` |
 | GET / POST | `/repo/github-poller/api-debug` | POST: `{ "enabled": false }` |
 
-Start cold-starts the poller without a WebView. Control delivery returns
+Start cold-starts the poller without a WebView. An automation executor also starts polling its registered issue-intake allowlist without a client. Client path/filter changes do not replace this subscription; stop releases only client paths while intake is enabled. Intake paths use issue filter `all`, while other paths retain the client filter. Control delivery returns
 `{"ok":true}` or an error when no poller accepts the command. API-debug reads
 return `{"enabled":false}` (or true); writes also return `ok`. Repository status
 is read through `/repo/github?path=...`; there is no separate poller-status route.
@@ -1777,7 +1777,7 @@ Returns status and metrics for all upstream MCP servers (connecting, ready, circ
 GET /mcp/instructions
 ```
 
-Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
+Returns server guidance for the MCP bridge binary as `{"instructions": "..."}`. It uses the same producer as MCP initialize, without live terminal or peer inventory. Configuration and capability changes can change the guidance; use `session action=list` and `agent action=list_peers` for current inventory.
 
 ## Filesystem Endpoints
 
@@ -3142,7 +3142,8 @@ extraction errors.
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
 | `run_now` | `id` | Full persisted run, including status and reason |
-| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0) | Newest-first run snapshots, including deleted definitions |
+| `profiles` | None | Saved run profile names for the addressed backend, sorted by name |
+| `list_runs` | Optional `id`, `limit` (default 50, 1–100), `offset` (default 0), `group_failures` (default false) | Newest-first run snapshots, including deleted definitions. Grouping collapses failures with the same definition, repository, profile and reason before pagination; returns the newest representative plus `failure_count`. Other states remain separate. Individual ledger records and summaries do not change. |
 | `worktree_preview` | Saved run `id` | `{automation_id,run_id,repository,workspace,workspace_id,can_remove,reason,safety}` |
 | `cleanup_worktree` | Saved run `id` | `{removed:true,run_id,branch_delete_warning}`; unsafe workspaces return an error |
 | `summary` | `window`: `24h` or `7d` | `{total,by_status}` over elapsed UTC windows |
@@ -3614,11 +3615,15 @@ DTO. `GET /github/diagnostics` remains read-only. This maps to
 ### Session usage
 
 `GET /sessions/{id}/usage` mirrors `get_session_usage(session_id)`. It returns
-`{agent, model, scope, source, availability, reason, observed_at_ms, stale, lines}`.
-Each line has `label` and `value`; the backend owns units and formatting.
+`{agent, model, scope, source, availability, reason, observed_at_ms, stale, lines, quota_windows}`.
+Each non-quota line has `label` and `value`; Rust owns token and cost semantics.
+Each quota window has `provider`, nullable `plan`, nullable `window_seconds`,
+`window_name`, `used_percent`, and nullable `resets_at` (an ISO instant).
+The shared desktop/mobile presenter owns quota wording and converts reset and
+report instants to the viewing client’s local short date and time.
 Availability is `available` or `unavailable`; unknown identity/timestamp fields
 are null, not inferred from defaults. Scope is `account_quota` or `session_usage`.
-Claude/Codex lines describe shared account windows, not session spend. ego v3
+Claude/Codex quota windows describe shared account windows, not session spend. ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
 settlement. Remote sessions are forwarded to their owning daemon or are unavailable.

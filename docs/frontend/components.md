@@ -934,14 +934,18 @@ FileBrowserPanel and TreeNode render the backend link target and target kind wit
 
 `SessionUsageBlock` is mounted inside the session overflow. It loads
 `get_session_usage` on mount/session change, invalidates pending responses on
-cleanup, and renders backend-owned lines without usage computation. It has
-explicit loading, unavailable, unknown-model and stale presentation.
+cleanup, and renders backend-owned token/cost lines without usage computation.
+Quota fields use `sessionUsageFormatting`, also used by desktop Claude/Codex cards.
+The shared presenter owns provider/plan/window words and client-local short times.
+The block shows model metadata only when available and keeps explicit loading,
+unavailable and stale presentation. The overflow height is bounded by its session
+pane rather than the viewport, and its sections do not flex-shrink.
 
 Sidebar worktree diagnostics render recorded paths and repair guidance without buttons, tab focus or branch-selection handlers. The repository header retains a diagnostic count while folded. These transient inventory rows are separate from branch workspaces and are not saved in repository configuration.
 
 ### StoryNotes (native story detail)
 
-`StoryNotes` renders the selected story's append-only notes and workflow receipt references. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.
+`StoryNotes` renders the selected story's append-only notes and workflow receipt references. Its local Suspense boundary keeps pending notes from removing the parent dialog through the inline or detached host's lazy-loading boundary. Plan, story and filter selections update the visible dialog in place. `StoriesDialog` mounts it with a project/story key, so changing selection cannot carry a draft or a late append response into another story. It calls the shared story service for `list_notes` and `add_note`; the backend owns validation, author/time/revision provenance, receipt ownership and append order. A failed append keeps the exact draft. A confirmed append clears it and reloads persisted notes. **Refresh notes** loads additions from MCP or another window; there is no polling or alternate state store.
 
 Stories dialog actions use the shared Button geometry. Plan, story and run list rows and Kanban cards retain native layout buttons with explicit row/card markers.
 

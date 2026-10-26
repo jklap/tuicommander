@@ -115,6 +115,8 @@ async fn batch_poll_never_selects_projects_fields() {
                     drafts,
                     &mut prs,
                     &mut issues,
+                    false,
+                    &mut std::collections::HashMap::new(),
                 )
                 .await
                 .unwrap();
@@ -169,6 +171,14 @@ impl PollHttpFixture {
                         "2026-10-25T00:00:{:02}Z",
                         sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     ));
+                    if request["query"].as_str().unwrap().contains("intakeIssues:") {
+                        // Query-aware simulator: all intake issues remain available;
+                        // the recorded issue has neither the viewer author nor an assignee.
+                        healthy["intakeIssues"] = healthy["issues"].clone();
+                        if request["query"].as_str().unwrap().contains("filterBy:") {
+                            healthy["issues"]["nodes"] = serde_json::json!([]);
+                        }
+                    }
                     response["data"]
                         .as_object_mut()
                         .unwrap()

@@ -124,8 +124,9 @@
 
 /* Repo filter icon — loud accent state when "active only" is engaged so it is
    obvious repos are being filtered. */
-.filterToggleActive,
-.filterToggleActive:hover {
+/* Outrank shared ghost styles, including hover, regardless of chunk order. */
+button.filterToggle.filterToggleActive,
+button.filterToggle.filterToggleActive:hover {
   background: var(--accent);
   color: var(--text-on-accent);
 }

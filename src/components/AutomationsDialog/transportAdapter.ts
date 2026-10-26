@@ -21,6 +21,7 @@ export function createAutomationAdapter(connectionId?: string): AutomationAdapte
 			: invoke<T>("automation_action", { input });
 	}
 	return {
+		profiles: () => call<string[]>({ action: "profiles" }),
 		templates: () => call<AutomationTemplate[]>({ action: "templates" }),
 		template: (template_id, repository, run_config, timezone) =>
 			call<AutomationDefinition>({
@@ -36,7 +37,14 @@ export function createAutomationAdapter(connectionId?: string): AutomationAdapte
 		setEnabled: (id, enabled) => call<void>({ action: enabled ? "resume" : "pause", id }),
 		remove: (id) => call<void>({ action: "delete", id }),
 		runNow: (id) => call<RunReceipt>({ action: "run_now", id }),
-		history: (id, offset = 0, limit = 50) => call<AutomationRun[]>({ action: "list_runs", id, limit, offset }),
+		history: (id, offset = 0, limit = 50, groupFailures = false) =>
+			call<AutomationRun[]>({
+				action: "list_runs",
+				id,
+				limit,
+				offset,
+				...(groupFailures ? { group_failures: true } : {}),
+			}),
 		summary: (window) => call<RunSummary>({ action: "summary", window }),
 		preview: (cron, timezone) =>
 			call<SchedulePreview>({ action: "preview", cron, timezone: timezone || null, count: 4 }),

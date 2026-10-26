@@ -9,9 +9,9 @@ const script = new URL("./github-work-desktop-e2e.mjs", import.meta.url);
 test("registered-provider E2E rejects unsafe sockets and missing consent before desktop access", () => {
 	for (const args of [
 		["/tmp/tuic-mcp.sock", "sstraus", "1", "2", "--isolated-desktop"],
-		[`${homedir()}/Gits/.tmp/tuic-at/../tuic-mcp.sock`, "sstraus", "1", "2", "--isolated-desktop"],
-		[`${homedir()}/Gits/.tmp/tuic-at/scope/app.sock`, "sstraus", "1", "2"],
-		[`${homedir()}/Gits/.tmp/tuic-at/scope/app.sock`, "sstraus", "0", "2", "--isolated-desktop"],
+		[`${homedir()}/Gits/.tuic/tuic-at/../tuic-mcp.sock`, "sstraus", "1", "2", "--isolated-desktop"],
+		[`${homedir()}/Gits/.tuic/tuic-at/scope/app.sock`, "sstraus", "1", "2"],
+		[`${homedir()}/Gits/.tuic/tuic-at/scope/app.sock`, "sstraus", "0", "2", "--isolated-desktop"],
 	]) {
 		const result = spawnSync(process.execPath, [script.pathname, ...args], { encoding: "utf8", timeout: 2000 });
 		assert.equal(result.status, 2);

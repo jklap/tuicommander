@@ -242,8 +242,9 @@ Measured result:
 | Mobile `mobile.html` | 610,692 bytes | 67,417 bytes | 89.0% |
 
 The build now fails if an optional editor, diff, Markdown/Mermaid, or compose
-asset returns to either initial entry graph. It also enforces 500 KiB and 100
-KiB gzip budgets for the desktop and mobile entrypoints respectively. The
+asset returns to either initial entry graph. It also enforces 500 KiB and 150
+KiB gzip budgets for the desktop and mobile entrypoints respectively, and prints
+a `WARNING` (without failing) once an entry reaches 98% of its budget. The
 reporting and checks live in `scripts/report-frontend-bundles.mjs`.
 
 Validation performed for work unit 1:

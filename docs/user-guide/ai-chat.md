@@ -138,8 +138,10 @@ wakes an idle ego with a short notice.
 
 Select text in user messages, answers, code blocks, and tool output and use
 `Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
-keyboard focus. It copies the raw message text. Code blocks have their own
-Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
+keyboard focus. It copies the whole raw message, including fenced code, through
+the same clipboard adapter as the terminal. Answers have no separate code-block
+Copy button. The compact Copy and **Fork from here** row stays below its answer
+and does not overlap the next message. Web links open in the
 system browser; file links and plain source paths are resolved by the backend.
 Files open in TUICommander's viewer or editor, while directories open in the
 file browser, including when AI Chat is detached.

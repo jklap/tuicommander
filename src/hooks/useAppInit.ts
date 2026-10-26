@@ -3,7 +3,7 @@ import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompl
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
 import { listenForWorkItemMcpRequests } from "../plugins/workItemMcpBridge";
-import { presentAutomationNotice } from "../services/automationNotifications";
+import { presentAutomationNotice, startAutomationProfileNotices } from "../services/automationNotifications";
 import { persistBackgroundSnapshot } from "../services/backgroundSnapshot";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
@@ -430,6 +430,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	const { mcpPopupStore } = await import("../stores/mcpPopup");
 	for (const start of [
+		startAutomationProfileNotices,
 		() => mcpPopupStore.startRemoteSync(),
 		() => promptLibraryStore.startRemoteSync(),
 		() => repoSettingsStore.startRemoteSync(),
