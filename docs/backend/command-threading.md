@@ -374,6 +374,8 @@ normalized snapshot are shared with `GET /sessions/{id}/usage`. Provider/CLI
 I/O is bounded and never runs through a synchronous Tauri command on the
 macOS main thread.
 
+`get_ego_usage` is async. It shares the live-terminal source and bounded report reader with session usage; no process wait runs on the macOS UI thread.
+
 ## Sleep assertion refresh (2402-12a0)
 
 `block_sleep` and `unblock_sleep` are async compatibility entry points into the

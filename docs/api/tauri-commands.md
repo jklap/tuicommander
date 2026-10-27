@@ -1119,3 +1119,8 @@ Unavailable detached registrations are excluded from automatic orphan cleanup in
 ### Append-only story notes
 
 `add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.
+
+
+### Ego terminal usage
+
+`get_ego_usage({ sessionId })` returns `{ text: string | null, tooltip?: string }` from the live ego terminal's exact pid/lease binding. The backend shares session usage's live-terminal executable resolution and calls that binary with `usage --json --session-dir <bound store> -C <manifest workspace>`, accepts report v3 or v4 and selects only that session. V4 adds observed context capacity and typed remaining limits; current-key balances remain distinct from session observations. The optional tooltip carries limit timestamps, sources, and reported resets. Missing data returns null; command failures return an error. Async: no child work runs on the macOS main thread. HTTP parity: `GET /ego/usage?sessionId=<id>`.
