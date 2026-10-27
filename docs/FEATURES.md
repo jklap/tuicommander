@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).
+
 - Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
 
 - The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
@@ -20,6 +22,7 @@ Native story API and CLI lists support combined state, priority and type filters
 
 - AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
 
+- AI Chat automatically compacts an exhausted ego context through the advertised extension, opens the continuation and replays the original prompt once. Failures and a second overflow stop recovery (#2392-b2e3).
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
 
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
@@ -244,7 +247,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
-- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
+- Desktop session Chat and AI Chat share a 14px default reading scale and the terminal zoom delta; AI Chat follows the active terminal. Active and all-terminal zoom actions update both Chat views; mobile keeps its device-local reading preference
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`
@@ -3427,3 +3430,13 @@ Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 
 Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. Story detail lists notes with author/time/revision provenance and receipt IDs, provides an append-only add field, and has an explicit Refresh notes control for external additions. Drafts and pending replies stay scoped to the selected story.
+
+
+## AI Chat slash commands
+
+A leading `/` opens the selected conversation's ACP command offer with descriptions,
+input hints, prefix filtering and keyboard/mouse completion. Agent invocations keep
+`/<name> <arguments>` prompt text. Supported host actions (`/new`, `/clear`, `/quit`
+with `/q`, `/usage`, and advertised `/compact`, `/fork`, `/pause`, `/resume`) use the
+existing controls, not model prompts. Unknown or unsupported commands retain the
+draft and show an inline list of available commands (#2393-19fc).

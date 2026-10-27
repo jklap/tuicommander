@@ -155,6 +155,14 @@ describe("ComposePanel", () => {
 		expect(props.onSend).toHaveBeenCalledWith("候補");
 	});
 
+	// Catches: the visible legend still advertising Ctrl+Enter to send.
+	it("shows the current send, newline, and queue shortcuts in the visible legend", () => {
+		const { getByText } = renderPanel();
+		expect(getByText("send").textContent).toBe("↵ send");
+		expect(getByText("newline").textContent).toBe("ctrl ↵ / ⇧ ↵ newline");
+		expect(getByText("queue").textContent).toBe("⇧ ctrl ↵ queue");
+	});
+
 	// Catches: the send control still advertising the old shortcut.
 	it("labels the send control with Enter", () => {
 		const { getByRole } = renderPanel();

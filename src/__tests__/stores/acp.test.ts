@@ -14,6 +14,7 @@ import type {
 	AcpRequestPermissionRequest,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import recordedCommands from "../fixtures/ego-available-commands-2393.json";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -446,4 +447,50 @@ describe("acpStore: frames for a connection it does not know", () => {
 		expect(acpStore.connection(CONNECTION)).toBeNull();
 		expect(acpStore.cursor(CONNECTION)).toBe(0);
 	});
+});
+
+describe("acpStore: ACP slash commands", () => {
+	it("replaces the command offer only for its owner — catches dropped offers and stale commands after revocation", () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: "sibling" })] }));
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "sessionUpdate", update: recordedCommands }, SESSION));
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual(recordedCommands.availableCommands);
+		expect(acpStore.attachment(CONNECTION, "sibling")?.availableCommands ?? []).toEqual([]);
+		acpStore.applyFrame(
+			CONNECTION,
+			frame(
+				3,
+				{ kind: "sessionUpdate", update: { sessionUpdate: "available_commands_update", availableCommands: [] } },
+				SESSION,
+			),
+		);
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual([]);
+	});
+	it("recovers command offers from snapshots — catches late subscribers losing the current menu", () => {
+		acpStore.applySnapshot(
+			snapshot({ attachments: [attachment({ availableCommands: recordedCommands.availableCommands })] }),
+		);
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual(recordedCommands.availableCommands);
+	});
+});
+
+// Catches: v1 failure loses turn identity after activeTurn is cleared, or a replay overwrites a newer completion.
+it("retains the latest completion identity without accepting a replayed older failure", () => {
+	acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+	acpStore.applyFrame(CONNECTION, { ...frame(1, { kind: "turnStarted" }, SESSION), turnId: "turn-1" });
+	const failure = {
+		...frame(2, { kind: "turnFailed", message: "overflow", state: "idle" }, SESSION),
+		turnId: "turn-1",
+	};
+	acpStore.applyFrame(CONNECTION, failure);
+	expect(acpStore.attachment(CONNECTION, SESSION)?.activeTurn).toBeNull();
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toEqual({ turnId: "turn-1", event: failure.event });
+	const settled = {
+		...frame(4, { kind: "turnSettled", stopReason: "end_turn", usage: null }, SESSION),
+		turnId: "turn-2",
+	};
+	acpStore.applyFrame(CONNECTION, settled);
+	acpStore.applyFrame(CONNECTION, failure);
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toEqual({ turnId: "turn-2", event: settled.event });
+	acpStore.applySnapshot(snapshot());
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toBeNull();
 });

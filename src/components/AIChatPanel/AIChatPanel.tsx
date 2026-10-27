@@ -4,6 +4,7 @@ import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
+import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
@@ -244,6 +245,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 
 			<Transcript
+				fontSize={terminalsStore.getActive()?.fontSize}
 				onSearchRef={(ref) => {
 					transcriptSearch = ref;
 				}}
@@ -304,20 +306,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 			<Show when={sessionSettingsOpen()}>
 				<SessionSettingsDialog chat={chat} onClose={() => setSessionSettingsOpen(false)} />
-			</Show>
-			<Show when={chat.usage()}>
-				{(usage) => (
-					<div class={s.usageFooter}>
-						<span>Context {Math.round((usage().used / usage().size) * 100)}%</span>
-						<Show when={usage().cost}>
-							{(cost) => (
-								<span>
-									{cost().currency} {cost().amount}
-								</span>
-							)}
-						</Show>
-					</div>
-				)}
 			</Show>
 		</div>
 	);

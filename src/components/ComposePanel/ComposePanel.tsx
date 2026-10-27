@@ -337,7 +337,10 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				    literal Control on every platform: CodeMirror's "Ctrl-" is not "Mod-". */}
 				<div class={s.hints}>
 					<span class={s.hint}>
-						<kbd>ctrl ↵</kbd> send
+						<kbd>↵</kbd> send
+					</span>
+					<span class={s.hint}>
+						<kbd>ctrl ↵ / ⇧ ↵</kbd> newline
 					</span>
 					<Show when={props.canEnqueue()}>
 						<span class={s.hint}>

@@ -162,6 +162,8 @@ export interface AcpAttachmentSnapshot {
 	cwd: string;
 	additionalDirectories: string[];
 	configOptions: AcpSessionConfigOption[];
+	/** Latest complete ACP command offer, retained across snapshot refreshes. */
+	availableCommands?: AcpAvailableCommand[];
 	/** Authoritative ego clamp notices returned when a repo selects a profile. */
 	profileWarnings?: string[];
 	usage: AcpUsageSnapshot | null;
@@ -193,6 +195,12 @@ export interface AcpConnectionSnapshot {
 // ---------------------------------------------------------------------------
 // Session configuration
 // ---------------------------------------------------------------------------
+
+export interface AcpAvailableCommand {
+	name: string;
+	description: string;
+	input?: { hint: string } | null;
+}
 
 export interface AcpSessionConfigSelectOption {
 	value: string;
@@ -338,6 +346,7 @@ export type AcpSessionUpdate =
 	| { sessionUpdate: "tool_call"; [key: string]: unknown }
 	| { sessionUpdate: "tool_call_update"; [key: string]: unknown }
 	| { sessionUpdate: "plan"; [key: string]: unknown }
+	| { sessionUpdate: "available_commands_update"; availableCommands: AcpAvailableCommand[] }
 	| { sessionUpdate: "config_option_update"; [key: string]: unknown }
 	| { sessionUpdate: "usage_update"; used: number; size: number; [key: string]: unknown }
 	| { sessionUpdate: string; [key: string]: unknown };

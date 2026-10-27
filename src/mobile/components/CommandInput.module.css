@@ -20,7 +20,7 @@
   background: var(--bg-tertiary);
 }
 
-.composer:focus-within {
+.composer:has(.input:focus) {
   border-color: var(--accent);
 }
 
@@ -76,6 +76,11 @@
 .dictate[aria-pressed="true"],
 .dictate[data-failed="true"] {
   color: var(--error);
+}
+
+/* Recording is indicated by the red icon, not a second focus border. */
+.dictate[aria-pressed="true"]:not(:focus-visible) {
+  border-color: transparent;
 }
 
 .dictationFailure {

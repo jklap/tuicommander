@@ -1,6 +1,12 @@
 ## Compose Enter shortcuts (2395-ed27)
 
 - [x] Enter sends; Ctrl+Enter and Shift+Enter insert a newline; Shift+Ctrl+Enter queues. IME composition confirmation keeps the draft without sending. Verified by the focused ComposePanel component tests, including browser-style composition events and a DOM edit; physical IME hardware was not exercised. Desktop Chat draft cleanup consumers also pass. Mobile production uses its separate CommandInput and native keybar, unchanged by this feature.
+## Mobile composer focus (2398-1de9)
+
+- [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
+## Shared Chat typography and zoom (2396-66e2)
+
+- [ ] Coordinator visual check after unlocking the screen: compare session Chat and AI Chat at default terminal zoom, after zoom in/out and after reset. Both should use AI Chat's original 14px default reading scale, line height, weight and colors. AI Chat follows the active terminal when tabs change. Check body prose, bold text, inline code and tool text; mobile must retain its own Chat font preference. The implementer did not capture screenshots because the required browser wrapper failed while the screen was locked.
 
 ## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
 
@@ -3031,3 +3037,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next backend rebuild/restart, check that MCP automations discovery includes `profiles: saved profile names` (#2370-bf4a).
 
 - [ ] After the next manual Rust rebuild/restart, verify Windows worktree cleanup uses its selected Git installation launcher and a forty-worktree MCP listing remains responsive while fresh dirty fingerprints change (#2310-6e76). The daily backend was not restarted; Rust changes do not hot-reload.
+
+
+- [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).

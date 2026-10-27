@@ -264,15 +264,18 @@
 .buttonGroup > .button:not(:first-child) { border-inline-start: 1px solid var(--border); }
 .buttonGroup > .button:focus-visible { position: relative; z-index: 1; }
 
-.textareaAutoGrow {
+.textareaCompact {
  min-height: var(--control-height, 36px);
- max-height: calc(var(--control-height, 36px) * 3);
  padding-block: calc(var(--control-padding-x, 8px) / 2);
+}
+.textareaAutoGrow {
+ max-height: calc(var(--control-height, 36px) * 3);
  resize: none;
  overflow-y: auto;
 }
 @media (max-width: 600px) {
- .textareaAutoGrow { min-height: max(44px, var(--control-height, 36px)); max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
+ .textareaCompact { min-height: max(44px, var(--control-height, 36px)); }
+ .textareaAutoGrow { max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
 }
 
 /* Validation changes the border, not the keyboard focus ring. */
