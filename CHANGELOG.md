@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Make the desktop AI Chat model, reasoning and mode summary open Session settings, and keep its menu action visible with an explanation while options are unavailable (#2385-1694).
+
 - Allow remote terminal WebSocket streams over SSH and Direct HTTP(S) connections in the macOS desktop CSP, fixing blank terminals with “The operation is insecure” (#147, #2382-97aa).
 
 - Make private secret-form SSO HTTP(S) links selectable, clickable and copyable with the same browser and copy controls as phone links; keep other display values as plain text (#2381-1c72).
