@@ -2964,25 +2964,30 @@ mod tests {
     }
 
     #[test]
-    fn test_get_merged_branches_skips_a_branch_it_cannot_classify() {
+    fn test_get_merged_branches_classifies_a_branch_whose_reflog_is_gone() {
         let (_dir, repo_root) = history_fixture_repo(3);
         git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
         git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
-        // A branch whose reflog is gone cannot have its creation proven, which
-        // makes the classifier error. One such branch must not fail the whole call.
+        // A branch whose reflog is gone no longer errors the classifier (its
+        // creation is simply unproven, so ancestry decides). One such branch must
+        // neither fail the whole call nor be dropped from the result.
+        // DEFERRED (2026-10-27) — the classifier's error path (a branch the
+        // snapshot must skip) has no test now: a missing or garbled reflog no
+        // longer reaches it, and no cheap fixture does. Add one if a real way to
+        // make `inspect_workspace_lifecycle` return an error is found.
         let reflog = repo_root.join(".git/logs/refs/heads/no-reflog");
         std::fs::remove_file(&reflog).expect("remove the branch's reflog");
 
         let merged = get_merged_branches_impl(&repo_root)
-            .expect("an unclassifiable branch must not fail the snapshot");
+            .expect("a reflog-less branch must not fail the snapshot");
 
         assert!(
             merged.contains(&"merged-feature".to_string()),
             "other branches are still classified, got: {merged:?}"
         );
         assert!(
-            !merged.contains(&"no-reflog".to_string()),
-            "the unclassifiable branch is not reported merged, got: {merged:?}"
+            merged.contains(&"no-reflog".to_string()),
+            "the reflog-less branch is classified by ancestry, got: {merged:?}"
         );
     }
 
