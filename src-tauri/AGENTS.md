@@ -134,6 +134,8 @@ A brand-new git worktree is missing gitignored build artifacts that `cargo test`
 need — this is why the exact same commands "just work" in the main checkout or any
 previously-built worktree but fail in a fresh one:
 
+**`scripts/setup-worktree.sh` does all of the below, plus the `pnpm install` and the plugins submodule init, and optionally pre-compiles the test binaries (`docs/guides/development-setup.md` → "Setting up a fresh worktree"). Run it once per new worktree; the list is what it automates and why.**
+
 1. **Frontend `dist/` stub** — `src-tauri/src/mcp_http/static_files.rs` does
    `include_dir!("$CARGO_MANIFEST_DIR/../dist")` at compile time. Without it: `mkdir -p dist &&
    echo '<html></html>' > dist/index.html` (from the repo root). **Also create `dist/mobile.html`**

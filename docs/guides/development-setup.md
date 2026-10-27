@@ -458,6 +458,46 @@ sharing one target can therefore make an older checkout look fresh against an
 artifact from another checkout. The wrapper also gives each run its own scratch
 directory under `$TMPDIR/tuic-tests` (see Testing above).
 
+### Setting up a fresh worktree
+
+`scripts/setup-worktree.sh` prepares a new checkout or linked worktree to run the
+full suite and `scripts/check-gate.sh`. It is idempotent, so it is also safe to
+rerun after a toolchain bump. It does, in order:
+
+1. Checks the tools the gate calls (`cargo-nextest`, `cargo-audit`, the `rustfmt`
+   and `clippy` components, `node`, `pnpm`) and fails before any long build.
+2. Runs `pnpm install --offline --frozen-lockfile`, falling back to the same
+   command online. Frozen keeps a fresh branch from rewriting `pnpm-lock.yaml`;
+   offline links from the shared store. The layout is pinned to the local `.pnpm`
+   one (`pnpm_config_enable_global_virtual_store=false`): a session that exports
+   `=true` converts `node_modules`, after which pnpm needs a TTY to purge it. If
+   `node_modules` already has the other layout the script stops and prints the one
+   command to run in a real terminal.
+3. Creates the `dist/index.html` and `dist/mobile.html` stubs and the empty
+   sidecar placeholders (`tuic-bridge`, `tuic`, `tuic-hook`), only where absent.
+4. Builds a real `tuic-hook` (the `golden_wire_output` tests execute it) and
+   rebuilds once if it reads as 0 bytes right after the build.
+5. Initialises the `plugins` submodule and warns about pin drift. A failed init
+   (SSH blocked) is a warning, not a retry loop.
+6. Pre-compiles the test binaries with `cargo nextest run --workspace --no-run`,
+   through `scripts/with-test-tmp.sh` and `TUIC_TEST_FAKE_HOME=1` exactly as
+   `make check` does (`--skip-precompile` skips this slow step). With
+   `warm_ignored_directories` off there is no cloned `target/`, so the first test
+   run would otherwise be a from-scratch build. The wrapper matters: a plain
+   `cargo nextest run --no-run` rebuilds the C-dependency crates in a different
+   environment, so alternating the two rebuilds them every time (about a minute).
+
+Do not run `make dev` or `pnpm build:sidecar` first: with the placeholders in place
+the sidecar guard rejects them as stubs. The cargo steps run through
+`scripts/with-clean-tuic-env.sh`, which drops the ambient `TUIC_*` variables a
+TUICommander terminal exports (keeping `TUIC_TEST_*`). Run the gate the same way,
+redirecting to a file and reading its own exit code:
+
+```bash
+scripts/with-clean-tuic-env.sh ./scripts/check-gate.sh > "${TMPDIR:-.}/gate.log" 2>&1
+echo "EXIT_CODE=$?" >> "${TMPDIR:-.}/gate.log"
+```
+
 ### TypeScript mutation testing
 
 Run Stryker on the changed source files and their relevant Vitest files. Keep both

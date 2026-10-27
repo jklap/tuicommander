@@ -60,6 +60,8 @@ scripts/*
 !scripts/observe-github-volume-1995.vite.ts
 !scripts/check-mobile-session-chat-layout.mjs
 !scripts/check-mobile-jump-layout.mjs
+!scripts/setup-worktree.sh
+!scripts/with-clean-tuic-env.sh
 !scripts/check-chat-code-copy-layout.py
 !scripts/fixtures/
 scripts/fixtures/*
