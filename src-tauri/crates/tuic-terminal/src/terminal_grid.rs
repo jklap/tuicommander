@@ -4929,7 +4929,7 @@ mod tests {
         assert_eq!(bounds(&over_limit, 0), None);
         // Split across both directions: the budget is shared.
         assert_eq!(bounds(&at_limit, limit / 2), Some((0, limit)));
-        assert_eq!(bounds(&over_limit, (limit + 1) / 2), None);
+        assert_eq!(bounds(&over_limit, limit.div_ceil(2)), None);
     }
 
     /// Fill a `cols`-wide grid with `rows` full rows: `euros` three-byte
