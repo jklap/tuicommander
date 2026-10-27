@@ -2650,8 +2650,11 @@ partial work, and their child processes may continue.
   it to `127.0.0.1`
 - `--survive-secs <n>` exits after that many seconds without SSE or WebSocket
   clients; client activity resets the timer
-- `--no-agent-configs` skips host agent configuration for ephemeral and installed
-  desktop-managed daemons
+- `--no-agent-configs` skips startup host agent MCP configuration writes for
+  ephemeral and installed desktop-managed daemons, and cluster workers that must
+  preserve the OS user's agent configs (`~/.claude.json`, `~/.codex/config.toml`).
+  Without it, `RemoteOptions.agent_configs` defaults to `true`; workers sharing
+  an agent-config owner must use the flag on every launch
 - `TUIC_PAIRING_TOKEN` is consumed once as the daemon session token and removed
   from the environment before child processes can inherit it
 

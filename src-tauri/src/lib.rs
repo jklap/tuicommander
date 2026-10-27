@@ -2977,6 +2977,13 @@ impl RemoteOptions {
         std::net::SocketAddr::new(self.bind, self.port)
     }
 
+    /// Apply the remote boot policy before touching host agent configuration.
+    pub(crate) fn configure_agent_mcp(&self, disabled: &[String]) {
+        if self.agent_configs {
+            agent_mcp::ensure_mcp_configs(disabled);
+        }
+    }
+
     /// Set the one-shot pairing token supplied by the launcher.
     pub fn set_pairing_token(&mut self, token: Option<String>) {
         self.pairing_token = token;
@@ -3127,9 +3134,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     // this machine can only find the socket if it is listening. Awaited: the
     // configs written below name a bridge that must have something to connect to.
     mcp_http::spawn_ipc_listener(&state, true).await;
-    if options.agent_configs {
-        agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
-    }
+    options.configure_agent_mcp(&app_config.disabled_mcp_agents);
 
     // Watch and pre-warm the repos this machine holds. Cross-repo content search
     // never starts a build of its own, so without this the daemon answers every
@@ -3741,8 +3746,7 @@ mod tests {
             "pub async fn run_remote(mut options: RemoteOptions)",
         );
         assert!(
-            body.contains("if options.agent_configs")
-                && body.contains("agent_mcp::ensure_mcp_configs"),
+            body.contains("options.configure_agent_mcp(&app_config.disabled_mcp_agents)"),
             "run_remote must gate agent config writes behind the explicit option"
         );
     }

@@ -752,6 +752,31 @@ desktop-managed form binds to loopback, skips agent config installation, writes
 no SSE or WebSocket clients. SIGINT, SIGTERM and SIGHUP all shut it down cleanly
 and remove that pid file.
 
+### Cluster workers: leave host agent configs untouched
+
+Start each cluster worker with `--no-agent-configs` when another TUICommander
+process owns the same OS user's agent integration, or when the worker must not
+change that user's agent configuration:
+
+```bash
+TUIC_PORT=9877 ./tuic-remote --no-agent-configs
+```
+
+The flag sets `RemoteOptions.agent_configs` to `false`. Without the flag, this
+option defaults to `true`: startup can install or repair the TUICommander MCP
+bridge entries in supported agents' configuration files, including
+`~/.claude.json` and `~/.codex/config.toml` (or the selected agent config roots).
+Those files belong to the OS user, not to a cluster task. Use the flag on every
+worker launch that must preserve them; otherwise a worker that owns config repair
+can redirect the user's bridge entry to its own installation.
+
+This flag skips only startup agent MCP config writes. It does not disable the
+daemon's MCP endpoint, local IPC listener, or normal writes to its own config
+directory. A named `--instance` isolates daemon state but is not a substitute for
+an explicit no-agent-config policy. If a worker needs to own agent integration,
+give it a separate OS user and HOME rather than sharing those files with another
+owner.
+
 The daemon serves:
 - The HTTP API (sessions, terminals, git, filesystem, agents)
 - WebSocket terminal streaming
