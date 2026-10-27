@@ -96,16 +96,39 @@ fn isolate_git_config(root: &std::path::Path) {
 /// process looked like a config edit to every test already running, which
 /// then reopened its repository or redid a status scan it was asserting it
 /// would reuse (the "pass alone, fail in a full run" `monitoring_*` tests).
-/// A changed file is written to a private copy and renamed into place, so no
-/// git ever reads a half-written one.
+/// A changed file is written to a private copy and put into place atomically, so
+/// no git ever reads a half-written one.
+///
+/// Two processes can both find the file absent and install at once. A hard link
+/// fails when a peer got there first, so it never replaces an identical file (a
+/// rename would, bumping the very mtime this function exists to keep still). A
+/// present-but-stale file, or a filesystem without links, falls back to a
+/// rename. Windows refuses to rename over a file a peer has open
+/// (`PermissionDenied`); the content is constant, so a peer having installed it
+/// meanwhile is as good as installing it here.
 fn install_test_gitconfig(root: &std::path::Path) -> std::path::PathBuf {
     let path = root.join("gitconfig");
-    if std::fs::read(&path).is_ok_and(|current| current == TEST_GITCONFIG.as_bytes()) {
+    let installed =
+        |p: &std::path::Path| std::fs::read(p).is_ok_and(|c| c == TEST_GITCONFIG.as_bytes());
+    if installed(&path) {
         return path;
     }
-    let staging = root.join(format!("gitconfig.{}.tmp", std::process::id()));
+    // Unique per call, not just per process: a staging file that is already hard
+    // linked to `path` must never be rewritten by a second in-process caller.
+    static STAGING_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let staging = root.join(format!(
+        "gitconfig.{}.{}.tmp",
+        std::process::id(),
+        STAGING_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&staging, TEST_GITCONFIG).expect("write the test gitconfig");
-    std::fs::rename(&staging, &path).expect("install the test gitconfig");
+    if std::fs::hard_link(&staging, &path).is_err()
+        && !installed(&path)
+        && let Err(err) = std::fs::rename(&staging, &path)
+    {
+        assert!(installed(&path), "install the test gitconfig: {err}");
+    }
+    let _ = std::fs::remove_file(&staging);
     path
 }
 
@@ -1170,6 +1193,36 @@ mod tests {
             super::TEST_GITCONFIG,
             "a stale gitconfig must be replaced"
         );
+    }
+
+    /// Catches: two processes installing at once. The hard-link install must
+    /// leave exactly one identical file, never replace it, and never leave the
+    /// private staging copy behind.
+    #[test]
+    fn concurrent_installs_leave_one_identical_gitconfig_and_no_staging_file() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).expect("temp dir");
+        let root = dir.path().to_path_buf();
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let root = root.clone();
+                std::thread::spawn(move || super::install_test_gitconfig(&root))
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(
+                thread.join().expect("install thread"),
+                root.join("gitconfig")
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("gitconfig")).expect("read gitconfig"),
+            super::TEST_GITCONFIG
+        );
+        let left: Vec<_> = std::fs::read_dir(&root)
+            .expect("read root")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["gitconfig"], "a staging copy was left behind");
     }
 
     /// The constructor's config is the one git reads, whatever the invoking
