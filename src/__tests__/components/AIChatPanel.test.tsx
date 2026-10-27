@@ -1062,6 +1062,37 @@ describe("AIChatPanel: one chat across repositories", () => {
 });
 
 describe("AIChatPanel: parallel tabs", () => {
+	// Catches: a late startup owner read replaces an explicit tab click (also used by mobile push links).
+	it("keeps an explicit tab selection when the initial shared selection arrives late", async () => {
+		let resolveSelection!: (value: { workspace: string; sessionId: string }) => void;
+		const initialSelection = new Promise((resolve) => {
+			resolveSelection = resolve;
+		});
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			if (command === "ai_chat_selection") return initialSelection;
+			return undefined;
+		});
+		client.loadSession.mockImplementation(async (_id, session) => {
+			await openSession(session);
+		});
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		const { container } = renderIdlePanel();
+		await settle();
+		(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		resolveSelection({ workspace: CHAT_ROOT, sessionId: SESSION });
+		await settle();
+		expect(
+			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
+		).toBe("true");
+		expect(vi.mocked(invoke)).toHaveBeenCalledWith("select_ai_chat_conversation", { sessionId: SECOND_SESSION });
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
 	// Catches: selecting a restored tab without a binding never connects or replays.
 	it("restores two saved tabs and loads the second when selected without sending", async () => {
 		aiChatTabs.add("global", SESSION);
