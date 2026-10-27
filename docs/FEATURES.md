@@ -3422,3 +3422,8 @@ Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 
 Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. Story detail lists notes with author/time/revision provenance and receipt IDs, provides an append-only add field, and has an explicit Refresh notes control for external additions. Drafts and pending replies stay scoped to the selected story.
+
+
+### Ego terminal usage (#2386-6f7c)
+
+Ego terminal usage uses the exact live pid lease and `ego usage --json` v3. The shared badge shows observed context tokens and complete session cost, or an explicitly labelled API-price equivalent for subscriptions. Unknown fields stay hidden. Ego does not publish provider quota balances or a context ceiling on this surface; TUIC does not infer them from another provider account.

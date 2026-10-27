@@ -29,6 +29,7 @@ use crate::ego_cli::{self, EgoCliError, EgoCliErrorCode};
 /// Sub-router mounted at `/ego`.
 pub(super) fn ego_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/usage", get(usage))
         .route("/providers", get(providers))
         .route("/providers/model", post(set_default_model))
         .route("/perimeter", get(perimeter))
@@ -316,5 +317,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(local.status(), StatusCode::CONFLICT);
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageQuery {
+    session_id: String,
+}
+
+async fn usage(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<UsageQuery>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    match ego_cli::usage::read(&state, &query.session_id).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
     }
 }

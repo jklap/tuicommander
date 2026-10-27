@@ -365,3 +365,5 @@ transaction and agent command writer in `spawn_blocking`, not on the main thread
 normalized snapshot are shared with `GET /sessions/{id}/usage`. Provider/CLI
 I/O is bounded and never runs through a synchronous Tauri command on the
 macOS main thread.
+
+`get_ego_usage` is async. It reads the exact ego manifest and awaits a bounded `tokio::process::Command`; no process wait runs on the macOS UI thread.

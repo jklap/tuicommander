@@ -408,6 +408,39 @@ describe("StatusBar", () => {
 		expect(openDashboard).toHaveBeenCalledOnce();
 	});
 
+	it("absorbs matching ego usage into the active agent badge — catches ego allow-list omission", () => {
+		mockTerminalGetActive.mockReturnValue({ agentType: "ego", sessionId: "ego-one", usageLimit: null });
+		statusBarTicker.addMessage({
+			id: "claude-usage:rate",
+			pluginId: "claude-usage",
+			label: "ego",
+			sessionId: "ego-one",
+			text: "ctx: 32768 · USD 1.25",
+			priority: 0,
+			ttlMs: 0,
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(container.querySelector(".agentBadge")?.textContent).toContain("ctx: 32768 · USD 1.25");
+		expect(container.querySelector(".tickerMessage")).toBeNull();
+	});
+
+	it("hides absent and wrong-session ego data — catches stale usage leaking across ego tabs", () => {
+		mockTerminalGetActive.mockReturnValue({ agentType: "ego", sessionId: "ego-two", usageLimit: null });
+		statusBarTicker.addMessage({
+			id: "claude-usage:rate",
+			pluginId: "claude-usage",
+			label: "ego",
+			sessionId: "ego-one",
+			text: "ctx: 32768 · USD 1.25",
+			priority: 0,
+			ttlMs: 0,
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(container.querySelector(".agentUsage")).toBeNull();
+		statusBarTicker.clear();
+		expect(container.querySelector(".agentUsage")).toBeNull();
+	});
+
 	it("does not show stale Claude usage in an active Codex badge", () => {
 		mockTerminalGetActive.mockReturnValue({ agentType: "codex", usageLimit: null });
 		statusBarTicker.addMessage({

@@ -321,15 +321,20 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						const display = () => AGENT_DISPLAY[agentType()];
 						const ul = () => terminalsStore.getActive()?.usageLimit ?? null;
 						const rl = rateLimitWarning;
-						// The shared usage slot follows Claude or Codex. Absorb it only when
+						// The shared usage slot follows Claude, Codex or ego. Absorb it only when
 						// its provider label matches this tab; an async provider switch may
 						// briefly leave the previous provider's result in the store.
 						const usageTicker = () => {
 							const provider = agentType();
-							if (provider !== "claude" && provider !== "codex") return null;
+							if (provider !== "claude" && provider !== "codex" && provider !== "ego") return null;
 							return statusBarTicker
 								.getAll()
-								.find((message) => message.pluginId === "claude-usage" && message.label?.toLowerCase() === provider);
+								.find(
+									(message) =>
+										message.pluginId === "claude-usage" &&
+										message.label?.toLowerCase() === provider &&
+										(provider !== "ego" || message.sessionId === terminalsStore.getActive()?.sessionId),
+								);
 						};
 						return (
 							<span

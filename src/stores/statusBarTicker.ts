@@ -13,6 +13,8 @@ export interface TickerMessage {
 	text: string;
 	/** Human-readable source label shown before the text (e.g. "Usage") */
 	label?: string;
+	/** Terminal binding for session-specific usage; absent for provider-wide tickers. */
+	sessionId?: string;
 	/** Optional inline SVG icon */
 	icon?: string;
 	/** Higher = more visible. Default 0. Messages >=80 get warning styling. */

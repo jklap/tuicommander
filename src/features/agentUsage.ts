@@ -38,7 +38,7 @@ const API_POLL_MS = 5 * 60 * 1000;
 const CHART_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M0 11.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1-.5-.5v-4zm6-4a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1-.5-.5v-8zm6-7a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5v15a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5V.5z"/></svg>`;
 
 /** Agents that expose a usage API. Anything else leaves the ticker as it was. */
-export type UsageAgent = "claude" | "codex" | "grok";
+export type UsageAgent = "claude" | "codex" | "grok" | "ego";
 
 interface AgentUsageSpec {
 	/** Ticker label — the whole point of the feature: name the agent on screen. */
@@ -49,10 +49,17 @@ interface AgentUsageSpec {
 	/** Substring of the backend's "no credentials" error, for a clearer ticker. */
 	missingTokenHint: string;
 	/** Opens the agent's usage dashboard tab when the ticker is clicked. */
-	openDashboard: (sessionId?: string) => void;
+	openDashboard?: (sessionId?: string) => void;
 }
 
 const SPECS: Record<UsageAgent, AgentUsageSpec> = {
+	ego: {
+		label: "ego",
+		command: "get_ego_usage",
+		buildText: (api: { text: string | null }) => api.text ?? "",
+		priority: () => 0,
+		missingTokenHint: "not configured",
+	} as AgentUsageSpec,
 	claude: {
 		label: "Claude",
 		command: "get_claude_usage_api",
@@ -81,7 +88,9 @@ const SPECS: Record<UsageAgent, AgentUsageSpec> = {
 
 /** Map a detected agentType onto an agent with a usage API, or null. */
 export function toUsageAgent(agentType: string | null | undefined): UsageAgent | null {
-	return agentType === "claude" || agentType === "codex" || agentType === "grok" ? agentType : null;
+	return agentType === "claude" || agentType === "codex" || agentType === "grok" || agentType === "ego"
+		? agentType
+		: null;
 }
 
 /** Classify a poll failure into the short text the ticker shows. */
@@ -128,25 +137,35 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 	const write = (text: string, priority: number) => {
 		// A late response from the agent we just switched away from must not win.
 		if (seq !== pollSeq) return;
+		if (agent === "ego" && !text) {
+			statusBarTicker.removeMessage(TICKER_ID, FEATURE_ID);
+			return;
+		}
 		statusBarTicker.addMessage({
 			id: TICKER_ID,
 			pluginId: FEATURE_ID,
 			label: spec.label,
+			...(agent === "ego" && sessionId ? { sessionId } : {}),
 			text,
 			icon: CHART_SVG,
 			priority,
 			ttlMs: API_POLL_MS + 30_000,
-			onClick: agent === "claude" && !sessionId ? undefined : () => spec.openDashboard(sessionId ?? undefined),
+			onClick:
+				agent === "ego" || (agent === "claude" && !sessionId)
+					? undefined
+					: () => spec.openDashboard?.(sessionId ?? undefined),
 		});
 	};
 
 	try {
-		if (agent === "claude" && !sessionId) {
-			write("unknown", 5);
+		if ((agent === "claude" || agent === "ego") && !sessionId) {
+			write(agent === "ego" ? "" : "unknown", 5);
 			return;
 		}
 		const api =
-			agent === "claude" ? await invoke<never>(spec.command, { sessionId }) : await invoke<never>(spec.command);
+			agent === "claude" || agent === "ego"
+				? await invoke<never>(spec.command, { sessionId })
+				: await invoke<never>(spec.command);
 		write(spec.buildText(api), spec.priority(api));
 	} catch (err) {
 		const errStr = String(err);
@@ -158,7 +177,7 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 		if (text !== "no token") {
 			appLogger.warn("network", `${spec.label} usage poll: ${text}`, errStr);
 		}
-		write(text, 5);
+		write(agent === "ego" ? "" : text, 5);
 	}
 }
 
@@ -181,6 +200,7 @@ export function initAgentUsage(): void {
 		createEffect(() => {
 			const next = activeUsageSession();
 			if (!next || (next.agent === shownAgent && next.sessionId === shownSessionId)) return;
+			statusBarTicker.removeMessage(TICKER_ID, FEATURE_ID);
 			shownAgent = next.agent;
 			shownSessionId = next.sessionId;
 			poll(next.agent, next.sessionId);
@@ -193,6 +213,7 @@ export function initAgentUsage(): void {
 export function destroyAgentUsage(): void {
 	if (!initialized) return;
 	initialized = false;
+	++pollSeq;
 	shownAgent = null;
 	shownSessionId = null;
 

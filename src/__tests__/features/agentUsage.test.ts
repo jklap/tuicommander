@@ -90,6 +90,31 @@ describe("agent usage ticker — no vendor default", () => {
 		expect(addMessage).not.toHaveBeenCalled();
 	});
 
+	it("reads the ego terminal only — catches accidental Claude/Codex account fallback", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "ego", sessionId: "ego-one" } } });
+		invoke.mockResolvedValue({ text: "ctx: 32768 · API eq: USD 1.25" });
+		initAgentUsage();
+		await settle();
+		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_ego_usage", { sessionId: "ego-one" });
+		expect(addMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				label: "ego",
+				sessionId: "ego-one",
+				text: "ctx: 32768 · API eq: USD 1.25",
+				onClick: undefined,
+			}),
+		);
+	});
+
+	it("clears missing ego data — catches unknown usage rendered as zero or stale provider data", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "ego", sessionId: "ego-one" } } });
+		invoke.mockResolvedValue({ text: null });
+		initAgentUsage();
+		await settle();
+		expect(addMessage).not.toHaveBeenCalled();
+		expect(removeMessage).toHaveBeenCalledWith("claude-usage:rate", "claude-usage");
+	});
+
 	it("never polls Claude on a Codex-only install", async () => {
 		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "codex" } } });
 

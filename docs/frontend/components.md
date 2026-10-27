@@ -1019,3 +1019,8 @@ Input, and Switch controls. Feature styles only format the chat-list heading.
 
 Keyboard Shortcuts uses shared Button for the built-in Rebind actions and the
 global-hotkey Clear action. Workspace styles retain binding-column layout only.
+
+
+### Ego terminal usage (#2386-6f7c)
+
+Ego terminal usage uses the exact live pid lease and `ego usage --json` v3. The shared badge shows observed context tokens and complete session cost, or an explicitly labelled API-price equivalent for subscriptions. Unknown fields stay hidden. Ego does not publish provider quota balances or a context ceiling on this surface; TUIC does not infer them from another provider account.
