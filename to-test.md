@@ -1,3 +1,7 @@
+## Shared Chat typography and zoom (2396-66e2)
+
+- [ ] Coordinator visual check after unlocking the screen: compare session Chat and AI Chat at default terminal zoom, after zoom in/out and after reset. Both should use AI Chat's original 14px default reading scale, line height, weight and colors. AI Chat follows the active terminal when tabs change. Check body prose, bold text, inline code and tool text; mobile must retain its own Chat font preference. The implementer did not capture screenshots because the required browser wrapper failed while the screen was locked.
+
 ## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
 
 - [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.

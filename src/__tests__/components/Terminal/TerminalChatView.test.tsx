@@ -43,9 +43,10 @@ beforeEach(() => {
 });
 
 describe("TerminalChatView", () => {
-	// Catches: Chat stays at the app font size instead of following its session's CLI zoom.
+	// Catches: session Chat keeps the 13px grid default or loses its terminal zoom delta.
 	it("chat_follows_session_zoom_actions", () => {
 		const id = addTerminal("claude", "uuid");
+		terminalsStore.setFontSize(id, 13);
 		const other = terminalsStore.add({
 			sessionId: "sess-2",
 			fontSize: 20,
@@ -64,28 +65,33 @@ describe("TerminalChatView", () => {
 					confirm: async () => false,
 				},
 				setStatusInfo: () => {},
-				getDefaultFontSize: () => 14,
+				getDefaultFontSize: () => 13,
 			});
-			zoom.zoomIn();
 			return <TerminalChatView terminalId={id} sessionId="sess-1" />;
 		});
-		const size = () => getByTestId("terminal-chat-view").style.getPropertyValue("--font-base");
-		expect(size()).toBe("16px");
+		const size = () => {
+			const transcript = getByTestId("terminal-chat-view").querySelector<HTMLElement>("[data-chat-typography]")!;
+			return getComputedStyle(transcript).getPropertyValue("--chat-zoom-step");
+		};
+		expect(size()).toBe("0px");
+		expect(getByTestId("terminal-chat-view").style.getPropertyValue("--font-base")).toBe("");
 		zoom.zoomIn();
-		expect(size()).toBe("18px");
+		expect(size()).toBe("2px");
+		zoom.zoomIn();
+		expect(size()).toBe("4px");
 		zoom.zoomOut();
-		expect(size()).toBe("16px");
+		expect(size()).toBe("2px");
 		zoom.zoomReset();
-		expect(size()).toBe("14px");
+		expect(size()).toBe("0px");
 		expect(terminalsStore.get(other)?.fontSize).toBe(20);
 		zoom.zoomInAll();
-		expect(size()).toBe("16px");
+		expect(size()).toBe("2px");
 		expect(terminalsStore.get(other)?.fontSize).toBe(22);
 		zoom.zoomOutAll();
-		expect(size()).toBe("14px");
+		expect(size()).toBe("0px");
 		zoom.zoomResetAll();
-		expect(size()).toBe("14px");
-		expect(terminalsStore.get(other)?.fontSize).toBe(14);
+		expect(size()).toBe("0px");
+		expect(terminalsStore.get(other)?.fontSize).toBe(13);
 	});
 	// Catches: a blank panel after the agent dies (grid hidden, nothing in its place).
 	it("view_falls_back_to_cli_when_agent_exits", async () => {
