@@ -5,14 +5,18 @@ export const CODING_EXT =
 /** Box-drawing block, as a regex class fragment: an agent TUI glues its panel borders to the text. */
 const BOX_DRAWING = "\\u2500-\\u257F";
 
-/** Factory — returns a fresh RegExp (has lastIndex state, not safe to share). */
+/** Factory — returns a fresh RegExp (has lastIndex state, not safe to share).
+ *
+ *  A path never ends in `.`: that dot belongs to the sentence (`saved to a/b.mp4.`), and
+ *  swallowing it makes the existence check look for a file that is not there. `*` frames a
+ *  path in markdown bold and `…` is how a TUI truncates one; both end a match like a space. */
 export function filePathRegex(): RegExp {
 	return new RegExp(
-		`(?:^|[\\s"'\`(\\[{${BOX_DRAWING}])` +
-			`((?:[A-Za-z]:[\\\\/][\\w.\\\\/@-]+(?::\\d+(?::\\d+)?)?` +
-			`|(?:~/|/|\\.\\.?/|[\\w@.-]+/)[\\w./@-]+(?::\\d+(?::\\d+)?)?` +
+		`(?:^|[\\s"'\`(\\[{*${BOX_DRAWING}])` +
+			`((?:[A-Za-z]:[\\\\/][\\w.\\\\/@-]*[\\w\\\\/@-](?::\\d+(?::\\d+)?)?` +
+			`|(?:~/|/|\\.\\.?/|[\\w@.-]+/)[\\w./@-]*[\\w/@-](?::\\d+(?::\\d+)?)?` +
 			`|[\\w@.-]+\\.(?:${CODING_EXT})(?::\\d+(?::\\d+)?)?))` +
-			`(?=[\\s"'\`),;.!?:\\]}>${BOX_DRAWING}]|$)`,
+			`(?=[\\s"'\`),;.!?:*\u2026\\]}>${BOX_DRAWING}]|$)`,
 		"g",
 	);
 }
