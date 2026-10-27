@@ -73,22 +73,13 @@
   flex-shrink: 0;
 }
 
-.dictate[aria-pressed="true"],
-.dictate[data-failed="true"] {
+.dictate[aria-pressed="true"] {
   color: var(--error);
 }
 
 /* Recording is indicated by the red icon, not a second focus border. */
 .dictate[aria-pressed="true"]:not(:focus-visible) {
   border-color: transparent;
-}
-
-.dictationFailure {
-  position: absolute;
-  bottom: 100%;
-  right: 12px;
-  color: var(--error);
-  background: var(--bg-secondary);
 }
 
 .question {

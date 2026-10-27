@@ -33,12 +33,14 @@ interface ChatViewState {
 	cursors: Record<string, Cursor>;
 	/** Why the last read of a terminal found nothing to show. */
 	unavailable: Record<string, string>;
+	/** UI-only bridge from Send until the next existing activity/transcript update. */
+	submissions: Record<string, symbol>;
 }
 
 const inFlight = new Map<string, { again: boolean }>();
 const watchOwners = new Map<string, symbol>();
 
-const [state, setState] = createStore<ChatViewState>({ cursors: {}, unavailable: {} });
+const [state, setState] = createStore<ChatViewState>({ cursors: {}, unavailable: {}, submissions: {} });
 
 /** The key a terminal's conversation is filed under in `acpTranscript`. */
 export function chatViewKey(sessionId: string): string {
@@ -135,6 +137,25 @@ async function readOnce(sessionId: string): Promise<void> {
 export const chatViewStore = {
 	state,
 
+	/** Start feedback only for an open Chat view, without changing terminal state.
+	 * The returned rollback cannot cancel a newer submission to the same PTY. */
+	beginSubmission(sessionId: string): () => void {
+		if (!watchOwners.has(sessionId)) return () => {};
+		const token = Symbol();
+		setState("submissions", sessionId, token);
+		return () => {
+			if (state.submissions[sessionId] === token) chatViewStore.clearSubmission(sessionId);
+		};
+	},
+
+	clearSubmission(sessionId: string): void {
+		setState(
+			produce((s) => {
+				delete s.submissions[sessionId];
+			}),
+		);
+	},
+
 	/** Why this terminal's chat view could not be read, or null. */
 	unavailableReason(sessionId: string): string | null {
 		return state.unavailable[sessionId] ?? null;
@@ -198,6 +219,7 @@ export const chatViewStore = {
 			setState(
 				produce((s) => {
 					delete s.cursors[sessionId];
+					delete s.submissions[sessionId];
 				}),
 			);
 			acpTranscript.clear(chatViewKey(sessionId));
@@ -208,6 +230,6 @@ export const chatViewStore = {
 	reset(): void {
 		inFlight.clear();
 		watchOwners.clear();
-		setState({ cursors: {}, unavailable: {} });
+		setState({ cursors: {}, unavailable: {}, submissions: {} });
 	},
 };

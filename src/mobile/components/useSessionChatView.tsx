@@ -13,6 +13,9 @@ export function useSessionChatView(props: {
 	sessionId: () => string;
 	agentType: () => string | undefined;
 	sessionExists: () => boolean;
+	busy?: () => boolean;
+	awaitingInput?: () => boolean;
+	activityRevision?: () => string | number | null | undefined;
 	subscribeWake: ChatViewWake;
 }) {
 	const [atBottom, setAtBottom] = createSignal(true);
@@ -62,6 +65,9 @@ export function useSessionChatView(props: {
 					<div class={styles.reading} data-mobile-reading style={mobileChatReadingStyle()}>
 						<TerminalChatTranscript
 							sessionId={sessionId}
+							busy={props.busy?.()}
+							awaitingInput={props.awaitingInput?.()}
+							activityRevision={props.activityRevision?.()}
 							terminalAgent={props.agentType() as AgentType}
 							mobile
 							onAtBottomChange={setAtBottom}

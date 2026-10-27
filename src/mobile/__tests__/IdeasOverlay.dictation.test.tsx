@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { ideasStore } from "../../stores/ideas";
+import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
 import { IdeasOverlay } from "../components/IdeasOverlay";
 
@@ -80,12 +81,13 @@ it("preserves the selection after empty recognition and inserts the next take at
 });
 
 // Catches: the Ideas consumer bypasses shared error shutdown or cannot dictate again.
-it("uses shared failed-take recovery and keeps the failure wording", () => {
+it("uses shared failed-take recovery and reports the failure only in a toast", () => {
 	const input = mount();
 	const first = start();
 	first.onerror?.({ error: "no-speech" });
 	expect(first.abort).toHaveBeenCalledOnce();
-	expect(screen.getByRole("status").textContent).toBe("Dictation failed");
+	expect(toastsStore.add).toHaveBeenCalledExactlyOnceWith("Dictation failed", "No speech detected", "error", true);
+	expect(screen.queryByRole("status")).toBeNull();
 	first.onend?.();
 	start().result("A new idea");
 	expect(input.value).toBe("A new idea");

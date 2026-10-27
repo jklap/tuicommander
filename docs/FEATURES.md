@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
+
 AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).
 
 - Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
@@ -383,7 +385,8 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
 
 - **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
-- **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
+- **Send now** — `Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
+- **New line** — `Ctrl+Enter` or `Shift+Enter` inserts a line break without sending. Enter used to confirm an IME candidate does not send
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue count** — the collapsed Compose button shows a muted pill for every waiting FIFO item, including commands and peer/orchestrator notices, hidden at zero. Hover or focus shows the command/message breakdown. The open panel shows `N queued`; click it to inspect and remove entries, or clear the queue. Counts come from the backend (`state.queued_commands`), including across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting. Hands-free speech does not use this queue at all — see 9.9
@@ -1882,6 +1885,8 @@ Buffer eviction is reported; it does not create another output store.
 
 ## 15. Keyboard Shortcut Reference
 
+Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
+
 ### Terminal
 | Shortcut | Action |
 |----------|--------|
@@ -2377,7 +2382,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
-- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. “Dictation failed” also remains beside the composer mic above the keyboard until the next take starts. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. The toast is the only failure surface; no error label or failure colour remains on the composer mic. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
 - Mobile CLI output follows the bottom through keyboard and viewport resizes while following; a reader who scrolled up keeps their position.
 - Mobile CLI and Chat output show a floating down-arrow at the bottom-right of the output area while scrolled back, at least 8px above the key bar and outside the composer. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Appearance offers independent Terminal and Chat font controls (10–24 px), each saved on this device. Existing defaults remain 14 px for CLI and Chat body text. Chat changes affect Session Chat and AI Chat transcripts only; composers and UI chrome do not change. CLI output rewraps locally and preserves the visible row without resizing the shared PTY.

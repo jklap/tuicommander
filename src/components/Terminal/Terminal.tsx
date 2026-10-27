@@ -18,6 +18,7 @@ import { invoke } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
+import { chatViewStore } from "../../stores/chatView";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";
@@ -1582,9 +1583,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {
-							await submitCompose("send", sessionId, (id) =>
-								pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
-							);
+							const rollback = sessionId ? chatViewStore.beginSubmission(sessionId) : () => {};
+							try {
+								await submitCompose("send", sessionId, (id) =>
+									pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
+								);
+							} catch (error) {
+								rollback();
+								throw error;
+							}
 						}}
 					/>
 				</Suspense>

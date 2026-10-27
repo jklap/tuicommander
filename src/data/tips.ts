@@ -263,7 +263,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Terminal Chat Input",
 		description:
-			"Switch a Claude terminal to Chat to reply in docked Compose. Ctrl+Enter sends now; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
+			"Switch a Claude terminal to Chat to reply in docked Compose. Enter sends now; Ctrl+Enter or Shift+Enter adds a line; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
 		shortcut: null,
 	},
 	{

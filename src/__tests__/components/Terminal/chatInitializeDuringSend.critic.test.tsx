@@ -90,9 +90,7 @@ describe("Chat send completion during editor initialization", () => {
 			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 			const editor = EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
 			editor.dispatch({ changes: { from: 0, insert: "Sent message" } });
-			fireEvent.click(
-				view.getByTitle(queue ? "Queue for the next idle moment (Shift+Ctrl+Enter)" : "Send (Ctrl+Enter)"),
-			);
+			fireEvent.click(view.getByTitle(queue ? "Queue for the next idle moment (Shift+Ctrl+Enter)" : "Send (Enter)"));
 			editor.dispatch({ changes: { from: editor.state.doc.length, insert: "\nNext unsent message" } });
 			terminalsStore.setViewMode(id, "cli");
 

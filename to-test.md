@@ -2,6 +2,13 @@
 
 - [ ] After an authorized backend rebuild/restart, reload a user plugin with a cold payload cache and confirm discovery remains responsive. Make its manifest name empty and confirm the backend warning names the plugin and `name is empty`. Invalid plugins remain skipped; this change does not add a frontend error card. The daily app was not restarted by this peer.
 
+## Session Chat working indicator (2397-06b6)
+
+- [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.
+- [ ] Capture and inspect the working row visually on desktop and mobile. The isolated Chrome fixture rendered and measured the row, but `Page.captureScreenshot` timed out on both surfaces. No screenshot or native live-agent check is claimed. Retained evidence: `~/Gits/.tmp/results/chat-busy-2397/`.
+## Compose Enter shortcuts (2395-ed27)
+
+- [x] Enter sends; Ctrl+Enter and Shift+Enter insert a newline; Shift+Ctrl+Enter queues. IME composition confirmation keeps the draft without sending. Verified by the focused ComposePanel component tests, including browser-style composition events and a DOM edit; physical IME hardware was not exercised. Desktop Chat draft cleanup consumers also pass. Mobile production uses its separate CommandInput and native keybar, unchanged by this feature.
 ## Mobile composer focus (2398-1de9)
 
 - [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
@@ -12,6 +19,10 @@
 ## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
 
 - [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.
+
+## Mobile dictation error surfaces (2399-e2ae)
+
+- [ ] [HUMAN] After the updated frontend loads on Boss’s iPad, dictate in the same session in CLI view, stop and retry. If microphone capture fails, confirm the toast has the failure detail and no red failure label remains above the scroll arrow. Keep the take IDs and callback sequence from source `dictation` if capture fails again. The desktop log records separate audio-capture and aborted takes, not concurrent recognizers; this peer cannot test physical iPad audio.
 
 ## Plans and Stories editor layout (2356-5c36)
 
@@ -383,7 +394,7 @@
 
 - [ ] After the updated frontend loads on the phone, record a real take and inspect debug source `dictation` on the owner. Retain its session/take-correlated start, first-result, error/abort if present, end and ownership-release sequence for any recurrence. These records are bounded diagnostics, not an assertion that the original incident is fixed.
 
-- [ ] On an iPhone after the updated frontend loads, reproduce a failed/empty recognition, then dictate again without a manual send. Confirm the next transcript inserts and “Dictation failed” stays visible beside the composer mic with the real keyboard open. The worktree browser probe used a focused textarea at 390×480 and a lifecycle driver; it did not record iOS callback order or display a real on-screen keyboard.
+- [ ] On an iPhone after the updated frontend loads, reproduce a failed/empty recognition, then dictate again without a manual send. Confirm the next transcript inserts and the failure detail appears only in its toast, with no retained “Dictation failed” label beside the composer mic. The worktree browser probe used a focused textarea at 390×480 and a lifecycle driver; it did not record iOS callback order or display a real on-screen keyboard.
 
 ## Run-owned launch timeout (2006-f5a1) — Rust restart required
 

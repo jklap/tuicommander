@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Send terminal Compose drafts with Enter; use Ctrl+Enter or Shift+Enter for a new line. Shift+Ctrl+Enter still queues for the next idle moment, and IME candidate confirmation does not send (#2395-ed27).
+
 ### Added
+
+- Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
 
 - Organize the AI Chat composer into a compact card with repository pinning, draft parking, input/send and live context/model details (#2394-e3c4).
 
@@ -16,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
 - Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
 - Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
 - Automatically compact an exhausted ego AI Chat conversation and retry the submitted prompt once in its continuation; stop with an error if recovery fails. Keep composer drafts during compaction and allow sends in other conversations (#2392-b2e3).
