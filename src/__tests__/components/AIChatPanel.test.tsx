@@ -275,14 +275,14 @@ async function renderPanel() {
 	return view;
 }
 
-/** Type a message and press Send. */
+/** Type a message and press the active Send or Queue control. */
 async function typeAndSend(container: HTMLElement, text: string): Promise<void> {
 	const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 	textarea.value = text;
 	textarea.dispatchEvent(new Event("input", { bubbles: true }));
 	(
 		[...container.querySelectorAll("button")].find(
-			(button) => button.getAttribute("aria-label") === "Send",
+			(button) => ["Send", "Queue"].includes(button.getAttribute("aria-label") ?? ""),
 		) as HTMLButtonElement
 	).click();
 	await settle();
