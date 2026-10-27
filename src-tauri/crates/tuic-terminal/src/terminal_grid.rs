@@ -4865,6 +4865,101 @@ mod tests {
         assert_eq!(too_many_bytes.logical_prefix_at_cursor(), None);
     }
 
+    fn bounds(grid: &TerminalGrid, row: usize) -> Option<(usize, usize)> {
+        grid.logical_line_at_row(row)
+            .map(|l| (l.start_row, l.end_row))
+    }
+
+    /// Bug caught: a chain walk that stops one row early or late, or does not
+    /// walk both ways from a middle row, hands the parser a truncated line.
+    #[test]
+    fn logical_line_at_row_reports_exact_bounds_of_a_three_row_chain() {
+        let mut grid = TerminalGrid::new(6, 4, 100);
+        let _ = grid.process(b"abcdefghij\r\nxyz");
+
+        for row in 0..=2 {
+            let line = grid.logical_line_at_row(row).unwrap();
+            assert_eq!((line.start_row, line.end_row), (0, 2), "from row {row}");
+            assert!(line.text.starts_with("abcdefghij"), "{:?}", line.text);
+            assert!(!line.text.contains("xyz"));
+        }
+        assert_eq!(bounds(&grid, 3), Some((3, 3)), "next line stays separate");
+        assert_eq!(bounds(&grid, 6), None, "row beyond the screen");
+    }
+
+    /// Bug caught: a wrap-flagged last screen row (here scrolled down from the
+    /// top) makes the forward walk step past the end of the screen.
+    #[test]
+    fn logical_line_at_row_stops_at_the_last_screen_row() {
+        let mut grid = TerminalGrid::new(3, 4, 100);
+        let _ = grid.process(b"abcdefghij");
+        assert_eq!(bounds(&grid, 0), Some((0, 2)));
+        assert_eq!(bounds(&grid, 2), Some((0, 2)));
+
+        let mut grid = TerminalGrid::new(3, 4, 100);
+        let _ = grid.process(b"abcde\x1b[2T");
+        assert!(
+            grid.row_wrapped(Line(2)),
+            "fixture: flagged row is now last"
+        );
+        assert_eq!(bounds(&grid, 2), Some((2, 2)));
+    }
+
+    /// A one-column grid of `rows` rows holding a single soft-wrapped chain
+    /// of `chain_rows` rows.
+    fn one_column_chain(rows: u16, chain_rows: usize) -> TerminalGrid {
+        let mut grid = TerminalGrid::new(rows, 1, 0);
+        let _ = grid.process("x".repeat(chain_rows).as_bytes());
+        grid
+    }
+
+    /// Bug caught: the wrap-transition limit is off by one, or applies per
+    /// direction instead of to the whole walk.
+    #[test]
+    fn logical_line_at_row_enforces_the_wrap_transition_limit() {
+        let limit = crate::output_parser::MAX_INTENT_CANDIDATE_CHARS;
+        let at_limit = one_column_chain((limit + 12) as u16, limit + 1);
+        let over_limit = one_column_chain((limit + 12) as u16, limit + 2);
+
+        // Backward only: `limit` transitions pass, `limit + 1` is refused.
+        assert_eq!(bounds(&at_limit, limit), Some((0, limit)));
+        assert_eq!(bounds(&over_limit, limit + 1), None);
+        // Forward only.
+        assert_eq!(bounds(&at_limit, 0), Some((0, limit)));
+        assert_eq!(bounds(&over_limit, 0), None);
+        // Split across both directions: the budget is shared.
+        assert_eq!(bounds(&at_limit, limit / 2), Some((0, limit)));
+        assert_eq!(bounds(&over_limit, (limit + 1) / 2), None);
+    }
+
+    /// Fill a `cols`-wide grid with `rows` full rows: `euros` three-byte
+    /// scalars first, then ASCII, so the chain holds a known byte count.
+    fn byte_budget_grid(cols: u16, rows: usize, euros: usize) -> TerminalGrid {
+        let cells = cols as usize * rows;
+        let mut grid = TerminalGrid::new(rows as u16 + 2, cols, 0);
+        let data = format!("{}{}", "\u{20ac}".repeat(euros), "x".repeat(cells - euros));
+        let _ = grid.process(data.as_bytes());
+        grid
+    }
+
+    /// Bug caught: the byte budget counts scalars instead of UTF-8 bytes
+    /// (4 per scalar), or is off by one at the boundary.
+    #[test]
+    fn logical_line_at_row_enforces_the_utf8_byte_budget() {
+        let budget = crate::output_parser::MAX_INTENT_CANDIDATE_CHARS * 4;
+        // 64x100 cells, 896 euros: 6400 + 2*896 = exactly 8192 bytes.
+        let exact = byte_budget_grid(64, 100, 896);
+        let line = exact.logical_line_at_row(0).unwrap();
+        assert_eq!(line.text.len(), budget);
+        assert_eq!((line.start_row, line.end_row), (0, 99));
+        // 65x101 cells, 814 euros: 6565 + 2*814 = 8193 bytes, one over.
+        assert_eq!(bounds(&byte_budget_grid(65, 101, 814), 0), None);
+        // 8192 scalars of one byte stay under the budget although they exceed
+        // the scalar limit: the budget is bytes, not characters.
+        let ascii = byte_budget_grid(64, 100, 0);
+        assert_eq!(ascii.logical_line_at_row(0).unwrap().text.len(), 6400);
+    }
+
     #[test]
     fn physical_suggest_prefix_survives_a_refused_soft_wrap_chain() {
         let mut grid = TerminalGrid::new(5, 80, 100);
