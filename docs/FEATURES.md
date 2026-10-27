@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+AI Chat shares the active conversation across desktop and mobile for the configured host workspace. The last saved selection wins; reconnect catches up. Open-tab layout, drafts and the session CLI | Chat switch remain per device.
+
 - **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
 
 AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).

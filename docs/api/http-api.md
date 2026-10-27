@@ -3653,3 +3653,7 @@ ACP attachment snapshots include `availableCommands`, the latest complete sessio
 command offer: each entry has `name`, `description`, and optional `input.hint`.
 An empty list revokes earlier commands. IPC and HTTP snapshots use the same shape;
 the existing ACP stream carries the original `available_commands_update` update.
+
+### Shared AI Chat selection
+
+`GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.

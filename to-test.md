@@ -3057,3 +3057,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 
 - [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).
+
+- [ ] After a manual backend restart, select AI Chat conversations on desktop and iPad in both directions, then reconnect the iPad and confirm it catches up. Confirm the session CLI | Chat choice does not follow. Rust selection changes require `make dev` restart or a rebuilt release (#2403-e711).

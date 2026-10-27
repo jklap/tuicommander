@@ -398,6 +398,8 @@ pub enum AppEvent {
     SettingsChanged(crate::settings::changes::SettingsChanged),
     #[serde(rename = "open-markdown-tabs-changed")]
     OpenMarkdownTabsChanged,
+    #[serde(rename = "ai-chat-selection-changed")]
+    AiChatSelectionChanged,
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
@@ -5565,6 +5567,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::AiChatSelectionChanged
             | AppEvent::OpenMarkdownTabsChanged
             | AppEvent::SettingsChanged(_)
             | AppEvent::IdeasChanged

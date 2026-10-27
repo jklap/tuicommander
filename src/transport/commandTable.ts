@@ -200,6 +200,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// The bodies carry exactly the arguments the Tauri command takes, because
 	// the client's refusals are computed in Rust and must be identical on both
 	// transports — a body that dropped a field would move a decision here.
+	ai_chat_selection: {
+		map: () => ({ method: "GET", path: "/acp/chat/selection" }),
+	},
+	select_ai_chat_conversation: {
+		map: (args) => ({ method: "PUT", path: "/acp/chat/selection", body: { sessionId: args.sessionId ?? null } }),
+	},
 	acp_workspace_root: {
 		map: () => ({ method: "GET", path: "/acp/workspace" }),
 	},
