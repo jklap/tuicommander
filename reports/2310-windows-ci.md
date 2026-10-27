@@ -1,5 +1,76 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Native five-owner completion (2026-10-27, tuic-2310f)
+
+This section supersedes the remaining-failure status in the historical sections
+below. Boss authorized SSH-only pushes of `fix/ci-win-2310f` for a branch-only
+Windows workflow, not main, tags or a PR. Ordinary CI is unchanged.
+
+**GREEN:** [run 40474953148](https://github.com/sstraus/tuicommander/actions/runs/40474953148),
+job `122090786781`, source `f409e39cc52ce3dd66b4debec71bca9821cafd59`:
+five selected owner tests passed, none failed, test summary 36.083 seconds.
+The other 6328 tests were filtered out, not executed. This is native Windows
+five-owner GREEN, not full Windows-suite or main-push GREEN.
+
+| Row | Classification and decisive evidence | Final native owner result |
+|---|---|---|
+| 6 | **Product:** the hook selected Git for Windows' internal `ucrt64/bin/git.exe` from Git Bash, bypassing its installation launcher. Run 40473276530 holds the original cwd/PATH/ref constant: the internal binary and its `--no-optional-locks` variant crash with `0xC0000005`, while that installation's `cmd/git.exe` prunes the same stale ref successfully. Select the existing same-install launcher for internal `ucrt64/bin` and `mingw64/bin` paths; preserve custom paths and missing-launcher fallback. | PASS 8.007s; the local branch survives after its remote proof is pruned. |
+| 9 | **Product:** directory `Modify(Any)` invalidated unchanged rollout files. The already-landed directory-event repair preserves warm discovery while retaining file/topology invalidation. | PASS 0.055s. |
+| 17 | **Product:** project-directory metadata events forced a full Usage rescan. The already-landed directory-event repair preserves the changed-transcript-only contract. | PASS 0.035s. |
+| 18 | **Product:** the same directory invalidation restatted unchanged Usage history. Original native failures plus recorded-event replay establish the defect even though some earlier runs passed. | PASS 0.032s. |
+| 23 | **Product:** every fresh checkout fingerprint spawned recursive `git submodule status`, even with no index gitlinks, and duplicated porcelain/HEAD reads. Run 40472009272 measured 3.789–6.437s in empty submodule scans. Reuse one fresh status/HEAD snapshot and skip only the shell scan when live staged-index entries contain no mode `160000`. Real gitlinks still use the original recursive status/recovery logic. | PASS 26.299s including setup; the unchanged three-second warm-list assertion passes. |
+
+Row 6 is **not** attributed to a broken runner Git installation. Standalone
+`--version` and local fetch probes outside Rust tests passed for the internal,
+`bin` and `cmd` executables under inherited and captured hook PATHs, including
+a populated origin, linked checkout and stale tracking ref. The faulting module
+remains unknown. The controlled original-process differential proves which
+entry point works in that environment; the repair uses the distribution launcher
+rather than guessing a DLL failure or changing branch-safety policy.
+
+### Native RED and iteration record
+
+- [40468108854](https://github.com/sstraus/tuicommander/actions/runs/40468108854),
+  `3913cbbb5`: rows 6/23 fail all three attempts; rows 9/17/18 pass. Row 23 warm
+  listing is 11.896026s, inventory 71.8798ms.
+- [40472009272](https://github.com/sstraus/tuicommander/actions/runs/40472009272),
+  `2272305a3`: diagnostic-only source again reports three passed/two failed;
+  empty recursive submodule scans dominate checkout inspection. Standalone
+  empty-origin Git probes pass; they do not identify a runner defect.
+- [40473276530](https://github.com/sstraus/tuicommander/actions/runs/40473276530),
+  `893a9aaf5`: the checkout-snapshot repair makes row 23 pass; only row 6 fails.
+  The same-environment launcher differential identifies the hook entry-point
+  defect without changing the failed assertion.
+- [40474953148](https://github.com/sstraus/tuicommander/actions/runs/40474953148),
+  `f409e39cc`: all five pass on their first attempt. Added assertions in those
+  existing owners cover same-install/custom/missing-launcher resolution,
+  legacy fingerprint bytes for clean/dirty checkouts, and a staged gitlink with
+  missing `.gitmodules`. No original assertion or deadline was relaxed.
+
+Each run uses `scripts/with-test-tmp.sh cargo nextest run -p tuicommander
+-p tuic-git --lib --features dictation --profile ci -j 1 -E '<five exact owner
+names>'`. The branch-only workflow contains the complete filter. The final
+job took 11m18s including setup/cache/build; its Tests step took 8m46s.
+Logs and run metadata are retained under
+`~/Gits/.tmp/results/tuic-2310f-run-<run-id>.{log,json}`.
+
+### Lab capacity and remaining scope
+
+The corrected authorized IP/account SSH connection worked. Native inventory
+reported C: free space before 16,510,767,104 bytes and after read-only inventory
+16,510,763,008 bytes (15.38 GiB). No eligible old TUIC checkout/target existed
+under the build user; Gits held only 86,218,966 bytes. Nothing was deleted.
+Boss selected the test-branch CI alternative rather than a VM build.
+
+All 24 original rows now have product/fixture classifications: the 19 earlier
+classifications remain as recorded, and the five above complete the inventory.
+Full Windows CI after a main push remains outside this branch-only assignment.
+Native macOS/rb validation and broader submodule/removal consumer tests were not
+run by this worker. The coordinator owns integration review and those broader
+gates. The running desktop app was not restarted; Rust changes need a planned
+backend rebuild/restart.
+
+
 ## Recorded directory-event repair (2026-10-26, tuic-2310)
 
 The latest completed CI run inspected for this follow-up is `40331854991`,
@@ -228,7 +299,7 @@ Test names below omit their common module prefixes where the source column suppl
 | 3 | `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` | F | Both membership assertions compared portable diagnostic paths with a native fixture path. Normalize both oracles, including the negative assertion. |
 | 4 | `recycling_finished_checkout_keeps_artifacts_and_removes_stale_paths` | F | Recycled provenance path is read from portable Git inventory, while archive return contains native joined separators. Normalize the archive oracle; retain artifact and stale-path checks. |
 | 5 | `recycling_journal_failure_restores_the_original_checkout` | F | Same restored-inventory path oracle mismatch. |
-| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | U, intermittent native Git subprocess fault | Run 40193236753 on `d3404c764` fails all three attempts. Failure probes restore the stale ref successfully, then both direct `C:\Program Files\Git\ucrt64\bin\git.exe fetch --prune origin` and the original `cmd /C` form exit `3221225477` (`0xC0000005`) with empty streams under the same captured PATH/cwd (lines 5104/5126/5149). The unchanged owner passed in run 40179831695 in 11.812s. The direct probe excludes a cmd-only parsing failure, not a native Git/runtime/environment fault. Faulting module and product-versus-runner/fixture ownership remain unproven; keep diagnostics and safety assertions. |
+| 6 | `removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof` | P, launcher selection proven | See the 2026-10-27 native completion above: same cwd/PATH/ref, internal Git crashes while same-install cmd launcher succeeds; final native owner passes. This supersedes the earlier U classification, not a claim about the faulting module. |
 | 7 | `temporary_detached_worktrees_are_never_orphan_candidates` | F | Raw porcelain uses forward slashes; registration-presence oracle used backslashes. Keep the registration and no-cleanup assertions. |
 | 8 | `attachment_resume_drops_only_generated_directory_grants` | P | `agent_session.rs`: only configured root was canonicalized. Windows verbatim/nonverbatim roots compare unequal, so a deleted generated grant survives into the resume command. Resolve the existing config root on both sides, not the expired session child. A real symlink-root reproducer fails on Linux too. |
 | 9 | `codex_warm_discovery_does_not_restat_historical_rollouts` | P, invalidation cause proven | Run 40150611058 logs an available watcher and `Modify(Any)` on `sessions/2026`, with `rescan=false`, unchanged days, and `directory_changed=true`. `CodexIndex::candidates` invalidates the cached index for a date ancestor and rescans its files; the following lookup creates an uninitialized index and scans them again. Two scans of 65 files account for the exact 130 extra metadata reads. The fixture performs no writes between its first discovery and ten repeated lookups. This is over-broad directory-event invalidation, not watcher unavailability. The source of the native event remains unknown. Preserve the zero-read assertion; this build-only follow-up does not change watcher semantics. |
@@ -245,7 +316,7 @@ Test names below omit their common module prefixes where the source column suppl
 | 20 | `session_stats_cache_tracks_growth_truncation_and_deletion` | F (proven mismatch) | Production watches the canonical projects root; readiness helper compared its canonical events with a noncanonical fixture file path. Canonicalize the readiness oracle. This removes that mismatch, not a claim that native watcher delivery is proven. |
 | 21 | `repo_add_persists_workspace_and_preserves_repeat_registration` | F | `registered_spelling` deliberately persists a portable canonical key; oracle used verbatim canonical key. Use the registration spelling for lookup and exact values. |
 | 22 | `repo_add_uses_real_git_head_and_invalid_paths_do_not_change_config` | F | Git HEAD assertion already passed; line 108 looks up config with the wrong native key and returns null. Same fixture root cause as #21, not a product failure to discover the branch. |
-| 23 | `native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees` | P, cause open | Warm listing takes 13.6210139s against the 3s CLI response contract. The preceding base-repo fork-budget assertion passed, so repeated base integration subprocesses are not established as the cause. Native per-checkout profiling is needed. Do not raise the bound or remove the timing assertion. |
+| 23 | `native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees` | P, empty submodule scans proven | Native stage timings locate 3.789–6.437s in each empty recursive submodule scan. A live-index gitlink check removes only empty shell scans and one fresh status/HEAD snapshot supplies all safety fields; final owner passes its unchanged three-second warm-list assertion. |
 | 24 | `invalid_pause_publish_is_a_client_error` | F | Fixture seeds the store directly with a noncanonical project, while the HTTP API canonicalizes ownership. It fails project scope before graph validation. Seed with the API's resolved owner; keep client-error and `resume_to` assertions. |
 
 The patch addresses the proven causes in 18 rows. Six rows remain unresolved: #6, #9, #12, #17, #18 and #23. Inline dated deferrals identify their evidence gaps at the test sites. No speculative watcher or removal changes were made. The complete-classification criterion remains unchecked because #6 still lacks fault ownership; the later native differential proves #12 is a fixture defect (see follow-up below).
