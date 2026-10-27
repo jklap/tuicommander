@@ -2,6 +2,9 @@
 
 - [x] Session Chat shows working feedback from Send and existing terminal busy state on desktop and mobile, hidden for idle and awaiting input (#2397-06b6).
 
+- [x] AI Chat retains per-session ACP command offers, completes slash commands, routes supported host actions locally, and explains unavailable names without sending them (#2393-19fc).
+
+- [x] AI Chat automatically compacts an exhausted ego context and replays the submitted prompt once through the shared manual compaction path; recovery failures stop without looping (#2392-b2e3).
 - [x] AI Chat bottom card: repository header and independent pin, document draft action, input/send row and live context/model footer; conversation overflow actions remain available (#2394-e3c4).
 - [x] Markdown selections can be staged as quoted file-and-line references in an open AI Chat composer on desktop and mobile (#2361-8099).
 
@@ -101,7 +104,7 @@ TUICommander is a multi-agent terminal orchestrator designed to manage supported
 
 1. **Parallel Agent Orchestration** - Run 50+ coding agents simultaneously
 2. **Git Worktree Isolation** - Each task gets its own isolated workspace
-3. **Per-Pane Font Control** - Independent zoom levels for each terminal, shared by its CLI and Chat views
+3. **Per-Pane Font Control** - Independent zoom levels for each terminal. Desktop session Chat and AI Chat share one 14px default reading scale plus the terminal zoom delta; AI Chat follows the active terminal. Mobile retains its device-local reading size.
 4. **Rate Limit Resilience** - Detection and countdown display when agents hit rate limits
 5. **Productivity Features** - Prompt library, keyboard shortcuts, IDE integration
 

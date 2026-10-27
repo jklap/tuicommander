@@ -18,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
+- Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
+- Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
+- Automatically compact an exhausted ego AI Chat conversation and retry the submitted prompt once in its continuation; stop with an error if recovery fails. Keep composer drafts during compaction and allow sends in other conversations (#2392-b2e3).
+- Give session Chat and AI Chat one 14px default typography scale, and make both follow terminal zoom steps; AI Chat follows the active terminal (#2396-66e2).
+
 - Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow (#2383-f1a1).
 - Show the agent's reasoning choice label in the AI Chat summary instead of its internal unselected value after a model change (#2388-53a8).
 - Make the desktop AI Chat model, reasoning and mode summary open Session settings, and keep its menu action visible with an explanation while options are unavailable (#2385-1694).

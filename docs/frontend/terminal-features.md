@@ -4,6 +4,10 @@ Session Chat shows a pulsing **Working…** row after Send and while the termina
 
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.
 
+## Mobile composer focus
+
+The composer border highlights only while its textarea has focus. Tapping the mic releases editor focus without changing the insertion range. Recording uses the red mic icon, not an extra accent border. Keyboard navigation retains the mic focus ring. The blue slash key marks an available action, not retained focus.
+
 ## Keyboard Shortcuts
 
 ### Terminal Management
@@ -108,6 +112,8 @@ reversal and when the gesture ends.
 | Cmd+Ctrl+1–9 | Quick branch switch (hold Cmd+Ctrl, press number); in the Global Workspace it switches to tab N |
 
 ### Zoom
+
+Desktop terminal Chat and AI Chat use the shared scale in `styles/chat-tokens.css`: 14px plus the terminal font-size delta from the configured default, bounded to 8–32px. Terminal Chat reads its own terminal; AI Chat reads the active terminal and uses zero delta when none is active. Reset restores the 14px reading size. Mobile retains its device-local reading preference.
 
 | Shortcut | Action |
 |----------|--------|

@@ -21,8 +21,8 @@ class Recognition {
 	constructor() {
 		Recognition.instances.push(this);
 	}
-	start() {}
-	stop() {}
+	start = vi.fn();
+	stop = vi.fn();
 	abort() {}
 }
 
@@ -46,6 +46,9 @@ function serverLines() {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
+	vi.spyOn(console, "debug").mockImplementation(() => {});
+	vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.spyOn(console, "info").mockImplementation(() => {});
 	vi.stubGlobal("webkitSpeechRecognition", Recognition);
 	render(() => <CommandInput sessionId="errors" managedSession awaitingInput />);
 });
@@ -53,8 +56,46 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 	vi.clearAllMocks();
 	Recognition.instances = [];
+});
+
+// Catches: focus and activation both starting speech for one mic tap.
+it("starts once when the mic receives focus and one activation", () => {
+	const mic = screen.getByRole("button", { name: "Dictate into draft" });
+	fireEvent.pointerDown(mic);
+	mic.focus();
+	fireEvent.click(mic);
+	expect(Recognition.instances).toHaveLength(1);
+	expect(Recognition.instances[0].start).toHaveBeenCalledOnce();
+});
+
+// Catches: abort's follow-up error creating a second toast for the same failed take.
+it("reports one failure when audio capture fails and shutdown reports aborted", () => {
+	const current = dictate();
+	const error = current.onerror!;
+	error({ error: "audio-capture" });
+	error({ error: "aborted" });
+	current.onend?.();
+	expect(toastsStore.add).toHaveBeenCalledExactlyOnceWith(
+		"Dictation failed",
+		"No microphone found, or it is in use",
+		"error",
+		true,
+	);
+});
+
+// Catches: the toast leaves a second, persistent failure label and red mic over the composer.
+it("keeps a failure in the toast without retaining a composer failure label", () => {
+	const current = dictate();
+	current.onerror?.({ error: "audio-capture" });
+	expect(toastsStore.add).toHaveBeenCalledOnce();
+	expect(screen.queryByText("Dictation failed")).toBeNull();
+	current.onend?.();
+	const mic = screen.getByRole("button", { name: "Dictate into draft" });
+	expect(mic.getAttribute("data-failed")).toBeNull();
+	expect(mic.getAttribute("aria-pressed")).toBe("false");
 });
 
 // Catches: a recognition error code and state that never leave the phone, so the cause of

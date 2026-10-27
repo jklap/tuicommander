@@ -6,7 +6,7 @@
  * the next thing a person wants during a turn they regret is not a second turn.
  */
 
-import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, createUniqueId, For, on, Show } from "solid-js";
 import { t } from "../../i18n";
 import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { MobileComposerMenu } from "../../mobile/components/MobileComposerMenu";
@@ -14,6 +14,7 @@ import { MobileDictationButton } from "../../mobile/components/MobileDictationBu
 import { useBrowserDictation } from "../../mobile/useBrowserDictation";
 import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { uploadAttachment } from "../../services/uploadAttachment";
+import type { AcpAvailableCommand } from "../../types/acp";
 import { pastedImageFiles } from "../../utils/pastedImage";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoTextColor } from "../../utils/repoColor";
@@ -40,6 +41,119 @@ export const Composer: Component<{
 	const keyboardCorrection = useKeyboardCorrection();
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
 	const [uploading, setUploading] = createSignal(false);
+	const [commandNotice, setCommandNotice] = createSignal<string | null>(null);
+	const commandMenuId = createUniqueId();
+	const [commandIndex, setCommandIndex] = createSignal(0);
+	const [commandsDismissed, setCommandsDismissed] = createSignal(false);
+	type Command = AcpAvailableCommand & { run?: () => void; unavailable?: string };
+	const commands = createMemo<Command[]>(() => {
+		const chat = props.chat;
+		const live = !!chat.sessionId() && !!chat.connectionId?.();
+		const busy = chat.busy();
+		const host: Command[] = [
+			{
+				name: "new",
+				description: "Start a new conversation",
+				run: () => {
+					void chat.startSession();
+				},
+			},
+			{ name: "clear", description: "Clear the composer and its attachments", run: () => aiChatDraft.clear() },
+		];
+		if (live) {
+			host.push({
+				name: "quit",
+				description: "End the AI Chat connection (alias /q)",
+				run: () => {
+					void chat.stop();
+				},
+			});
+			host.push({
+				name: "usage",
+				description: "Show current context usage and cost",
+				run: () => {
+					const usage = chat.usage();
+					setCommandNotice(
+						usage
+							? `Context ${usage.used} / ${usage.size} tokens (${Math.round((usage.used / usage.size) * 100)}%)${usage.cost ? ` · ${usage.cost.currency} ${usage.cost.amount}` : ""}`
+							: "No usage has been reported for this conversation.",
+					);
+				},
+			});
+		}
+		if (live && chat.capabilities?.()?.egoCompactVersion != null)
+			host.push({
+				name: "compact",
+				description: "Compact context and continue in the successor conversation",
+				unavailable: busy ? "Wait for the current turn to finish before compacting." : undefined,
+				run: () => {
+					void chat.compact();
+				},
+			});
+		if (live && chat.capabilities?.()?.fork)
+			host.push({
+				name: "fork",
+				description: "Fork the conversation into a new tab",
+				unavailable: busy ? "Wait for the current turn to finish before forking." : undefined,
+				run: () => {
+					void chat.fork();
+				},
+			});
+		if (live && chat.capabilities?.()?.egoHoldVersion != null) {
+			host.push({
+				name: "pause",
+				description: "Pause the current turn",
+				unavailable: !busy || chat.held() ? "Pause is available while a turn is running." : undefined,
+				run: () => {
+					void chat.pause();
+				},
+			});
+			host.push({
+				name: "resume",
+				description: "Resume the paused turn",
+				unavailable: !chat.held() ? "Resume is available while a turn is paused." : undefined,
+				run: () => {
+					void chat.resume();
+				},
+			});
+		}
+		const hostNames = new Set([
+			"new",
+			"clear",
+			"quit",
+			"q",
+			"usage",
+			"compact",
+			"fork",
+			"pause",
+			"resume",
+			"name",
+			"retry",
+		]);
+		return [...host, ...(chat.availableCommands?.() ?? []).filter((command) => !hostNames.has(command.name))];
+	});
+	const commandText = () => aiChatDraft.text().match(/^\/(\S*)(?:\s([\s\S]*))?$/);
+	const matchingCommands = createMemo(() => {
+		const typed = commandText();
+		if (!typed || typed[2] !== undefined) return [];
+		return commands().filter((command) => command.name.toLowerCase().startsWith(typed[1].toLowerCase()));
+	});
+	const commandMenuOpen = () => !commandsDismissed() && matchingCommands().length > 0;
+	createEffect(on(matchingCommands, () => setCommandIndex(0)));
+	createEffect(
+		on(
+			() => aiChatDraft.text(),
+			() => {
+				setCommandIndex(0);
+				setCommandsDismissed(false);
+			},
+		),
+	);
+	const chooseCommand = (command: Command) => {
+		setCommandNotice(null);
+		aiChatDraft.set(`/${command.name} `);
+		queueMicrotask(() => textarea?.focus());
+	};
 	let textarea: HTMLTextAreaElement | undefined;
 	let inputArea: HTMLDivElement | undefined;
 	const browserDictation = useBrowserDictation({
@@ -59,6 +173,7 @@ export const Composer: Component<{
 			(session) => {
 				browserDictation.cancel();
 				aiChatDraft.activate(session);
+				setCommandNotice(null);
 			},
 		),
 	);
@@ -97,12 +212,38 @@ export const Composer: Component<{
 		queueMicrotask(resize);
 	});
 	const send = () => {
+		// Compaction may refuse or lose selection. Keep the draft until it can be accepted.
+		if (props.chat.compacting?.()) return;
 		if (props.mobileAttachments && uploading()) return;
 		browserDictation.cancel();
+		setCommandNotice(null);
 		const text = aiChatDraft.expandedText();
 		const images = aiChatDraft.images().map((image) => image.block);
 		const files = aiChatDraft.files();
 		if (!text.trim() && images.length === 0 && files.length === 0) return;
+		if (text.startsWith("/")) {
+			const typed = text.match(/^\/(\S+)(?:\s([\s\S]*))?$/);
+			const name = typed?.[1] === "q" ? "quit" : typed?.[1];
+			const command = commands().find((candidate) => candidate.name === name);
+			if (!command) {
+				setCommandNotice(
+					`${typed ? `/${typed[1]}` : "This command"} is not available in AI Chat. Available commands: ${commands()
+						.map((candidate) => `/${candidate.name}`)
+						.join(", ")}`,
+				);
+				return;
+			}
+			if (command.run) {
+				if (command.unavailable || typed?.[2]?.trim() || ((images.length || files.length) && name !== "clear")) {
+					setCommandNotice(command.unavailable ?? `/${name} does not accept arguments or attachments.`);
+					return;
+				}
+				aiChatDraft.clear();
+				command.run();
+				queueMicrotask(resize);
+				return;
+			}
+		}
 		aiChatDraft.restoreAfterSend();
 		queueMicrotask(resize);
 		setPasteError(null);
@@ -179,6 +320,33 @@ export const Composer: Component<{
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.isComposing) return;
+		if (commandMenuOpen()) {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				setCommandsDismissed(true);
+				return;
+			}
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				event.preventDefault();
+				const count = matchingCommands().length;
+				setCommandIndex((index) => (index + (event.key === "ArrowDown" ? 1 : count - 1)) % count);
+				queueMicrotask(() =>
+					document.getElementById(`${commandMenuId}-${commandIndex()}`)?.scrollIntoView?.({ block: "nearest" }),
+				);
+				return;
+			}
+			const selected = matchingCommands()[commandIndex()];
+			if (
+				selected &&
+				(event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && commandText()?.[1] !== selected.name))
+			) {
+				event.preventDefault();
+				chooseCommand(selected);
+				return;
+			}
+		}
 		if (event.key.toLowerCase() === "s" && event.ctrlKey && !event.metaKey && !event.altKey) {
 			event.preventDefault();
 			if (event.repeat) return;
@@ -285,6 +453,37 @@ export const Composer: Component<{
 					/>
 				</Show>
 				<div class={s.inputBody}>
+					<Show when={commandMenuOpen()}>
+						<div id={commandMenuId} class={s.slashCommands} role="listbox" aria-label="Slash commands">
+							<For each={matchingCommands()}>
+								{(command, index) => (
+									<button
+										id={`${commandMenuId}-${index()}`}
+										type="button"
+										data-control-layout="row"
+										role="option"
+										aria-selected={index() === commandIndex()}
+										class={s.slashCommand}
+										onClick={() => chooseCommand(command)}
+									>
+										<strong>/{command.name}</strong>
+										<span>{command.description}</span>
+										<Show when={command.input?.hint}>
+											<code>{command.input?.hint}</code>
+										</Show>
+										<Show when={command.unavailable}>
+											<span>{command.unavailable}</span>
+										</Show>
+									</button>
+								)}
+							</For>
+						</div>
+					</Show>
+					<Show when={commandNotice()}>
+						<span class={s.commandNotice} role="status">
+							{commandNotice()}
+						</span>
+					</Show>
 					<Show when={aiChatDraft.images().length > 0}>
 						<div class={s.imagePreviews}>
 							<For each={aiChatDraft.images()}>
@@ -353,12 +552,16 @@ export const Composer: Component<{
 							autocapitalize={
 								props.mobileAttachments ? (keyboardCorrection.enabled() ? "sentences" : "off") : undefined
 							}
+							aria-controls={commandMenuOpen() ? commandMenuId : undefined}
+							aria-autocomplete="list"
+							aria-activedescendant={commandMenuOpen() ? `${commandMenuId}-${commandIndex()}` : undefined}
 							placeholder={
 								props.mobileAttachments ? "Message ego..." : t("aiChat.messagePlaceholder", "Write a message…")
 							}
 							value={aiChatDraft.text()}
 							onInput={(event) => {
 								browserDictation.cancel();
+								setCommandNotice(null);
 								aiChatDraft.set(event.currentTarget.value);
 								resize();
 							}}

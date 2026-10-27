@@ -1,0 +1,72 @@
+tuic bg: command=/Users/stefano.straus/Gits/personal/orchestrator/tools/build/build-slot.sh scripts/with-test-tmp.sh pnpm vitest run src/mobile/__tests__/BrowserDictation.errors.test.tsx -t starts once when|reports one failure when|keeps a failure in the toast
+build-slot: admitted after 0s (running=0 free=75%)
+
+ RUN  v5.0.0 /Users/stefano.straus/Gits/personal/tuicommander__wt/fix-mobile-dictation-failed
+
+stdout | src/mobile/__tests__/BrowserDictation.errors.test.tsx > starts once when the mic receives focus and one activation
+[dictation] Screen wake lock unavailable; the screen may lock during capture
+[dictation] Browser dictation lifecycle: start [dictation-8f7e476c-5fb0-486f-bd71-4a51f4c34fb9]
+
+stdout | src/mobile/__tests__/BrowserDictation.errors.test.tsx > starts once when the mic receives focus and one activation
+[dictation] Browser dictation lifecycle: abort-requested [dictation-8f7e476c-5fb0-486f-bd71-4a51f4c34fb9]
+
+stdout | src/mobile/__tests__/BrowserDictation.errors.test.tsx > reports one failure when audio capture fails and shutdown reports aborted
+[dictation] Browser dictation lifecycle: start [dictation-fba322ab-2e70-4f3f-aa59-c3a68b0c525c]
+[dictation] Browser dictation lifecycle: error [dictation-fba322ab-2e70-4f3f-aa59-c3a68b0c525c]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-fba322ab-2e70-4f3f-aa59-c3a68b0c525c]
+[dictation] Browser dictation lifecycle: end [dictation-fba322ab-2e70-4f3f-aa59-c3a68b0c525c]
+[dictation] Browser dictation lifecycle: ownership-release [dictation-fba322ab-2e70-4f3f-aa59-c3a68b0c525c]
+
+stderr | src/mobile/__tests__/BrowserDictation.errors.test.tsx > reports one failure when audio capture fails and shutdown reports aborted
+[dictation] Browser dictation failed: audio-capture
+
+stdout | src/mobile/__tests__/BrowserDictation.errors.test.tsx > keeps a failure in the toast without retaining a composer failure label
+[dictation] Browser dictation lifecycle: start [dictation-bf316ef3-38f5-42a0-ba0e-a2062ccdd798]
+[dictation] Browser dictation lifecycle: error [dictation-bf316ef3-38f5-42a0-ba0e-a2062ccdd798]
+[dictation] Browser dictation lifecycle: abort-requested [dictation-bf316ef3-38f5-42a0-ba0e-a2062ccdd798]
+
+ ❯ src/mobile/__tests__/BrowserDictation.errors.test.tsx (12 tests | 1 failed | 9 skipped) 51ms
+   ✓ starts once when the mic receives focus and one activation 20ms
+   ✓ reports one failure when audio capture fails and shutdown reports aborted 12ms
+   × keeps a failure in the toast without retaining a composer failure label 11ms
+   ↓ sends the error code and the recognition state to the server log
+   ↓ sends every failure when two different codes follow each other
+   ↓ names not-allowed in plain words in the toast
+   ↓ names service-not-allowed in plain words in the toast
+   ↓ names no-speech in plain words in the toast
+   ↓ names audio-capture in plain words in the toast
+   ↓ names network in plain words in the toast
+   ↓ falls back to the raw code for a code it does not know
+   ↓ mirrors one bounded ordered lifecycle for an error then end, with session and take identity
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/mobile/__tests__/BrowserDictation.errors.test.tsx > keeps a failure in the toast without retaining a composer failure label
+AssertionError: expected <span role="status" …(1)></span> to be null
+
+- Expected:
+null
+
++ Received:
+<span
+  class="dictationFailure"
+  role="status"
+>
+  Dictation failed
+</span>
+
+ ❯ src/mobile/__tests__/BrowserDictation.errors.test.tsx:90:49
+     88|  current.onerror?.({ error: "audio-capture" });
+     89|  expect(toastsStore.add).toHaveBeenCalledOnce();
+     90|  expect(screen.queryByText("Dictation failed")).toBeNull();
+       |                                                 ^
+     91|  current.onend?.();
+     92|  const mic = screen.getByRole("button", { name: "Dictate into draft" }…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed | 9 skipped (12)
+   Start at  20:23:24
+   Duration  3.60s (transform 37%, import 37%, environment 19%, setup 6%, tests 2%)

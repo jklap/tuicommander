@@ -78,13 +78,9 @@ export const TerminalChatTranscript: Component<{
 		unwatch?.();
 	});
 	return (
-		<div
-			class={s.chatView}
-			data-testid="terminal-chat-view"
-			data-session-zoom={props.fontSize !== undefined ? "true" : undefined}
-			style={{ "--font-base": props.fontSize !== undefined ? `${props.fontSize}px` : undefined }}
-		>
+		<div class={s.chatView} data-testid="terminal-chat-view">
 			<Transcript
+				fontSize={props.fontSize}
 				terminalAgent={props.terminalAgent}
 				mobile={props.mobile}
 				onAtBottomChange={props.onAtBottomChange}

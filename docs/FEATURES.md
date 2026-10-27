@@ -24,6 +24,7 @@ Native story API and CLI lists support combined state, priority and type filters
 
 - AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
 
+- AI Chat automatically compacts an exhausted ego context through the advertised extension, opens the continuation and replays the original prompt once. Failures and a second overflow stop recovery (#2392-b2e3).
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
 
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.
@@ -248,7 +249,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
-- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
+- Desktop session Chat and AI Chat share a 14px default reading scale and the terminal zoom delta; AI Chat follows the active terminal. Active and all-terminal zoom actions update both Chat views; mobile keeps its device-local reading preference
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`
@@ -2378,7 +2379,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
-- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. “Dictation failed” also remains beside the composer mic above the keyboard until the next take starts. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. The toast is the only failure surface; no error label or failure colour remains on the composer mic. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
 - Mobile CLI output follows the bottom through keyboard and viewport resizes while following; a reader who scrolled up keeps their position.
 - Mobile CLI and Chat output show a floating down-arrow at the bottom-right of the output area while scrolled back, at least 8px above the key bar and outside the composer. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Appearance offers independent Terminal and Chat font controls (10–24 px), each saved on this device. Existing defaults remain 14 px for CLI and Chat body text. Chat changes affect Session Chat and AI Chat transcripts only; composers and UI chrome do not change. CLI output rewraps locally and preserves the visible row without resizing the shared PTY.
@@ -3428,3 +3429,13 @@ Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 
 Native story notes: the shared project-scoped story service appends immutable commentary with backend actor provenance, Unix-millisecond time and the current subject revision. Notes do not advance story revisions. Optional workflow evidence stores validated `{runId, commandId}` references to persisted receipts in the same project and plan, not copied payloads. Story detail lists notes with author/time/revision provenance and receipt IDs, provides an append-only add field, and has an explicit Refresh notes control for external additions. Drafts and pending replies stay scoped to the selected story.
+
+
+## AI Chat slash commands
+
+A leading `/` opens the selected conversation's ACP command offer with descriptions,
+input hints, prefix filtering and keyboard/mouse completion. Agent invocations keep
+`/<name> <arguments>` prompt text. Supported host actions (`/new`, `/clear`, `/quit`
+with `/q`, `/usage`, and advertised `/compact`, `/fork`, `/pause`, `/resume`) use the
+existing controls, not model prompts. Unknown or unsupported commands retain the
+draft and show an inline list of available commands (#2393-19fc).
