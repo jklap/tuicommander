@@ -77,11 +77,6 @@
   color: var(--error);
 }
 
-/* Recording is indicated by the red icon, not a second focus border. */
-.dictate[aria-pressed="true"]:not(:focus-visible) {
-  border-color: transparent;
-}
-
 .question {
   position: absolute;
   bottom: 100%;
