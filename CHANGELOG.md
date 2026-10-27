@@ -18,8 +18,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Make the desktop AI Chat model, reasoning and mode summary open Session settings, and keep its menu action visible with an explanation while options are unavailable (#2385-1694).
 - Keep the AI Chat conversation picker on the selected transcript when saved conversations arrive or refresh, instead of showing another attached session (#2391-8d6a).
 
-- Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow. Show a separate list warning with a list-only retry instead of failing the active conversation (#2383-f1a1).
-
 - Allow remote terminal WebSocket streams over SSH and Direct HTTP(S) connections in the macOS desktop CSP, fixing blank terminals with “The operation is insecure” (#147, #2382-97aa).
 
 - Make private secret-form SSO HTTP(S) links selectable, clickable and copyable with the same browser and copy controls as phone links; keep other display values as plain text (#2381-1c72).
