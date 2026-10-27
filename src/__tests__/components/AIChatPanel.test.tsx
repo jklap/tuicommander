@@ -2188,7 +2188,10 @@ describe("AIChatPanel: composer height", () => {
 		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
 			return this.value.split("\n").length * LINE_PX + 16;
 		});
-		clientHeight.mockReturnValue(PANEL_PX);
+		// Catches the new card wrapper becoming the 40% height-budget source.
+		clientHeight.mockImplementation(function (this: HTMLElement) {
+			return this.id === "ai-chat-panel" ? PANEL_PX : 60;
+		});
 	});
 	afterEach(() => {
 		scrollHeight.mockReset();
@@ -2884,7 +2887,10 @@ describe("AIChatPanel: durable conversations", () => {
 		});
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		// Catches: the card footer showing a stale or incorrect context numerator, capacity or remainder.
+		expect(container.querySelector('[aria-label="Context usage"]')?.textContent).toContain(
+			"Ctx 25% · 50K/200K · ~150K free",
+		);
 		expect(container.textContent).toContain("USD 0.001035");
 	});
 
@@ -2894,7 +2900,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("Ctx 25%");
 		expect(container.textContent).not.toContain("NaN");
 		expect(container.textContent).not.toContain("USD");
 	});
@@ -2909,7 +2915,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).toContain("Ctx 50%");
 		expect(container.textContent).not.toContain("USD 2");
 	});
 
@@ -2919,7 +2925,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
 		await settle();
 
-		expect(container.textContent).not.toContain("Context");
+		expect(container.querySelector('[aria-label="Context usage"]')).toBeNull();
 		expect(container.textContent).not.toContain("Infinity");
 	});
 
@@ -4570,6 +4576,25 @@ describe("AIChatPanel: new chat during cold saved connection", () => {
 });
 
 describe("desktop composer icon controls", () => {
+	it("keeps repository pin and parked-draft actions separate inside the card header", async () => {
+		// Catches: moving the draft action to the header accidentally wires it to repository pinning.
+		const view = await renderPanel();
+		const header = view.container.querySelector('[class*="composerHeader"]')!;
+		expect(header.textContent).toContain("Repository · ");
+		const pin = header.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement;
+		const park = header.querySelector('button[aria-label="Park draft"]') as HTMLButtonElement;
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep my draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		pin.click();
+		expect(textarea.value).toBe("Keep my draft");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		park.click();
+		expect(textarea.value).toBe("");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		expect(park.getAttribute("aria-label")).toBe("Restore parked draft");
+	});
+
 	it("keeps icon actions named and disabled for an empty draft, and marks parked drafts pressed", async () => {
 		// Catches: replacing text with SVG drops accessible names, enables empty sends, or hides parked state.
 		const view = await renderPanel();
