@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop retrying unavailable PTY child status forever during close or kill, so that error cannot prevent desktop Quit from finishing (#2406-e4e1).
 - Keep sleep prevention active for background agent jobs, detached runners and managed `keep_open` work, even when a terminal is idle or the WebView is hidden; retain the user opt-out (#2402-12a0).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 

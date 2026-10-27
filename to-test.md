@@ -1,3 +1,10 @@
+## Quit after child-status errors (2406-e4e1) — Rust restart required
+
+- [x] Before the fix, real OS `ECHILD` errors made both PTY close and kill hang on native macOS and Linux rb. The two focused regressions failed at their teardown-return bound; neither simulates the child status. Evidence: `~/Gits/.tmp/results/tuic-quit-evidence/`.
+- [x] The pre-fix isolated native `agent-test-quit` displayed Quit confirmation, closed its disposable PTY, and exited with status 0 after clicking Quit. The instance is stopped. This ordinary-case check does not reproduce Boss's historical failure.
+- [ ] Coordinator: run `child_reaping_tests` and `close_pty_core_kills_agent_grandchild` against the final change. No post-fix GREEN run was performed in the implementation lane.
+- [ ] After an authorized `make dev` restart or `make build`, check the next desktop quit attempt. If it still hangs, retain the exact action (window close, Cmd+Q, menu, or confirmation), time and logs. The original failure has not been attributed to `ECHILD`; the running daily app was not quit or restarted by this peer. Rust does not hot-reload.
+
 ## Mobile usage menu (2400-d006)
 
 - [x] Nine focused mobile usage and shared formatter tests pass. Equal/changed session snapshots keep the existing quota rows mounted; one plan heading groups both windows, with no invented tier.
