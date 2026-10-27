@@ -336,6 +336,13 @@ test-run directories under `~/Gits/.tmp/tuic-tests` and the checkout's
 `.tmp/tuic-tests` after they have been unused for more than seven days. Run
 standalone Rust tests through that wrapper.
 
+Rust coverage uses `make cov` (`cargo llvm-cov nextest`). Nextest builds the ACP
+and MCP fixture executables once for the library tests that launch them. Under
+llvm-cov, setup uses the parent of `LLVM_PROFILE_FILE` as Cargo's explicit
+`--target-dir`, so those executables stay beside the instrumented tests rather
+than in the ordinary build tree. This also supports custom coverage directories.
+The fixture feature selection and test profile are unchanged.
+
 Every Rust test binary that links `tuic-test-support` runs its git processes against a fixed hermetic gitconfig: `GIT_CONFIG_GLOBAL` points at it, `GIT_CONFIG_NOSYSTEM=1` is set and inherited `GIT_CONFIG_*` variables are dropped. Your own `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings therefore do not change test results.
 
 When a named instance's Unix socket path does not fit `sun_path`, the error names the path length, the 103-byte limit, the longest `TMPDIR` that would fit and `TUIC_SOCKET`; the bind is not retried.
