@@ -738,8 +738,8 @@ empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default; every tone releases to zero and drains a short silent tail before the output stream closes |
-| `block_sleep` | -- | `()` | Prevent system sleep |
-| `unblock_sleep` | -- | `()` | Allow system sleep |
+| `block_sleep` | -- | `()` | Refresh backend-owned sleep prevention; cannot override the user setting |
+| `unblock_sleep` | -- | `()` | Refresh backend-owned sleep prevention; cannot release live-work protection |
 
 ## ACP client for ego (`acp_commands.rs`)
 

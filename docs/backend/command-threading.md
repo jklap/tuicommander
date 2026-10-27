@@ -373,3 +373,11 @@ transaction and agent command writer in `spawn_blocking`, not on the main thread
 normalized snapshot are shared with `GET /sessions/{id}/usage`. Provider/CLI
 I/O is bounded and never runs through a synchronous Tauri command on the
 macOS main thread.
+
+## Sleep assertion refresh (2402-12a0)
+
+`block_sleep` and `unblock_sleep` are async compatibility entry points into the
+same backend-owned policy. Both use `spawn_blocking` for process inventory,
+locks and the native keepawake transition. Neither accepts a frontend busy flag.
+The dedicated `sleep-prevention` thread owns periodic reconciliation even when
+no WebView is loaded; it shares the same serialized native guard.
