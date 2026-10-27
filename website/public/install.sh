@@ -24,18 +24,16 @@ get_download_url() {
     | grep -o 'https://[^"]*'
 }
 
-install_macos() {
-  local APP_HOME
-  local APP_VER
+install_macos() (
+  APP_HOME=
+  APP_VER=
 
   if [ -d "$OSX_HOME/TUICommander.app" ]; then
     APP_HOME="$OSX_HOME/TUICommander.app"
   else
     # might not be in the usual place, but if the user has set up tuic we can find it from that
-    local TUIC_BIN
     TUIC_BIN=$(command -v tuic || true)
     if [ -n "$TUIC_BIN" ] && [ -L "$TUIC_BIN" ]; then
-      local TUIC
       TUIC=$(readlink "$TUIC_BIN")
       APP_HOME="${TUIC%/Contents/MacOS/tuic}"
       OSX_HOME="${APP_HOME%/TUICommander.app}"
@@ -63,18 +61,14 @@ install_macos() {
   fi
 
   # get the latest version from GitHub
-  local LATEST_VER="unknown"
+  LATEST_VER="unknown"
   if [ "$WANTED_VER" = "nightly" ] || [ "$WANTED_VER" = "beta" ]; then
-    local CHANNEL="$WANTED_VER"
+    CHANNEL="$WANTED_VER"
     # fetch the latest json for nightly so we can find the version string there
     # "version": "1.3.0-nightly.20260603.t2025",
     LATEST_VER=$(curl -sS --fail-with-body -L \
         "https://github.com/${REPO}/releases/download/${CHANNEL}/latest.json" \
         | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^" ]*\)".*/\1/p')
-    if [ $? -ne 0 ]; then
-      echo "Unable to get the latest $CHANNEL version from GitHub"
-      exit 1
-    fi
     echo "Found $LATEST_VER as latest $CHANNEL"
 
     # nightly ver numbers can be slightly different between the actual app version found in Info.plist and the version found in latest.json
@@ -97,10 +91,6 @@ install_macos() {
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "$RELEASE_URL/latest" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^" ]*\)".*/\1/p')
-    if [ $? -ne 0 ]; then
-      echo "Unable to get the latest version from GitHub"
-      exit 1
-    fi
     echo "Found ${LATEST_VER} as latest release version"
     WANTED_VER="v${LATEST_VER}"
   fi
@@ -115,18 +105,14 @@ install_macos() {
     exit 0
   fi
 
-  local ASSET="TUICommander_aarch64.app.tar.gz"
-  local URL="https://github.com/$REPO/releases/download/$WANTED_VER/$ASSET"
+  ASSET="TUICommander_aarch64.app.tar.gz"
+  URL="https://github.com/$REPO/releases/download/$WANTED_VER/$ASSET"
   echo "Downloading and installing version ${LATEST_VER}"
   curl -LSs "$URL" \
     | tar xz -C "$OSX_HOME"
-  if [ $? -ne 0 ]; then
-    echo "Unable to download version ${WANTED_VER} from GitHub"
-    exit 1
-  fi
   echo "Installed to ${OSX_HOME}/TUICommander.app"
   echo "Tip: you can also install via Homebrew: brew install sstraus/tap/tuicommander"
-}
+)
 
 # A fresh 0700 directory under the caller's temp dir ($TMPDIR, else /tmp).
 # The package keeps its extension inside it: a suffix after the X's of a
