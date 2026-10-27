@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { statusBarTicker } from "../../stores/statusBarTicker";
 
 /**
  * The ticker must not name a vendor it has not seen. A Codex-only install polling
@@ -10,14 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("../../invoke", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-const addMessage = vi.fn();
-const removeMessage = vi.fn();
-vi.mock("../../stores/statusBarTicker", () => ({
-	statusBarTicker: {
-		addMessage: (...args: unknown[]) => addMessage(...args),
-		removeMessage: (...args: unknown[]) => removeMessage(...args),
-	},
-}));
+const addMessage = vi.spyOn(statusBarTicker, "addMessage");
+const removeMessage = vi.spyOn(statusBarTicker, "removeMessage");
 
 vi.mock("../../stores/mdTabs", () => ({
 	mdTabsStore: { addClaudeUsage: vi.fn(), addCodexUsage: vi.fn(), addGrokUsage: vi.fn() },
@@ -54,13 +49,17 @@ describe("agent usage ticker — no vendor default", () => {
 		destroyAgentUsage();
 		invoke.mockReset();
 		invoke.mockResolvedValue({});
-		addMessage.mockReset();
-		removeMessage.mockReset();
+		statusBarTicker.clear();
+		addMessage.mockClear();
+		removeMessage.mockClear();
 		setTerminals({ activeId: null, terminals: {} });
 	});
 
 	// The poll interval outlives the test otherwise.
-	afterEach(() => destroyAgentUsage());
+	afterEach(() => {
+		destroyAgentUsage();
+		statusBarTicker.clear();
+	});
 
 	it("polls nothing and writes no ticker when no terminal is active", async () => {
 		initAgentUsage();
@@ -88,6 +87,43 @@ describe("agent usage ticker — no vendor default", () => {
 
 		expect(invoke).not.toHaveBeenCalled();
 		expect(addMessage).not.toHaveBeenCalled();
+	});
+
+	it("reads the ego terminal only — catches accidental Claude/Codex account fallback", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "ego", sessionId: "ego-one" } } });
+		invoke.mockResolvedValue({
+			text: "ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+			tooltip: "openrouter key: observed 2026-10-27T17:53:47.635+00:00; source: openrouter_key:data.limit_remaining",
+		});
+		initAgentUsage();
+		await settle();
+		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_ego_usage", { sessionId: "ego-one" });
+		expect(statusBarTicker.getAll()).toEqual([
+			expect.objectContaining({
+				label: "ego",
+				sessionId: "ego-one",
+				text: "ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+				tooltip: "openrouter key: observed 2026-10-27T17:53:47.635+00:00; source: openrouter_key:data.limit_remaining",
+				onClick: undefined,
+			}),
+		]);
+	});
+
+	it("clears missing ego data — catches unknown usage rendered as zero or stale provider data", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "ego", sessionId: "ego-one" } } });
+		statusBarTicker.addMessage({
+			id: "claude-usage:rate",
+			pluginId: "claude-usage",
+			label: "ego",
+			sessionId: "ego-one",
+			text: "old usage",
+			priority: 0,
+			ttlMs: 0,
+		});
+		invoke.mockResolvedValue({ text: null });
+		initAgentUsage();
+		await settle();
+		expect(statusBarTicker.getAll()).toEqual([]);
 	});
 
 	it("never polls Claude on a Codex-only install", async () => {
@@ -139,7 +175,7 @@ describe("agent usage ticker — no vendor default", () => {
 		expect(invoke).toHaveBeenLastCalledWith("get_claude_usage_api", { sessionId: "default-session" });
 		expect(addMessage).toHaveBeenLastCalledWith(expect.objectContaining({ label: "Claude" }));
 		const { mdTabsStore } = await import("../../stores/mdTabs");
-		addMessage.mock.lastCall?.[0].onClick();
+		statusBarTicker.getAll()[0]?.onClick?.();
 		expect(mdTabsStore.addClaudeUsage).toHaveBeenCalledWith("default-session");
 	});
 

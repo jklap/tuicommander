@@ -2688,6 +2688,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
             ego_cli::ego_providers,
+            ego_cli::usage::get_ego_usage,
             ego_cli::perimeter::ego_perimeter,
             ego_cli::perimeter::ego_set_perimeter_roots,
             ego_cli::perimeter::ego_set_perimeter_network,
