@@ -12,8 +12,16 @@
 # feature unification: cargo build --profile test alone does not include it.
 # Integration targets build the normal fixture executables, not test harnesses.
 set -eu
+# llvm-cov passes --target-dir to nextest, not to this nested Cargo build.
+# Its LLVM_PROFILE_FILE lives in that exact artifact root (also for custom
+# coverage target directories). Keep fixtures beside the instrumented tests.
+set --
+if [ "${CARGO_LLVM_COV:-}" = 1 ]; then
+    : "${LLVM_PROFILE_FILE:?llvm-cov must provide its profile output path}"
+    set -- --target-dir "$(dirname "$LLVM_PROFILE_FILE")"
+fi
 if [ -n "${TUIC_FIXTURE_FEATURES:-}" ]; then
-    cargo test --workspace --no-run --features "$TUIC_FIXTURE_FEATURES"
+    cargo test --workspace --no-run --features "$TUIC_FIXTURE_FEATURES" "$@"
 else
-    cargo build --profile test --no-default-features --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server
+    cargo build --profile test --no-default-features --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server "$@"
 fi

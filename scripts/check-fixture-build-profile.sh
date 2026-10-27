@@ -30,12 +30,23 @@ for shell in sh pwsh; do
   else
     builder=(sh scripts/build-fixture-bins.sh)
   fi
-  unset TUIC_FIXTURE_FEATURES FIXTURE_BUILD_EXIT
+  unset TUIC_FIXTURE_FEATURES FIXTURE_BUILD_EXIT CARGO_LLVM_COV LLVM_PROFILE_FILE
   check build --profile test --no-default-features \
     --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server
   export TUIC_FIXTURE_FEATURES=dictation
   # Catches: CI selecting a binary-only graph without test dev-dependencies.
   check test --workspace --no-run --features dictation
+  # Catches: llvm-cov setup succeeding while fixtures land outside the test tree.
+  # A nonstandard directory with spaces rejects hardcoded llvm-cov-target paths
+  # and unquoted shell argument expansion. Both feature selections must route it.
+  export CARGO_LLVM_COV=1
+  export LLVM_PROFILE_FILE="$work/custom coverage/tuicommander-%p-%m.profraw"
+  check test --workspace --no-run --features dictation \
+    --target-dir "$work/custom coverage"
+  unset TUIC_FIXTURE_FEATURES
+  check build --profile test --no-default-features \
+    --bin tuic-acp-fixture-agent --bin tuic-mcp-fixture-server \
+    --target-dir "$work/custom coverage"
   # Catches: a failed fixture build being reported as successful setup.
   export FIXTURE_BUILD_EXIT=7
   set +e
