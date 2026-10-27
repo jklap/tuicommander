@@ -92,7 +92,8 @@ assets use `tauri/custom-protocol` even though this is a debug build.
 
 Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
 The isolated window starts at 1400 × 900 logical pixels so Tasks and other
-virtualized panels have a usable viewport. Its minimum size remains 640 × 420.
+virtualized panels have a usable viewport. Its minimum size is 390 × 420, so
+native checks can use a phone-width viewport.
 Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
 AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
 Agents must connect through the instance's Unix socket, printed as `socket` and
@@ -120,7 +121,7 @@ is not a symlink into mbx's target cache. The default instance stores app state
 in `~/Library/Application Support/com.tuic.commander/instances/agent-test/`.
 It never seeds from the daily config. Never copy daily tokens or config there.
 
-The test window is 640×420 logical pixels, with matching minimum dimensions,
+The test window starts at 1400×900 logical pixels, with a 390×420 minimum,
 at the bottom-right of the primary screen work area (16 logical pixels inset).
 It is always on top so ordinary application windows do not cover it. A higher
 or another floating window (a second agent-test instance in the same corner, a
@@ -144,9 +145,36 @@ becoming key. Saved-window restoration is disabled for this profile because
 the window-state plugin calls `show` and `set_focus` during restoration.
 Do not call `window.show()` or `setFocus()` to present it: the pinned Tao backend
 uses `makeKeyAndOrderFront` for those APIs. The agent-test capability override
-denies `show` and `set-focus`; it adds no presentation permission. The daily
-capability file is unchanged. Stop the instance when the check ends to remove
-the floating window. The daily window configuration remains unchanged.
+denies `show` and `set-focus` and grants `core:window:allow-set-size` only
+to its `main` window. The grant is inline in the agent-test build overlay, not
+in an auto-loaded capability file. The daily capability files are unchanged.
+Stop the instance when the check ends to remove the floating window. The daily window configuration remains unchanged.
+
+#### Resize the native test window
+
+Use the socket from `make agent-test AGENT_TEST_DRY_RUN=1` with the same
+`AGENT_TEST_INSTANCE=agent-test-<story>` and `AGENT_TEST_PORT=<port>` values
+as the running authorized instance. Do not use the orchestrator MCP debug tool:
+it targets the daily app, not your worktree. Set `SOCKET` to that dry run's
+`socket` value, then send a native Tauri resize through the instance API:
+
+```sh
+curl --fail --unix-socket "$SOCKET" http://localhost/debug/invoke_js \
+  -H 'Content-Type: application/json' --data-binary @- <<'EOF'
+{"script":"const api = window.__TAURI__.window; const w = api.getCurrentWindow(); await w.setSize(new api.LogicalSize(390, 844)); return {check: 'agent-test-resize', size: (await w.innerSize()).toLogical(await w.scaleFactor())};"}
+EOF
+curl --fail --unix-socket "$SOCKET" \
+  'http://localhost/logs?source=eval_js&limit=5'
+```
+
+`invoke_js` acknowledges dispatch, not completion. Read the matching
+`agent-test-resize` log result and check its logical width and height before
+capturing evidence; a permission error is not a successful resize. This changes
+the native WebView viewport, not a browser-mode Vite page. Do not call `show()`
+or `setFocus()`. To restore the initial viewport, use the same script with
+`new api.LogicalSize(1400, 900)`. Rebuild and restart only your named agent-test
+instance to load a changed capability overlay; an existing binary keeps its
+compiled permissions.
 
 #### Persistent GitHub live-check login
 

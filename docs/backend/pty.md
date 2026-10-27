@@ -49,6 +49,11 @@ Close never takes the PTY writer mutex or writes Ctrl-C into a potentially full
 terminal. On Unix it signals the owned foreground process group with SIGINT,
 then retains the 100ms grace and 100ms force-kill wait. On Windows it terminates
 the owned child because ConPTY has no portable out-of-band Ctrl-C operation.
+All three exit waits share the same bounded poller. If the OS cannot supply the
+child status, the poller logs the error and returns instead of retrying forever.
+For example, `ECHILD` after another waiter reaps a child cannot block the
+sequential desktop quit cleanup. Teardown does not invent an exit code when the
+status is unavailable.
 
 ## Identity loss during replacement
 

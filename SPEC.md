@@ -763,7 +763,7 @@ Some frontend-only stores persist to localStorage:
 - [x] GitHub GraphQL API (replaces gh CLI for PR/CI data)
 - [x] Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server (PAT), per-repo account bindings with ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker (see FEATURES.md 8.14)
 - [x] Auto-update via tauri-plugin-updater with progress badge
-- [x] Prevent system sleep while agents are working (keepawake)
+- [x] Backend-owned sleep prevention for active turns, background agent work and live managed `keep_open` holds; independent of WebView lifecycle (keepawake)
 - [x] Usage limit detection for Claude Code (weekly/session) with status bar badge
 - [x] Repository groups with accordion UI (named, colored, collapsible, drag-and-drop)
 - [x] HEAD file watcher for branch change detection
