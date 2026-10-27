@@ -11855,7 +11855,7 @@ branch refs/heads/feat
         let after = crate::git_cli::take_command_counts();
         eprintln!("1491: 11 writers x 3 refreshes; before={before:?}; after={after:?}");
         assert!(before.get("cherry").copied().unwrap_or_default() > 0);
-        assert_eq!(before.get("status"), Some(&66));
+        assert_eq!(before.get("status"), Some(&33));
         assert!(
             after.is_empty(),
             "file saves must spawn no Git CLI reads: {after:?}"
