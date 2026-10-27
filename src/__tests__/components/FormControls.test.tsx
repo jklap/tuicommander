@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -401,4 +402,58 @@ it("forwards reactive invalid fields and removable toggle state", () => {
 	expect(button).toHaveAttribute("aria-pressed", "true");
 	fireEvent.click(button);
 	expect(button).toHaveAttribute("aria-pressed", "false");
+});
+
+// Catches: suppressing the pressed border globally, or losing the opt-out while recording toggles.
+it("keeps pressed borders by default and lets status-only toggles omit them", () => {
+	const stylesheet = document.createElement("style");
+	stylesheet.textContent = readFileSync("src/components/ui/FormControls.module.css", "utf8");
+	document.head.append(stylesheet);
+	document.documentElement.style.setProperty("--accent", "#123456");
+	const [pressed, setPressed] = createSignal(false);
+	try {
+		render(() => (
+			<>
+				<Button variant="ghost" aria-pressed={pressed()} onClick={() => setPressed(!pressed())}>
+					Default toggle
+				</Button>
+				<Button shape="icon" circular variant="ghost" aria-label="Round default" aria-pressed={pressed()}>
+					+
+				</Button>
+				<Button variant="ghost" pressedIndicator="none" aria-pressed={pressed()}>
+					Status toggle
+				</Button>
+				<Button
+					shape="icon"
+					circular
+					variant="ghost"
+					pressedIndicator="none"
+					aria-label="Round status"
+					aria-pressed={pressed()}
+				>
+					+
+				</Button>
+			</>
+		));
+		const toggle = screen.getByRole("button", { name: "Default toggle" });
+		const status = screen.getByRole("button", { name: "Status toggle" });
+		const round = screen.getByRole("button", { name: "Round status" });
+		fireEvent.click(toggle);
+		expect(getComputedStyle(toggle).borderColor).toBe("#123456");
+		const roundDefault = screen.getByRole("button", { name: "Round default" });
+		// Happy DOM misweights the existing grouped circular-border reset; native Chrome checks the outer border.
+		expect(getComputedStyle(roundDefault.firstElementChild!).borderColor).toBe("#123456");
+		for (const button of [status, round]) {
+			expect(button).toHaveAttribute("aria-pressed", "true");
+			expect(button).not.toHaveAttribute("pressedIndicator");
+			expect(getComputedStyle(button).borderColor).toBe("transparent");
+		}
+		expect(getComputedStyle(round.firstElementChild!).borderColor).toBe("transparent");
+		fireEvent.click(toggle);
+		expect(getComputedStyle(toggle).borderColor).toBe("transparent");
+		expect(status).toHaveAttribute("aria-pressed", "false");
+	} finally {
+		stylesheet.remove();
+		document.documentElement.style.removeProperty("--accent");
+	}
 });

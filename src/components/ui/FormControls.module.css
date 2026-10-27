@@ -138,7 +138,7 @@
 .danger { background: var(--error); border-color: var(--error); color: var(--text-on-error); }
 .secondary:hover:enabled, .ghost:hover:enabled, .circleButton:hover:enabled > :is(.secondary, .ghost) { background: var(--bg-highlight); }
 .primary:hover:enabled, .danger:hover:enabled, .circleButton:hover:enabled > :is(.primary, .danger) { filter: brightness(1.1); }
-.button[aria-pressed="true"], .circleButton[aria-pressed="true"] > .circleSurface { border-color: var(--accent); }
+.button:where(:not(.noPressedIndicator))[aria-pressed="true"], .circleButton:where(:not(.noPressedIndicator))[aria-pressed="true"] > .circleSurface { border-color: var(--accent); }
 
 /* Promoted from Settings: Expert's 36x20 track is the shared switch look. */
 .switchControl, .colorInput {
@@ -264,15 +264,18 @@
 .buttonGroup > .button:not(:first-child) { border-inline-start: 1px solid var(--border); }
 .buttonGroup > .button:focus-visible { position: relative; z-index: 1; }
 
-.textareaAutoGrow {
+.textareaCompact {
  min-height: var(--control-height, 36px);
- max-height: calc(var(--control-height, 36px) * 3);
  padding-block: calc(var(--control-padding-x, 8px) / 2);
+}
+.textareaAutoGrow {
+ max-height: calc(var(--control-height, 36px) * 3);
  resize: none;
  overflow-y: auto;
 }
 @media (max-width: 600px) {
- .textareaAutoGrow { min-height: max(44px, var(--control-height, 36px)); max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
+ .textareaCompact { min-height: max(44px, var(--control-height, 36px)); }
+ .textareaAutoGrow { max-height: calc(max(44px, var(--control-height, 36px)) * 3); }
 }
 
 /* Validation changes the border, not the keyboard focus ring. */

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat slash commands",
+		description:
+			"Type / in AI Chat to see available agent commands and local actions such as compact, fork and quit. Use the arrows and Tab to complete a name before sending.",
+		shortcut: null,
+	},
+	{
 		feature: "Markdown references in AI Chat",
 		description:
 			"Select a passage in a Markdown file and choose Send to AI Chat to stage its path, source lines and quote in your open conversation without sending.",
@@ -257,7 +263,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Terminal Chat Input",
 		description:
-			"Switch a Claude terminal to Chat to reply in docked Compose. Ctrl+Enter sends now; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
+			"Switch a Claude terminal to Chat to reply in docked Compose. Enter sends now; Ctrl+Enter or Shift+Enter adds a line; Shift+Ctrl+Enter queues. Answer permission prompts in CLI.",
 		shortcut: null,
 	},
 	{
@@ -281,7 +287,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "AI Chat Repository Pin",
 		description:
-			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
+			"Use the pin beside Repository in the AI Chat card to keep one repository while you browse elsewhere. The document button parks or restores your draft.",
 		shortcut: null,
 	},
 	{

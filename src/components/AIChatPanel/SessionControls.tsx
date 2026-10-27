@@ -100,7 +100,7 @@ const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props)
 	</Select>
 );
 
-const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[]; onClose: () => void }> = (props) => {
+export const SessionSettingsDialog: Component<{ chat: AcpChat; onClose: () => void }> = (props) => {
 	registerModal(props.onClose);
 	props.chat.clearError();
 	return (
@@ -116,7 +116,7 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 					<h4 id="session-settings-title">Session settings</h4>
 				</div>
 				<div class={d.body}>
-					<For each={props.options}>
+					<For each={sessionSelectOptions(props.chat)}>
 						{(option) => (
 							<div class={s.sessionSettingRow}>
 								<label class={s.sessionSettingLabel}>
@@ -143,16 +143,26 @@ const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[];
 	);
 };
 
-export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => void; detached?: boolean }> = (props) => {
-	const [settingsOpen, setSettingsOpen] = createSignal(false);
+export function sessionSelectOptions(chat: AcpChat): SelectOption[] {
+	return chat.configOptions().filter((option): option is SelectOption => option.type === "select");
+}
+
+export const SESSION_SETTINGS_UNAVAILABLE =
+	"Session settings are available after the conversation publishes its options.";
+
+export const SessionControls: Component<{
+	chat: AcpChat;
+	onNewOptions: () => void;
+	onSessionSettings: () => void;
+	detached?: boolean;
+}> = (props) => {
 	const [deleteTarget, setDeleteTarget] = createSignal<AcpListedSession | null>(null);
 	const [deleting, setDeleting] = createSignal(false);
 	const holdOffered = () => props.chat.capabilities()?.egoHoldVersion != null;
 	const compactOffered = () => props.chat.capabilities()?.egoCompactVersion != null;
 	const forkOffered = () => props.chat.capabilities()?.fork === true;
 	const sessions = () => props.chat.sessions();
-	const selectOptions = () =>
-		props.chat.configOptions().filter((option): option is SelectOption => option.type === "select");
+	const selectOptions = () => sessionSelectOptions(props.chat);
 
 	return (
 		<div class={s.sessionHeader}>
@@ -183,10 +193,12 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 					<Show when={!sessions().some((session) => session.sessionId === props.chat.sessionId())}>
 						<option value={props.chat.sessionId() ?? ""}>{props.chat.title() || "AI Chat"}</option>
 					</Show>
+					{/* Catalogue rows can arrive without changing sessionId; select each new option explicitly. */}
 					<For each={sessions()}>
 						{(session) => (
 							<option
 								value={session.sessionId}
+								selected={session.sessionId === props.chat.sessionId()}
 								title={session.sessionId}
 								disabled={session._meta?.tuicommander?.deleted === true}
 							>
@@ -319,18 +331,17 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 						</Button>
 					</Show>
 					<hr class={s.menuSeparator} />
-					<Show when={selectOptions().length > 0}>
-						<Button
-							variant="ghost"
-							type="button"
-							class={s.headerBtn}
-							aria-label="Session settings"
-							title="Session settings"
-							onClick={() => setSettingsOpen(true)}
-						>
-							Session settings — model, reasoning
-						</Button>
-					</Show>
+					<Button
+						variant="ghost"
+						type="button"
+						class={s.headerBtn}
+						aria-label="Session settings"
+						title={selectOptions().length > 0 ? "Session settings" : SESSION_SETTINGS_UNAVAILABLE}
+						disabled={selectOptions().length === 0}
+						onClick={props.onSessionSettings}
+					>
+						Session settings — model, reasoning and mode
+					</Button>
 
 					<Button
 						variant="ghost"
@@ -408,10 +419,6 @@ export const SessionControls: Component<{ chat: AcpChat; onNewOptions: () => voi
 					/>
 				</div>
 			</details>
-
-			<Show when={settingsOpen()}>
-				<SessionSettingsDialog chat={props.chat} options={selectOptions()} onClose={() => setSettingsOpen(false)} />
-			</Show>
 		</div>
 	);
 };
@@ -422,13 +429,7 @@ export function sessionSummary(chat: AcpChat): string {
 			.configOptions()
 			.filter((option): option is SelectOption => option.type === "select")
 			.filter((option) => option.id === "model" || option.id === "effort" || option.id === "mode")
-			.map((option) =>
-				option.id === "model"
-					? choiceName(option).split("/").at(-1)
-					: option.id === "effort"
-						? option.currentValue
-						: choiceName(option),
-			)
+			.map((option) => (option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)))
 			.join(" · ") || "Model: pending · Mode: pending"
 	);
 }

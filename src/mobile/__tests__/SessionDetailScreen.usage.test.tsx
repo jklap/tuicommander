@@ -147,6 +147,172 @@ it("shows structured quota in plain language without a misleading model unavaila
 		/>
 	));
 	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
-	await waitFor(() => expect(view.getByText("Claude Max plan, 5-hour window: 2% used")).toBeTruthy());
+	await waitFor(() => expect(view.getByText("5-hour window: 2% used")).toBeTruthy());
+	expect(view.getByText("Claude Max plan")).toBeTruthy();
 	expect(view.container.textContent).not.toContain("Model unavailable");
+});
+
+// Catches: the three-second session poll clears and reloads usage for an unchanged PTY.
+it("keeps quota rows mounted across equal and changed session polling snapshots", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) =>
+		command === "get_session_usage"
+			? {
+					availability: "available",
+					model: null,
+					lines: [],
+					quota_windows: [
+						{
+							provider: "Claude",
+							plan: "Max",
+							window_seconds: 18000,
+							window_name: "primary",
+							used_percent: 3,
+							resets_at: null,
+						},
+					],
+				}
+			: undefined,
+	);
+	const [current, setCurrent] = createSignal(session);
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={current()}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await waitFor(() => expect(view.getByText(/5-hour window: 3% used/)).toBeTruthy());
+	const row = view.getByText(/5-hour window: 3% used/);
+	const menu = view.getByRole("region", { name: "Session actions" });
+	for (const activity of [0, 3000, 6000]) {
+		setCurrent({ ...session, state: { ...session.state!, last_activity_ms: activity } });
+		expect(row.isConnected).toBe(true);
+		expect(view.queryByText("Usage: loading…")).toBeNull();
+		await Promise.resolve();
+		expect(view.getByRole("region", { name: "Session actions" })).toBe(menu);
+		expect(view.getByText(/5-hour window: 3% used/)).toBe(row);
+	}
+	expect(vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_session_usage")).toHaveLength(1);
+});
+
+// Catches: two windows from one subscription being presented as two plans.
+it("labels one plan once above its five-hour and seven-day windows", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) =>
+		command === "get_session_usage"
+			? {
+					availability: "available",
+					model: null,
+					lines: [],
+					quota_windows: [
+						{
+							provider: "Claude",
+							plan: "Max",
+							window_seconds: 18000,
+							window_name: "primary",
+							used_percent: 3,
+							resets_at: null,
+						},
+						{
+							provider: "Claude",
+							plan: "Max",
+							window_seconds: 604800,
+							window_name: "secondary",
+							used_percent: 74,
+							resets_at: null,
+						},
+					],
+				}
+			: undefined,
+	);
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await waitFor(() => expect(view.getByText("Claude Max plan")).toBeTruthy());
+	expect(view.getAllByText(/Claude Max plan/)).toHaveLength(1);
+	expect(view.getByText("5-hour window: 3% used")).toBeTruthy();
+	expect(view.getByText("7-day window: 74% used")).toBeTruthy();
+});
+
+// Catches: inventing a subscription tier when the account source supplies none.
+it("keeps an unknown tier absent while retaining both windows", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) =>
+		command === "get_session_usage"
+			? {
+					availability: "available",
+					model: null,
+					lines: [],
+					quota_windows: [
+						{
+							provider: "Claude",
+							plan: null,
+							window_seconds: 18000,
+							window_name: "primary",
+							used_percent: 3,
+							resets_at: null,
+						},
+						{
+							provider: "Claude",
+							plan: null,
+							window_seconds: 604800,
+							window_name: "secondary",
+							used_percent: 74,
+							resets_at: null,
+						},
+					],
+				}
+			: undefined,
+	);
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await waitFor(() => expect(view.getByText("Claude plan")).toBeTruthy());
+	expect(view.getAllByText(/Claude.*plan/)).toHaveLength(1);
+	expect(view.container.textContent).not.toContain("Max");
+	expect(view.getByText("7-day window: 74% used")).toBeTruthy();
+});
+
+// Catches: a non-quota session inheriting a Claude plan heading from the menu.
+it("shows ego session usage without adding Claude account quota", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) =>
+		command === "get_session_usage"
+			? {
+					availability: "available",
+					model: "openai-codex/gpt-6.1-sol",
+					lines: [{ label: "Session usage", value: "24 output" }],
+					quota_windows: [],
+				}
+			: undefined,
+	);
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await waitFor(() => expect(view.getByText("Session usage: 24 output")).toBeTruthy());
+	expect(view.container.textContent).not.toContain("Claude");
+	expect(vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_session_usage")).toEqual([
+		["get_session_usage", { sessionId: session.session_id }],
+	]);
 });

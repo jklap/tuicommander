@@ -3649,6 +3649,11 @@ The backend derives actor provenance and time. It checks the current story revis
 Receipt references identify persisted workflow event receipts by run ID and command ID, not a policy check name. Each receipt must exist in the same project and plan as the story. The note stores only these identifiers, not a copy of the receipt. A reference is historical evidence, not an assertion that the story is approved or its integration checks are current. All actions use the existing project-scoped IPC, HTTP, MCP, and CLI boundary.
 
 
+ACP attachment snapshots include `availableCommands`, the latest complete session
+command offer: each entry has `name`, `description`, and optional `input.hint`.
+An empty list revokes earlier commands. IPC and HTTP snapshots use the same shape;
+the existing ACP stream carries the original `available_commands_update` update.
+
 ### Ego terminal usage
 
 `GET /ego/usage?sessionId=<terminal UUID>` returns `{ "text": string | null, "tooltip"?: string }`, identically to `get_ego_usage`. Requires local or authenticated access because it runs the live terminal's ego CLI. Uses the exact live pid/lease and manifest workspace, not the most recent session. Unknown data stays null. The shared reader caps stdout at 4 MiB and has a twenty-five-second child deadline; the status-bar feature polls every five minutes. Reports v3 and v4 are accepted. V4 context capacity is used only when reported. Remaining provider limits keep their typed unit and exact decimal value; optional `tooltip` preserves observation time, source, and reset. Session observations require exact model/provider identity. Root OpenRouter balances are explicitly labelled as current-key data and appear only for an OpenRouter session. Subscription API equivalents are labelled, not reported as spend.

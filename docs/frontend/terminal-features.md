@@ -1,6 +1,12 @@
 # Terminal Features & Keyboard Shortcuts
 
+Session Chat shows a pulsing **Working…** row after Send and while the terminal reports busy. It disappears when the terminal reports idle or awaits a question or permission answer. Desktop and mobile use the existing session state; Chat does not infer activity from the conversation text.
+
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.
+
+## Mobile composer focus
+
+The composer border highlights only while its textarea has focus. Tapping the mic releases editor focus without changing the insertion range. Recording uses the red mic icon, not an extra accent border. Keyboard navigation retains the mic focus ring. The blue slash key marks an available action, not retained focus.
 
 ## Keyboard Shortcuts
 
@@ -107,6 +113,8 @@ reversal and when the gesture ends.
 
 ### Zoom
 
+Desktop terminal Chat and AI Chat use the shared scale in `styles/chat-tokens.css`: 14px plus the terminal font-size delta from the configured default, bounded to 8–32px. Terminal Chat reads its own terminal; AI Chat reads the active terminal and uses zero delta when none is active. Reset restores the 14px reading size. Mobile retains its device-local reading preference.
+
 | Shortcut | Action |
 |----------|--------|
 | Cmd+= / Cmd++ | Zoom in |
@@ -157,3 +165,7 @@ The CLI Compose button shows a muted count pill for all pending FIFO entries,
 including user commands and TUIC messages. It hides at zero and follows the
 backend session state without opening the editor. Hover or keyboard focus loads
 the command/message breakdown; the count remains available if details fail.
+
+### Compose editor shortcuts
+
+In the terminal Compose panel, Enter sends the draft. Ctrl+Enter and Shift+Enter insert a new line. Shift+Ctrl+Enter queues for the next idle moment when an agent is detected. Enter used to confirm an IME candidate does not submit the draft. These shortcuts do not change native terminal keybar controls.

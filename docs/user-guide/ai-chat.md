@@ -1,5 +1,7 @@
 # AI Chat
 
+On desktop, AI Chat and session Chat share the same 14px default reading scale. Terminal zoom in, zoom out and reset also update AI Chat using the active terminal's zoom step. With no active terminal, AI Chat uses its default size. Font family, line height, weight and colors do not change when you switch between the two Chat views. Mobile keeps its device-local Chat font preference.
+
 Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
 
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
@@ -29,7 +31,7 @@ existing warning notices. The repository cannot raise the machine policy.
 A repo selection requires an explicit machine profile and an ego build that
 acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
 
-Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
+The desktop composer uses one compact card. Its header shows **Repository · name** and an independent repository pin. The document button on the right parks the draft; its tooltip offers restore or swap when a draft is parked. The blue play button sends while idle and queues while ego is busy. Stop remains beside the input during a running turn.
 
 Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
 
@@ -38,11 +40,45 @@ number and a live countdown. The countdown starts when the update arrives and
 ends at **retrying now**. Recovery removes the line; a final failure replaces it
 with the error. The Copy action beside a user message stays on one line.
 
+## Slash commands
+
+Start a draft with `/` to see the commands available in the selected conversation.
+Type a command name to filter the list. Each agent command shows its description
+and input hint. Use Up/Down and Tab or Enter to complete a name, or click a row.
+Completion does not submit it. Add arguments and press Enter or Send to run it.
+Escape closes the list without stopping a turn.
+
+Agent commands come from ACP `available_commands_update` and are sent as
+`/<name> <arguments>`. The latest offer replaces the previous list, including an
+empty offer. Commands from another conversation do not enter this list.
+
+TUICommander handles these actions locally instead of sending them to the model:
+
+| Command | Action |
+|---|---|
+| `/new` | Start a new conversation with the existing New action. |
+| `/clear` | Clear this composer's text and attachments, not conversation history. |
+| `/quit`, `/q` | Stop the current AI Chat connection through the existing stop action. Saved history remains. Other tabs on that connection also disconnect. |
+| `/usage` | Show the context usage and cost already reported for this conversation. |
+| `/compact` | Run the same action as **Compact context**. Available only when advertised; wait for the turn to finish. |
+| `/fork` | Run **Fork conversation** without a message argument. Available only when advertised; wait for the turn to finish. |
+| `/pause`, `/resume` | Run the advertised pause/resume controls in their applicable turn state. |
+
+Host actions do not accept arguments or attachments, except `/clear`, which
+removes attachments. Unsupported commands, including `/name` and `/retry`, stay
+in the composer with an inline **not available in AI Chat** explanation and a
+list of available names. Nothing is sent silently. Open a conversation with
+**New** or `/new` to receive its agent command offer.
+
+## Automatic context compaction
+
+When ego reports an exhausted context and supports compaction, AI Chat shows **Compacting conversation**, opens the compacted continuation and sends the original prompt again once. Text, images, file references and repository context stay the same. **Conversation compacted** confirms that the continuation opened. A compaction or load failure stops recovery and shows the error. If the repeated prompt exhausts context again, AI Chat stops instead of compacting in a loop. The manual **Compact** action uses the same continuation path. Switching conversations while compaction is pending keeps your newer selection and prevents an automatic replay into it. A different conversation can still send while compaction is pending. Its own manual or automatic compaction waits for the first operation, then runs only if that conversation is still selected. In the compacting conversation, Send or Queue leaves your draft and attachments in the composer until compaction finishes; submit them again when ready.
+
 ## Compact panel controls
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
-The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+The footer shows context occupancy, used/window tokens and approximate free tokens when ego publishes usage. It also keeps any reported cost. The model, reasoning and permission summary stays on the right and opens Session settings. Repository pinning stays in the card header. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
 
@@ -107,6 +143,8 @@ without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 
+The saved-conversation list loads separately from the active chat. You can keep sending while the list is slow or unavailable. A missing background tab does not fail the selected conversation; its refusal is handled when that tab is selected.
+
 The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
 focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
@@ -122,6 +160,7 @@ activity time. A conversation without these details shows **Untitled conversatio
 its session ID is available in the tooltip. The model/mode row remains visible
 with **pending** values until the selected session publishes its options.
 
+The header and conversation picker stay on the selected transcript when the saved-conversation list loads or refreshes, even when other sessions are attached.
 When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
 percentage and shows the cumulative cost when ego reports one.
@@ -219,13 +258,16 @@ read its full command and output.
   Resume. Every connected view can remove a queued item before ego receives it.
   Stop affects the running turn for every view. A queued message appears in the
   conversation when it reaches ego; steering appears when ego echoes it.
-- **Session settings** are published by the current conversation. The control bar
-  shows the model's short name and the current mode. Its summary shortens before
-  the icon controls, so Pause, Resume and Compact stay on one row. Each
-  control has a tooltip and a name for assistive technology. The settings button opens a dialog with
+- **Session settings** are published by the current conversation. On desktop, click the model,
+  reasoning and mode summary below the input, or use **⋯ → Session settings**.
+  Both open the same dialog. Before the conversation publishes its options, the
+  settings action stays visible but disabled, with a tooltip that explains why.
+  The dialog has
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
-  and the displayed values follow ego's reply. A rejected change shows its error
+  and the displayed values follow ego's reply. The summary uses the published
+  choice labels, including **Choose a value** when a model change leaves reasoning
+  effort unselected. A rejected change shows its error
   in the dialog. TUICommander keeps no separate model list.
   The model every *new* run starts from is ego's own default, editable in
   Settings → **AI Chat** (see [Settings](settings.md#ai-chat)).

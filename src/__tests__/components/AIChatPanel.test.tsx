@@ -8,8 +8,12 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import recordedCommands from "../fixtures/ego-available-commands-2393.json";
+import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
+import recordedModelChange from "../fixtures/ego-model-change-2388.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
+import { chatFontSize, loadChatTypography } from "../helpers/chatFontSize";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -78,7 +82,7 @@ vi.mock("../../transport", () => ({
 // Whether an ego binary is configured is the one setting this panel reads, and
 // criterion 9 turns on it being readable as "not configured" rather than as an
 // empty string nobody checked.
-const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
+const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego", defaultFontSize: 13 }));
 
 vi.mock("../../stores/settings", async () => {
 	const { createSignal } = await import("solid-js");
@@ -128,11 +132,13 @@ import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useTerminalLifecycle } from "../../hooks/useTerminalLifecycle";
 import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
@@ -272,14 +278,14 @@ async function renderPanel() {
 	return view;
 }
 
-/** Type a message and press Send. */
+/** Type a message and press the active Send or Queue control. */
 async function typeAndSend(container: HTMLElement, text: string): Promise<void> {
 	const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 	textarea.value = text;
 	textarea.dispatchEvent(new Event("input", { bubbles: true }));
 	(
-		[...container.querySelectorAll("button")].find(
-			(button) => button.getAttribute("aria-label") === "Send",
+		[...container.querySelectorAll("button")].find((button) =>
+			["Send", "Queue"].includes(button.getAttribute("aria-label") ?? ""),
 		) as HTMLButtonElement
 	).click();
 	await settle();
@@ -428,6 +434,68 @@ describe("AIChatPanel: repository profile warnings", () => {
 		await settle();
 		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
 	});
+});
+
+// Catches: AI Chat stays at its fixed size when the active terminal zooms or changes.
+it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", async () => {
+	const removeStyles = loadChatTypography();
+	const previous = terminalsStore.state.activeId;
+	const first = terminalsStore.add({
+		name: "zoom one",
+		sessionId: "zoom-one",
+		fontSize: 13,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	const second = terminalsStore.add({
+		name: "zoom two",
+		sessionId: "zoom-two",
+		fontSize: 19,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	terminalsStore.setActive(first);
+	let zoom!: ReturnType<typeof useTerminalLifecycle>;
+	const view = render(() => {
+		zoom = useTerminalLifecycle({
+			pty: { canSpawn: async () => true, close: async () => {} },
+			dialogs: {
+				confirmCloseTerminal: async () => false,
+				confirmSaveChanges: async () => "cancel",
+				confirm: async () => false,
+			},
+			setStatusInfo: () => {},
+			getDefaultFontSize: () => 13,
+		});
+		return <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />;
+	});
+	await settle();
+	(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+	await settle();
+	acpTranscript.restore(SESSION, [{ id: "zoom-answer", kind: "agent", text: "Readable zoom answer" }]);
+	await settle();
+	const size = () => chatFontSize(view.getByText("Readable zoom answer").closest<HTMLElement>(".assistantMsg")!);
+	try {
+		expect(size()).toBe("14px");
+		zoom.zoomIn();
+		expect(size()).toBe("16px");
+		zoom.zoomOut();
+		expect(size()).toBe("14px");
+		terminalsStore.setActive(second);
+		expect(size()).toBe("20px");
+		zoom.zoomReset();
+		expect(size()).toBe("14px");
+		terminalsStore.remove(second);
+		terminalsStore.remove(first);
+		terminalsStore.setActive(null);
+		expect(size()).toBe("14px");
+	} finally {
+		view.unmount();
+		removeStyles();
+		terminalsStore.remove(first);
+		terminalsStore.remove(second);
+		if (previous) terminalsStore.setActive(previous);
+	}
 });
 
 describe("AIChatPanel: the frame it keeps", () => {
@@ -1069,6 +1137,101 @@ describe("AIChatPanel: parallel tabs", () => {
 		});
 	});
 
+	// Catches: the optional session/list refusal replaces successful attachment
+	// with a fatal missing-session error for both new and restored conversations.
+	it.each(["new", "restored"])(
+		"keeps a %s conversation usable when ego catalogue reports session not found",
+		async (kind) => {
+			client.listSessions.mockRejectedValue(missingCatalogue);
+			client.loadSession.mockImplementation(async () => {
+				acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+			});
+			await createRoot(async (dispose) => {
+				const chat = createAcpChat(
+					() => ROOT,
+					() => true,
+				);
+				if (kind === "new") await chat.startSession();
+				else await chat.selectSession(SESSION);
+				await settle();
+				expect(chat.error()).toBeNull();
+				expect(chat.phase()).toBe("live");
+				await chat.send("Still connected");
+				expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Still connected", [], ROOT);
+				dispose();
+			});
+		},
+	);
+
+	// Catches: awaiting optional catalogue I/O leaves an attached new chat on
+	// Connecting conversation and disables the composer indefinitely.
+	it("enables an attached conversation before its catalogue request settles", async () => {
+		let finish!: (value: { sessions: []; nextCursor: null }) => void;
+		client.listSessions.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		const { container } = await renderPanel();
+		try {
+			expect(container.textContent).not.toContain("Connecting conversation");
+			expect(container.querySelector("textarea")?.disabled).toBe(false);
+			await typeAndSend(container, "Do not wait for the picker");
+			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Do not wait for the picker", [], ROOT);
+		} finally {
+			finish({ sessions: [], nextCursor: null });
+			await settle();
+		}
+	});
+
+	// Catches: an old process's delayed discovery refusal poisons the new
+	// connection after recovery even though the new catalogue succeeded.
+	it("ignores a catalogue refusal from a replaced connection", async () => {
+		let refuse!: (error: unknown) => void;
+		client.listSessions.mockReturnValueOnce(
+			new Promise((_resolve, reject) => {
+				refuse = reject;
+			}),
+		);
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.startSession();
+			client.reconnect.mockImplementation(async () => {
+				const opened = snapshot({ connectionId: "replacement" });
+				acpStore.applySnapshot(opened);
+				return opened;
+			});
+			client.loadSession.mockImplementation(async (id, session) => {
+				acpStore.applySnapshot(snapshot({ connectionId: id, attachments: [attachment({ sessionId: session })] }));
+			});
+			await chat.recover();
+			refuse(missingCatalogue);
+			await settle();
+			expect(chat.error()).toBeNull();
+			expect(chat.phase()).toBe("live");
+			dispose();
+		});
+	});
+
+	// Catches: a missing background tab publishes its refusal as the active
+	// conversation's error when a desktop panel replays several saved tabs.
+	it("keeps the selected conversation live when a background saved tab is missing", async () => {
+		const first = await renderPanel();
+		first.unmount();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.loadSession.mockRejectedValue(missingSession);
+		const { container } = renderIdlePanel();
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(container.textContent).not.toContain("session not found");
+		await typeAndSend(container, "The selected chat still works");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "The selected chat still works", [], ROOT);
+	});
+
 	// Catches: remount replays the selected missing tab without recovery, leaving
 	// the desktop panel failed and its model controls pending until user action.
 	it("recovers a missing selected saved tab on desktop remount without user action", async () => {
@@ -1363,7 +1526,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
 		});
 		acpStore.applySnapshot(empty);
-		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		expect((container.querySelector('[aria-label="Session settings"]') as HTMLButtonElement).disabled).toBe(true);
 		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
 			.trim()
 			.split("\n")
@@ -1420,7 +1583,7 @@ describe("AIChatPanel: parallel tabs", () => {
 	])("keeps model and mode pending until options arrive, starting with $configOptions", async ({ configOptions }) => {
 		const { container } = await renderPanel();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions })] }));
-		expect(container.textContent).toContain(configOptions.length ? "high" : "Model: pending · Mode: pending");
+		expect(container.textContent).toContain(configOptions.length ? "High" : "Model: pending · Mode: pending");
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
 		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Model: pending");
@@ -2091,7 +2254,10 @@ describe("AIChatPanel: composer height", () => {
 		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
 			return this.value.split("\n").length * LINE_PX + 16;
 		});
-		clientHeight.mockReturnValue(PANEL_PX);
+		// Catches the new card wrapper becoming the 40% height-budget source.
+		clientHeight.mockImplementation(function (this: HTMLElement) {
+			return this.id === "ai-chat-panel" ? PANEL_PX : 60;
+		});
 	});
 	afterEach(() => {
 		scrollHeight.mockReset();
@@ -2667,6 +2833,78 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.prompt).not.toHaveBeenCalled();
 	});
 
+	// Catches: late catalogue options reset the native picker to another attached session.
+	it("keeps the header on the selected session when a two-session catalogue arrives", async () => {
+		let finishList!: (value: {
+			sessions: { sessionId: string; cwd: string; title: string }[];
+			nextCursor: null;
+		}) => void;
+		client.listSessions.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finishList = resolve;
+				}),
+		);
+		client.newSession.mockImplementation(async () => {
+			await openSession(SECOND_SESSION);
+			return openSession(SESSION);
+		});
+		const { container } = await renderPanel();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Selected design review" } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Selected transcript" } },
+		});
+		feed(
+			{ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Background investigation" } },
+			SECOND_SESSION,
+		);
+		finishList({
+			sessions: [
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Background investigation" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Selected design review" },
+			],
+			nextCursor: null,
+		});
+		await settle();
+
+		const picker = container.querySelector<HTMLSelectElement>('select[title="Conversation"]')!;
+		expect(acpStore.connection(CONNECTION)?.attachments).toHaveLength(2);
+		expect(picker.value).toBe(SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Selected design review");
+		expect(container.querySelector('[class*="conversationLabel"]')?.textContent).toBe("Selected design review");
+		expect(container.textContent).toContain("Selected transcript");
+		await typeAndSend(container, "Continue the selected review");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Continue the selected review", [], ROOT);
+
+		picker.value = SECOND_SESSION;
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		finishList({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Selected design review" },
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Background investigation" },
+			],
+			nextCursor: null,
+		});
+		await settle();
+		expect(picker.value).toBe(SECOND_SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Background investigation");
+		expect(container.querySelector('[class*="conversationLabel"]')?.textContent).toBe("Background investigation");
+		expect(container.textContent).not.toContain("Selected transcript");
+		expect(client.loadSession).not.toHaveBeenCalled();
+
+		feed(
+			{ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Renamed background review" } },
+			SECOND_SESSION,
+		);
+		await settle();
+		expect(picker.value).toBe(SECOND_SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Renamed background review");
+		await typeAndSend(container, "Continue the other review");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Continue the other review", [], ROOT);
+	});
+
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
@@ -2715,7 +2953,10 @@ describe("AIChatPanel: durable conversations", () => {
 		});
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		// Catches: the card footer showing a stale or incorrect context numerator, capacity or remainder.
+		expect(container.querySelector('[aria-label="Context usage"]')?.textContent).toContain(
+			"Ctx 25% · 50K/200K · ~150K free",
+		);
 		expect(container.textContent).toContain("USD 0.001035");
 	});
 
@@ -2725,7 +2966,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("Ctx 25%");
 		expect(container.textContent).not.toContain("NaN");
 		expect(container.textContent).not.toContain("USD");
 	});
@@ -2740,7 +2981,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).toContain("Ctx 50%");
 		expect(container.textContent).not.toContain("USD 2");
 	});
 
@@ -2750,7 +2991,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
 		await settle();
 
-		expect(container.textContent).not.toContain("Context");
+		expect(container.querySelector('[aria-label="Context usage"]')).toBeNull();
 		expect(container.textContent).not.toContain("Infinity");
 	});
 
@@ -3496,6 +3737,115 @@ describe("AIChatPanel: the session's own knobs", () => {
 		],
 	};
 
+	// Catches: the composer reports settings as inert text instead of opening their controls.
+	it("opens model reasoning and mode controls from the composer summary and applies each choice", async () => {
+		const effort: AcpSessionConfigOption = {
+			id: "effort",
+			name: "Reasoning",
+			type: "select",
+			currentValue: "medium",
+			options: [
+				{ value: "medium", name: "Medium" },
+				{ value: "high", name: "High" },
+			],
+		};
+		const options = [MODEL_OPTION, effort, mode];
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: options })] }));
+		await settle();
+		const summary = container.querySelector<HTMLButtonElement>(
+			'.composerMeta button[aria-label="Change model, reasoning and mode"]',
+		);
+		expect(summary).not.toBeNull();
+		summary!.click();
+		const dialog = container.querySelector('[role="dialog"]')!;
+		expect(dialog).not.toBeNull();
+		for (const [name, id, value] of [
+			["Model", "model", "sonnet"],
+			["Reasoning", "effort", "high"],
+			["Mode", "mode", "auto"],
+		]) {
+			const picker = dialog.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)!;
+			expect(picker.disabled).toBe(false);
+			picker.value = value;
+			picker.dispatchEvent(new Event("change", { bubbles: true }));
+			await settle();
+			expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, id, { value });
+		}
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: [
+							{ ...MODEL_OPTION, currentValue: "sonnet" },
+							{ ...effort, currentValue: "high" },
+							{ ...mode, currentValue: "auto" },
+						],
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(summary!.textContent).toBe("Sonnet · High · Automatic");
+	});
+
+	// Catches: changing models exposes ego's internal unselected effort value in composer metadata.
+	it("uses the published reasoning label after the recorded model change, never the internal sentinel", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: recordedModelChange.before as AcpSessionConfigOption[],
+					}),
+				],
+			}),
+		);
+		await settle();
+		const summary = container.querySelector<HTMLButtonElement>(
+			'.composerMeta button[aria-label="Change model, reasoning and mode"]',
+		)!;
+		expect(summary.textContent).toBe("gpt-6.1-sol · low · default");
+		summary.click();
+		const picker = container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
+		picker.value = "ollama/gemma4:12b-mlx";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", {
+			value: "ollama/gemma4:12b-mlx",
+		});
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: recordedModelChange.after as AcpSessionConfigOption[],
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(summary.textContent).not.toContain("__ego_unselected__");
+		expect(summary.textContent).toBe("gemma4:12b-mlx · Choose a value · default");
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	// Catches: missing ACP options silently remove the only discoverable settings action.
+	it("keeps session settings visible with an unavailable explanation before options arrive", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [] })] }));
+		await settle();
+		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
+		menu.querySelector("summary")!.click();
+		expect(menu.open).toBe(true);
+		const settings = menu.querySelector<HTMLButtonElement>('button[aria-label="Session settings"]');
+		expect(settings).not.toBeNull();
+		expect(settings!.disabled).toBe(true);
+		expect(settings!.title).toBe("Session settings are available after the conversation publishes its options.");
+	});
+
 	// Catches: an ACP option is hidden or shown without its published name and choice.
 	it("shows every published select with a label, description, and current choice in a dialog", async () => {
 		const { container } = await renderPanel();
@@ -3713,6 +4063,359 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
 	});
 
+	it.each(["stop", "v1 failure"])(
+		"overflow stop compacts and retries (%s) — catches overflow left to the user and infinite retry loops",
+		async (shape) => {
+			client.compact.mockResolvedValueOnce({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+			client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+			const { container } = await renderPanel();
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			if (shape === "stop") {
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			} else {
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"overflow-turn",
+				);
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Continue my work", [], ROOT);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+			feed({ kind: "turnStarted" }, SECOND_SESSION, "retry-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "retry-turn");
+			await settle();
+			expect(client.compact).toHaveBeenCalledTimes(1);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(container.textContent).toContain("still exhausted after compaction");
+		},
+	);
+
+	it("keeps original attachments and repository on overflow replay — catches changed context on retry", async () => {
+		let dispose = () => {};
+		let repo = ROOT;
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => repo,
+				() => true,
+				client,
+			);
+		});
+		const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+		const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+		client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		try {
+			await chat.send("Read these", images, files);
+			repo = "/different/repository";
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Read these", images, ROOT, files);
+		} finally {
+			dispose();
+		}
+	});
+
+	it.each(["refused", "unpublished", "load refused", "unsupported"])(
+		"stops overflow recovery when %s — catches replay without a usable continuation",
+		async (failure) => {
+			const { container } = await renderPanel();
+			client.prompt.mockResolvedValueOnce("overflow-turn");
+			if (failure === "refused") client.compact.mockRejectedValueOnce(new Error("compact refused"));
+			else if (failure !== "unsupported")
+				client.compact.mockResolvedValueOnce({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication:
+						failure === "unpublished"
+							? { kind: "not_published", diagnostic: "checkpoint refused" }
+							: { kind: "published_durably", diagnostic: null },
+				});
+			if (failure === "load refused") client.loadSession.mockRejectedValueOnce(new Error("successor refused"));
+			if (failure === "unsupported")
+				acpStore.applySnapshot(
+					snapshot({
+						capabilities: { ...snapshot().capabilities!, egoCompactVersion: null },
+						attachments: [attachment()],
+					}),
+				);
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			expect(client.compact).toHaveBeenCalledTimes(failure === "unsupported" ? 0 : 1);
+			expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+			expect(container.textContent).toContain(
+				failure === "refused"
+					? "compact refused"
+					: failure === "unpublished"
+						? "checkpoint refused"
+						: failure === "load refused"
+							? "successor refused"
+							: "cannot compact",
+			);
+		},
+	);
+
+	it("ignores overflow from another turn — catches replaying the wrong user's prompt", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "My prompt");
+		feed({ kind: "turnStarted" }, SESSION, "other-turn");
+		feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "other-turn");
+		await settle();
+		expect(client.compact).not.toHaveBeenCalled();
+		expect(client.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers overflow arriving before prompt acknowledgement — catches a lost early completion", async () => {
+		client.prompt
+			.mockImplementationOnce(async () => {
+				feed({ kind: "turnStarted" }, SESSION, "early-turn");
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"early-turn",
+				);
+				return "early-turn";
+			})
+			.mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Continue");
+		await settle();
+		expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+		expect(client.prompt).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps a newer selection while compact waits — catches switching and replaying into another tab", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("Continue");
+			feed({ kind: "turnStarted" }, SESSION, "turn-1");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "turn-1");
+			await settle();
+			await openSession(SECOND_SESSION);
+			await chat.selectSession(SECOND_SESSION);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-session",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			expect(chat.sessionId()).toBe(SECOND_SESSION);
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("keeps a message submitted during compaction — catches a silently dropped composer send", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("First");
+			const compacting = chat.compact();
+			const sending = chat.send("Next message");
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await compacting;
+			await sending;
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Next message", [], ROOT);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("sends in a newer selection during compaction — catches concurrent send discarded during stale compaction", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container } = await renderPanel();
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+		await settle();
+		await openSession(SECOND_SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+		await settle();
+		const textarea = container.querySelector("textarea")!;
+		textarea.value = "Message for B";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await settle();
+		finish({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted-session",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		await settle();
+		expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, "Message for B", [], ROOT);
+	});
+
+	it.each(["overflow", "manual", "leave"])(
+		"waits for another conversation compaction (%s) — catches swallowed, duplicated or stale B actions",
+		async (action) => {
+			let finish!: (value: unknown) => void;
+			client.compact
+				.mockReset()
+				.mockImplementationOnce(
+					() =>
+						new Promise((resolve) => {
+							finish = resolve;
+						}),
+				)
+				.mockResolvedValue({
+					sourceSessionId: SECOND_SESSION,
+					targetSessionId: CHILD_SESSION,
+					publication: { kind: "published_durably", diagnostic: null },
+				});
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			await openSession(SECOND_SESSION);
+			aiChatTabs.add("global", SECOND_SESSION);
+			container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+			await settle();
+			if (action !== "leave") client.loadSession.mockImplementationOnce(() => openSession(CHILD_SESSION));
+			if (action === "overflow") {
+				await typeAndSend(container, "Continue B");
+				feed({ kind: "turnStarted" }, SECOND_SESSION, "turn-1");
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "turn-1");
+			} else {
+				const button = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!;
+				button.click();
+				button.click();
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			if (action === "leave") {
+				container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SESSION}"]`)!.click();
+				await settle();
+			}
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-A",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			if (action === "leave") {
+				expect(client.compact).toHaveBeenCalledTimes(1);
+				expect(client.prompt).not.toHaveBeenCalled();
+				expect(aiChatTabs.active("global")).toBe(SESSION);
+				return;
+			}
+			expect(client.compact).toHaveBeenCalledTimes(2);
+			expect(client.compact).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION);
+			expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+			if (action === "overflow") {
+				expect(client.prompt).toHaveBeenCalledTimes(2);
+				expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, CHILD_SESSION, "Continue B", [], ROOT);
+			} else expect(client.prompt).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["refused", "unpublished"])(
+		"retains a composer submission during %s compaction — catches concurrent send discarded during compaction",
+		async (failure) => {
+			let finish!: (value: unknown) => void;
+			let refuse!: (error: Error) => void;
+			client.compact.mockImplementationOnce(
+				() =>
+					new Promise((resolve, reject) => {
+						finish = resolve;
+						refuse = reject;
+					}),
+			);
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+			aiChatDraft.stageFile(files[0]);
+			const textarea = container.querySelector("textarea")!;
+			textarea.value = "Keep this message";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+			container.querySelector<HTMLButtonElement>('button[aria-label="Queue"]')!.click();
+			if (failure === "refused") refuse(new Error("compact refused"));
+			else
+				finish({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication: { kind: "not_published", diagnostic: "checkpoint refused" },
+				});
+			await settle();
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(textarea.value).toBe("Keep this message");
+			expect(aiChatDraft.files()).toEqual(files);
+		},
+	);
+
 	it("compacts the conversation", async () => {
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
@@ -3763,6 +4466,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("tells the person the conversation was compacted", async () => {
+		client.loadSession.mockImplementationOnce(() => openSession("sess-compacted"));
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
 			targetSessionId: "sess-compacted",
@@ -4292,6 +4996,25 @@ describe("AIChatPanel: new chat during cold saved connection", () => {
 });
 
 describe("desktop composer icon controls", () => {
+	it("keeps repository pin and parked-draft actions separate inside the card header", async () => {
+		// Catches: moving the draft action to the header accidentally wires it to repository pinning.
+		const view = await renderPanel();
+		const header = view.container.querySelector('[class*="composerHeader"]')!;
+		expect(header.textContent).toContain("Repository · ");
+		const pin = header.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement;
+		const park = header.querySelector('button[aria-label="Park draft"]') as HTMLButtonElement;
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep my draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		pin.click();
+		expect(textarea.value).toBe("Keep my draft");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		park.click();
+		expect(textarea.value).toBe("");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		expect(park.getAttribute("aria-label")).toBe("Restore parked draft");
+	});
+
 	it("keeps icon actions named and disabled for an empty draft, and marks parked drafts pressed", async () => {
 		// Catches: replacing text with SVG drops accessible names, enables empty sends, or hides parked state.
 		const view = await renderPanel();
@@ -4874,4 +5597,144 @@ it("closes the detached window from its header", async () => {
 	const { container } = await renderPanel();
 	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
 	expect(mockClosePanel).toHaveBeenCalledWith("ai-chat");
+});
+
+describe("AIChatPanel: ACP slash commands", () => {
+	const offer = () => feed({ kind: "sessionUpdate", update: recordedCommands });
+	const type = (container: HTMLElement, text: string) => {
+		const input = container.querySelector("textarea")!;
+		input.value = text;
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		return input;
+	};
+	it("shows descriptions and input hints — catches available_commands_update dropped so no menu appears", async () => {
+		const { container } = await renderPanel();
+		offer();
+		type(container, "/capture");
+		await settle();
+		const menu = container.querySelector('[aria-label="Slash commands"]');
+		expect(menu?.textContent).toContain("/capture-meeting");
+		expect(menu?.textContent).toContain("Extract a meeting into the operational memory graph");
+		expect(menu?.textContent).toContain("<path-to-notes | pasted text | Spinach reference>");
+		expect(menu?.textContent).not.toContain("/imagegen");
+	});
+	it("runs the existing compact action — catches /compact sent to the model", async () => {
+		const { container } = await renderPanel();
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted",
+			publication: { kind: "not_published", diagnostic: "empty" },
+		});
+		await typeAndSend(container, "/compact");
+		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it.each(["/quit", "/q"])("ends the chat for %s — catches quit sent to the model", async (command) => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, command);
+		expect(client.disconnect).toHaveBeenCalledWith(CONNECTION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("forks the chat — catches /fork sent to the model", async () => {
+		supportsFork = true;
+		client.forkSession.mockResolvedValueOnce(CHILD_SESSION);
+		const { container } = await renderPanel();
+		await typeAndSend(container, "/fork");
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	it("selects with keyboard and mouse and preserves prompt arguments — catches completion submitting or rewriting agent commands", async () => {
+		const { container } = await renderPanel();
+		offer();
+		const input = type(container, "/capt");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+		expect(input.value).toBe("/capture-meeting ");
+		expect(client.prompt).not.toHaveBeenCalled();
+		await typeAndSend(container, "/capture-meeting notes with spaces");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "/capture-meeting notes with spaces", [], ROOT);
+		type(container, "/ima");
+		container.querySelector<HTMLButtonElement>('[role="option"]')!.click();
+		expect(input.value).toBe("/imagegen ");
+	});
+	it("navigates, dismisses and completes without sending — catches arrows ignored or Escape cancelling a busy turn", async () => {
+		const { container } = await renderPanel();
+		const input = type(container, "/");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(input.value).toBe("/clear ");
+		expect(client.prompt).not.toHaveBeenCalled();
+		type(container, "/");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+		expect(client.cancel).not.toHaveBeenCalled();
+	});
+	it.each(["/not-a-command", "/name new title", "/retry"])(
+		"retains %s with available actions — catches unknown commands silently sent",
+		async (command) => {
+			const { container } = await renderPanel();
+			await typeAndSend(container, command);
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(container.querySelector("textarea")!.value).toBe(command);
+			expect(container.textContent).toContain("not available in AI Chat");
+			expect(container.textContent).toContain("Available commands: /new, /clear");
+		},
+	);
+	it("revokes stale offers and isolates sessions — catches commands leaking across tabs or surviving an empty replacement", async () => {
+		const { container } = await renderPanel();
+		offer();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "available_commands_update", availableCommands: [] } });
+		type(container, "/capture");
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+		feed({ kind: "sessionUpdate", update: recordedCommands }, SECOND_SESSION);
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+	});
+	it("keeps unadvertised host verbs unavailable — catches unsupported /fork or /compact falling through to a model", async () => {
+		const { container } = await renderPanel();
+		const current = acpStore.connection(CONNECTION)!;
+		acpStore.applySnapshot({
+			...current,
+			capabilities: { ...current.capabilities!, fork: false, egoHoldVersion: null, egoCompactVersion: null },
+		});
+		for (const command of ["/fork", "/compact", "/pause", "/resume"]) {
+			await typeAndSend(container, command);
+			expect(container.textContent).toContain("not available in AI Chat");
+		}
+		expect(client.prompt).not.toHaveBeenCalled();
+		expect(client.forkSession).not.toHaveBeenCalled();
+		expect(client.compact).not.toHaveBeenCalled();
+	});
+	it("clears only the composer and reports existing usage — catches local actions becoming model turns", async () => {
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 100, size: 400, cost: { amount: 2, currency: "USD" } },
+		});
+		await typeAndSend(container, "/usage");
+		expect(container.textContent).toContain("Context 100 / 400 tokens (25%) · USD 2");
+		await typeAndSend(container, "/clear");
+		expect(container.querySelector("textarea")!.value).toBe("");
+		expect(acpTranscript.usage(SESSION)?.used).toBe(100);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("starts a new conversation without sending /new — catches new action becoming a model turn", async () => {
+		const { container } = await renderPanel();
+		client.newSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		await typeAndSend(container, "/new");
+		expect(aiChatTabs.active("global")).toBe(SECOND_SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("uses hold actions and preserves busy drafts — catches pause/resume or busy compact sent as prompts", async () => {
+		const { container } = await renderPanel();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await typeAndSend(container, "/compact");
+		expect(container.querySelector("textarea")!.value).toBe("/compact");
+		expect(client.compact).not.toHaveBeenCalled();
+		await typeAndSend(container, "/pause");
+		expect(client.pause).toHaveBeenCalledWith(CONNECTION, SESSION);
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+		await typeAndSend(container, "/resume");
+		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
 });

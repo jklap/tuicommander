@@ -75,7 +75,9 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 
 ### CLI / Chat view
 
-A terminal that runs Claude Code, Grok, Codex or ego shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles (including follow-ups typed while Claude is busy), Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. The desktop switch has its own row in Chat, so it does not cover the first prompt even when the context bar is hidden. Compose opens and receives focus below the conversation. Reply with **Ctrl+Enter**, or queue follow-up work with **Shift+Ctrl+Enter**. Active native question and permission choices appear above Compose. Select a named choice to send its native keys to that terminal, without sending or clearing your Compose draft. Questions without exported choices show **Answer in CLI**; Codex free-form alternatives also return to CLI. PTY Chat is separate from ACP AI Chat. The grid keeps running while hidden, so scrollback and selection are unchanged. Prompts have a theme-coloured background in Chat and a reading width of up to 80 characters; the CLI grid does not tint submitted prompts.
+Session Chat shows a pulsing **Working…** row after Send and while the terminal reports busy. It disappears when the terminal reports idle or awaits a question or permission answer. Desktop and mobile use the existing session state; Chat does not infer activity from the conversation text.
+
+A terminal that runs Claude Code, Grok, Codex or ego shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles (including follow-ups typed while Claude is busy), Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. The desktop switch has its own row in Chat, so it does not cover the first prompt even when the context bar is hidden. Compose opens and receives focus below the conversation. Reply with **Enter**, or queue follow-up work with **Shift+Ctrl+Enter**. Active native question and permission choices appear above Compose. Select a named choice to send its native keys to that terminal, without sending or clearing your Compose draft. Questions without exported choices show **Answer in CLI**; Codex free-form alternatives also return to CLI. PTY Chat is separate from ACP AI Chat. The grid keeps running while hidden, so scrollback and selection are unchanged. Prompts have a theme-coloured background in Chat and a reading width of up to 80 characters; the CLI grid does not tint submitted prompts.
 
 For ego, configure an absolute **ego executable** in Settings that supports local transcript v1, including `--after`. This is the executable Chat uses, even if your shell launches a newer ego from another path. A failed export reports the configured path and exit status; check that Settings points to the transcript-capable binary. TUICommander binds the foreground ego process to the session whose lease names that PID, then reads `ego export SESSION --format transcript --after SEQ` from the same `EGO_HOME`. It does not select the newest session in the folder or read ego's private event files. The existing Chat ticker follows committed entries; message previews are omitted and completed answers appear once. Tool starts and results share a card. Goal continuations and compaction checkpoints appear as system notices, not user prompts. A new session binding resets the conversation rather than joining unrelated histories. Missing binding, unsupported export versions and unreadable sessions return to CLI with a reason. ego Chat is available immediately after a page reload, including while a native question or permission prompt is pending. It does not wait for the frontend to rediscover a session ID. The backend still checks the live process and lease before reading. ego Chat is also available on mobile through the same transcript lifecycle and existing event stream.
 
@@ -214,7 +216,7 @@ Per-terminal font size control:
 | Zoom out | `Cmd+-` | -2px font size |
 | Reset | `Cmd+0` | Back to default size |
 
-Range: 8px to 32px. Each terminal has its own zoom level, shared by its CLI and Chat views. Zoom shortcuts work in either view; the all-terminals variants update both views too. The current zoom is shown in the status bar.
+Range: 8px to 32px for the CLI grid. Each terminal has its own zoom level. Desktop session Chat and AI Chat share a 14px default reading scale, independent of the configured grid default. A terminal zoom step changes its Chat text by the same amount; AI Chat follows the active terminal. Reset returns both Chat views to their default reading scale. Chat body text stays between 8px and 32px. Zoom shortcuts work in either terminal view; the all-terminals variants update both views too. The current grid font size is shown in the status bar. Mobile keeps its device-local Chat font preference.
 
 ## Split Panes
 
@@ -370,7 +372,9 @@ In Compose, paste an image, drop PNG, JPEG, WebP or GIF files on the editor, or 
 
 The Compose panel can leave work for an agent without steering its current turn:
 
-- **Ctrl+Enter** sends immediately.
+- **Enter** sends immediately.
+- **Ctrl+Enter** or **Shift+Enter** inserts a new line without sending.
+- Enter that confirms an IME candidate does not send the draft.
 - **Shift+Ctrl+Enter** or the queue button submits immediately when the agent is
   already idle; otherwise it waits for the next idle window.
 - Queued user commands and peer messages share one FIFO and are delivered one

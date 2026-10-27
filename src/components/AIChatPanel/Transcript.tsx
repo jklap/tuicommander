@@ -23,6 +23,7 @@ import {
 } from "solid-js";
 import type { AcpNoticeAction, AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
@@ -299,6 +300,8 @@ export interface TranscriptSearchRef {
 }
 
 export interface TranscriptProps {
+	/** Terminal font zoom input; Chat keeps its own shared default type scale. */
+	fontSize?: number;
 	/** Let a host expose the existing follow state and jump action outside the transcript. */
 	onAtBottomChange?: (atBottom: boolean) => void;
 	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
@@ -311,6 +314,8 @@ export interface TranscriptProps {
 	entries: () => AcpTranscriptEntry[];
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
+	/** Accessible working text for PTY hosts; AI Chat keeps its compact pulse. */
+	busyLabel?: string;
 	/** History has no execution timestamps: never time it from the view's mount. */
 	observeToolDuration?: boolean;
 	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
@@ -728,7 +733,14 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<div class={s.transcriptViewport}>
+		<div
+			class={s.transcriptViewport}
+			data-chat-typography={props.mobile ? undefined : ""}
+			style={{
+				"--chat-zoom-step":
+					props.fontSize !== undefined ? `${props.fontSize - settingsStore.state.defaultFontSize}px` : "0px",
+			}}
+		>
 			<div
 				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 				ref={container}
@@ -1010,7 +1022,9 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 					when={props.retry?.()}
 					fallback={
 						<Show when={props.busy()}>
-							<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
+							<div class={cx(s.assistantMsg, s.thinkingPulse)} role={props.busyLabel ? "status" : undefined}>
+								{props.busyLabel ?? "…"}
+							</div>
 						</Show>
 					}
 				>

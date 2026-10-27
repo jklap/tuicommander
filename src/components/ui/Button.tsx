@@ -5,6 +5,8 @@ import s from "./FormControls.module.css";
 type ButtonBaseProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
 	variant?: "primary" | "secondary" | "ghost" | "danger" | "removalToggle";
 	size?: "default" | "compact";
+	/** Status-only toggles can omit the selected border without hiding keyboard focus. */
+	pressedIndicator?: "border" | "none";
 };
 
 export type ButtonProps = ButtonBaseProps &
@@ -20,6 +22,7 @@ export function Button(props: ButtonProps) {
 		"classList",
 		"variant",
 		"size",
+		"pressedIndicator",
 		"geometry",
 		"shape",
 		"circular",
@@ -34,6 +37,7 @@ export function Button(props: ButtonProps) {
 			class={cx(
 				s.control,
 				s.button,
+				local.pressedIndicator === "none" && s.noPressedIndicator,
 				!(local.shape === "icon" && local.circular) && s[local.variant ?? "secondary"],
 				local.shape !== "icon" && local.size === "compact" && s.compact,
 				local.shape === "icon" && s.iconButton,

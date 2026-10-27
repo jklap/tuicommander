@@ -455,6 +455,9 @@ controls have a 44px minimum height and 16px text to prevent iOS zoom.
 `type="submit"` for form submission). Variants are `primary`, `secondary` (default),
 `ghost` and `danger`; sizes are `default` (36px) and `compact` (22px), both with a
 44px touch minimum. It shares FormControls height and padding tokens with fields.
+For status-only toggles whose icon already indicates the active state, use
+`pressedIndicator="none"` to omit the pressed border. The default remains
+`"border"`; keyboard `:focus-visible` styling stays intact.
 Clickable list rows/cards retain native buttons with `data-control-layout="row"`
 or `data-control-layout="card"`. Their geometry selectors must include both the
 `button` tag and the exact marker. This exception is for content layout, never
@@ -723,6 +726,7 @@ arrange the wrapping picker but must not resize its swatches.
 - Use `ButtonGroup` with direct shared `Button` children for connected split
   actions. Buttons retain their own size and behavior; the shared group owns
   corners and the single divider. Do not clip focus rings or dropdown content.
+- Use `Textarea compact` when an owner already manages editor expansion and needs a one-control-height minimum. Keep its padding in the shared primitive.
 - Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
   is 36px desktop or 44px touch, and the maximum is three control heights.
   Remove consumer auto-resize callbacks and height caps when adopting it.

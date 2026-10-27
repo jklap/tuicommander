@@ -4,6 +4,7 @@ import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
+import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
@@ -18,7 +19,7 @@ import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { RemoteInteractions } from "./RemoteInteractions";
-import { conversationLabel, SessionControls } from "./SessionControls";
+import { conversationLabel, SessionControls, SessionSettingsDialog } from "./SessionControls";
 import { Transcript, type TranscriptSearchRef } from "./Transcript";
 import { openChatTableDocument } from "./tableDocument";
 import { trackPanelWidth } from "./trackPanelWidth";
@@ -57,6 +58,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	const viewed = createMemo(() => props.fsRoot || props.repoPath || null);
 	const chat = createAcpChat(viewed, () => props.visible);
 	const [newOptionsOpen, setNewOptionsOpen] = createSignal(false);
+	const [sessionSettingsOpen, setSessionSettingsOpen] = createSignal(false);
 	// Toasts keep clear of this panel's rendered width (see ToastContainer).
 	let panelEl!: HTMLDivElement;
 	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
@@ -139,6 +141,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				<SessionControls
 					chat={chat}
 					detached={isPanelMode()}
+					onSessionSettings={() => setSessionSettingsOpen(true)}
 					onNewOptions={() => {
 						chat.clearError();
 						setNewOptionsOpen(true);
@@ -242,6 +245,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 
 			<Transcript
+				fontSize={terminalsStore.getActive()?.fontSize}
 				onSearchRef={(ref) => {
 					transcriptSearch = ref;
 				}}
@@ -298,21 +302,10 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
-				<Composer chat={chat} />
+				<Composer chat={chat} onSessionSettings={() => setSessionSettingsOpen(true)} />
 			</Show>
-			<Show when={chat.usage()}>
-				{(usage) => (
-					<div class={s.usageFooter}>
-						<span>Context {Math.round((usage().used / usage().size) * 100)}%</span>
-						<Show when={usage().cost}>
-							{(cost) => (
-								<span>
-									{cost().currency} {cost().amount}
-								</span>
-							)}
-						</Show>
-					</div>
-				)}
+			<Show when={sessionSettingsOpen()}>
+				<SessionSettingsDialog chat={chat} onClose={() => setSessionSettingsOpen(false)} />
 			</Show>
 		</div>
 	);

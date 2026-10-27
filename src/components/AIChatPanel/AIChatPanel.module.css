@@ -400,13 +400,11 @@
 
 /* ── Input area ─────────────────────────────────────────── */
 .inputArea {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  padding: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .inputBody {
@@ -484,7 +482,7 @@
 
 .textarea::placeholder {
   color: var(--fg-muted);
-  opacity: 0.5;
+  opacity: 1;
 }
 
 
@@ -792,6 +790,10 @@
 /* ── Thinking pulse animation ──────────────────────────── */
 .thinkingPulse {
   animation: thinkingPulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinkingPulse { animation: none; }
 }
 
 @keyframes thinkingPulse {
@@ -1254,19 +1256,33 @@
 }
 
 
-.repoContext {
+.mobileComposerContainer { display: contents; }
+
+.composerCard {
+  flex-shrink: 0;
+  margin: 6px 8px 8px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.composerHeader {
+  composes: toolbar from "../ui/FormControls.module.css";
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  border-top: 1px solid var(--border);
-  font-size: var(--font-xs);
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
 }
-.repoContext span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repoContext button {
-  margin-left: auto;
-}
-
+.composerHeader > button { margin-left: auto; }
+.repoContext { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--fg-secondary); font-size: var(--font-xs); }
+.repoContext > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repoContext strong { color: var(--fg-primary); font-weight: 600; }
+.contextUsage { min-width: 0; }
 
 /* The header contains shared desktop/touch targets without clipping. */
 .tidyHeader {
@@ -1294,14 +1310,8 @@
 .menuSeparator { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 .menuHint { margin-left: auto; font-size: 10px; color: var(--fg-muted); white-space: nowrap; }
 .actionsMenuItems .conversationRows { position: static; box-shadow: none; border: none; }
-.composerMeta { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; padding: 0 12px 4px; font-size: 11px; color: var(--fg-secondary); min-width: 0; }
-.composerMeta .sessionSettingsSummary { font-size: 11px; flex-shrink: 0; margin-left: auto; }
-.composerMeta .repoContext { display: flex; align-items: center; overflow: hidden; gap: 4px; min-width: 0; border: none; padding: 0; font-size: 11px; }
-.composerMeta .repoContext button {
-  margin-left: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.composerMeta { composes: toolbar from "../ui/FormControls.module.css"; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: 11px; color: var(--fg-secondary); min-width: 0; }
+.composerMeta .sessionSettingsSummary { margin-left: auto; font-size: inherit; }
 .stepTitle { color: var(--accent); font-weight: 600; white-space: nowrap; max-width: 35%; overflow: hidden; text-overflow: ellipsis; }
 .stepDescription { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); }
 .toolActivitySummary { white-space: nowrap; }
@@ -1367,4 +1377,42 @@ summary.headerBtn[data-control-layout="disclosure"]:focus-visible { outline: 2px
   summary.headerBtn[data-control-layout="disclosure"] { height: max(44px, var(--control-height, 36px)); }
   .actionsMenu > summary.headerBtn[data-control-layout="disclosure"] { width: max(44px, var(--control-height, 36px)); }
   .textarea[data-control-layout="composer-editor"] { min-height: max(44px, var(--control-height, 36px)); }
+}
+
+
+/* Slash offers share the composer's width and stay scrollable on small screens. */
+.slashCommands {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+}
+
+button[data-control-layout="row"].slashCommand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  gap: 3px;
+  cursor: pointer;
+}
+
+button[data-control-layout="row"].slashCommand[aria-selected="true"],
+button[data-control-layout="row"].slashCommand:hover {
+  background: var(--bg-highlight);
+}
+
+.slashCommand span,
+.slashCommand code,
+.commandNotice {
+  color: var(--fg-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }

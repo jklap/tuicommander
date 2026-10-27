@@ -1,7 +1,9 @@
 import { createStore, produce } from "solid-js/store";
 import type {
 	AcpAttachmentSnapshot,
+	AcpAvailableCommand,
 	AcpClientError,
+	AcpClientEvent,
 	AcpConnectionId,
 	AcpConnectionSnapshot,
 	AcpPendingInteraction,
@@ -14,6 +16,11 @@ import type {
 // State
 // ---------------------------------------------------------------------------
 
+export interface AcpTurnOutcome {
+	turnId: string;
+	event: Extract<AcpClientEvent, { kind: "turnSettled" | "turnFailed" }>;
+}
+
 /**
  * Everything this window knows about one ACP connection.
  *
@@ -24,6 +31,8 @@ import type {
  * agent adds to and anybody — another window, a phone — may remove from.
  */
 interface AcpConnectionEntry {
+	/** Latest streamed completion per attachment, including v1 failures with no activeTurn. */
+	outcomes: Record<AcpSessionId, AcpTurnOutcome>;
 	snapshot: AcpConnectionSnapshot;
 	/**
 	 * The last sequence this store handled, or 0 for none.
@@ -114,6 +123,10 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 		}
 		case "sessionUpdate": {
 			const update = event.update;
+			if (update.sessionUpdate === "available_commands_update" && Array.isArray(update.availableCommands)) {
+				const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+				if (attachment) attachment.availableCommands = update.availableCommands as AcpAvailableCommand[];
+			}
 			if (update.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) {
 				const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
 				if (attachment) attachment.configOptions = update.configOptions as AcpSessionConfigOption[];
@@ -178,10 +191,15 @@ export const acpStore = {
 				const existing = s.connections[snapshot.connectionId];
 				if (existing) {
 					existing.snapshot = snapshot;
+					for (const session of Object.keys(existing.outcomes)) {
+						if (!snapshot.attachments.some((attachment) => attachment.sessionId === session))
+							delete existing.outcomes[session];
+					}
 					return;
 				}
 				s.connections[snapshot.connectionId] = {
 					snapshot,
+					outcomes: {},
 					cursor: 0,
 					interactions: [],
 					gap: null,
@@ -249,6 +267,15 @@ export const acpStore = {
 				const entry = s.connections[frame.connectionId];
 				if (!entry) return;
 				reduceEvent(entry, frame);
+				if (
+					frame.sequence > entry.cursor &&
+					frame.sessionId &&
+					frame.turnId &&
+					entry.snapshot.attachments.some((attachment) => attachment.sessionId === frame.sessionId) &&
+					(frame.event.kind === "turnSettled" || frame.event.kind === "turnFailed")
+				) {
+					entry.outcomes[frame.sessionId] = { turnId: frame.turnId, event: frame.event };
+				}
 				// The journal is ordered and the transport delivers in order, so a
 				// lower sequence is a defect upstream, not a late frame. Letting it
 				// drag the cursor backwards would replay everything after it.
@@ -313,6 +340,10 @@ export const acpStore = {
 
 	attachment(connectionId: AcpConnectionId, sessionId: AcpSessionId): AcpAttachmentSnapshot | null {
 		return this.attachments(connectionId).find((a) => a.sessionId === sessionId) ?? null;
+	},
+
+	turnOutcome(connectionId: AcpConnectionId, sessionId: AcpSessionId): AcpTurnOutcome | null {
+		return state.connections[connectionId]?.outcomes[sessionId] ?? null;
 	},
 
 	/** The last sequence handled, or 0 if none has been. */
