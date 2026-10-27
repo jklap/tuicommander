@@ -5,10 +5,12 @@ import s from "./FormControls.module.css";
 export type TextareaProps = JSX.TextareaHTMLAttributes<HTMLTextAreaElement> & {
 	/** Compact content-sized editor, bounded by three shared control heights. */
 	autoGrow?: boolean;
+	/** One-control-height minimum for an editor whose owner manages expansion. */
+	compact?: boolean;
 };
 
 export function Textarea(props: TextareaProps) {
-	const [local, rest] = splitProps(props, ["class", "classList", "autoGrow", "ref"]);
+	const [local, rest] = splitProps(props, ["class", "classList", "autoGrow", "compact", "ref"]);
 	let element: HTMLTextAreaElement | undefined;
 	const resize = () => {
 		if (!element) return;
@@ -49,7 +51,13 @@ export function Textarea(props: TextareaProps) {
 				if (typeof local.ref === "function") local.ref(node);
 			}}
 			data-form-control
-			class={cx(s.control, s.textarea, local.autoGrow && s.textareaAutoGrow, local.class)}
+			class={cx(
+				s.control,
+				s.textarea,
+				(local.compact || local.autoGrow) && s.textareaCompact,
+				local.autoGrow && s.textareaAutoGrow,
+				local.class,
+			)}
 			classList={local.classList}
 		/>
 	);

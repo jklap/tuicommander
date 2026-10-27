@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).
+
 - Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
 
 - The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
@@ -245,7 +247,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
-- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
+- Desktop session Chat and AI Chat share a 14px default reading scale and the terminal zoom delta; AI Chat follows the active terminal. Active and all-terminal zoom actions update both Chat views; mobile keeps its device-local reading preference
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`

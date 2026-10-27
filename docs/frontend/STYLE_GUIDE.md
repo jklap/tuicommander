@@ -723,6 +723,7 @@ arrange the wrapping picker but must not resize its swatches.
 - Use `ButtonGroup` with direct shared `Button` children for connected split
   actions. Buttons retain their own size and behavior; the shared group owns
   corners and the single divider. Do not clip focus rings or dropdown content.
+- Use `Textarea compact` when an owner already manages editor expansion and needs a one-control-height minimum. Keep its padding in the shared primitive.
 - Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
   is 36px desktop or 44px touch, and the maximum is three control heights.
   Remove consumer auto-resize callbacks and height caps when adopting it.

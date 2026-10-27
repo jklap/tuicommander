@@ -93,6 +93,8 @@ describe("font preferences after a real module reload", () => {
 		await screen.findByText("Chat answer");
 		const transcript = view.container.querySelector("[data-mobile-reading]") as HTMLElement;
 		expect(transcript.style.getPropertyValue("--font-base")).toBe("18px");
+		// Catches: the desktop zoom contract overriding the phone's own reading size.
+		expect(transcript.querySelector("[data-chat-typography]")).toBeNull();
 	});
 });
 

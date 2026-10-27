@@ -12,6 +12,7 @@ import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedModelChange from "../fixtures/ego-model-change-2388.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
+import { chatFontSize, loadChatTypography } from "../helpers/chatFontSize";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -80,7 +81,7 @@ vi.mock("../../transport", () => ({
 // Whether an ego binary is configured is the one setting this panel reads, and
 // criterion 9 turns on it being readable as "not configured" rather than as an
 // empty string nobody checked.
-const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
+const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego", defaultFontSize: 13 }));
 
 vi.mock("../../stores/settings", async () => {
 	const { createSignal } = await import("solid-js");
@@ -130,11 +131,13 @@ import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useTerminalLifecycle } from "../../hooks/useTerminalLifecycle";
 import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
@@ -430,6 +433,68 @@ describe("AIChatPanel: repository profile warnings", () => {
 		await settle();
 		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
 	});
+});
+
+// Catches: AI Chat stays at its fixed size when the active terminal zooms or changes.
+it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", async () => {
+	const removeStyles = loadChatTypography();
+	const previous = terminalsStore.state.activeId;
+	const first = terminalsStore.add({
+		name: "zoom one",
+		sessionId: "zoom-one",
+		fontSize: 13,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	const second = terminalsStore.add({
+		name: "zoom two",
+		sessionId: "zoom-two",
+		fontSize: 19,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	terminalsStore.setActive(first);
+	let zoom!: ReturnType<typeof useTerminalLifecycle>;
+	const view = render(() => {
+		zoom = useTerminalLifecycle({
+			pty: { canSpawn: async () => true, close: async () => {} },
+			dialogs: {
+				confirmCloseTerminal: async () => false,
+				confirmSaveChanges: async () => "cancel",
+				confirm: async () => false,
+			},
+			setStatusInfo: () => {},
+			getDefaultFontSize: () => 13,
+		});
+		return <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />;
+	});
+	await settle();
+	(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+	await settle();
+	acpTranscript.restore(SESSION, [{ id: "zoom-answer", kind: "agent", text: "Readable zoom answer" }]);
+	await settle();
+	const size = () => chatFontSize(view.getByText("Readable zoom answer").closest<HTMLElement>(".assistantMsg")!);
+	try {
+		expect(size()).toBe("14px");
+		zoom.zoomIn();
+		expect(size()).toBe("16px");
+		zoom.zoomOut();
+		expect(size()).toBe("14px");
+		terminalsStore.setActive(second);
+		expect(size()).toBe("20px");
+		zoom.zoomReset();
+		expect(size()).toBe("14px");
+		terminalsStore.remove(second);
+		terminalsStore.remove(first);
+		terminalsStore.setActive(null);
+		expect(size()).toBe("14px");
+	} finally {
+		view.unmount();
+		removeStyles();
+		terminalsStore.remove(first);
+		terminalsStore.remove(second);
+		if (previous) terminalsStore.setActive(previous);
+	}
 });
 
 describe("AIChatPanel: the frame it keeps", () => {
@@ -2188,7 +2253,10 @@ describe("AIChatPanel: composer height", () => {
 		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
 			return this.value.split("\n").length * LINE_PX + 16;
 		});
-		clientHeight.mockReturnValue(PANEL_PX);
+		// Catches the new card wrapper becoming the 40% height-budget source.
+		clientHeight.mockImplementation(function (this: HTMLElement) {
+			return this.id === "ai-chat-panel" ? PANEL_PX : 60;
+		});
 	});
 	afterEach(() => {
 		scrollHeight.mockReset();
@@ -2884,7 +2952,10 @@ describe("AIChatPanel: durable conversations", () => {
 		});
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		// Catches: the card footer showing a stale or incorrect context numerator, capacity or remainder.
+		expect(container.querySelector('[aria-label="Context usage"]')?.textContent).toContain(
+			"Ctx 25% · 50K/200K · ~150K free",
+		);
 		expect(container.textContent).toContain("USD 0.001035");
 	});
 
@@ -2894,7 +2965,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("Ctx 25%");
 		expect(container.textContent).not.toContain("NaN");
 		expect(container.textContent).not.toContain("USD");
 	});
@@ -2909,7 +2980,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).toContain("Ctx 50%");
 		expect(container.textContent).not.toContain("USD 2");
 	});
 
@@ -2919,7 +2990,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
 		await settle();
 
-		expect(container.textContent).not.toContain("Context");
+		expect(container.querySelector('[aria-label="Context usage"]')).toBeNull();
 		expect(container.textContent).not.toContain("Infinity");
 	});
 
@@ -4924,6 +4995,25 @@ describe("AIChatPanel: new chat during cold saved connection", () => {
 });
 
 describe("desktop composer icon controls", () => {
+	it("keeps repository pin and parked-draft actions separate inside the card header", async () => {
+		// Catches: moving the draft action to the header accidentally wires it to repository pinning.
+		const view = await renderPanel();
+		const header = view.container.querySelector('[class*="composerHeader"]')!;
+		expect(header.textContent).toContain("Repository · ");
+		const pin = header.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement;
+		const park = header.querySelector('button[aria-label="Park draft"]') as HTMLButtonElement;
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep my draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		pin.click();
+		expect(textarea.value).toBe("Keep my draft");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		park.click();
+		expect(textarea.value).toBe("");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		expect(park.getAttribute("aria-label")).toBe("Restore parked draft");
+	});
+
 	it("keeps icon actions named and disabled for an empty draft, and marks parked drafts pressed", async () => {
 		// Catches: replacing text with SVG drops accessible names, enables empty sends, or hides parked state.
 		const view = await renderPanel();

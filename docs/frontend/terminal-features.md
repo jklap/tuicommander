@@ -107,6 +107,8 @@ reversal and when the gesture ends.
 
 ### Zoom
 
+Desktop terminal Chat and AI Chat use the shared scale in `styles/chat-tokens.css`: 14px plus the terminal font-size delta from the configured default, bounded to 8–32px. Terminal Chat reads its own terminal; AI Chat reads the active terminal and uses zero delta when none is active. Reset restores the 14px reading size. Mobile retains its device-local reading preference.
+
 | Shortcut | Action |
 |----------|--------|
 | Cmd+= / Cmd++ | Zoom in |

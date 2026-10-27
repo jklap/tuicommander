@@ -1,5 +1,7 @@
 # AI Chat
 
+On desktop, AI Chat and session Chat share the same 14px default reading scale. Terminal zoom in, zoom out and reset also update AI Chat using the active terminal's zoom step. With no active terminal, AI Chat uses its default size. Font family, line height, weight and colors do not change when you switch between the two Chat views. Mobile keeps its device-local Chat font preference.
+
 Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
 
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
@@ -29,7 +31,7 @@ existing warning notices. The repository cannot raise the machine policy.
 A repo selection requires an explicit machine profile and an ego build that
 acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
 
-Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
+The desktop composer uses one compact card. Its header shows **Repository · name** and an independent repository pin. The document button on the right parks the draft; its tooltip offers restore or swap when a draft is parked. The blue play button sends while idle and queues while ego is busy. Stop remains beside the input during a running turn.
 
 Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
 
@@ -46,7 +48,7 @@ When ego reports an exhausted context and supports compaction, AI Chat shows **C
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
-The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+The footer shows context occupancy, used/window tokens and approximate free tokens when ego publishes usage. It also keeps any reported cost. The model, reasoning and permission summary stays on the right and opens Session settings. Repository pinning stays in the card header. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
 
