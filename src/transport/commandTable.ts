@@ -691,6 +691,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	get_claude_project_list: { map: () => ({ method: "GET", path: "/claude/projects" }) },
+	get_ego_usage: { map: (_args, p) => ({ method: "GET", path: `/ego/usage?sessionId=${p("sessionId")}` }) },
 	get_codex_usage_api: { map: () => ({ method: "GET", path: "/codex/usage" }) },
 	get_codex_usage_stats: { map: () => ({ method: "GET", path: "/codex/stats" }) },
 	get_grok_usage_api: { map: () => ({ method: "GET", path: "/grok/usage" }) },

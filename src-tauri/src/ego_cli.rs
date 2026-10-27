@@ -30,6 +30,7 @@ use crate::AppState;
 
 mod context;
 pub(crate) mod perimeter;
+pub(crate) mod usage;
 pub(crate) use context::ConfigContext;
 
 /// How much of a child's output is kept when reporting a failure.

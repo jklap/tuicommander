@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
 
 - Organize the AI Chat composer into a compact card with repository pinning, draft parking, input/send and live context/model details (#2394-e3c4).
@@ -23,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
+
+- Stop retrying unavailable PTY child status forever during close or kill, so that error cannot prevent desktop Quit from finishing (#2406-e4e1).
+- Keep sleep prevention active for background agent jobs, detached runners and managed `keep_open` work, even when a terminal is idle or the WebView is hidden; retain the user opt-out (#2402-12a0).
+- Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
 

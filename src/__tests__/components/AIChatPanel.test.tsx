@@ -4997,6 +4997,25 @@ describe("AIChatPanel: new chat after saved-tab selection", () => {
 });
 
 describe("AIChatPanel: new chat during cold saved connection", () => {
+	// Catches: New chat restores a saved greeting first, then leaves that old title selected when replay fails.
+	it("opens an untitled new chat without replaying a saved greeting", async () => {
+		aiChatTabs.add("global", SECOND_SESSION);
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "ciao" } }, SECOND_SESSION);
+		client.loadSession.mockRejectedValue(new Error("Saved greeting is unavailable"));
+		const view = renderIdlePanel();
+		await settle();
+		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+
+		const conversations = view.container.querySelector<HTMLSelectElement>('select[aria-label="Conversation"]')!;
+		expect(conversations.value).toBe(SESSION);
+		expect(view.container.querySelector(`[data-chat-session="${SESSION}"]`)?.textContent).toBe("Untitled conversation");
+		expect(client.loadSession).not.toHaveBeenCalled();
+		expect(acpTranscript.title(SECOND_SESSION)).toBe("ciao");
+		await typeAndSend(view.container, "Start a new task");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Start a new task", [], ROOT);
+	});
+
 	// Catches New chat waiting for an older saved replay and aborting when that replay fails.
 	it("opens a usable new chat when the saved connection was still pending at the click", async () => {
 		aiChatTabs.add("global", SESSION);
