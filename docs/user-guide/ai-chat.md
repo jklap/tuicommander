@@ -78,6 +78,12 @@ When ego reports an exhausted context and supports compaction, AI Chat shows **C
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
+Changing **Session settings → Model** updates the current conversation in place.
+It does not reconnect ego or create a conversation, and the transcript stays visible.
+After ego confirms the option, the next turn uses that model. **Settings → AI Chat →
+Default model** is different: it changes the default for new ego runs only. An open
+conversation keeps its selected model; use Session settings to change it.
+
 The footer shows context occupancy, used/window tokens and approximate free tokens when ego publishes usage. It also keeps any reported cost. The model, reasoning and permission summary stays on the right and opens Session settings. Repository pinning stays in the card header. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
@@ -92,8 +98,12 @@ Each table has **Markdown**, **Copy as Markdown**, and **Open as document** acti
 button and the command palette. The detach control moves it into its own window,
 and the main window shows the *Bring back* placeholder. Drag the left edge to
 resize — the width applies for the session and is not persisted.
-The conversation view loads when you first open it; terminal input is available
-while it loads.
+Opening the configured panel automatically connects ego and restores the selected
+conversation. With no saved conversation, it opens a new one without sending a
+message. Terminal input remains available while it connects. Switching repositories
+does not start another agent. A failed connection stays visible for explicit Retry;
+it does not retry in a loop. Stopping ego keeps the selected transcript visible.
+Reopening the panel, or sending another message, reconnects the same conversation.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
 
@@ -128,8 +138,8 @@ reach. The header names that repository. Switching repository keeps the same
 tabs and the same conversation, and starts or loads nothing.
 If desktop and mobile open the chat together, they attach to the same running ego.
 
-ego starts when you send the first message, click **+**, or select a saved tab; opening the panel
-starts nothing. There is one ego for the app: a reloaded window or the phone
+ego connects when you open the panel. Sending after a stop, clicking **+**, or
+selecting a saved tab also connects it when needed. There is one ego for the app: a reloaded window or the phone
 gets the one already running, and quitting TUICommander ends it. **New chat tab** in the
 tab bar starts another conversation; the conversation picker lists previous
 conversations by title, newest first. Selecting one loads its history. The open

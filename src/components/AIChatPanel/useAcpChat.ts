@@ -6,8 +6,8 @@
  * at the workspace (`~/Gits`) rather than at one repository. The repository
  * being viewed travels with each prompt as a context hint, never as the scope.
  *
- * Nothing starts until a person sends a message or opens/selects a tab. Opening the
- * panel or switching repository starts no process and loads no session: the
+ * Opening the panel connects ego and restores the selected conversation.
+ * Switching repository starts no process and loads no session: the
  * per-repository binding this replaced did both, and a webview reload that
  * lost it launched a fresh ego for every repository visited — 26 at once.
  *
@@ -95,8 +95,8 @@ function chatRoot(): Promise<string> {
 	return workspaceRoot;
 }
 
-/** `ready` is configured with nothing started yet: the composer is live, and
- *  the first message is what launches ego. */
+/** `ready` is configured but disconnected: retained history stays readable,
+ *  and reopening the panel or sending a message attaches it again. */
 export type AcpChatPhase = "unconfigured" | "ready" | "starting" | "failed" | "live";
 
 /** The client surface this hook drives, named so a test can hand it another. */
@@ -173,6 +173,7 @@ export function createAcpChat(
 	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
 	let catalogueRequest = 0;
 	let selection = 0;
+	let selecting: { session: AcpSessionId; promise: Promise<void> } | null = null;
 	let failedSession: AcpSessionId | null = null;
 	type SubmittedPrompt = {
 		id: AcpConnectionId;
@@ -245,7 +246,9 @@ export function createAcpChat(
 
 	/** Share the default connection even when several tab selections start it. */
 	function connectDefault(target: string): Promise<Binding> {
-		if (defaultBinding) return Promise.resolve(defaultBinding);
+		if (defaultBinding && acpStore.connection(defaultBinding.connectionId)?.state === "ready")
+			return Promise.resolve(defaultBinding);
+		defaultBinding = null;
 		connectingDefault ??= (async () => {
 			const snapshot = await client.connect(target);
 			defaultBinding = { connectionId: snapshot.connectionId, sessionId: null, root: target };
@@ -259,7 +262,18 @@ export function createAcpChat(
 	/** Selecting a saved tab requests attachment before the first message.
 	 *  Remounts preserve refused loads; explicit selections may retry them.
 	 *  Only the latest selection may change the visible tab. */
-	async function selectSession(session: AcpSessionId, explicit = true): Promise<void> {
+	function selectSession(session: AcpSessionId, explicit = true): Promise<void> {
+		// Automatic open, Send and a tab click share the same attachment request.
+		// Returning it also makes callers wait for its success or refusal.
+		if (selecting?.session === session && session === sessionId()) return selecting.promise;
+		const promise = attachSelected(session, explicit).finally(() => {
+			if (selecting?.promise === promise) selecting = null;
+		});
+		selecting = { session, promise };
+		return promise;
+	}
+
+	async function attachSelected(session: AcpSessionId, explicit: boolean): Promise<void> {
 		if (session === sessionId() && attachment() && !connecting() && !failedSession) return;
 		const request = ++selection;
 		const isCurrent = () => request === selection;
@@ -385,6 +399,7 @@ export function createAcpChat(
 	/** The session to talk to, starting ego for it on first use. One start at a
 	 *  time for the app: a second caller waits on the first. */
 	function start(): Promise<Started | null> {
+		if (binding && acpStore.connection(binding.connectionId)?.state !== "ready") binding = null;
 		const current = binding;
 		const selected = sessionId() ?? aiChatTabs.active(TABS) ?? current?.sessionId;
 		if (current && selected && acpStore.attachment(current.connectionId, selected)) {
@@ -462,29 +477,34 @@ export function createAcpChat(
 		}
 	}
 
-	// Showing the panel launches nothing. It takes back a connection this app
-	// already has, with the tab last shown; with none, it shows the saved tabs
-	// and waits for a message. The repository on screen is deliberately not read
-	// here: switching it must never start or load anything.
+	// One attempt per open/configuration edge, never per repository or stream
+	// update. A refusal stays visible for Retry rather than starting a loop.
 	createEffect(() => {
-		if (!active()) return;
-		const current = binding;
-		const selected = untrack(() => aiChatTabs.active(TABS));
-		if (!current) {
-			setConnectionId(null);
-			setSessionId(selected);
-			return;
-		}
-		setRoot(current.root);
-		setConnectionId(current.connectionId);
-		setSessionId(selected ?? current.sessionId);
+		if (!active() || !settingsStore.isAcpConfigured()) return;
 		untrack(() => {
-			const target = root();
-			if (!target) return;
+			const current = binding;
+			const selected = aiChatTabs.active(TABS);
+			setSessionId(selected ?? current?.sessionId ?? null);
+			if (!current || acpStore.connection(current.connectionId)?.state !== "ready") {
+				if (selected && !starting) {
+					void selectSession(selected, false);
+					return;
+				}
+				const request = selection;
+				void start().then((started) => {
+					if (!started || request !== selection) return;
+					setConnectionId(started.connectionId);
+					setSessionId(started.sessionId);
+					if (binding) setRoot(binding.root);
+				});
+				return;
+			}
+			setRoot(current.root);
+			setConnectionId(current.connectionId);
 			for (const tab of aiChatTabs.ids(TABS)) {
 				if (!launches()[tab] && !current.launch && !acpStore.attachment(current.connectionId, tab)) {
 					if (tab === selected) void selectSession(tab, false);
-					else void replay("replaying a chat tab", current.connectionId, tab, target);
+					else void replay("replaying a chat tab", current.connectionId, tab, current.root);
 				}
 			}
 		});
@@ -794,7 +814,7 @@ export function createAcpChat(
 			await selectSession(active);
 		},
 
-		/** Send a turn, starting ego first when this is the first message. */
+		/** Send a turn, attaching ego first when the conversation is disconnected. */
 		async send(
 			text: string,
 			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
@@ -1024,7 +1044,8 @@ export function createAcpChat(
 			if (!binding?.launch) defaultBinding = null;
 			binding = null;
 			setConnectionId(null);
-			setSessionId(null);
+			// Selection and its transcript outlive the process. Reopening or Send
+			// attaches this conversation again instead of presenting an empty one.
 			await guard("disconnecting", () => client.disconnect(id));
 		},
 	};

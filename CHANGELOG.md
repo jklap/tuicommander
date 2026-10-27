@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Connect AI Chat automatically when opened and retain its selected transcript after disconnect. In-chat model changes keep the conversation and apply to the next turn; global model defaults remain for new runs (#2404-e946).
+
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
 
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
