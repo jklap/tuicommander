@@ -42,7 +42,7 @@ export interface AIChatPanelProps {
  *
  * One chat for the whole app, across repositories: switching repository keeps
  * the same tabs and conversation and starts nothing, and ego is launched by the
- * first message. It does not bind to a terminal, and there is no per-terminal
+ * panel opening. It does not bind to a terminal, and there is no per-terminal
  * lock: a turn ego runs outlives any tab and may touch files no tab is showing.
  * The panel is a control plane over an agent that lives outside it — see
  * `docs/user-guide/ai-chat.md`.
@@ -128,7 +128,8 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			case "failed":
 				return "The conversation could not be opened. Use Retry to try again.";
 			default:
-				if (chat.phase() === "ready" && chat.sessionId()) return "Select a saved tab to load its conversation.";
+				if (chat.phase() === "ready" && chat.sessionId())
+					return "Conversation disconnected. Send a message to reconnect.";
 				return "Ask ego about any repository. The one on screen is sent as context.";
 		}
 	};

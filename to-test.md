@@ -1,6 +1,12 @@
 ## Headless manual TLS (2344-59cf) — daemon rebuild/restart required
 
 - [ ] After rebuilding `tuic-remote`, restart the affected daemon when safe. With manual PEM configuration, connect via HTTPS and WSS and confirm SSE delivery; confirm local relay/SSH HTTP access stays available. With TLS off, HTTP stays available. The daily app was not restarted; Rust does not hot-reload. Automated GREEN verification belongs to the coordinator critic.
+## Quit after child-status errors (2406-e4e1) — Rust restart required
+
+- [x] Before the fix, real OS `ECHILD` errors made both PTY close and kill hang on native macOS and Linux rb. The two focused regressions failed at their teardown-return bound; neither simulates the child status. Evidence: `~/Gits/.tmp/results/tuic-quit-evidence/`.
+- [x] The pre-fix isolated native `agent-test-quit` displayed Quit confirmation, closed its disposable PTY, and exited with status 0 after clicking Quit. The instance is stopped. This ordinary-case check does not reproduce Boss's historical failure.
+- [ ] Coordinator: run `child_reaping_tests` and `close_pty_core_kills_agent_grandchild` against the final change. No post-fix GREEN run was performed in the implementation lane.
+- [ ] After an authorized `make dev` restart or `make build`, check the next desktop quit attempt. If it still hangs, retain the exact action (window close, Cmd+Q, menu, or confirmation), time and logs. The original failure has not been attributed to `ECHILD`; the running daily app was not quit or restarted by this peer. Rust does not hot-reload.
 
 ## Mobile usage menu (2400-d006)
 
@@ -3065,4 +3071,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).
 
+- [ ] After a manual backend restart, select AI Chat conversations on desktop and iPad in both directions, then reconnect the iPad and confirm it catches up. Confirm the session CLI | Chat choice does not follow. Rust selection changes require `make dev` restart or a rebuilt release (#2403-e711).
 - [ ] Sleep prevention after backend rebuild (#2402-12a0): enable Prevent sleep when busy, run a managed agent background job or `keep_open` peer, let its composer become idle, then lock/hide the app. Check `pmset -g assertions` retains TUIC's Agent session active assertions; finish/close the work and confirm release. Disable the setting and confirm release while work remains. The Rust change needs a manual `make dev` restart or `make build`; it does not hot-reload.

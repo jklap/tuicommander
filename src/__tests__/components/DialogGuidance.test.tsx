@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 
 vi.mock("../../transport", () => ({
+	subscribeEvents: vi.fn(async () => () => {}),
 	rpc: vi.fn(async (command: string) =>
 		command === "get_local_ips" ? [] : { services: { server: { enabled: true } } },
 	),

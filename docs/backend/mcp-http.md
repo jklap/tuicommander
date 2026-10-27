@@ -3024,3 +3024,7 @@ HTTP responses, SSE and WebSocket upgrades share one HTTP+HTTPS TCP listener,
 preserving local relay and SSH HTTP clients; TLS off uses the plain acceptor. The
 `tls_listener` weak lifetime is published only after TLS listener setup and
 expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
+
+### Shared AI Chat selection
+
+`GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.

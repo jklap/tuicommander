@@ -2386,6 +2386,14 @@ describe("transport", () => {
 		// than derived from the mappers: a test that rebuilt the path the same
 		// way the code does would agree with any typo.
 		it.each([
+			["ai_chat_selection", {}, "GET", "/acp/chat/selection", undefined],
+			[
+				"select_ai_chat_conversation",
+				{ sessionId: "selected" },
+				"PUT",
+				"/acp/chat/selection",
+				{ sessionId: "selected" },
+			],
 			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
 			[
 				"acp_chat_open",

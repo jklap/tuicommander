@@ -935,7 +935,7 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ai_chat_workspace: String,
-    /// Last selected ego conversation for each repository root.
+    /// Shared active ego conversation for each AI Chat workspace root.
     #[serde(default)]
     #[schemars(extend("x-not-setting" = "Conversation selection history; not launch configuration."))]
     pub(crate) ai_chat_sessions: HashMap<String, String>,
@@ -3099,7 +3099,12 @@ fn commit_config_change_locked(
     save_app_config_with(next.clone(), |disk_config| file.write_atomic(disk_config))?;
     let reflow_changed = cached.scrollback_reflow != next.scrollback_reflow;
     let reflow = next.scrollback_reflow;
+    let chat_selection_changed = cached.ai_chat_sessions != next.ai_chat_sessions
+        || cached.ai_chat_workspace != next.ai_chat_workspace;
     *state.config.write() = next;
+    if chat_selection_changed {
+        crate::ai_chat_selection::publish(state);
+    }
     // `new_vt_log_buffer` only reads the config when a grid is built, so live
     // sessions would keep the old behaviour until they are recreated.
     if reflow_changed {
