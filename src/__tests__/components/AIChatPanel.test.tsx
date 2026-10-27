@@ -284,8 +284,8 @@ async function typeAndSend(container: HTMLElement, text: string): Promise<void> 
 	textarea.value = text;
 	textarea.dispatchEvent(new Event("input", { bubbles: true }));
 	(
-		[...container.querySelectorAll("button")].find(
-			(button) => ["Send", "Queue"].includes(button.getAttribute("aria-label") ?? ""),
+		[...container.querySelectorAll("button")].find((button) =>
+			["Send", "Queue"].includes(button.getAttribute("aria-label") ?? ""),
 		) as HTMLButtonElement
 	).click();
 	await settle();
