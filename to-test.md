@@ -1,3 +1,7 @@
+## Plugin discovery (2390-e129) — Rust restart required
+
+- [ ] After an authorized backend rebuild/restart, reload a user plugin with a cold payload cache and confirm discovery remains responsive. Make its manifest name empty and confirm the backend warning names the plugin and `name is empty`. Invalid plugins remain skipped; this change does not add a frontend error card. The daily app was not restarted by this peer.
+
 ## Session Chat working indicator (2397-06b6)
 
 - [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.

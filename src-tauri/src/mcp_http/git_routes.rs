@@ -234,10 +234,10 @@ pub(super) async fn list_user_plugins_http(
                 .into_response();
         }
     };
-    // Keep manifest reads and payload hashing off the runtime.
-    match tokio::task::spawn_blocking(move || crate::plugins::list_user_plugins(ids)).await {
+    // The shared command owns the blocking-pool boundary for both transports.
+    match crate::plugins::list_user_plugins(ids).await {
         Ok(plugins) => Json(serde_json::json!(plugins)).into_response(),
-        Err(e) => err_500(&format!("Task failed: {e}")),
+        Err(e) => err_500(&e),
     }
 }
 
