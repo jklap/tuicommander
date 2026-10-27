@@ -1513,7 +1513,10 @@
 	"stories.view.kanban": "Kanban",
 	"stories.filter.empty": "No stories match these filters.",
 	"stories.board.empty": "No stories",
-  "automations.fix": "Fix",
-  "automations.failureCount": "Occurrences",
-  "automations.chooseProfile": "Choose a saved profile"
+	"automations.fix": "Fix",
+	"automations.failureCount": "Occurrences",
+	"automations.chooseProfile": "Choose a saved profile",
+	"aiChat.repository": "Repository",
+	"aiChat.messagePlaceholder": "Write a message…",
+	"aiChat.contextUsage": "Ctx {percent}% · {used}/{size} · ~{free} free"
 }

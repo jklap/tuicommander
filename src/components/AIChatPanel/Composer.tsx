@@ -7,6 +7,7 @@
  */
 
 import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
+import { t } from "../../i18n";
 import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { MobileComposerMenu } from "../../mobile/components/MobileComposerMenu";
 import { MobileDictationButton } from "../../mobile/components/MobileDictationButton";
@@ -16,7 +17,7 @@ import { uploadAttachment } from "../../services/uploadAttachment";
 import { pastedImageFiles } from "../../utils/pastedImage";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoTextColor } from "../../utils/repoColor";
-import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
+import { ComposeSendIcon } from "../shared/ComposeActionIcons";
 import { Button } from "../ui/Button";
 import { Textarea } from "../ui/Textarea";
 import s from "./AIChatPanel.module.css";
@@ -80,7 +81,7 @@ export const Composer: Component<{
 		const previous = textarea.offsetHeight;
 		textarea.style.height = "auto";
 		const natural = textarea.scrollHeight;
-		const panelHeight = inputArea?.parentElement?.clientHeight ?? 0;
+		const panelHeight = inputArea?.parentElement?.parentElement?.clientHeight ?? 0;
 		const cap = panelHeight > 0 ? Math.max(MIN_HEIGHT_PX, panelHeight * MAX_PANEL_FRACTION) : FALLBACK_CAP_PX;
 		const target = Math.min(Math.max(natural, MIN_HEIGHT_PX), cap);
 		// Re-assert the old height and force a reflow so the CSS transition animates to the new one.
@@ -192,7 +193,49 @@ export const Composer: Component<{
 	};
 
 	return (
-		<>
+		<div class={props.mobileAttachments ? s.mobileComposerContainer : s.composerCard}>
+			<Show when={!props.mobileAttachments}>
+				<div class={s.composerHeader}>
+					<Show when={props.chat.operatingRepo?.()}>
+						{(repo) => (
+							<div class={s.repoContext}>
+								<span>
+									{t("aiChat.repository", "Repository")} ·{" "}
+									<strong title={repo()} style={{ color: getRepoTextColor(repo()) }}>
+										{pathBasename(repo())}
+									</strong>
+								</span>
+								<Button
+									type="button"
+									variant="ghost"
+									shape="icon"
+									aria-label={props.chat.pinnedRepo?.() ? "Unpin repository" : "Pin repository"}
+									aria-pressed={!!props.chat.pinnedRepo?.()}
+									disabled={!props.chat.sessionId()}
+									onClick={() => props.chat.toggleRepoPin()}
+								>
+									<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+										<path d="m10 1 5 5-2 1-2 3v3l-1 1-4-4-4 4-1-1 4-4-3-3 1-1h3l3-2 1-2Zm.5 2.5-.7 1.4L7 7H4l5 5V9l2.1-2.8 1.4-.7-2-2Z" />
+									</svg>
+								</Button>
+							</div>
+						)}
+					</Show>
+					<Button
+						variant="ghost"
+						shape="icon"
+						aria-label={parkLabel()}
+						title={parkLabel()}
+						aria-pressed={!!aiChatDraft.parked()}
+						disabled={!aiChatDraft.parked() && !hasContent()}
+						onClick={() => aiChatDraft.parkOrSwap()}
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<path d="M3 1h6l4 4v10H3V1Zm1 1v12h8V6H8V2H4Zm5 .7V5h2.3L9 2.7ZM5 8h6v1H5V8Zm0 3h6v1H5v-1Z" />
+						</svg>
+					</Button>
+				</div>
+			</Show>
 			<div
 				ref={inputArea}
 				class={props.mobileAttachments ? `${s.inputArea} ${s.mobileComposer} ${mobileInput.form}` : s.inputArea}
@@ -301,6 +344,7 @@ export const Composer: Component<{
 					</Show>
 					<div class={props.mobileAttachments ? mobileInput.composer : s.composerActions}>
 						<Textarea
+							compact={!props.mobileAttachments}
 							ref={textarea}
 							data-control-layout="composer-editor"
 							class={props.mobileAttachments ? `${s.textarea} ${mobileInput.input}` : s.textarea}
@@ -309,7 +353,9 @@ export const Composer: Component<{
 							autocapitalize={
 								props.mobileAttachments ? (keyboardCorrection.enabled() ? "sentences" : "off") : undefined
 							}
-							placeholder={props.mobileAttachments ? "Message ego..." : "Ask ego about this repository"}
+							placeholder={
+								props.mobileAttachments ? "Message ego..." : t("aiChat.messagePlaceholder", "Write a message…")
+							}
 							value={aiChatDraft.text()}
 							onInput={(event) => {
 								browserDictation.cancel();
@@ -335,19 +381,6 @@ export const Composer: Component<{
 							onClick={() => void props.chat.cancel()}
 						>
 							Stop
-						</Button>
-					</Show>
-					<Show when={!props.mobileAttachments}>
-						<Button
-							variant="ghost"
-							shape="icon"
-							aria-label={parkLabel()}
-							title={parkLabel()}
-							aria-pressed={!!aiChatDraft.parked()}
-							disabled={!aiChatDraft.parked() && !hasContent()}
-							onClick={() => aiChatDraft.parkOrSwap()}
-						>
-							<ComposePinIcon />
 						</Button>
 					</Show>
 				</div>
@@ -382,12 +415,11 @@ export const Composer: Component<{
 				</Show>
 			</div>
 			<div class={s.composerMeta}>
-				<Show when={props.chat.operatingRepo?.()}>
+				<Show when={props.mobileAttachments && props.chat.operatingRepo?.()}>
 					{(repo) => (
 						<div class={s.repoContext}>
 							<span style={{ color: getRepoTextColor(repo()) }}>{pathBasename(repo())}</span>
 							<Button
-								type="button"
 								variant="ghost"
 								aria-label={props.chat.pinnedRepo?.() ? "Unpin repository" : "Pin repository"}
 								aria-pressed={!!props.chat.pinnedRepo?.()}
@@ -397,6 +429,32 @@ export const Composer: Component<{
 								· {props.chat.pinnedRepo?.() ? "pinned repository" : "follows the repository on screen"}
 							</Button>
 						</div>
+					)}
+				</Show>
+				<Show when={!props.mobileAttachments ? props.chat.usage?.() : null}>
+					{(usage) => (
+						<span class={s.contextUsage} aria-label="Context usage">
+							{t("aiChat.contextUsage", "Ctx {percent}% · {used}/{size} · ~{free} free", {
+								percent: String(Math.round((usage().used / usage().size) * 100)),
+								used: Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(
+									usage().used,
+								),
+								size: Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(
+									usage().size,
+								),
+								free: Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(
+									Math.max(0, usage().size - usage().used),
+								),
+							})}
+							<Show when={usage().cost}>
+								{(cost) => (
+									<span>
+										{" "}
+										· {cost().currency} {cost().amount}
+									</span>
+								)}
+							</Show>
+						</span>
 					)}
 				</Show>
 				<Show
@@ -420,6 +478,6 @@ export const Composer: Component<{
 					</Button>
 				</Show>
 			</div>
-		</>
+		</div>
 	);
 };

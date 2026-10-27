@@ -29,7 +29,7 @@ existing warning notices. The repository cannot raise the machine policy.
 A repo selection requires an explicit machine profile and an ego build that
 acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
 
-Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
+The desktop composer uses one compact card. Its header shows **Repository · name** and an independent repository pin. The document button on the right parks the draft; its tooltip offers restore or swap when a draft is parked. The blue play button sends while idle and queues while ego is busy. Stop remains beside the input during a running turn.
 
 Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
 
@@ -42,7 +42,7 @@ with the error. The Copy action beside a user message stays on one line.
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
-The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+The footer shows context occupancy, used/window tokens and approximate free tokens when ego publishes usage. It also keeps any reported cost. The model, reasoning and permission summary stays on the right and opens Session settings. Repository pinning stays in the card header. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
 
