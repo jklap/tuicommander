@@ -1816,7 +1816,9 @@ All data persisted to platform config directory via Rust:
 - Menu: Check for Updates (app menu and Help menu)
 
 ### 14.2 Sleep Prevention
-- `keepawake` integration prevents system sleep while agents are working
+- Backend-owned `keepawake` assertions cover active turns, meaningful background descendants, detached `tuic bg` runners and live managed agents marked `keep_open`
+- Sleep prevention does not depend on WebView activity; hidden, unloaded or blocked views cannot release it
+- The user setting still disables inhibition; idle agents without live work and closed sessions do not retain the hold
 - Configurable in Settings
 
 ### 14.3 Splash Screen

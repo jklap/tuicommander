@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep sleep prevention active for background agent jobs, detached runners and managed `keep_open` work, even when a terminal is idle or the WebView is hidden; retain the user opt-out (#2402-12a0).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).

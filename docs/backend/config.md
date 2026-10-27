@@ -382,7 +382,7 @@ cleartext copy does not survive on disk.
 | `tab_tree_enabled` | `bool` | `false` | Opt-in sidebar activity cards. `false` renders no activity caret, card, or nested agent/session rows. `true` lets every branch with an open terminal session expand its assigned sessions. Applies immediately; no restart is required. |
 | `defer_update_relaunch` | `bool` | `true` | After an update installs, hold the app restart until no session is busy or awaiting input. The APP UPDATE notification shows the busy count and offers Restart now. `false` restarts as soon as the install ends. Applies immediately. |
 | `eager_resume_after_update` | `bool` | `true` | After the app restarts for an update, resume every agent tab whose session id the agent confirmed on disk, on every branch (the resume command is typed at first shell idle). A branch with no such tab, and any unconfirmed tab, keep the lazy click-to-resume banner. Applies at the next update restart. |
-| `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
+| `prevent_sleep_when_busy` | `bool` | `false` | Prevent idle system sleep while backend-owned agent work remains live |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
@@ -398,7 +398,31 @@ cleartext copy does not survive on disk.
 
 On macOS, the desktop process always opts out of App Nap, even while hidden and
 with no busy agent. This process-lifetime activity permits idle system sleep;
-`prevent_sleep_when_busy` controls the separate sleep assertion. Hidden-idle
+`prevent_sleep_when_busy` controls the separate sleep assertion.
+A dedicated backend thread reconciles this assertion once per second, independent
+of WebView visibility or JavaScript execution. It uses live PTY ownership,
+backend turn/background state, the existing process-tree helper exclusions,
+detached `tuic bg` runner identity and managed `keep_open` holds. ACP active or
+queued turns and live ACP `keep_open` peers also count. Unknown process inventory
+fails closed for a live agent. The assertion is retried after native acquisition
+failure. Display sleep remains allowed; the setting can release the assertion.
+The remote daemon does not start the desktop host's sleep-prevention owner.
+
+The 2026-10-27 incident was a frontend busy-only policy gap, present since
+`fd75c1c524`: a ready composer could release both TUIC assertions despite live
+background work. At 21:19:21 the log shows TUIC releasing both its idle-system
+and system-sleep assertions, then entering Idle Sleep on AC for 503 seconds.
+A separate `caffeinate -i` assertion was not sufficient in that power state:
+`pmset -g log` records DarkWake at 21:17:49 for 92 seconds, ending at 21:19:21.
+The installed IOKit `IOPMLib.h` explicitly states that
+`kIOPMAssertPreventUserIdleSystemSleep` has no effect in Dark Wake. Its presence
+in the aggregate `PrevIdle` flags therefore does not prove effective inhibition.
+TUIC's release removed its separate `PrevSleep` flag while `PrevIdle` remained.
+This explains why the idle assertion did not protect that DarkWake interval;
+it does not prove a macOS assertion defect, nor guarantee protection against
+explicit sleep, lid closure or critical power events. The native keepawake
+assertion types are unchanged by this fix.
+ Hidden-idle
 backend work can therefore use more energy than an App-Napped process. See the
 [controlled replay and its limits](../../scripts/stall-workload/OCCLUDED-RESULTS.md).
 
