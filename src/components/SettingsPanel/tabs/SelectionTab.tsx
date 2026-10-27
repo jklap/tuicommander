@@ -59,6 +59,7 @@ function newRule(): SmartSelectionRule {
 		precision: "normal",
 		enabled: true,
 		actions: [],
+		highlightOnModifier: false,
 	};
 }
 
@@ -170,6 +171,24 @@ const RuleRow: Component<{
 								{(opt) => <option value={opt.value}>{opt.label}</option>}
 							</For>
 						</Select>
+					</div>
+
+					<div class={s.ruleField}>
+						<label class={s.ruleFieldLabel}>Highlight</label>
+						<label>
+							<input
+								type="checkbox"
+								data-setting-id="app.smart_selection_rules.{id}.highlight_on_modifier"
+								data-testid="smart-rule-highlight"
+								checked={props.rule.highlightOnModifier === true}
+								onChange={(e) => props.onUpdate({ highlightOnModifier: e.currentTarget.checked })}
+							/>{" "}
+							Highlight matches while the link modifier is held
+						</label>
+						<p class={s.hint}>
+							The link modifier is Cmd on macOS and Ctrl elsewhere. Off by default: a broad pattern would light up
+							everything on screen. Where a match is also a link or file path, the rule's highlight is the one shown.
+						</p>
 					</div>
 
 					<Show when={props.rule.actions.length > 0}>

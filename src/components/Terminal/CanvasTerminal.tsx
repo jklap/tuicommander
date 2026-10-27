@@ -132,7 +132,15 @@ import { ImageLayer, type ImagePlacement } from "./imageLayer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml, scrollbarMarksKey, shouldShowScrollbar } from "./scrollbarMarks";
-import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
+import {
+	compileHighlightRules,
+	findHighlightSpans,
+	highlightRules,
+	mergeSpans,
+	type Span,
+	subtractSpans,
+} from "./smartHighlight";
+import { type CompiledRule, findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
 import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
 import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
 import type { SmartSelectionAction as SmartSelectionActionType } from "./smartSelectionTypes";
@@ -519,6 +527,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let cachedBgDefault = "#1e1e1e";
 	let cachedNeutralSurface = cachedBgDefault;
 	let cachedFgDefault = "#d4d4d4";
+	/** Theme accent: the colour of a Smart Selection rule highlight, so it never reads as a link underline. */
+	let cachedAccent = "#59a8dd";
 
 	// Tracks cumulative gesture distance (px) to ramp the scroll acceleration factor.
 	// Row index → row data lookup (persistent, updated incrementally)
@@ -715,6 +725,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
 		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--fg-primary").trim() || "#d4d4d4";
+		cachedAccent = getComputedStyle(canvasRef).getPropertyValue("--accent").trim() || "#59a8dd";
 		cachedNeutralSurface = getComputedStyle(canvasRef).getPropertyValue("--bg-tertiary").trim() || cachedBgDefault;
 		gridRenderer.setTheme(cachedBgDefault, cachedFgDefault, cachedNeutralSurface);
 		// The split-compositing glyph layer paints the same text; it must follow theme changes too.
@@ -1028,11 +1039,85 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		);
 	}
 
+	// Smart Selection rules that opted in to highlighting (`highlightOnModifier`) while the link
+	// modifier is held. Matches are found per row text and cached: the regexes run once per
+	// distinct row, not once per repaint, and only while the modifier is down.
+	let highlightRulesKey = "";
+	let highlightCompiled: CompiledRule[] = [];
+	const highlightTextCache = new Map<string, Span[]>();
+	const HIGHLIGHT_CACHE_MAX = 400;
+
+	/** Column spans, per row, to draw in the rule-highlight style. Empty unless the modifier is held. */
+	function modifierRuleSpans(maxRow: number): Map<number, Span[]> {
+		const out = new Map<number, Span[]>();
+		if (!linkModifierHeld()) return out;
+		const optedIn = highlightRules(resolveSmartSelectionRules(settingsStore.state.smartSelectionRules));
+		if (optedIn.length === 0) return out;
+		const key = JSON.stringify(optedIn.map((r) => [r.id, r.regex]));
+		if (key !== highlightRulesKey) {
+			highlightRulesKey = key;
+			highlightCompiled = compileHighlightRules(optedIn);
+			highlightTextCache.clear();
+		}
+		for (let i = 0; i < maxRow; i++) {
+			const row = rowMap.get(i);
+			if (!row) continue;
+			const text = rowToText(row);
+			let textSpans = highlightTextCache.get(text);
+			if (!textSpans) {
+				textSpans = findHighlightSpans(text, highlightCompiled);
+				if (highlightTextCache.size >= HIGHLIGHT_CACHE_MAX) highlightTextCache.clear();
+				highlightTextCache.set(text, textSpans);
+			}
+			const cells: Span[] = [];
+			for (const sp of textSpans) {
+				const range = rowStringSpanToCells(rowMap, i, sp.start, sp.end);
+				if (range) cells.push({ start: range[0], end: range[1] });
+			}
+			if (cells.length > 0) out.set(i, mergeSpans(cells));
+		}
+		return out;
+	}
+
 	function paintLinkUnderline(_frame: DecodedFrame, m: CellMetrics) {
 		const maxRow = currentFrame?.screenRows || lastResizeRows;
 		const visuals = currentLinkVisuals();
+		const ruleSpans = modifierRuleSpans(maxRow);
+		// Where a link and a rule highlight cover the same text, the rule's style wins: the link keeps
+		// only the columns the rule does not cover.
+		const minusRules = <T extends { colStart: number; colEnd: number }>(row: number, spans: readonly T[]) => {
+			const cover = ruleSpans.get(row);
+			if (!cover) return spans;
+			return subtractSpans(
+				spans.map((sp) => ({ start: sp.colStart, end: sp.colEnd })),
+				cover,
+			).map((sp) => ({ colStart: sp.start, colEnd: sp.end }));
+		};
 		octx.strokeStyle = cachedFgDefault;
 		octx.lineWidth = 1;
+
+		// Rule highlight: a tinted block with a thick solid accent underline — deliberately unlike the
+		// thin dashed foreground-colour link underline, so the two never read as the same thing.
+		if (ruleSpans.size > 0) {
+			const previousFill = octx.fillStyle;
+			octx.fillStyle = cachedAccent;
+			for (const [row, spans] of ruleSpans) {
+				if (row < 0 || row >= maxRow) continue;
+				const displayRow = viewportProjection.displayRow(row);
+				if (displayRow === null) continue;
+				const top = displayRow * m.cellHeight;
+				for (const span of spans) {
+					const x = viewportProjection.displayCol(row, span.start) * m.cellWidth;
+					const w = viewportProjection.displayCol(row, span.end) * m.cellWidth - x;
+					octx.globalAlpha = 0.18;
+					octx.fillRect(x, top + 1, w, m.cellHeight - 2);
+					octx.globalAlpha = 0.95;
+					octx.fillRect(x, top + m.cellHeight - 2, w, 2);
+				}
+			}
+			octx.globalAlpha = 1;
+			octx.fillStyle = previousFill;
+		}
 
 		// Dashed underline for all detected links
 		if (visuals.dashed && detectedLinks.size > 0) {
@@ -1044,7 +1129,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const displayRow = viewportProjection.displayRow(row);
 				if (displayRow === null) continue;
 				const y = displayRow * m.cellHeight + m.cellHeight - 1 + 0.5;
-				for (const span of spans) {
+				for (const span of minusRules(row, spans)) {
 					octx.moveTo(viewportProjection.displayCol(row, span.colStart) * m.cellWidth, y);
 					octx.lineTo(viewportProjection.displayCol(row, span.colEnd) * m.cellWidth, y);
 				}
@@ -1063,15 +1148,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (span.row >= 0 && span.row < maxRow) {
 					const row = viewportProjection.displayRow(span.row);
 					if (row === null) continue;
-					const start = viewportProjection.displayCol(span.row, span.colStart);
-					const end = viewportProjection.displayCol(span.row, span.colEnd);
-					const x = start * m.cellWidth;
-					const w = (end - start) * m.cellWidth;
-					const y = row * m.cellHeight + m.cellHeight - 1 + 0.5;
-					octx.beginPath();
-					octx.moveTo(x, y);
-					octx.lineTo(x + w, y);
-					octx.stroke();
+					for (const piece of minusRules(span.row, [span])) {
+						const start = viewportProjection.displayCol(span.row, piece.colStart);
+						const end = viewportProjection.displayCol(span.row, piece.colEnd);
+						const x = start * m.cellWidth;
+						const w = (end - start) * m.cellWidth;
+						const y = row * m.cellHeight + m.cellHeight - 1 + 0.5;
+						octx.beginPath();
+						octx.moveTo(x, y);
+						octx.lineTo(x + w, y);
+						octx.stroke();
+					}
 				}
 			}
 		}

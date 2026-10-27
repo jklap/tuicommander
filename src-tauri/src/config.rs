@@ -1583,6 +1583,12 @@ pub(crate) struct SmartSelectionRule {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates actions for the current owner; actions can send text or run commands when chosen.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-atomic-list" = true))]
     pub(crate) actions: Vec<SmartSelectionAction>,
+    /// Underline this rule's matches (in an accent style distinct from link underlines) while the
+    /// link-activation modifier (Cmd on macOS, Ctrl elsewhere) is held. Off by default and per rule:
+    /// a catch-all such as `\S+` would otherwise light up the whole screen.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates highlight on modifier for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) highlight_on_modifier: bool,
 }
 
 /// One action a smart-selection rule offers. `parameter` may reference the
@@ -6442,6 +6448,17 @@ mod tests {
         );
     }
 
+    // Catches: a rule saved before `highlight_on_modifier` existed turning highlighting on (or
+    // failing to load at all) — the field must default off when absent from config.json.
+    #[test]
+    fn smart_selection_rule_without_highlight_on_modifier_loads_with_it_off() {
+        let rule: SmartSelectionRule = serde_json::from_str(
+            r#"{"id":"r","name":"n","regex":"x","precision":"normal","enabled":true,"actions":[]}"#,
+        )
+        .unwrap();
+        assert!(!rule.highlight_on_modifier);
+    }
+
     #[test]
     fn app_config_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -6582,6 +6599,7 @@ mod tests {
                     parameter: "git show \\0".to_string(),
                     is_default: true,
                 }],
+                highlight_on_modifier: true,
             }],
             // All three default to true, so `false` is the only value that can
             // tell a real round trip from serde handing back the default.
@@ -6703,6 +6721,7 @@ mod tests {
         assert_eq!(loaded.smart_selection_rules[0].precision, "high");
         assert_eq!(loaded.smart_selection_rules[0].actions.len(), 1);
         assert!(loaded.smart_selection_rules[0].actions[0].is_default);
+        assert!(loaded.smart_selection_rules[0].highlight_on_modifier);
         assert_eq!(
             loaded.smart_selection_rules[0].actions[0].kind,
             "run_command"

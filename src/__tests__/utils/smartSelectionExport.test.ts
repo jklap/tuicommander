@@ -75,6 +75,48 @@ describe("differsFromDefaultRule", () => {
 	});
 });
 
+describe("highlightOnModifier in export, import and the modified check", () => {
+	// Catches: toggling highlight on a built-in not counting as a change, so "modified" export skips it.
+	it("counts a changed highlight flag as modified, and absent equals false", () => {
+		const def = makeRule();
+		expect(differsFromDefaultRule(makeRule({ highlightOnModifier: true }), def)).toBe(true);
+		expect(differsFromDefaultRule(makeRule({ highlightOnModifier: false }), def)).toBe(false);
+		expect(
+			differsFromDefaultRule(makeRule({ highlightOnModifier: undefined }), makeRule({ highlightOnModifier: false })),
+		).toBe(false);
+	});
+
+	const envelope = (rule: Record<string, unknown>) =>
+		JSON.stringify({
+			kind: RULES_EXPORT_KIND,
+			schemaVersion: RULES_EXPORT_SCHEMA_VERSION,
+			scope: "all",
+			rules: [rule],
+		});
+	const base = { id: "r", name: "R", regex: "x", precision: "normal", enabled: true, actions: [] };
+
+	// Catches: the flag lost on export -> import round trip.
+	it("survives an export file round trip", () => {
+		const file = buildRulesExportFile([makeRule({ id: "r", highlightOnModifier: true })], "all");
+		const parsed = parseRulesExportFile(JSON.stringify(file));
+		expect(parsed.rules[0].highlightOnModifier).toBe(true);
+	});
+
+	it("accepts the snake_case spelling of a pasted config.json slice, and defaults to off when absent", () => {
+		expect(parseRulesExportFile(envelope({ ...base, highlight_on_modifier: true })).rules[0].highlightOnModifier).toBe(
+			true,
+		);
+		expect(parseRulesExportFile(envelope(base)).rules[0].highlightOnModifier).toBe(false);
+	});
+
+	// Catches: a stringly "false" from a hand-edited file being truthy and switching highlighting on.
+	it("treats a non-boolean flag as off and warns", () => {
+		const parsed = parseRulesExportFile(envelope({ ...base, highlightOnModifier: "false" }));
+		expect(parsed.rules[0].highlightOnModifier).toBe(false);
+		expect(parsed.warnings.some((w) => w.includes("highlightOnModifier"))).toBe(true);
+	});
+});
+
 describe("isRuleModified / selectRulesForExport", () => {
 	const untouched = makeRule();
 	const editedDefault = makeRule({ id: "iterm-path", regex: "edited" });

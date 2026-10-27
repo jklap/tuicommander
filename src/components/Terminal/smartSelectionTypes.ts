@@ -38,6 +38,10 @@ export interface SmartSelectionRule {
 	precision: SmartSelectionPrecision;
 	enabled: boolean;
 	actions: SmartSelectionAction[];
+	/** Underline this rule's matches (in the rule-highlight style, distinct from the link
+	 *  underline) while the link-activation modifier is held. Absent means off, so a rule
+	 *  saved or exported before this field existed keeps its old behaviour. */
+	highlightOnModifier?: boolean;
 }
 
 /** Wire shape persisted in `config.json` (snake_case, matches serde). */
@@ -55,6 +59,8 @@ export interface RustSmartSelectionRule {
 	precision: string;
 	enabled: boolean;
 	actions: RustSmartSelectionAction[];
+	/** Absent in a `config.json` written before the field existed. */
+	highlight_on_modifier?: boolean;
 }
 
 const VALID_KINDS: readonly SmartSelectionActionKind[] = [
@@ -101,6 +107,7 @@ export function ruleFromWire(rule: RustSmartSelectionRule): SmartSelectionRule {
 		// inside settings.ts's hydrate(), which would otherwise disable
 		// persistence for the rest of the session.
 		actions: (rule.actions ?? []).map(actionFromWire),
+		highlightOnModifier: rule.highlight_on_modifier === true,
 	};
 }
 
@@ -112,5 +119,6 @@ export function ruleToWire(rule: SmartSelectionRule): RustSmartSelectionRule {
 		precision: rule.precision,
 		enabled: rule.enabled,
 		actions: rule.actions.map(actionToWire),
+		highlight_on_modifier: rule.highlightOnModifier === true,
 	};
 }

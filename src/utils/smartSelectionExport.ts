@@ -69,7 +69,12 @@ function actionsEqual(a: readonly SmartSelectionAction[] = [], b: readonly Smart
 
 /** True if `rule` differs from its built-in `def` on any field a user could have changed. */
 export function differsFromDefaultRule(rule: SmartSelectionRule, def: SmartSelectionRule): boolean {
-	return RULE_COMPARED_FIELDS.some((field) => rule[field] !== def[field]) || !actionsEqual(rule.actions, def.actions);
+	return (
+		RULE_COMPARED_FIELDS.some((field) => rule[field] !== def[field]) ||
+		// Optional on the type (absent = off), so coerce: `undefined` and `false` are the same setting.
+		Boolean(rule.highlightOnModifier) !== Boolean(def.highlightOnModifier) ||
+		!actionsEqual(rule.actions, def.actions)
+	);
 }
 
 /** True if `rule` counts as "modified" for export purposes: a built-in whose fields diverge
@@ -228,6 +233,12 @@ export function parseRulesExportFile(text: string): ParsedRuleImport {
 		if (enabled.ambiguous) {
 			warnings.push(`Rule "${name}": "enabled" was not a real boolean — treated as false`);
 		}
+		// Accept either spelling, like `isDefault` above: our own export writes the camelCase app
+		// shape, a pasted slice of config.json is snake_case. Absent means off.
+		const highlight = readBooleanField(candidate.highlight_on_modifier ?? candidate.highlightOnModifier, false);
+		if (highlight.ambiguous) {
+			warnings.push(`Rule "${name}": "highlightOnModifier" was not a real boolean — treated as false`);
+		}
 		const wire: RustSmartSelectionRule = {
 			id,
 			name,
@@ -235,6 +246,7 @@ export function parseRulesExportFile(text: string): ParsedRuleImport {
 			precision: wirePrecision,
 			enabled: enabled.value,
 			actions: wireActions,
+			highlight_on_modifier: highlight.value,
 		};
 
 		const rule = ruleFromWire(wire);

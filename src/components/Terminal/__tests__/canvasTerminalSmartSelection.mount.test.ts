@@ -391,4 +391,109 @@ describe("CanvasTerminal smart-selection gestures (Phase 4/5)", () => {
 		);
 		await mounted.dispose();
 	});
+
+	describe("rule highlight while the link modifier is held", () => {
+		const ACCENT = "#59a8dd"; // CanvasTerminal's fallback when the theme defines no --accent
+		const sha = {
+			id: "sha",
+			name: "SHA",
+			regex: "[0-9a-f]{7,40}",
+			precision: "high" as const,
+			enabled: true,
+			actions: [],
+			highlightOnModifier: true,
+		};
+		const issue = { ...sha, id: "issue", name: "Issue", regex: "#\\d+", highlightOnModifier: false };
+
+		type Draw = { op: string; x: number; y: number; w?: number; h?: number; fill?: string; alpha?: number };
+		let draws: Draw[] = [];
+		let restoreContext: () => void;
+
+		beforeEach(() => {
+			draws = [];
+			const base = HTMLCanvasElement.prototype.getContext;
+			HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string) {
+				const ctx = (base as (t: string) => CanvasRenderingContext2D | null).call(this, type);
+				if (ctx) {
+					ctx.fillRect = ((x: number, y: number, w: number, h: number) => {
+						draws.push({ op: "fillRect", x, y, w, h, fill: String(ctx.fillStyle), alpha: ctx.globalAlpha });
+					}) as CanvasRenderingContext2D["fillRect"];
+					ctx.moveTo = ((x: number, y: number) =>
+						draws.push({ op: "moveTo", x, y })) as CanvasRenderingContext2D["moveTo"];
+					ctx.lineTo = ((x: number, y: number) =>
+						draws.push({ op: "lineTo", x, y })) as CanvasRenderingContext2D["lineTo"];
+				}
+				return ctx;
+			} as typeof HTMLCanvasElement.prototype.getContext;
+			restoreContext = () => {
+				HTMLCanvasElement.prototype.getContext = base;
+			};
+		});
+
+		afterEach(() => {
+			restoreContext();
+			// The held-modifier signal is module-level: release it so no later test starts with Cmd down.
+			fireEvent.keyUp(document, { key: "Meta", metaKey: false, ctrlKey: false });
+			settingsStore.setSmartSelectionRules([]);
+		});
+
+		const hold = () => fireEvent.keyDown(document, { key: "Meta", metaKey: true, ctrlKey: true });
+		const tints = () => draws.filter((d) => d.op === "fillRect" && d.fill === ACCENT && d.alpha === 0.18);
+		const bars = () => draws.filter((d) => d.op === "fillRect" && d.fill === ACCENT && d.alpha === 0.95);
+
+		it("highlights an opted-in rule's match, in the accent style, only while the modifier is held", async () => {
+			settingsStore.setSmartSelectionRules([sha]);
+			const mounted = await mountCanvasTerminal({ sessionId: "h1", terminalId: "th1" });
+			fakeTransport.current!.pushFrame(buildTextFrame(["fix: handle EOF a1b2c3d today"], 40));
+
+			// Catches: highlighting painted with no modifier held.
+			await new Promise((r) => setTimeout(r, 30));
+			expect(tints()).toEqual([]);
+
+			hold();
+			await waitFor(() => expect(tints().length).toBeGreaterThan(0));
+			const cw = FIXED_CELL_METRICS.cellWidth;
+			// "a1b2c3d" is 7 cells wide, starting at column 16; the bar is the thick underline.
+			expect(tints()[0].w).toBeCloseTo(7 * cw);
+			expect(tints()[0].x).toBeCloseTo(16 * cw);
+			expect(bars()[0].w).toBeCloseTo(7 * cw);
+			expect(bars()[0].h).toBe(2);
+			await mounted.dispose();
+		});
+
+		// Catches: every rule highlighting once the modifier is down.
+		it("does not highlight a rule that did not opt in", async () => {
+			settingsStore.setSmartSelectionRules([sha, issue]);
+			const mounted = await mountCanvasTerminal({ sessionId: "h2", terminalId: "th2" });
+			fakeTransport.current!.pushFrame(buildTextFrame(["see #123 and a1b2c3d"], 40));
+
+			hold();
+			await waitFor(() => expect(tints().length).toBeGreaterThan(0));
+			expect(tints()).toHaveLength(1); // the SHA only; "#123" matches `issue`, which is off
+			expect(tints()[0].w).toBeCloseTo(7 * FIXED_CELL_METRICS.cellWidth);
+			await mounted.dispose();
+		});
+
+		// Catches: the link underline still drawn under text the rule highlights (two visuals on one string).
+		it("draws the rule's style, not the link underline, where a link and a rule cover the same text", async () => {
+			settingsStore.setSmartSelectionRules([sha]);
+			const mounted = await mountCanvasTerminal({ sessionId: "h3", terminalId: "th3" });
+			// The URL ends in a SHA: cols 4-31 are the link, cols 24-31 are also the rule's match.
+			fakeTransport.current!.pushFrame(buildTextFrame(["see https://example.com/a1b2c3d end"], 40));
+			const cw = FIXED_CELL_METRICS.cellWidth;
+			const dashedEnds = () => draws.filter((d) => d.op === "lineTo").map((d) => Math.round(d.x / cw));
+
+			// Link underlines are on by default ("click" mode), so the whole URL is underlined first.
+			await waitFor(() => expect(dashedEnds()).toContain(31));
+
+			draws = [];
+			hold();
+			await waitFor(() => expect(tints().length).toBeGreaterThan(0));
+			// Still underlined up to where the rule's match starts (col 24), but no longer under the SHA.
+			await waitFor(() => expect(dashedEnds()).toContain(24));
+			expect(dashedEnds()).not.toContain(31);
+			expect(tints()[0].x).toBeCloseTo(24 * cw);
+			await mounted.dispose();
+		});
+	});
 });

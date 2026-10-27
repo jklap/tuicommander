@@ -144,6 +144,46 @@ describe("SelectionTab", () => {
 		expect(persisted[0].name).toBe("Renamed");
 	});
 
+	// Catches: the highlight setting missing from the editor, or ticking it not reaching the store.
+	it("ticking a rule's highlight checkbox persists highlightOnModifier for that rule only", () => {
+		mockState = {
+			...mockState,
+			smartSelectionRules: [
+				{ id: "r1", name: "A", regex: "a", precision: "normal", enabled: true, actions: [] },
+				{ id: "r2", name: "B", regex: "b", precision: "normal", enabled: true, actions: [] },
+			],
+		};
+		const { container } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+		const box = container.querySelector('[data-testid="smart-rule-highlight"]') as HTMLInputElement;
+		expect(box.checked).toBe(false);
+		fireEvent.click(box);
+		const persisted = mockSetSmartSelectionRules.mock.calls[0][0] as { id: string; highlightOnModifier?: boolean }[];
+		expect(persisted.find((r) => r.id === "r1")?.highlightOnModifier).toBe(true);
+		expect(persisted.find((r) => r.id === "r2")?.highlightOnModifier).not.toBe(true);
+	});
+
+	// Catches: a rule that already opted in showing an unticked box, so the next edit silently turns it off.
+	it("shows an opted-in rule's highlight checkbox as ticked", () => {
+		mockState = {
+			...mockState,
+			smartSelectionRules: [
+				{ id: "r1", name: "A", regex: "a", precision: "normal", enabled: true, actions: [], highlightOnModifier: true },
+			],
+		};
+		const { container } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+		expect((container.querySelector('[data-testid="smart-rule-highlight"]') as HTMLInputElement).checked).toBe(true);
+	});
+
+	// Catches: a new rule defaulting to highlight (every rule lighting up is exactly what this setting avoids).
+	it("a newly added rule does not highlight", () => {
+		const { getByText } = render(() => <SelectionTab />);
+		fireEvent.click(getByText("Add rule"));
+		const persisted = mockSetSmartSelectionRules.mock.calls[0][0] as { name: string; highlightOnModifier?: boolean }[];
+		expect(persisted.at(-1)?.highlightOnModifier).toBe(false);
+	});
+
 	it("collapses an expanded rule on a second click of its header", () => {
 		mockState = {
 			...mockState,

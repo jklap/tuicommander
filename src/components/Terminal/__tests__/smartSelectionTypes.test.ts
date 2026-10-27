@@ -37,6 +37,7 @@ describe("ruleFromWire / ruleToWire", () => {
 		precision: "high",
 		enabled: true,
 		actions: [{ kind: "copy", title: "Copy SHA", parameter: "\\0", is_default: false }],
+		highlight_on_modifier: false,
 	};
 
 	it("converts a full rule including nested actions", () => {
@@ -47,11 +48,32 @@ describe("ruleFromWire / ruleToWire", () => {
 			precision: "high",
 			enabled: true,
 			actions: [{ kind: "copy", title: "Copy SHA", parameter: "\\0", isDefault: false }],
+			highlightOnModifier: false,
 		});
 	});
 
 	it("round-trips back to the wire shape", () => {
 		expect(ruleToWire(ruleFromWire(wire))).toEqual(wire);
+	});
+
+	// Catches: highlight_on_modifier dropped on load or save, so the checkbox never sticks.
+	it("carries highlight_on_modifier both ways", () => {
+		const on: RustSmartSelectionRule = { ...wire, highlight_on_modifier: true };
+		expect(ruleFromWire(on).highlightOnModifier).toBe(true);
+		expect(ruleToWire(ruleFromWire(on)).highlight_on_modifier).toBe(true);
+	});
+
+	// Catches: a config.json written before the field existed turning highlighting on or failing to load.
+	it("treats a missing or non-boolean highlight_on_modifier as off", () => {
+		const { highlight_on_modifier: _omit, ...legacy } = wire;
+		expect(ruleFromWire(legacy as RustSmartSelectionRule).highlightOnModifier).toBe(false);
+		expect(ruleFromWire({ ...wire, highlight_on_modifier: "true" as unknown as boolean }).highlightOnModifier).toBe(
+			false,
+		);
+		expect(
+			ruleToWire({ id: "x", name: "x", regex: "x", precision: "normal", enabled: true, actions: [] })
+				.highlight_on_modifier,
+		).toBe(false);
 	});
 
 	it("falls back to 'normal' precision for an unrecognized value", () => {
