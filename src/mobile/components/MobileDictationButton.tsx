@@ -13,6 +13,7 @@ export function MobileDictationButton(props: {
 			<Button
 				shape="icon"
 				variant="ghost"
+				pressedIndicator="none"
 				class={s.dictate}
 				type="button"
 				aria-label={

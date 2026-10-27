@@ -455,6 +455,9 @@ controls have a 44px minimum height and 16px text to prevent iOS zoom.
 `type="submit"` for form submission). Variants are `primary`, `secondary` (default),
 `ghost` and `danger`; sizes are `default` (36px) and `compact` (22px), both with a
 44px touch minimum. It shares FormControls height and padding tokens with fields.
+For status-only toggles whose icon already indicates the active state, use
+`pressedIndicator="none"` to omit the pressed border. The default remains
+`"border"`; keyboard `:focus-visible` styling stays intact.
 Clickable list rows/cards retain native buttons with `data-control-layout="row"`
 or `data-control-layout="card"`. Their geometry selectors must include both the
 `button` tag and the exact marker. This exception is for content layout, never
