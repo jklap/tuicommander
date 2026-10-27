@@ -70,3 +70,28 @@ fn ego_usage_known_monetary_total_preserves_exact_decimal() {
         );
     }
 }
+
+// Catches: choosing subscription equivalents instead of independent known spend.
+#[test]
+fn ego_usage_mixed_cost_keeps_spend_and_equivalent_independent() {
+    let mut report = recorded();
+    let session = "01a1780d-ae67-74ff-a371-4c6bf003946d";
+    report["sessions"][1]["context"] = Value::Null;
+    assert_eq!(
+        project(&report, session).unwrap().text.as_deref(),
+        Some("USD 0 · API eq: USD 3.1727124")
+    );
+    report["sessions"][1]["lines"]["total"]["cost"]["subscription_unknown"] =
+        serde_json::json!([{"reason": "no_pricing_quote"}]);
+    assert_eq!(
+        project(&report, session).unwrap().text.as_deref(),
+        Some("USD 0")
+    );
+    report["sessions"][1]["lines"]["total"]["cost"]["subscription_unknown"] = serde_json::json!([]);
+    report["sessions"][1]["lines"]["total"]["cost"]["unknown"] =
+        serde_json::json!([{"reason": "no_pricing_quote"}]);
+    assert_eq!(
+        project(&report, session).unwrap().text.as_deref(),
+        Some("API eq: USD 3.1727124")
+    );
+}

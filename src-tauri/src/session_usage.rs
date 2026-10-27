@@ -221,51 +221,22 @@ async fn local_usage(state: &AppState, session_id: &str) -> Result<SessionUsage,
             .await
         }
         "ego" => {
-            let argv =
-                crate::process_env::read_process_argv(pid).ok_or("ego binding unavailable")?;
-            // The existing exact resolver knows EGO_HOME, not an explicit CLI store override.
-            if argv
-                .iter()
-                .any(|arg| arg == "--session-dir" || arg.starts_with("--session-dir="))
-            {
-                return Ok(SessionUsage::unavailable("explicit ego store is not bound"));
-            }
-            let (home, ego_session) = crate::agent_session::ego_chat_session_for_pid(pid)
-                .ok_or("ego binding unavailable")?;
-            let manifest: Value = serde_json::from_slice(
-                &std::fs::read(
-                    home.join("sessions")
-                        .join(&ego_session)
-                        .join("manifest.json"),
-                )
-                .map_err(|_| "ego workspace unavailable")?,
-            )
-            .map_err(|_| "ego workspace unavailable")?;
-            let workspace = manifest
-                .get("workspace_root")
-                .and_then(Value::as_str)
-                .ok_or("ego workspace unavailable")?;
-            // PTY usage follows the terminal executable, not AI Chat's ACP setting.
-            let program = match argv.first().map(PathBuf::from) {
-                Some(path) if path.is_absolute() && path.is_file() => path,
-                _ => crate::agent::detect_agent_binary("ego".into())
-                    .await
-                    .path
-                    .map(PathBuf::from)
-                    .ok_or("ego executable unavailable")?,
+            let Some(source) = ego_terminal_source(state, session_id).await? else {
+                return Ok(SessionUsage::unavailable("ego binding unavailable"));
             };
-            if !home.is_absolute() || !program.is_absolute() || !Path::new(workspace).is_absolute()
-            {
-                return Ok(SessionUsage::unavailable(
-                    "ego executable or workspace unavailable",
-                ));
-            }
-            let key = format!("ego:{program:?}:{home:?}:{workspace:?}:{ego_session}");
-            cached(key, Duration::from_secs(30), async {
-                let report = ego_report(&program, &home, workspace).await?;
-                ego_snapshot(&report, &ego_session)
+            let key = format!(
+                "ego:{:?}:{:?}:{:?}:{}",
+                source.program, source.home, source.workspace, source.ego_session
+            );
+            let snapshot = cached(key, Duration::from_secs(30), async {
+                let report = source.read(state, session_id).await?;
+                ego_snapshot(&report, &source.ego_session)
             })
-            .await
+            .await?;
+            if ego_terminal_source(state, session_id).await?.as_ref() != Some(&source) {
+                return Ok(SessionUsage::unavailable("ego binding unavailable"));
+            }
+            Ok(snapshot)
         }
         _ => Ok(SessionUsage::unavailable("unsupported agent")),
     }
@@ -407,6 +378,89 @@ fn codex_quota(quota: crate::codex_usage::CodexUsageApiResponse) -> SessionUsage
     snapshot.finish()
 }
 
+/// Shared terminal identity and acquisition for session details and the badge.
+#[derive(PartialEq, Eq)]
+pub(crate) struct EgoTerminalSource {
+    pid: u32,
+    home: PathBuf,
+    pub(crate) ego_session: String,
+    workspace: String,
+    program: PathBuf,
+}
+
+pub(crate) async fn ego_terminal_source(
+    state: &AppState,
+    terminal: &str,
+) -> Result<Option<EgoTerminalSource>, String> {
+    if crate::remote_mirror::owner_connection(state, terminal).is_some()
+        || state
+            .session_maps
+            .session_states
+            .get(terminal)
+            .and_then(|session| session.agent_type.clone())
+            .as_deref()
+            != Some("ego")
+    {
+        return Ok(None);
+    }
+    let Some(pid) = crate::pty::session_leaf_pid(state, terminal) else {
+        return Ok(None);
+    };
+    let argv = crate::process_env::read_process_argv(pid).ok_or("ego binding unavailable")?;
+    // The existing exact resolver knows EGO_HOME, not an explicit CLI store override.
+    if argv
+        .iter()
+        .any(|arg| arg == "--session-dir" || arg.starts_with("--session-dir="))
+    {
+        return Ok(None);
+    }
+    let (home, ego_session) =
+        crate::agent_session::ego_chat_session_for_pid(pid).ok_or("ego binding unavailable")?;
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(
+            home.join("sessions")
+                .join(&ego_session)
+                .join("manifest.json"),
+        )
+        .map_err(|_| "ego workspace unavailable")?,
+    )
+    .map_err(|_| "ego workspace unavailable")?;
+    let workspace = manifest
+        .get("workspace_root")
+        .and_then(Value::as_str)
+        .ok_or("ego workspace unavailable")?
+        .to_owned();
+    // PTY usage follows the terminal executable, not AI Chat's ACP setting.
+    let program = match argv.first().map(PathBuf::from) {
+        Some(path) if path.is_absolute() && path.is_file() => path,
+        _ => crate::agent::detect_agent_binary("ego".into())
+            .await
+            .path
+            .map(PathBuf::from)
+            .ok_or("ego executable unavailable")?,
+    };
+    if !home.is_absolute() || !program.is_absolute() || !Path::new(&workspace).is_absolute() {
+        return Ok(None);
+    }
+    Ok(Some(EgoTerminalSource {
+        pid,
+        home,
+        ego_session,
+        workspace,
+        program,
+    }))
+}
+
+impl EgoTerminalSource {
+    pub(crate) async fn read(&self, state: &AppState, terminal: &str) -> Result<Value, String> {
+        let report = ego_report(&self.program, &self.home, &self.workspace).await?;
+        if ego_terminal_source(state, terminal).await?.as_ref() != Some(self) {
+            return Err("ego binding changed".into());
+        }
+        Ok(report)
+    }
+}
+
 /// Bound stdout before decoding: a large workspace is not an unbounded memory allocation.
 async fn ego_report(program: &Path, home: &Path, workspace: &str) -> Result<Value, String> {
     const MAX_REPORT: u64 = 4 * 1024 * 1024;
@@ -415,6 +469,7 @@ async fn ego_report(program: &Path, home: &Path, workspace: &str) -> Result<Valu
         .args(["usage", "--json", "-C", workspace, "--session-dir"])
         .arg(home.join("sessions"))
         .env("EGO_HOME", home)
+        .env_remove("EGO_PROFILE")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -446,7 +501,8 @@ async fn ego_report(program: &Path, home: &Path, workspace: &str) -> Result<Valu
         }
         Ok(())
     };
-    let result = tokio::time::timeout(Duration::from_secs(20), read).await;
+    // Leave headroom for binding checks inside the public thirty-second request deadline.
+    let result = tokio::time::timeout(Duration::from_secs(25), read).await;
     let _ = child.kill().await;
     let _ = child.wait().await;
     result.map_err(|_| "ego usage timed out")??;
@@ -663,8 +719,20 @@ cat "$EGO_HOME/report.json""#,
             },
         );
         let snapshot = get_session_usage_impl(&state, "terminal-ego").await;
+        let badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
         state.config.write().ego_executable = "/unrelated/acp/ego".into();
         let with_other_acp = get_session_usage_impl(&state, "terminal-ego").await;
+        let badge_with_other_acp = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+        // Exercise the badge consumer with the recorded mixed accounting row,
+        // not just the private projection: spend and equivalents must coexist.
+        let recorded: Value =
+            serde_json::from_str(include_str!("fixtures/ego-usage-v3.json")).unwrap();
+        let mut mixed = recorded["sessions"][1].clone();
+        mixed["session"] = serde_json::json!(id);
+        mixed["context"] = Value::Null;
+        let mixed_report = serde_json::json!({"v": 3, "sessions": [mixed]});
+        std::fs::write(dir.path().join("report.json"), mixed_report.to_string()).unwrap();
+        let mixed_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
         let source_error = if snapshot.availability != "available" {
             Some(format!(
                 "local={:?}; pid={:?}/{pid}; argv={:?}; home={:?}; binding={:?}",
@@ -686,6 +754,14 @@ cat "$EGO_HOME/report.json""#,
         drop(session);
         let output = output.join().unwrap();
         assert!(output.contains("test result: ok"), "{output}");
+        // Catches: the badge taking its executable from unrelated ACP settings.
+        for badge in [badge, badge_with_other_acp] {
+            assert_eq!(badge.unwrap().text.as_deref(), Some("USD 0.00156247"));
+        }
+        assert_eq!(
+            mixed_badge.unwrap().text.as_deref(),
+            Some("USD 0 · API eq: USD 3.1727124")
+        );
         for snapshot in [snapshot, with_other_acp] {
             assert_eq!(
                 snapshot.availability, "available",
