@@ -1,3 +1,6 @@
+## Mobile composer focus (2398-1de9)
+
+- [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
 ## Shared Chat typography and zoom (2396-66e2)
 
 - [ ] Coordinator visual check after unlocking the screen: compare session Chat and AI Chat at default terminal zoom, after zoom in/out and after reset. Both should use AI Chat's original 14px default reading scale, line height, weight and colors. AI Chat follows the active terminal when tabs change. Check body prose, bold text, inline code and tool text; mobile must retain its own Chat font preference. The implementer did not capture screenshots because the required browser wrapper failed while the screen was locked.
