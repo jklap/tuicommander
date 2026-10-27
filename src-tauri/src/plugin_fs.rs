@@ -1827,15 +1827,18 @@ mod tests {
         assert!(validate_within_home("").is_err());
     }
 
-    /// A directory under $HOME, because every plugin read is confined to it.
-    fn temp_dir_in_home() -> tempfile::TempDir {
-        tempfile::tempdir_in(dirs::home_dir().unwrap()).unwrap()
+    /// A fake `$HOME` under the test temp root: every plugin read is confined to
+    /// `$HOME`, and a test must never write into the real one. The guard holds
+    /// `FS_TEST_LOCK` and clears the override on drop.
+    fn fake_home() -> (tempfile::TempDir, impl Drop) {
+        let home = tempfile::tempdir().unwrap();
+        let guard = set_home_dir_override(home.path().to_path_buf());
+        (home, guard)
     }
 
     #[test]
     fn batch_read_returns_contents_in_request_order() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (dir, _guard) = fake_home();
         let paths: Vec<String> = (0..3)
             .map(|i| {
                 let p = dir.path().join(format!("{i}.md"));
@@ -1858,10 +1861,14 @@ mod tests {
 
     #[test]
     fn batch_read_reports_unreadable_entries_as_none() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (dir, _guard) = fake_home();
         let good = dir.path().join("good.md");
         std::fs::write(&good, "here").unwrap();
+        // An existing, readable file that sits outside the fake $HOME (a
+        // sibling under the test temp root, never a real system file).
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = outside.path().join("elsewhere.md");
+        std::fs::write(&elsewhere, "not yours").unwrap();
 
         // A missing file, a directory, and a path outside $HOME must each cost
         // the caller one None — not the whole batch.
@@ -1869,7 +1876,7 @@ mod tests {
             good.to_str().unwrap().to_string(),
             dir.path().join("missing.md").to_str().unwrap().to_string(),
             dir.path().to_str().unwrap().to_string(),
-            "/etc/hosts".to_string(),
+            elsewhere.to_str().unwrap().to_string(),
         ])
         .unwrap();
 
@@ -1895,8 +1902,7 @@ mod tests {
 
     #[test]
     fn batch_read_still_enforces_the_per_file_cap() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (dir, _guard) = fake_home();
         let big = dir.path().join("big.md");
         std::fs::write(&big, vec![b'x'; MAX_FILE_SIZE as usize + 1]).unwrap();
 
@@ -1911,8 +1917,7 @@ mod tests {
 
     #[test]
     fn batch_read_stops_spending_at_the_byte_budget() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (dir, _guard) = fake_home();
 
         // The per-file cap cannot bound a batch: MAX_BATCH_FILES files just
         // under it would retain three orders of magnitude more than any single
@@ -1957,8 +1962,7 @@ mod tests {
 
     #[test]
     fn binary_read_uses_the_requested_budget() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (dir, _guard) = fake_home();
         let file = dir.path().join("database.sqlite");
         std::fs::write(&file, b"SQLite format 3\0payload").unwrap();
 

@@ -3848,6 +3848,22 @@ mod tests {
         ensure_mcp_configs(&[]);
     }
 
+    /// Put this test binary at `dst` without copying hundreds of MB when avoidable.
+    /// A hard link keeps the path itself (a symlink would resolve to the real
+    /// target dir under `current_exe`, changing which `.git` the exe sits under);
+    /// it fails across filesystems, which is possible now that `dst` lives under
+    /// the test temp root rather than next to `target/`, so fall back to a copy.
+    fn link_or_copy_test_runner(dst: &std::path::Path) {
+        let src = std::env::current_exe().unwrap();
+        // The CI target and checkout can live on different Windows drives.
+        #[cfg(windows)]
+        std::fs::copy(&src, dst).unwrap();
+        #[cfg(not(windows))]
+        if std::fs::hard_link(&src, dst).is_err() {
+            std::fs::copy(&src, dst).unwrap();
+        }
+    }
+
     fn run_sandboxed_mcp_launch(
         exe: &std::path::Path,
         home: &std::path::Path,
@@ -4015,31 +4031,32 @@ mod tests {
 
     #[test]
     fn secondary_launch_leaves_agent_config_unchanged() {
-        let common_dir = std::process::Command::new("git")
-            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-            .output()
-            .unwrap();
-        assert!(common_dir.status.success());
-        let git_dir = PathBuf::from(String::from_utf8(common_dir.stdout).unwrap().trim());
-        let main_root = git_dir.parent().unwrap();
-        let sandbox_root = main_root.join(".tmp");
-        std::fs::create_dir_all(&sandbox_root).unwrap();
-        let sandbox = tempfile::tempdir_in(sandbox_root).unwrap();
+        // The sandbox is this checkout's own `.tmp`, never the main checkout's
+        // (the old `git-common-dir/../.tmp` wrote outside a linked worktree) and
+        // not the system temp dir: `bridge_location_is_stable` refuses an exe
+        // under any temp root, which would turn every `should_write` case below
+        // into a no-op. The fake main checkout and linked worktree live inside
+        // it, so nothing depends on the real checkout's layout
+        // (`launch_owns_agent_configs` only looks for a `.git` directory or file
+        // among the ancestors of the exe and the cwd).
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let sandbox = tempfile::tempdir_in(scratch).unwrap();
+        let main_root = sandbox.path().join("main");
+        std::fs::create_dir_all(main_root.join(".git")).unwrap();
         let runner_name = if cfg!(windows) {
             "tuic-test-runner.exe"
         } else {
             "tuic-test-runner"
         };
-        let exe = sandbox.path().join(runner_name);
-        // The CI target and checkout can live on different Windows drives.
-        #[cfg(windows)]
-        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
-        #[cfg(not(windows))]
-        std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
+        // The exe sits inside the fake main checkout, so its own ancestors say
+        // "main checkout" whatever surrounds the temp root.
+        let exe = main_root.join(runner_name);
+        link_or_copy_test_runner(&exe);
         // The bridge is copied and hashed, never launched. Hardlinking the
         // entire test runner here made owning launches copy hundreds of MB and
         // block on Linux writeback under the parallel suite's 120s bound.
-        let bridge = fake_bridge(sandbox.path(), b"bridge bytes");
+        let bridge = fake_bridge(&main_root, b"bridge bytes");
         let linked_worktree = sandbox.path().join("linked");
         std::fs::create_dir_all(&linked_worktree).unwrap();
         std::fs::write(linked_worktree.join(".git"), b"gitdir: isolated-fixture").unwrap();
@@ -4052,10 +4069,22 @@ mod tests {
         }}})
         .to_string();
         let cases = [
-            ("named", Some("tuic-test"), main_root, false, false),
+            (
+                "named",
+                Some("tuic-test"),
+                main_root.as_path(),
+                false,
+                false,
+            ),
             ("worktree", None, linked_worktree.as_path(), false, false),
-            ("default", None, main_root, false, true),
-            ("named-override", Some("tuic-test"), main_root, true, true),
+            ("default", None, main_root.as_path(), false, true),
+            (
+                "named-override",
+                Some("tuic-test"),
+                main_root.as_path(),
+                true,
+                true,
+            ),
             (
                 "worktree-override",
                 None,
@@ -4090,7 +4119,9 @@ mod tests {
                 );
                 // Compare filesystem identities, not a normal Windows path
                 // against canonicalize's verbatim path spelling.
-                let command = command.canonicalize().unwrap();
+                let command = command
+                    .canonicalize()
+                    .unwrap_or_else(|e| panic!("{name}: {e}; config was {after}"));
                 assert!(
                     command
                         .starts_with(home.join("tuic-config/mcp-bridge").canonicalize().unwrap()),
@@ -4116,7 +4147,7 @@ mod tests {
             run_sandboxed_mcp_launch(
                 &exe,
                 &removed_home,
-                main_root,
+                &main_root,
                 instance,
                 None,
                 disabled,
@@ -4132,17 +4163,14 @@ mod tests {
         std::fs::create_dir_all(&worktree_tmp).unwrap();
         let worktree_sandbox = tempfile::tempdir_in(worktree_tmp).unwrap();
         let worktree_exe = worktree_sandbox.path().join(runner_name);
-        #[cfg(windows)]
-        std::fs::copy(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
-        #[cfg(not(windows))]
-        std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
+        link_or_copy_test_runner(&worktree_exe);
         fake_bridge(worktree_sandbox.path(), b"bridge bytes");
         let home = sandbox.path().join("worktree-binary");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/installed"), b"present").unwrap();
         let config = home.join(".claude.json");
         std::fs::write(&config, &original).unwrap();
-        run_sandboxed_mcp_launch(&worktree_exe, &home, main_root, None, None, false, None);
+        run_sandboxed_mcp_launch(&worktree_exe, &home, &main_root, None, None, false, None);
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     }
 
