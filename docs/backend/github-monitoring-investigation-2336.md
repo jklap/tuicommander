@@ -115,7 +115,73 @@ filters. A login status or a zero gauge alone cannot distinguish them. A
 successful controlled outage/recovery test would prove recovery behavior, but
 would not establish the historical cause unless it reproduces the same failure.
 
-The story's authenticated agent-test check still requires Boss's device login.
-This audit did not attempt login or read token stores. Keep criterion 1 and the
-authenticated check open; do not infer the missing state from the removed-path
-fix or from the disconnected remote settings warning.
+The 2026-10-26 authenticated check reused an existing login on the isolated
+`agent-test-ghlive` instance. Its retained evidence showed an unreachable remote
+beside a local repository with 2 PRs, 5 issues, and an active monitor count of 1.
+That proves coexistence, not a fresh successful GraphQL poll or controlled
+outage recovery. Keep criterion 1 and the full authenticated human check open.
+Do not infer the missing state from the removed-path fix or from the disconnected
+remote settings warning.
+
+## Closure reconciliation (2026-10-27)
+
+### Proven causes and their limits
+
+- **Settings refresh:** before `af3be3658`, the `repo_local` reader used one
+  rejecting `Promise.all` across repository reads. One rejection prevented
+  adoption of every healthy sibling's new `.tuic.json` value. Direct failed
+  reloads also replaced the last successful value with `null`. The recorded
+  pre-fix failures are `local config refresh isolates failed repositories and
+  later recovers` and `direct local config reload preserves the last successful
+  value on failure`. The existing coordinator GREEN ran the settings store and
+  coordinator files: 14 tests passed in 1.12 seconds. Neither test asserts
+  GitHub poller registration, diagnostics, or sidebar rows.
+- **Misleading status count:** the old payload-cache gauge could expire while a
+  repository remained configured. The recorded
+  `monitored_repository_survives_query_cache_eviction` RED failed with 0 rather
+  than 1. This proves the diagnostic defect, not the historical empty sidebar.
+- **Historical empty sidebar:** no retained reproduction establishes its cause.
+  The independent defects above must not be relabelled as that cause.
+
+### Remote settings failure versus local GitHub behavior
+
+The additional store-boundary test in `src/__tests__/stores/github.test.ts`,
+`local GitHub monitoring and sidebar data survive a remote settings read failure`,
+uses the real settings refresh coordinator and the real GitHub store. It seeds
+local and remote config entries, makes the remote config transport reject,
+and lets the refresh finish. It then checks the local poller start command and
+local PR/issue event adoption while the disconnected remote is not started.
+Its PR/issue inputs are internal event-contract fixtures, not a captured GitHub
+response or a network/authentication test.
+
+The test **passes before the settings fix**: the three relevant production files
+(`repoSettings.ts`, `settingsRefresh.ts`, and `github.ts`) were temporarily
+replaced with their versions at `5eec9fc47^`
+(`2d29b47127088429b6cca9e2afda04ddfcf26b28`), then restored byte-for-byte. The
+new test ran alone through build-slot and `scripts/with-test-tmp.sh`: 1 passed,
+39 filtered out, duration 963 ms. Retained log:
+`~/Gits/.tmp/results/tuic-2336-close-prefixed.log`.
+
+This is a counterexample to the proposed causal link at this boundary, not RED
+evidence. Forcing that test to fail by awaiting a rejected refresh outside its
+production coordinator would test a different pipeline. No new production fix
+is justified. The literal RED criterion remains open; the local-isolation
+behavior is supported by this boundary test and the retained native evidence.
+The historical missing state and the human outage/recovery check remain open.
+
+### Mac-mint HTTP 403 Untrusted Host
+
+`RequestBoundary::allowed_host` in
+`src-tauri/src/mcp_http/request_boundary.rs` parses Host (or HTTP/2 authority).
+It accepts localhost, loopback/private IPs, detected local IPs, the machine's
+current hostname/`.local` form, and the current Running Tailscale FQDN or its
+short name. `check` returns HTTP 403 with `Untrusted Host` when that predicate
+fails, before authentication. Login cannot fix this rejection.
+
+Thus the reported FQDN was outside the remote server's accepted authority set
+at rejection time. The record does not establish that server's deployed
+revision, detected hostname, or Tailscale state. In particular, it does not prove
+whether Tailscale was stopped, detection was stale, or the address differed from
+the detected FQDN. Existing tests cover own versus foreign hostname, Running
+Tailscale short names, and late Tailscale startup recovery. No new defect is
+proven and no speculative story is filed.
