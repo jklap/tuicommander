@@ -3,7 +3,9 @@
 An agent can request named username, password, OTP or SSO-link fields with the
 `secret` MCP tool. TUICommander opens a separate native window containing only
 those fields. The tool receives names and `stored` or `declined`, never values.
-SSO links are displayed as text; they do not navigate automatically.
+SSO HTTP(S) URLs are selectable links with a **Copy URL** button. Click a link
+to open it in the system browser; links never open automatically. Other SSO
+display values remain plain text.
 
 `request` waits for entry or decline; the form expires after five minutes.
 The CLI and MCP bridge keep this request open for 305 seconds. `run` allows
