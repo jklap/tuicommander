@@ -8,6 +8,10 @@ const controls = readFileSync("src/components/ui/FormControls.module.css", "utf8
 const palette = readFileSync("src/mobile/mobile.css", "utf8");
 const composer = readFileSync("src/mobile/components/CommandInput.module.css", "utf8");
 
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 vi.mock("../../transport", () => ({
 	rpc: vi.fn(async () => ({})),
 	HttpRpcError: class extends Error {},
@@ -45,6 +49,21 @@ function mount() {
 	return { input, mic, box: input.parentElement! };
 }
 
+/** Happy DOM caches ancestor styles across descendant focus changes. Resolve the
+ * matching border-color declaration afresh, using the loaded production cascade.
+ * Like the chat typography helper, this bypasses emulator style resolution only.
+ */
+function fieldBorderColor(box: HTMLElement): string {
+	let color = getComputedStyle(box).borderColor;
+	for (const rule of Array.from(stylesheet.sheet!.cssRules)) {
+		if (!(rule instanceof CSSStyleRule) || !rule.style.borderColor) continue;
+		if (box.matches(rule.selectorText)) color = rule.style.borderColor;
+	}
+	return color.replace(/var\((--[\w-]+)\)/g, (_, name: string) =>
+		getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+	);
+}
+
 // Catches: pointer prevention leaves the textarea focused underneath the tapped mic.
 it("releases editor focus on mic pointer activation without losing the insertion range", () => {
 	const { input, mic } = mount();
@@ -60,11 +79,11 @@ it("releases editor focus on mic pointer activation without losing the insertion
 // Catches: wrapper focus-within incorrectly outlines the field when the mic owns focus.
 it("does not outline the field after focus moves from the textarea to the mic", () => {
 	const { input, mic, box } = mount();
-	const neutral = getComputedStyle(box).borderColor;
+	const neutral = fieldBorderColor(box);
 	input.focus();
-	expect(getComputedStyle(box).borderColor).not.toBe(neutral);
+	expect(fieldBorderColor(box)).not.toBe(neutral);
 	mic.focus();
-	expect(getComputedStyle(box).borderColor).toBe(neutral);
+	expect(fieldBorderColor(box)).toBe(neutral);
 });
 
 // Catches: shared pressed-button styling looks like a persistent focus ring after a mic tap.
