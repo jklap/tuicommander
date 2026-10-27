@@ -1,5 +1,6 @@
 # TUICommander Specification
 
+- [x] AI Chat automatically compacts an exhausted ego context and replays the submitted prompt once through the shared manual compaction path; recovery failures stop without looping (#2392-b2e3).
 - [x] Markdown selections can be staged as quoted file-and-line references in an open AI Chat composer on desktop and mobile (#2361-8099).
 
 Headless GitHub issue intake (#2323-c294): after executor ownership, the runtime subscribes registered allowlisted github.com repositories to all-issue polling without a client. Repository/settings events and the existing 30-second tick reconcile configuration. Unresolved entries emit an explicit configuration error. Client paths, filters and stop calls do not disable the intake subscription; unrelated client repositories retain their filters.

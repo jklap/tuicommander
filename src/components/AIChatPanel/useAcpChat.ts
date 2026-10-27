@@ -174,6 +174,19 @@ export function createAcpChat(
 	let catalogueRequest = 0;
 	let selection = 0;
 	let failedSession: AcpSessionId | null = null;
+	type SubmittedPrompt = {
+		id: AcpConnectionId;
+		session: AcpSessionId;
+		turnId: string;
+		text: string;
+		images: Extract<AcpContentBlock, { type: "image" }>[];
+		files: { name: string; path: string }[];
+		repo: string | null;
+		retried: boolean;
+	};
+	const [submitted, setSubmitted] = createSignal<SubmittedPrompt[]>([]);
+	const [compacting, setCompacting] = createSignal(false);
+	let compaction: Promise<boolean> | null = null;
 
 	aiChatTabs.refresh();
 	async function readLaunches(): Promise<void> {
@@ -519,7 +532,7 @@ export function createAcpChat(
 	/** A turn is running, so the composer sends nothing and offers to stop. */
 	const busy = (): boolean => {
 		const state = attachment()?.state;
-		return state === "prompting" || state === "cancelling";
+		return compacting() || state === "prompting" || state === "cancelling";
 	};
 
 	const held = (): boolean => {
@@ -535,6 +548,82 @@ export function createAcpChat(
 
 	const pinnedRepo = () => aiChatTabs.pinnedRepo(TABS, sessionId() ?? "");
 	const operatingRepo = () => pinnedRepo() ?? viewedRepo();
+	/** Button, slash command and overflow recovery all use this one transition. */
+	function compact(): Promise<boolean> {
+		compaction ??= performCompact().finally(() => {
+			compaction = null;
+		});
+		return compaction;
+	}
+
+	async function performCompact(): Promise<boolean> {
+		const current = pair();
+		if (!current) return false;
+		if (connection()?.capabilities?.egoCompactVersion == null) {
+			setError("This agent cannot compact conversations.");
+			return false;
+		}
+		const request = selection;
+		const isCurrent = () => request === selection && connectionId() === current.id && sessionId() === current.session;
+		setCompacting(true);
+		toastsStore.add("Compacting conversation", "Reducing context before continuing", "info");
+		try {
+			const compacted = await guard(
+				"compacting the conversation",
+				() => client.compact(current.id, current.session),
+				isCurrent,
+			);
+			if (!compacted || !isCurrent()) return false;
+			if (compacted.publication.kind === "not_published") {
+				setError(`Compaction was not published: ${compacted.publication.diagnostic}`);
+				return false;
+			}
+			await selectSession(compacted.targetSessionId);
+			if (sessionId() !== compacted.targetSessionId || !attachment() || error()) return false;
+			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
+			const target = root();
+			if (target && connection()?.capabilities?.list) void refreshSessions(connectionId()!, target);
+			return true;
+		} finally {
+			setCompacting(false);
+		}
+	}
+
+	async function submitPrompt(prompt: Omit<SubmittedPrompt, "turnId">): Promise<void> {
+		const turnId = await guard("sending the turn", () =>
+			prompt.files.length
+				? client.prompt(prompt.id, prompt.session, prompt.text, prompt.images, prompt.repo, prompt.files)
+				: client.prompt(prompt.id, prompt.session, prompt.text, prompt.images, prompt.repo),
+		);
+		if (turnId !== null) setSubmitted((pending) => [...pending, { ...prompt, turnId }]);
+	}
+
+	createEffect(() => {
+		for (const prompt of submitted()) {
+			const outcome = acpStore.turnOutcome(prompt.id, prompt.session);
+			if (outcome?.turnId !== prompt.turnId) continue;
+			// Consume before awaiting: a repaint or a repeated settlement cannot retry twice.
+			setSubmitted((pending) => pending.filter((item) => item !== prompt));
+			const event = outcome.event;
+			const overflow =
+				event.kind === "turnSettled"
+					? event.stopReason === "_context_overflow"
+					: event.message.includes("the provider context window is exhausted; invoke _ego/compact");
+			if (!overflow || connectionId() !== prompt.id || sessionId() !== prompt.session) continue;
+			if (prompt.retried) {
+				setError("The context is still exhausted after compaction. Start a new conversation or shorten the prompt.");
+				continue;
+			}
+			untrack(() => {
+				void (async () => {
+					if (!(await compact())) return;
+					const successor = pair();
+					if (successor) await submitPrompt({ ...prompt, ...successor, retried: true });
+				})();
+			});
+		}
+	});
+
 	return {
 		pinnedRepo,
 		operatingRepo,
@@ -694,6 +783,9 @@ export function createAcpChat(
 			files: { name: string; path: string }[] = [],
 		): Promise<void> {
 			if (!text.trim() && images.length === 0 && files.length === 0) return;
+			// The composer can queue while busy. Wait for the continuation rather
+			// than dropping that new message or sending it to the exhausted source.
+			if (compaction && !(await compaction)) return;
 			if (failedSession) {
 				await selectSession(failedSession);
 				if (failedSession) return;
@@ -704,12 +796,14 @@ export function createAcpChat(
 				current = started ? { id: started.connectionId, session: started.sessionId } : null;
 			}
 			if (!current) return;
-			const { id, session } = current;
-			await guard("sending the turn", () =>
-				files.length
-					? client.prompt(id, session, text, images, operatingRepo(), files)
-					: client.prompt(id, session, text, images, operatingRepo()),
-			);
+			await submitPrompt({
+				...current,
+				text,
+				images: [...images],
+				files: [...files],
+				repo: operatingRepo(),
+				retried: false,
+			});
 		},
 
 		async cancel(): Promise<void> {
@@ -737,20 +831,7 @@ export function createAcpChat(
 		},
 
 		async compact(): Promise<void> {
-			const current = pair();
-			if (!current) return;
-			const compacted = await guard("compacting the conversation", () => client.compact(current.id, current.session));
-			if (compacted === null) return;
-			// ego continues the conversation in a new session. Without opening it the
-			// button appeared to do nothing: the source tab stayed exactly as it was.
-			if (compacted.publication.kind === "not_published") {
-				setError(`Compaction was not published: ${compacted.publication.diagnostic}`);
-				return;
-			}
-			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
-			await selectSession(compacted.targetSessionId);
-			const target = root();
-			if (target && connection()?.capabilities?.list) void refreshSessions(current.id, target);
+			await compact();
 		},
 
 		/** Branch this conversation at its tip into a new tab; the parent keeps its own. */
