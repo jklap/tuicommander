@@ -2987,10 +2987,12 @@ mod tests {
     }
 
     #[test]
-    fn merged_branch_set_still_reports_merged_branches_when_one_branch_is_unclassifiable() {
+    fn merged_branch_set_classifies_a_reflog_less_branch_by_ancestry() {
         // `merged_branch_set` feeds the sidebar's `is_merged`; before the fix one
         // reflog-less branch made it fall back to an EMPTY set, so every merged
-        // branch silently stopped showing as merged.
+        // branch silently stopped showing as merged. A missing reflog now only
+        // means the branch's origin is unknown, so ancestry decides: `main~2` is
+        // an ancestor of main and is reported merged like any other.
         let (_dir, repo_root) = history_fixture_repo(3);
         git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
         git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
@@ -3000,7 +3002,7 @@ mod tests {
         let set = merged_branch_set(&repo_root);
 
         assert!(set.contains("merged-feature"), "got: {set:?}");
-        assert!(!set.contains("no-reflog"), "got: {set:?}");
+        assert!(set.contains("no-reflog"), "got: {set:?}");
     }
 
     #[test]
