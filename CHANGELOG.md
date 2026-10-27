@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Make private secret-form SSO HTTP(S) links selectable, clickable and copyable with the same browser and copy controls as phone links; keep other display values as plain text (#2381-1c72).
+
 - Keep Windows worktree cleanup on the selected Git installation launcher and avoid empty submodule shell scans during fresh workspace safety listings (#2310-6e76).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 

@@ -1,5 +1,5 @@
 /* This form module deliberately does not import App, debugGlobals, appLogger, stores,
- * heartbeat, crash handlers, plugins or the terminal. Only explicit phone-link actions can copy or open its backend-issued URL. */
+ * heartbeat, crash handlers, plugins or the terminal. Only explicit link actions can copy or open HTTP(S) URLs. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { render } from "solid-js/web";
