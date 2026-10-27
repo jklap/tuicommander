@@ -1,4 +1,4 @@
-/* One presentation contract for desktop and mobile session Chat.
+/* One presentation contract for session Chat and AI Chat on desktop and mobile.
  * Theme colors remain owned by the selected app palette. */
 :root {
   /* The user's question in the terminal grid and the chat view; the answer keeps its green. */
@@ -22,4 +22,20 @@
 
 [data-theme="vscode-light"] {
   --answer-rule: var(--success);
+}
+
+/* Desktop hosts supply only a terminal zoom delta. Mobile retains its device-local
+ * reading preference. Keep AI Chat's default reading scale
+ * in one place, independent of the terminal grid's default font size. */
+[data-chat-typography] {
+  --font-base: clamp(8px, calc(14px + var(--chat-zoom-step, 0px)), 32px);
+  --font-3xs: calc(var(--font-base) * 8 / 14);
+  --font-2xs: calc(var(--font-base) * 10 / 14);
+  --font-xs: calc(var(--font-base) * 11 / 14);
+  --font-sm: calc(var(--font-base) * 12 / 14);
+  --font-md: calc(var(--font-base) * 13 / 14);
+  --font-lg: calc(var(--font-base) * 15 / 14);
+  --font-xl: calc(var(--font-base) * 17 / 14);
+  --font-2xl: calc(var(--font-base) * 20 / 14);
+  --font-3xl: calc(var(--font-base) * 24 / 14);
 }

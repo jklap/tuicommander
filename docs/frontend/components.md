@@ -204,6 +204,8 @@ the main window's same file opener, where the editor and viewer tabs live.
 Tool-call dots pulse only while a call is pending or in progress. The
 transcript projection settles unfinished calls when their turn ends, so a
 missing final tool update cannot leave an old dot animating.
+AI Chat context-overflow recovery reuses the manual compact action, opens the continuation and resubmits the original prompt once. Progress uses existing informational notices; publication, load and repeated-overflow failures remain visible.
+
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image

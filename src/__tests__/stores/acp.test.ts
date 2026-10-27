@@ -472,3 +472,25 @@ describe("acpStore: ACP slash commands", () => {
 		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual(recordedCommands.availableCommands);
 	});
 });
+
+// Catches: v1 failure loses turn identity after activeTurn is cleared, or a replay overwrites a newer completion.
+it("retains the latest completion identity without accepting a replayed older failure", () => {
+	acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+	acpStore.applyFrame(CONNECTION, { ...frame(1, { kind: "turnStarted" }, SESSION), turnId: "turn-1" });
+	const failure = {
+		...frame(2, { kind: "turnFailed", message: "overflow", state: "idle" }, SESSION),
+		turnId: "turn-1",
+	};
+	acpStore.applyFrame(CONNECTION, failure);
+	expect(acpStore.attachment(CONNECTION, SESSION)?.activeTurn).toBeNull();
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toEqual({ turnId: "turn-1", event: failure.event });
+	const settled = {
+		...frame(4, { kind: "turnSettled", stopReason: "end_turn", usage: null }, SESSION),
+		turnId: "turn-2",
+	};
+	acpStore.applyFrame(CONNECTION, settled);
+	acpStore.applyFrame(CONNECTION, failure);
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toEqual({ turnId: "turn-2", event: settled.event });
+	acpStore.applySnapshot(snapshot());
+	expect(acpStore.turnOutcome(CONNECTION, SESSION)).toBeNull();
+});

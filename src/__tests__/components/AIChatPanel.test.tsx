@@ -13,6 +13,7 @@ import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedModelChange from "../fixtures/ego-model-change-2388.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
+import { chatFontSize, loadChatTypography } from "../helpers/chatFontSize";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -81,7 +82,7 @@ vi.mock("../../transport", () => ({
 // Whether an ego binary is configured is the one setting this panel reads, and
 // criterion 9 turns on it being readable as "not configured" rather than as an
 // empty string nobody checked.
-const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
+const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego", defaultFontSize: 13 }));
 
 vi.mock("../../stores/settings", async () => {
 	const { createSignal } = await import("solid-js");
@@ -131,11 +132,13 @@ import { Composer } from "../../components/AIChatPanel/Composer";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { createAcpChat, resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { useTerminalLifecycle } from "../../hooks/useTerminalLifecycle";
 import { useKeyboardCorrection } from "../../mobile/useKeyboardCorrection";
 import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
@@ -431,6 +434,68 @@ describe("AIChatPanel: repository profile warnings", () => {
 		await settle();
 		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
 	});
+});
+
+// Catches: AI Chat stays at its fixed size when the active terminal zooms or changes.
+it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", async () => {
+	const removeStyles = loadChatTypography();
+	const previous = terminalsStore.state.activeId;
+	const first = terminalsStore.add({
+		name: "zoom one",
+		sessionId: "zoom-one",
+		fontSize: 13,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	const second = terminalsStore.add({
+		name: "zoom two",
+		sessionId: "zoom-two",
+		fontSize: 19,
+		cwd: ROOT,
+		awaitingInput: null,
+	});
+	terminalsStore.setActive(first);
+	let zoom!: ReturnType<typeof useTerminalLifecycle>;
+	const view = render(() => {
+		zoom = useTerminalLifecycle({
+			pty: { canSpawn: async () => true, close: async () => {} },
+			dialogs: {
+				confirmCloseTerminal: async () => false,
+				confirmSaveChanges: async () => "cancel",
+				confirm: async () => false,
+			},
+			setStatusInfo: () => {},
+			getDefaultFontSize: () => 13,
+		});
+		return <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />;
+	});
+	await settle();
+	(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+	await settle();
+	acpTranscript.restore(SESSION, [{ id: "zoom-answer", kind: "agent", text: "Readable zoom answer" }]);
+	await settle();
+	const size = () => chatFontSize(view.getByText("Readable zoom answer").closest<HTMLElement>(".assistantMsg")!);
+	try {
+		expect(size()).toBe("14px");
+		zoom.zoomIn();
+		expect(size()).toBe("16px");
+		zoom.zoomOut();
+		expect(size()).toBe("14px");
+		terminalsStore.setActive(second);
+		expect(size()).toBe("20px");
+		zoom.zoomReset();
+		expect(size()).toBe("14px");
+		terminalsStore.remove(second);
+		terminalsStore.remove(first);
+		terminalsStore.setActive(null);
+		expect(size()).toBe("14px");
+	} finally {
+		view.unmount();
+		removeStyles();
+		terminalsStore.remove(first);
+		terminalsStore.remove(second);
+		if (previous) terminalsStore.setActive(previous);
+	}
 });
 
 describe("AIChatPanel: the frame it keeps", () => {
@@ -2189,7 +2254,10 @@ describe("AIChatPanel: composer height", () => {
 		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
 			return this.value.split("\n").length * LINE_PX + 16;
 		});
-		clientHeight.mockReturnValue(PANEL_PX);
+		// Catches the new card wrapper becoming the 40% height-budget source.
+		clientHeight.mockImplementation(function (this: HTMLElement) {
+			return this.id === "ai-chat-panel" ? PANEL_PX : 60;
+		});
 	});
 	afterEach(() => {
 		scrollHeight.mockReset();
@@ -2885,7 +2953,10 @@ describe("AIChatPanel: durable conversations", () => {
 		});
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		// Catches: the card footer showing a stale or incorrect context numerator, capacity or remainder.
+		expect(container.querySelector('[aria-label="Context usage"]')?.textContent).toContain(
+			"Ctx 25% · 50K/200K · ~150K free",
+		);
 		expect(container.textContent).toContain("USD 0.001035");
 	});
 
@@ -2895,7 +2966,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("Ctx 25%");
 		expect(container.textContent).not.toContain("NaN");
 		expect(container.textContent).not.toContain("USD");
 	});
@@ -2910,7 +2981,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
 		await settle();
 
-		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).toContain("Ctx 50%");
 		expect(container.textContent).not.toContain("USD 2");
 	});
 
@@ -2920,7 +2991,7 @@ describe("AIChatPanel: durable conversations", () => {
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
 		await settle();
 
-		expect(container.textContent).not.toContain("Context");
+		expect(container.querySelector('[aria-label="Context usage"]')).toBeNull();
 		expect(container.textContent).not.toContain("Infinity");
 	});
 
@@ -3992,6 +4063,359 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
 	});
 
+	it.each(["stop", "v1 failure"])(
+		"overflow stop compacts and retries (%s) — catches overflow left to the user and infinite retry loops",
+		async (shape) => {
+			client.compact.mockResolvedValueOnce({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+			client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+			const { container } = await renderPanel();
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			if (shape === "stop") {
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			} else {
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"overflow-turn",
+				);
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Continue my work", [], ROOT);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+			feed({ kind: "turnStarted" }, SECOND_SESSION, "retry-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "retry-turn");
+			await settle();
+			expect(client.compact).toHaveBeenCalledTimes(1);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(container.textContent).toContain("still exhausted after compaction");
+		},
+	);
+
+	it("keeps original attachments and repository on overflow replay — catches changed context on retry", async () => {
+		let dispose = () => {};
+		let repo = ROOT;
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => repo,
+				() => true,
+				client,
+			);
+		});
+		const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+		const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+		client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		try {
+			await chat.send("Read these", images, files);
+			repo = "/different/repository";
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Read these", images, ROOT, files);
+		} finally {
+			dispose();
+		}
+	});
+
+	it.each(["refused", "unpublished", "load refused", "unsupported"])(
+		"stops overflow recovery when %s — catches replay without a usable continuation",
+		async (failure) => {
+			const { container } = await renderPanel();
+			client.prompt.mockResolvedValueOnce("overflow-turn");
+			if (failure === "refused") client.compact.mockRejectedValueOnce(new Error("compact refused"));
+			else if (failure !== "unsupported")
+				client.compact.mockResolvedValueOnce({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication:
+						failure === "unpublished"
+							? { kind: "not_published", diagnostic: "checkpoint refused" }
+							: { kind: "published_durably", diagnostic: null },
+				});
+			if (failure === "load refused") client.loadSession.mockRejectedValueOnce(new Error("successor refused"));
+			if (failure === "unsupported")
+				acpStore.applySnapshot(
+					snapshot({
+						capabilities: { ...snapshot().capabilities!, egoCompactVersion: null },
+						attachments: [attachment()],
+					}),
+				);
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			expect(client.compact).toHaveBeenCalledTimes(failure === "unsupported" ? 0 : 1);
+			expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+			expect(container.textContent).toContain(
+				failure === "refused"
+					? "compact refused"
+					: failure === "unpublished"
+						? "checkpoint refused"
+						: failure === "load refused"
+							? "successor refused"
+							: "cannot compact",
+			);
+		},
+	);
+
+	it("ignores overflow from another turn — catches replaying the wrong user's prompt", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "My prompt");
+		feed({ kind: "turnStarted" }, SESSION, "other-turn");
+		feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "other-turn");
+		await settle();
+		expect(client.compact).not.toHaveBeenCalled();
+		expect(client.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers overflow arriving before prompt acknowledgement — catches a lost early completion", async () => {
+		client.prompt
+			.mockImplementationOnce(async () => {
+				feed({ kind: "turnStarted" }, SESSION, "early-turn");
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"early-turn",
+				);
+				return "early-turn";
+			})
+			.mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Continue");
+		await settle();
+		expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+		expect(client.prompt).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps a newer selection while compact waits — catches switching and replaying into another tab", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("Continue");
+			feed({ kind: "turnStarted" }, SESSION, "turn-1");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "turn-1");
+			await settle();
+			await openSession(SECOND_SESSION);
+			await chat.selectSession(SECOND_SESSION);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-session",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			expect(chat.sessionId()).toBe(SECOND_SESSION);
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("keeps a message submitted during compaction — catches a silently dropped composer send", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("First");
+			const compacting = chat.compact();
+			const sending = chat.send("Next message");
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await compacting;
+			await sending;
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Next message", [], ROOT);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("sends in a newer selection during compaction — catches concurrent send discarded during stale compaction", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container } = await renderPanel();
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+		await settle();
+		await openSession(SECOND_SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+		await settle();
+		const textarea = container.querySelector("textarea")!;
+		textarea.value = "Message for B";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await settle();
+		finish({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted-session",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		await settle();
+		expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, "Message for B", [], ROOT);
+	});
+
+	it.each(["overflow", "manual", "leave"])(
+		"waits for another conversation compaction (%s) — catches swallowed, duplicated or stale B actions",
+		async (action) => {
+			let finish!: (value: unknown) => void;
+			client.compact
+				.mockReset()
+				.mockImplementationOnce(
+					() =>
+						new Promise((resolve) => {
+							finish = resolve;
+						}),
+				)
+				.mockResolvedValue({
+					sourceSessionId: SECOND_SESSION,
+					targetSessionId: CHILD_SESSION,
+					publication: { kind: "published_durably", diagnostic: null },
+				});
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			await openSession(SECOND_SESSION);
+			aiChatTabs.add("global", SECOND_SESSION);
+			container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+			await settle();
+			if (action !== "leave") client.loadSession.mockImplementationOnce(() => openSession(CHILD_SESSION));
+			if (action === "overflow") {
+				await typeAndSend(container, "Continue B");
+				feed({ kind: "turnStarted" }, SECOND_SESSION, "turn-1");
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "turn-1");
+			} else {
+				const button = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!;
+				button.click();
+				button.click();
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			if (action === "leave") {
+				container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SESSION}"]`)!.click();
+				await settle();
+			}
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-A",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			if (action === "leave") {
+				expect(client.compact).toHaveBeenCalledTimes(1);
+				expect(client.prompt).not.toHaveBeenCalled();
+				expect(aiChatTabs.active("global")).toBe(SESSION);
+				return;
+			}
+			expect(client.compact).toHaveBeenCalledTimes(2);
+			expect(client.compact).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION);
+			expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+			if (action === "overflow") {
+				expect(client.prompt).toHaveBeenCalledTimes(2);
+				expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, CHILD_SESSION, "Continue B", [], ROOT);
+			} else expect(client.prompt).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["refused", "unpublished"])(
+		"retains a composer submission during %s compaction — catches concurrent send discarded during compaction",
+		async (failure) => {
+			let finish!: (value: unknown) => void;
+			let refuse!: (error: Error) => void;
+			client.compact.mockImplementationOnce(
+				() =>
+					new Promise((resolve, reject) => {
+						finish = resolve;
+						refuse = reject;
+					}),
+			);
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+			aiChatDraft.stageFile(files[0]);
+			const textarea = container.querySelector("textarea")!;
+			textarea.value = "Keep this message";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+			container.querySelector<HTMLButtonElement>('button[aria-label="Queue"]')!.click();
+			if (failure === "refused") refuse(new Error("compact refused"));
+			else
+				finish({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication: { kind: "not_published", diagnostic: "checkpoint refused" },
+				});
+			await settle();
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(textarea.value).toBe("Keep this message");
+			expect(aiChatDraft.files()).toEqual(files);
+		},
+	);
+
 	it("compacts the conversation", async () => {
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
@@ -4042,6 +4466,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("tells the person the conversation was compacted", async () => {
+		client.loadSession.mockImplementationOnce(() => openSession("sess-compacted"));
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
 			targetSessionId: "sess-compacted",
@@ -4571,6 +4996,25 @@ describe("AIChatPanel: new chat during cold saved connection", () => {
 });
 
 describe("desktop composer icon controls", () => {
+	it("keeps repository pin and parked-draft actions separate inside the card header", async () => {
+		// Catches: moving the draft action to the header accidentally wires it to repository pinning.
+		const view = await renderPanel();
+		const header = view.container.querySelector('[class*="composerHeader"]')!;
+		expect(header.textContent).toContain("Repository · ");
+		const pin = header.querySelector('button[aria-label="Pin repository"]') as HTMLButtonElement;
+		const park = header.querySelector('button[aria-label="Park draft"]') as HTMLButtonElement;
+		const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Keep my draft";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		pin.click();
+		expect(textarea.value).toBe("Keep my draft");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		park.click();
+		expect(textarea.value).toBe("");
+		expect(pin.getAttribute("aria-pressed")).toBe("true");
+		expect(park.getAttribute("aria-label")).toBe("Restore parked draft");
+	});
+
 	it("keeps icon actions named and disabled for an empty draft, and marks parked drafts pressed", async () => {
 		// Catches: replacing text with SVG drops accessible names, enables empty sends, or hides parked state.
 		const view = await renderPanel();

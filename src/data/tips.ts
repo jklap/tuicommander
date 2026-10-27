@@ -287,7 +287,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "AI Chat Repository Pin",
 		description:
-			"Use Pin repository beside the AI Chat composer to keep that conversation on one repository while you browse elsewhere. Draft parking stays separate.",
+			"Use the pin beside Repository in the AI Chat card to keep one repository while you browse elsewhere. The document button parks or restores your draft.",
 		shortcut: null,
 	},
 	{
