@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, normalize } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
@@ -1732,6 +1736,69 @@ describe("useGitOperations", () => {
 				last_commit_ts: summary.last_commit_ts,
 			});
 		}
+
+		// Catches: a retained A ref or A-named directory defeating current-branch reconciliation,
+		// including a refresh that was already reading A when Git switched the checkout to B.
+		it.each([false, true])("2351 real Git replaces retained A with B (active=%s)", async (active) => {
+			const root = realpathSync(mkdtempSync(join(tmpdir(), "sidebar-2351-")));
+			onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+			const git = (cwd: string, ...args: string[]) =>
+				execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+			git(root, "init", "-b", "main");
+			git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "seed");
+			const checkout = join(root, "poc-00001-slack-flap");
+			const old = "POC-00001-slack-flap";
+			const current = "POC-00003/endpoint-capability-audit";
+			git(root, "worktree", "add", "-b", old, checkout);
+			git(root, "branch", current);
+			// Only adapt real Git's inventory to the frontend port shape. Backend parsing,
+			// cache invalidation and actual removal are covered by the Rust 2351 test.
+			const readStructure = () => ({
+				worktree_paths: Object.fromEntries(
+					git(root, "worktree", "list", "--porcelain")
+						.trim()
+						.split("\n\n")
+						.map((record) => {
+							const lines = record.split("\n");
+							const path = normalize(lines.find((line) => line.startsWith("worktree "))!.slice(9));
+							const branch = lines.find((line) => line.startsWith("branch refs/heads/"))!.slice(18);
+							return [branch, { branch, path, kind: "worktree" as const }];
+						}),
+				),
+				merged_branches: [],
+			});
+			repositoriesStore.add({ path: root, displayName: "2351" });
+			mockRepo.getRepoStructure.mockImplementation(async () => readStructure());
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+			mockRepo.detectOrphanWorktrees.mockResolvedValue([]);
+			await gitOps.refreshAllBranchStats(root, { immediate: true });
+			const tid = terminalsStore.add(makeTerminal({ name: "Agent", sessionId: "2351", cwd: checkout }));
+			repositoriesStore.addTerminalToWorkspace(root, old, tid);
+			repositoriesStore.setActiveWorkspace(root, active ? old : "main");
+
+			const stale = readStructure();
+			let release!: (value: typeof stale) => void;
+			mockRepo.getRepoStructure.mockReturnValueOnce(
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+			);
+			const first = gitOps.refreshAllBranchStats(root, { immediate: true });
+			git(checkout, "switch", current);
+			expect(git(root, "show-ref", "--verify", `refs/heads/${old}`)).toContain(`refs/heads/${old}`);
+			const queued = gitOps.refreshAllBranchStats(root, { immediate: true });
+			release(stale);
+			await Promise.all([first, queued]);
+
+			const repo = repositoriesStore.get(root)!;
+			expect(repo.workspaces[old]).toBeUndefined();
+			expect(repo.workspaces[current].branchName).toBe(current);
+			expect(repo.workspaces[current].worktreePath).toBe(checkout);
+			expect(repo.workspaces[current].terminals).toContain(tid);
+			expect(repo.activeWorkspaceId).toBe(active ? current : "main");
+			expect(terminalsStore.get(tid)?.cwd).toBe(checkout);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
 
 		// Catches the structure-to-store boundary dropping detached rows or minting fake workspaces.
 		it("refreshes detached inventory separately from branch workspaces and retracts it", async () => {
