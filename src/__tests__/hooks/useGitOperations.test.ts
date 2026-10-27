@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
+import { basename, join, normalize } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
@@ -23,6 +22,7 @@ import { openDialog as open } from "../../utils/nativeDialog";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { branchFacts, STALE_AFTER_DAYS } from "../../utils/sidebarRich";
 import { makeTerminal } from "../helpers/store";
+import { build2351Topology } from "../helpers/worktree2351";
 import { mockInvoke } from "../mocks/tauri";
 import missingDetachedOrphans from "./missingDetachedOrphans.fixture.json";
 
@@ -1740,33 +1740,52 @@ describe("useGitOperations", () => {
 		// Catches: a retained A ref or A-named directory defeating current-branch reconciliation,
 		// including a refresh that was already reading A when Git switched the checkout to B.
 		it.each([false, true])("2351 real Git replaces retained A with B (active=%s)", async (active) => {
-			const root = realpathSync(mkdtempSync(join(tmpdir(), "sidebar-2351-")));
-			onTestFinished(() => rmSync(root, { recursive: true, force: true }));
-			const git = (cwd: string, ...args: string[]) =>
-				execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-			git(root, "init", "-b", "main");
-			git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "seed");
-			const checkout = join(root, "poc-00001-slack-flap");
-			const old = "POC-00001-slack-flap";
-			const current = "POC-00003/endpoint-capability-audit";
-			git(root, "worktree", "add", "-b", old, checkout);
-			git(root, "branch", current);
-			// Only adapt real Git's inventory to the frontend port shape. Backend parsing,
-			// cache invalidation and actual removal are covered by the Rust 2351 test.
-			const readStructure = () => ({
-				worktree_paths: Object.fromEntries(
-					git(root, "worktree", "list", "--porcelain")
-						.trim()
-						.split("\n\n")
-						.map((record) => {
-							const lines = record.split("\n");
-							const path = normalize(lines.find((line) => line.startsWith("worktree "))!.slice(9));
-							const branch = lines.find((line) => line.startsWith("branch refs/heads/"))!.slice(18);
-							return [branch, { branch, path, kind: "worktree" as const }];
-						}),
-				),
-				merged_branches: [],
-			});
+			const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sidebar-2351-")));
+			onTestFinished(() => rmSync(scratch, { recursive: true, force: true }));
+			const { repo: root, checkout, git, topology } = build2351Topology(scratch);
+			const old = topology.old_branch;
+			const current = topology.switched_branch;
+			// The backend path is tested separately. This adapter feeds the full real
+			// topology through the production coordinator, including detached/repair rows.
+			const readStructure = () => {
+				const records = git(root, "worktree", "list", "--porcelain")
+					.trim()
+					.split("\n\n")
+					.map((record) => {
+						const lines = record.split("\n");
+						return {
+							path: normalize(lines.find((line) => line.startsWith("worktree "))!.slice(9)),
+							branch: lines.find((line) => line.startsWith("branch refs/heads/"))?.slice(18) ?? null,
+							head: lines.find((line) => line.startsWith("HEAD "))!.slice(5),
+							missing: lines.some((line) => line.startsWith("prunable ")),
+						};
+					});
+				return {
+					worktree_paths: Object.fromEntries(
+						records
+							.filter((r) => r.branch && !r.missing)
+							.map((r) => [r.branch!, { branch: r.branch!, path: r.path, kind: "worktree" as const }]),
+					),
+					detached_worktrees: records
+						.filter((r) => !r.branch && !r.missing)
+						.map((r) => ({
+							path: r.path,
+							head: r.head,
+							short_head: r.head.slice(0, 7),
+							directory_name: basename(r.path),
+							state: "detached" as const,
+						})),
+					worktree_diagnostics: records
+						.filter((r) => r.missing)
+						.map((r) => ({
+							path: r.path,
+							branch: r.branch,
+							state: "missing" as const,
+							guidance: "Git registration points to a missing checkout",
+						})),
+					merged_branches: [],
+				};
+			};
 			repositoriesStore.add({ path: root, displayName: "2351" });
 			mockRepo.getRepoStructure.mockImplementation(async () => readStructure());
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
@@ -1798,6 +1817,17 @@ describe("useGitOperations", () => {
 			expect(repo.activeWorkspaceId).toBe(active ? current : "main");
 			expect(terminalsStore.get(tid)?.cwd).toBe(checkout);
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(Object.keys(repo.workspaces).sort()).toEqual(
+				topology.entries
+					.filter((entry) => entry.branch)
+					.map((entry) => entry.branch)
+					.sort(),
+			);
+			expect(repo.detachedWorktrees).toHaveLength(7);
+			expect(repo.worktreeDiagnostics).toHaveLength(4);
+			for (const entry of topology.entries.filter((entry) => entry.branch)) {
+				expect(repo.workspaces[entry.branch!].worktreePath).toBe(join(scratch, entry.path));
+			}
 		});
 
 		// Catches the structure-to-store boundary dropping detached rows or minting fake workspaces.

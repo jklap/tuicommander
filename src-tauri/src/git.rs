@@ -1179,29 +1179,83 @@ mod tests {
     #[tokio::test]
     async fn sidebar_2351_switch_with_retained_ref_and_prunable_checkouts() {
         let run_git = |cwd: &Path, args: &[&str]| git_cmd(cwd).args(args).run().unwrap().stdout;
-        let (_dir, path) = setup_test_repo_with_commit();
-        let linked = tempfile::tempdir().unwrap();
-        let checkout = linked.path().join("poc-00001-slack-flap");
-        let old = "POC-00001-slack-flap";
-        let new = "POC-00003/endpoint-capability-audit";
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("work/agent2");
+        std::fs::create_dir_all(&path).unwrap();
+        run_git(&path, &["init", "-b", "main"]);
+        run_git(&path, &["config", "user.name", "Test"]);
+        run_git(&path, &["config", "user.email", "test@example.com"]);
+        run_git(&path, &["config", "commit.gpgsign", "false"]);
+        run_git(&path, &["commit", "--allow-empty", "-m", "seed"]);
+        // Recorded from Roberto's complete porcelain. Relocate absolute roots
+        // and synthesize objects while preserving names, shared HEAD groups,
+        // lock reason, external checkouts, nesting and missing registrations.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "fixtures/worktrees/2351-roberto-topology.json"
+        ))
+        .unwrap();
+        let entries = fixture["entries"].as_array().unwrap();
+        let old = fixture["old_branch"].as_str().unwrap();
+        let new = fixture["switched_branch"].as_str().unwrap();
+        let mut heads = HashMap::new();
+        for source in std::iter::once(fixture["old_head"].as_str().unwrap())
+            .chain(entries.iter().map(|entry| entry["head"].as_str().unwrap()))
+        {
+            heads.entry(source).or_insert_with(|| {
+                run_git(
+                    &path,
+                    &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", source],
+                )
+                .trim()
+                .to_string()
+            });
+        }
         run_git(
             &path,
-            &["worktree", "add", "-b", old, checkout.to_str().unwrap()],
+            &[
+                "reset",
+                "--hard",
+                &heads[entries[0]["head"].as_str().unwrap()],
+            ],
         );
-        // These are detached, as in the colleague's porcelain, not missing
-        // branch workspaces. Discovery must not fail the whole refresh on them.
-        for i in 0..4 {
-            let missing = linked.path().join(format!("review-old-{i}"));
-            run_git(
-                &path,
-                &["worktree", "add", "--detach", missing.to_str().unwrap()],
-            );
-            std::fs::remove_dir_all(missing).unwrap();
+        run_git(
+            &path,
+            &["branch", old, &heads[fixture["old_head"].as_str().unwrap()]],
+        );
+        for entry in entries.iter().skip(1) {
+            let checkout = scratch.path().join(entry["path"].as_str().unwrap());
+            std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+            let checkout_str = checkout.to_str().unwrap();
+            let head = &heads[entry["head"].as_str().unwrap()];
+            if let Some(branch) = entry["branch"].as_str() {
+                run_git(&path, &["branch", branch, head]);
+                let initial_branch = if branch == new { old } else { branch };
+                run_git(&path, &["worktree", "add", checkout_str, initial_branch]);
+            } else {
+                run_git(&path, &["worktree", "add", "--detach", checkout_str, head]);
+            }
+            if let Some(reason) = entry["locked"].as_str() {
+                run_git(
+                    &path,
+                    &["worktree", "lock", "--reason", reason, checkout_str],
+                );
+            }
+            if entry["prunable"].as_bool().unwrap() {
+                std::fs::remove_dir_all(checkout).unwrap();
+            }
         }
+        let checkout = scratch.path().join("work/agent2__wt/poc-00001-slack-flap");
         let porcelain = run_git(&path, &["worktree", "list", "--porcelain"]);
+        assert_eq!(
+            porcelain.matches("worktree ").count(),
+            entries.len(),
+            "{porcelain}"
+        );
         assert_eq!(porcelain.matches("prunable ").count(), 4, "{porcelain}");
-
-        run_git(&path, &["branch", new]);
+        assert!(
+            porcelain
+                .contains("locked User requested endpoint-risk WIP preservation and later rework")
+        );
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let repo = path.to_string_lossy().into_owned();
         let initial = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
@@ -1237,6 +1291,17 @@ mod tests {
         assert_eq!(fresh.worktree_paths[new].branch, new);
         assert_eq!(Path::new(&fresh.worktree_paths[new].path), checkout);
         assert_eq!(fresh.worktree_diagnostics.len(), 4);
+        assert_eq!(fresh.worktree_paths.len(), 8);
+        assert_eq!(fresh.detached_worktrees.len(), 7);
+        for entry in entries {
+            if let Some(branch) = entry["branch"].as_str() {
+                assert_eq!(
+                    Path::new(&fresh.worktree_paths[branch].path),
+                    scratch.path().join(entry["path"].as_str().unwrap())
+                );
+            }
+        }
+
         assert!(tuic_git::worktree::resolve_removable_workspace(&path, old).is_err());
         tuic_git::worktree::remove_worktree_by_workspace_id(&repo, new, false, None, false)
             .expect("the current sidebar row must be removable");
