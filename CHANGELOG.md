@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Automatically compact an exhausted ego AI Chat conversation and retry the submitted prompt once in its continuation; stop with an error if recovery fails. Keep composer drafts during compaction and allow sends in other conversations (#2392-b2e3).
 - Give session Chat and AI Chat one 14px default typography scale, and make both follow terminal zoom steps; AI Chat follows the active terminal (#2396-66e2).
 
 - Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow (#2383-f1a1).

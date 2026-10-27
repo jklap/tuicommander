@@ -22,6 +22,7 @@ Native story API and CLI lists support combined state, priority and type filters
 
 - AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
 
+- AI Chat automatically compacts an exhausted ego context through the advertised extension, opens the continuation and replays the original prompt once. Failures and a second overflow stop recovery (#2392-b2e3).
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
 
 Repository Settings exposes inherited overrides, scripts, team sharing, and a scoped reset card in the shared Settings vocabulary.

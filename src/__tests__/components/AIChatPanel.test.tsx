@@ -4062,6 +4062,359 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
 	});
 
+	it.each(["stop", "v1 failure"])(
+		"overflow stop compacts and retries (%s) — catches overflow left to the user and infinite retry loops",
+		async (shape) => {
+			client.compact.mockResolvedValueOnce({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+			client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+			const { container } = await renderPanel();
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			if (shape === "stop") {
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			} else {
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"overflow-turn",
+				);
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Continue my work", [], ROOT);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+			feed({ kind: "turnStarted" }, SECOND_SESSION, "retry-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "retry-turn");
+			await settle();
+			expect(client.compact).toHaveBeenCalledTimes(1);
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(container.textContent).toContain("still exhausted after compaction");
+		},
+	);
+
+	it("keeps original attachments and repository on overflow replay — catches changed context on retry", async () => {
+		let dispose = () => {};
+		let repo = ROOT;
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => repo,
+				() => true,
+				client,
+			);
+		});
+		const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+		const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+		client.prompt.mockResolvedValueOnce("overflow-turn").mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		try {
+			await chat.send("Read these", images, files);
+			repo = "/different/repository";
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Read these", images, ROOT, files);
+		} finally {
+			dispose();
+		}
+	});
+
+	it.each(["refused", "unpublished", "load refused", "unsupported"])(
+		"stops overflow recovery when %s — catches replay without a usable continuation",
+		async (failure) => {
+			const { container } = await renderPanel();
+			client.prompt.mockResolvedValueOnce("overflow-turn");
+			if (failure === "refused") client.compact.mockRejectedValueOnce(new Error("compact refused"));
+			else if (failure !== "unsupported")
+				client.compact.mockResolvedValueOnce({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication:
+						failure === "unpublished"
+							? { kind: "not_published", diagnostic: "checkpoint refused" }
+							: { kind: "published_durably", diagnostic: null },
+				});
+			if (failure === "load refused") client.loadSession.mockRejectedValueOnce(new Error("successor refused"));
+			if (failure === "unsupported")
+				acpStore.applySnapshot(
+					snapshot({
+						capabilities: { ...snapshot().capabilities!, egoCompactVersion: null },
+						attachments: [attachment()],
+					}),
+				);
+			await typeAndSend(container, "Continue my work");
+			feed({ kind: "turnStarted" }, SESSION, "overflow-turn");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "overflow-turn");
+			await settle();
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			expect(client.compact).toHaveBeenCalledTimes(failure === "unsupported" ? 0 : 1);
+			expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+			expect(container.textContent).toContain(
+				failure === "refused"
+					? "compact refused"
+					: failure === "unpublished"
+						? "checkpoint refused"
+						: failure === "load refused"
+							? "successor refused"
+							: "cannot compact",
+			);
+		},
+	);
+
+	it("ignores overflow from another turn — catches replaying the wrong user's prompt", async () => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, "My prompt");
+		feed({ kind: "turnStarted" }, SESSION, "other-turn");
+		feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "other-turn");
+		await settle();
+		expect(client.compact).not.toHaveBeenCalled();
+		expect(client.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers overflow arriving before prompt acknowledgement — catches a lost early completion", async () => {
+		client.prompt
+			.mockImplementationOnce(async () => {
+				feed({ kind: "turnStarted" }, SESSION, "early-turn");
+				feed(
+					{
+						kind: "turnFailed",
+						message: "the provider context window is exhausted; invoke _ego/compact",
+						state: "idle",
+					},
+					SESSION,
+					"early-turn",
+				);
+				return "early-turn";
+			})
+			.mockResolvedValueOnce("retry-turn");
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: SECOND_SESSION,
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		const { container } = await renderPanel();
+		await typeAndSend(container, "Continue");
+		await settle();
+		expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+		expect(client.prompt).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps a newer selection while compact waits — catches switching and replaying into another tab", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("Continue");
+			feed({ kind: "turnStarted" }, SESSION, "turn-1");
+			feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SESSION, "turn-1");
+			await settle();
+			await openSession(SECOND_SESSION);
+			await chat.selectSession(SECOND_SESSION);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-session",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			expect(chat.sessionId()).toBe(SECOND_SESSION);
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("keeps a message submitted during compaction — catches a silently dropped composer send", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		client.loadSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		let dispose = () => {};
+		const chat = createRoot((cleanup) => {
+			dispose = cleanup;
+			return createAcpChat(
+				() => ROOT,
+				() => true,
+				client,
+			);
+		});
+		try {
+			await chat.send("First");
+			const compacting = chat.compact();
+			const sending = chat.send("Next message");
+			expect(client.prompt).toHaveBeenCalledTimes(1);
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: SECOND_SESSION,
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await compacting;
+			await sending;
+			expect(client.prompt).toHaveBeenCalledTimes(2);
+			expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Next message", [], ROOT);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("sends in a newer selection during compaction — catches concurrent send discarded during stale compaction", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container } = await renderPanel();
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+		await settle();
+		await openSession(SECOND_SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+		await settle();
+		const textarea = container.querySelector("textarea")!;
+		textarea.value = "Message for B";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await settle();
+		finish({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted-session",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		await settle();
+		expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, "Message for B", [], ROOT);
+	});
+
+	it.each(["overflow", "manual", "leave"])(
+		"waits for another conversation compaction (%s) — catches swallowed, duplicated or stale B actions",
+		async (action) => {
+			let finish!: (value: unknown) => void;
+			client.compact
+				.mockReset()
+				.mockImplementationOnce(
+					() =>
+						new Promise((resolve) => {
+							finish = resolve;
+						}),
+				)
+				.mockResolvedValue({
+					sourceSessionId: SECOND_SESSION,
+					targetSessionId: CHILD_SESSION,
+					publication: { kind: "published_durably", diagnostic: null },
+				});
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			await openSession(SECOND_SESSION);
+			aiChatTabs.add("global", SECOND_SESSION);
+			container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+			await settle();
+			if (action !== "leave") client.loadSession.mockImplementationOnce(() => openSession(CHILD_SESSION));
+			if (action === "overflow") {
+				await typeAndSend(container, "Continue B");
+				feed({ kind: "turnStarted" }, SECOND_SESSION, "turn-1");
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "turn-1");
+			} else {
+				const button = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!;
+				button.click();
+				button.click();
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			if (action === "leave") {
+				container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SESSION}"]`)!.click();
+				await settle();
+			}
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-A",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			if (action === "leave") {
+				expect(client.compact).toHaveBeenCalledTimes(1);
+				expect(client.prompt).not.toHaveBeenCalled();
+				expect(aiChatTabs.active("global")).toBe(SESSION);
+				return;
+			}
+			expect(client.compact).toHaveBeenCalledTimes(2);
+			expect(client.compact).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION);
+			expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+			if (action === "overflow") {
+				expect(client.prompt).toHaveBeenCalledTimes(2);
+				expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, CHILD_SESSION, "Continue B", [], ROOT);
+			} else expect(client.prompt).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["refused", "unpublished"])(
+		"retains a composer submission during %s compaction — catches concurrent send discarded during compaction",
+		async (failure) => {
+			let finish!: (value: unknown) => void;
+			let refuse!: (error: Error) => void;
+			client.compact.mockImplementationOnce(
+				() =>
+					new Promise((resolve, reject) => {
+						finish = resolve;
+						refuse = reject;
+					}),
+			);
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+			aiChatDraft.stageFile(files[0]);
+			const textarea = container.querySelector("textarea")!;
+			textarea.value = "Keep this message";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+			container.querySelector<HTMLButtonElement>('button[aria-label="Queue"]')!.click();
+			if (failure === "refused") refuse(new Error("compact refused"));
+			else
+				finish({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication: { kind: "not_published", diagnostic: "checkpoint refused" },
+				});
+			await settle();
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(textarea.value).toBe("Keep this message");
+			expect(aiChatDraft.files()).toEqual(files);
+		},
+	);
+
 	it("compacts the conversation", async () => {
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
@@ -4112,6 +4465,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("tells the person the conversation was compacted", async () => {
+		client.loadSession.mockImplementationOnce(() => openSession("sess-compacted"));
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
 			targetSessionId: "sess-compacted",
