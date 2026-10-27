@@ -73,14 +73,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Community
 
 - [@jklap](https://github.com/jklap) — terminal wheel and scroll fixes (#128), Claude usage for enterprise plans (#129), bundle-budget warning (#130), local builds without an updater signing key (#131), SSH tunnel shutdown (#132), panels during worktree consolidation (#133), pane-layout ghost tabs (#134), private temp directories (#135), clock-skew handling (#136), Markdown tab focus frames (#137), denied clipboard writes (#138), default-branch resolution (#139), `merge.ff=only` merges (#140), plugin backup location (#141), mdkb daemon socket (#142), hermetic test gitconfig (#144), remote HEAD symref classification (#145), Unix socket path budget (#146)
-- Credited retroactively for earlier releases:
-  - [@paulovitin](https://github.com/paulovitin) — branch and worktree labels (#29), Keep-worktree cleanup (#40), worktree sidebar resurrection (#41), stale worktree directories and async create/remove (#48), terminal selection viewport and dead-key duplication (#55), renamed-tab title (#83), quiet worktree checkout output (#88)
-  - [@Sbaia](https://github.com/Sbaia) — dictation permission (#2), microphone entitlements (#14, #15)
-  - [@sky10p](https://github.com/sky10p) — Windows navigation guard for `tauri.localhost` (#3)
-  - [@fnicolelli-ls](https://github.com/fnicolelli-ls) — new theme and extralight font (#11)
-  - [@antoniovizuete](https://github.com/antoniovizuete) — server-side plugin capability registration (#12)
-  - [@pabloalcaraz](https://github.com/pabloalcaraz) — fix for a permanent blank terminal from a stuck in-flight flag (#46)
-  - [@nyagihime](https://github.com/nyagihime) — ignore Enter during IME composition in the notes panel (#113)
+
+Earlier contributions not credited before:
+
+- [@paulovitin](https://github.com/paulovitin) — branch and worktree labels (#29), Keep-worktree cleanup (#40), worktree sidebar resurrection (#41), stale worktree directories and async create/remove (#48), terminal selection viewport and dead-key duplication (#55), renamed-tab title (#83), collapsible terminal tab list (#85), quiet worktree checkout output (#88)
+- [@Sbaia](https://github.com/Sbaia) — dictation permission (#2), microphone entitlements (#14, #15)
+- [@sky10p](https://github.com/sky10p) — Windows navigation guard for `tauri.localhost` (#3)
+- [@fnicolelli-ls](https://github.com/fnicolelli-ls) — new theme and extralight font (#11)
+- [@antoniovizuete](https://github.com/antoniovizuete) — server-side plugin capability registration (#12)
+- [@pabloalcaraz](https://github.com/pabloalcaraz) — fix for a permanent blank terminal from a stuck in-flight flag (#46)
+- [@nyagihime](https://github.com/nyagihime) — ignore Enter during IME composition in the notes panel (#113)
 
 ## [2.0.0-beta.3] - 2026-10-26
 
