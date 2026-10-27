@@ -21,7 +21,7 @@ import { Button } from "../ui/Button";
 import { Textarea } from "../ui/Textarea";
 import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
-import { sessionSummary } from "./SessionControls";
+import { SESSION_SETTINGS_UNAVAILABLE, sessionSelectOptions, sessionSummary } from "./SessionControls";
 import type { AcpChat } from "./useAcpChat";
 
 const MIN_HEIGHT_PX = 36;
@@ -32,6 +32,7 @@ const FALLBACK_CAP_PX = 150;
 export const Composer: Component<{
 	chat: AcpChat;
 	mobileAttachments?: boolean;
+	onSessionSettings?: () => void;
 	sharedFile?: File | null;
 	onSharedFileConsumed?: () => void;
 }> = (props) => {
@@ -398,7 +399,26 @@ export const Composer: Component<{
 						</div>
 					)}
 				</Show>
-				<span class={s.sessionSettingsSummary}>{sessionSummary(props.chat)}</span>
+				<Show
+					when={props.onSessionSettings}
+					fallback={<span class={s.sessionSettingsSummary}>{sessionSummary(props.chat)}</span>}
+				>
+					<Button
+						variant="ghost"
+						size="compact"
+						class={s.sessionSettingsSummary}
+						aria-label="Change model, reasoning and mode"
+						title={
+							sessionSelectOptions(props.chat).length > 0
+								? "Change model, reasoning and mode"
+								: SESSION_SETTINGS_UNAVAILABLE
+						}
+						disabled={sessionSelectOptions(props.chat).length === 0}
+						onClick={props.onSessionSettings}
+					>
+						{sessionSummary(props.chat)}
+					</Button>
+				</Show>
 			</div>
 		</>
 	);
