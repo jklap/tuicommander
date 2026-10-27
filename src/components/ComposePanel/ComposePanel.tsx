@@ -1,4 +1,4 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
 import { type Accessor, type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
@@ -148,8 +148,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	let fileInput: HTMLInputElement | undefined;
 	createExtension(
 		keymap.of([
-			// Shift first: CodeMirror matches the more specific binding, so plain
-			// Ctrl-Enter keeps sending immediately.
+			// Keep the queue chord distinct from both newline bindings.
 			{
 				key: "Shift-Ctrl-Enter",
 				run: (view) => {
@@ -159,13 +158,15 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				},
 			},
 			{
-				key: "Ctrl-Enter",
+				key: "Enter",
 				run: (view) => {
 					const text = view.state.doc.toString().trim();
 					if (text) submit(props.onSend, text);
 					return true;
 				},
 			},
+			{ key: "Ctrl-Enter", run: insertNewline },
+			{ key: "Shift-Enter", run: insertNewline },
 			{
 				key: "Escape",
 				run: () => {
@@ -336,7 +337,10 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				    literal Control on every platform: CodeMirror's "Ctrl-" is not "Mod-". */}
 				<div class={s.hints}>
 					<span class={s.hint}>
-						<kbd>ctrl ↵</kbd> send
+						<kbd>↵</kbd> send
+					</span>
+					<span class={s.hint}>
+						<kbd>ctrl ↵ / ⇧ ↵</kbd> newline
 					</span>
 					<Show when={props.canEnqueue()}>
 						<span class={s.hint}>
@@ -420,13 +424,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							<path d="M16.5 3a4.5 4.5 0 0 1 3.18 7.68l-8.49 8.49a6 6 0 0 1-8.48-8.48l8.49-8.49 1.41 1.41-8.49 8.49a4 4 0 0 0 5.66 5.66l8.49-8.49a2.5 2.5 0 0 0-3.54-3.54l-8.49 8.49a1 1 0 0 0 1.42 1.42l7.78-7.78 1.41 1.41-7.78 7.78a3 3 0 0 1-4.24-4.24l8.49-8.49A4.49 4.49 0 0 1 16.5 3z" />
 						</svg>
 					</Button>
-					<Button
-						shape="icon"
-						variant="primary"
-						onClick={handleSend}
-						title="Send (Ctrl+Enter)"
-						aria-label="Send (Ctrl+Enter)"
-					>
+					<Button shape="icon" variant="primary" onClick={handleSend} title="Send (Enter)" aria-label="Send (Enter)">
 						<ComposeSendIcon />
 					</Button>
 					<Show when={!props.persistent?.()}>

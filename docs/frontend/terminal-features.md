@@ -163,3 +163,7 @@ The CLI Compose button shows a muted count pill for all pending FIFO entries,
 including user commands and TUIC messages. It hides at zero and follows the
 backend session state without opening the editor. Hover or keyboard focus loads
 the command/message breakdown; the count remains available if details fail.
+
+### Compose editor shortcuts
+
+In the terminal Compose panel, Enter sends the draft. Ctrl+Enter and Shift+Enter insert a new line. Shift+Ctrl+Enter queues for the next idle moment when an agent is detected. Enter used to confirm an IME candidate does not submit the draft. These shortcuts do not change native terminal keybar controls.

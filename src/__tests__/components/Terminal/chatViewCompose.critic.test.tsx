@@ -143,7 +143,7 @@ describe("Chat Compose input", () => {
 		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 		const cm = await readyEditor(view.container);
 		typeDraft(view.container, "Next task");
-		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: true, shiftKey: queue });
+		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: queue, shiftKey: queue });
 		await waitFor(() => expect(cm.state.doc.toString()).toBe(""));
 		expect(cm.hasFocus).toBe(true);
 		expect(terminalsStore.get(id)?.viewMode).toBe("chat");
