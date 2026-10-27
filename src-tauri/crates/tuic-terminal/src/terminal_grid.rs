@@ -4866,7 +4866,8 @@ mod tests {
     }
 
     fn bounds(grid: &TerminalGrid, row: usize) -> Option<(usize, usize)> {
-        grid.logical_line_at_row(row).map(|l| (l.start_row, l.end_row))
+        grid.logical_line_at_row(row)
+            .map(|l| (l.start_row, l.end_row))
     }
 
     /// Bug caught: a chain walk that stops one row early or late, or does not
@@ -4897,7 +4898,10 @@ mod tests {
 
         let mut grid = TerminalGrid::new(3, 4, 100);
         let _ = grid.process(b"abcde\x1b[2T");
-        assert!(grid.row_wrapped(Line(2)), "fixture: flagged row is now last");
+        assert!(
+            grid.row_wrapped(Line(2)),
+            "fixture: flagged row is now last"
+        );
         assert_eq!(bounds(&grid, 2), Some((2, 2)));
     }
 
