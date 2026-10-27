@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop retrying unavailable PTY child status forever during close or kill, so that error cannot prevent desktop Quit from finishing (#2406-e4e1).
+
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
 
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).

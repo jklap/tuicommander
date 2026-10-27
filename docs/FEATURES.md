@@ -67,6 +67,8 @@ does not become the shell composer draft (#2178-24da).
 
 ## Desktop close and quit
 
+PTY close and kill stop polling when child status is unavailable. A persistent OS status error does not keep the desktop quit cleanup waiting forever.
+
 Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides all visible windows and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
 
 ## Shared form controls
