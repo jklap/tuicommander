@@ -1,3 +1,8 @@
+## Session Chat working indicator (2397-06b6)
+
+- [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.
+- [ ] Capture and inspect the working row visually on desktop and mobile. The isolated Chrome fixture rendered and measured the row, but `Page.captureScreenshot` timed out on both surfaces. No screenshot or native live-agent check is claimed. Retained evidence: `~/Gits/.tmp/results/chat-busy-2397/`.
+
 ## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
 
 - [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.

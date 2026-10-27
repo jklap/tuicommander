@@ -2,6 +2,10 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../../stores/appLogger", () => ({
+	appLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), diag: { info: vi.fn() } },
+}));
+
 const pty = vi.hoisted(() => ({
 	sendCommand: vi.fn().mockResolvedValue(undefined),
 	enqueueCommand: vi.fn().mockResolvedValue({ queued: 1 }),
@@ -97,6 +101,25 @@ function typeDraft(container: HTMLElement, text: string) {
 }
 
 describe("Chat Compose input", () => {
+	// Catches: the real Compose Send path never starts Chat feedback before PTY output.
+	it("shows working immediately from Compose Send until existing terminal state settles", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		const cm = await readyEditor(view.container);
+		terminalsStore.update(id, { shellState: "idle" });
+		expect(view.queryByText("Working…")).toBeNull();
+		typeDraft(view.container, "Next task");
+		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: true });
+		expect(view.getByText("Working…")).toBeTruthy();
+		await waitFor(() => expect(pty.sendCommand).toHaveBeenCalled());
+		expect(view.getByText("Working…")).toBeTruthy();
+		terminalsStore.update(id, { shellState: "busy" });
+		expect(view.getByText("Working…")).toBeTruthy();
+		terminalsStore.update(id, { shellState: "idle" });
+		expect(view.queryByText("Working…")).toBeNull();
+	});
+
 	// Catches: entering Chat without an input, or forcing Compose open in CLI on return.
 	it("opens_docked_and_focused_in_chat_and_restores_closed_cli_with_the_draft", async () => {
 		const id = addTerminal();

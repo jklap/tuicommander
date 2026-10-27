@@ -1,5 +1,7 @@
 # Terminal Features & Keyboard Shortcuts
 
+Session Chat shows a pulsing **Working…** row after Send and while the terminal reports busy. It disappears when the terminal reports idle or awaits a question or permission answer. Desktop and mobile use the existing session state; Chat does not infer activity from the conversation text.
+
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.
 
 ## Keyboard Shortcuts

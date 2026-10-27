@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
+
 - Organize the AI Chat composer into a compact card with repository pinning, draft parking, input/send and live context/model details (#2394-e3c4).
 
 - Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).

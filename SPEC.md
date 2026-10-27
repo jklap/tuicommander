@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] Session Chat shows working feedback from Send and existing terminal busy state on desktop and mobile, hidden for idle and awaiting input (#2397-06b6).
+
 - [x] AI Chat bottom card: repository header and independent pin, document draft action, input/send row and live context/model footer; conversation overflow actions remain available (#2394-e3c4).
 - [x] Markdown selections can be staged as quoted file-and-line references in an open AI Chat composer on desktop and mobile (#2361-8099).
 

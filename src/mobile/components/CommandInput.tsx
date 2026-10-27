@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from
 import { Button } from "../../components/ui";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
+import { chatViewStore } from "../../stores/chatView";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { waitForAgentEnterGap } from "../../utils/sendCommand";
@@ -341,6 +342,7 @@ export function CommandInput(props: CommandInputProps) {
 
 		browserDictation.cancel();
 
+		const rollback = chatViewStore.beginSubmission(sessionId);
 		if (atomicReply()) {
 			setSubmitting(true);
 			try {
@@ -352,6 +354,7 @@ export function CommandInput(props: CommandInputProps) {
 					detail?: string;
 				}>("submit_agent_reply", { sessionId, input: text });
 				if (!receipt.submitted) {
+					rollback();
 					if (receipt.reason === "selection_required") props.onSelectionRequired?.(sessionId);
 					toastsStore.add(
 						"Reply not sent",
@@ -372,6 +375,7 @@ export function CommandInput(props: CommandInputProps) {
 				setValue("");
 				if (textareaEl) textareaEl.value = "";
 			} catch (err) {
+				rollback();
 				let msg = err instanceof Error ? err.message : String(err);
 				if (err instanceof HttpRpcError) {
 					try {
@@ -418,6 +422,7 @@ export function CommandInput(props: CommandInputProps) {
 			await retryWrite(() => rpc("write_pty", { sessionId, data: "\r" }));
 			setCodexNotesMode(false);
 		} catch (err) {
+			rollback();
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("network", `Failed to send command after retries: ${msg}`);
 			toastsStore.add("Send failed", `Could not send command: ${msg}`, "error", true);

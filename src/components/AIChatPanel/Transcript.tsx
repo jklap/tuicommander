@@ -311,6 +311,8 @@ export interface TranscriptProps {
 	entries: () => AcpTranscriptEntry[];
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
+	/** Accessible working text for PTY hosts; AI Chat keeps its compact pulse. */
+	busyLabel?: string;
 	/** History has no execution timestamps: never time it from the view's mount. */
 	observeToolDuration?: boolean;
 	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
@@ -1010,7 +1012,9 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 					when={props.retry?.()}
 					fallback={
 						<Show when={props.busy()}>
-							<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
+							<div class={cx(s.assistantMsg, s.thinkingPulse)} role={props.busyLabel ? "status" : undefined}>
+								{props.busyLabel ?? "…"}
+							</div>
 						</Show>
 					}
 				>
