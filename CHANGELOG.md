@@ -6,7 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 ### Added
 
 - Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).
@@ -16,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Keep Windows worktree cleanup on the selected Git installation launcher and avoid empty submodule shell scans during fresh workspace safety listings (#2310-6e76).
+- Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 
 - Give Edit plan and New story a full-width editor, let users choose repository plan documents, show the complete source and disabled-Save reason, and group archive actions with plan actions (#2356-5c36).
 
@@ -46,7 +46,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `make agent-test-github` and its stop target to reuse the persistent `agent-test-ghlive` login across authorized GitHub live checks, instead of selecting a fresh credential namespace for each agent.
 
 - Attach restored AI Chat tabs before sending, and automatically open a fresh conversation when ego no longer has the saved session, including when reopening the desktop panel (#2348-8927).
-- Stage elevated mdkb installs and Linux `.deb`/`.rpm` installs in fresh private 0700 temp directories instead of predictable `/tmp` paths another local user could pre-create or swap.
+- Stage elevated mdkb installs, Tailscale certificate provisioning (TLS private key) and Linux `.deb`/`.rpm` installs in fresh private 0700 temp directories instead of predictable `/tmp` paths another local user could pre-create or swap; remove the scratch directory when a package install fails (PR #135).
+
+- Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel now reaches TUIC scrollback, scrollback gesture acceleration is capped at 2x, and SGR mouse reports no longer leak into the reconstructed input line used for busy detection (PR #128).
+- Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data" (PR #129).
+- Kill an SSH tunnel's whole process group on shutdown and wait, bounded, for confirmed exit, so forked `ProxyCommand` grandchildren are no longer orphaned; refuse tunnel starts once shutdown has begun (PR #132).
+- Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo Global Workspace suppresses them (PR #133).
+- A ghost pane tab (its terminal, diff, Markdown or editor entry is gone) no longer wedges a split open or defeats Reset Panel Sizes; Reset rebuilds the active Global Workspace layout, switching workspace scope keeps keyboard focus on the active tab, and the saved non-terminal pane selection is restored (PR #134).
+- Read the rich sidebar's subagent flow and a repository's git state at once when the system clock was set back, instead of waiting out the skew (PR #136).
+- Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so a late frame cannot focus a detached wrapper (PR #137).
+- Handle denied clipboard writes (common in browser/PWA mode) in Branches "Copy Name", Remote QR "copy URL", Generators copy buttons and "Copy Block Output": they log instead of raising an unhandled rejection and no longer show a false "Copied" state (PR #138).
+- Resolve a repository's default branch from the tracked remote or any other remote, including remotes not named `origin`, instead of guessing a local main/master; keep the default branch tracking its upstream (PR #139).
+- Merge-and-archive and Update-from-base (merge strategy) no longer fail with "Not possible to fast-forward" when Git config sets `merge.ff=only` or the target branch's `mergeOptions` select `--ff-only` (PR #140).
+- Fix plugin updates failing with "Failed to backup data/" on Linux: the backup stays on the plugins filesystem, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file (PR #141).
+- Stop the mdkb client from falling back to a predictable `/tmp/.mdkb/daemon-hook.sock` when the home directory is unknown; it now treats that as "no daemon" (PR #142).
+- Stop a remote's `HEAD` symref (for example `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch, and classify remote branches from the full refname so non-`origin` remotes and local branches such as `origin/foo` are reported correctly (PR #145).
+- Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the 103-byte limit, the longest `TMPDIR` that would hold it and `TUIC_SOCKET`, and the doomed bind retries are skipped (PR #146).
+- Keep the 2.0 website's reveal content readable without JavaScript (#2369-324c).
+
+### Changed
+
+- `make build` and `make build-dmg` no longer fail locally with a missing-private-key error: updater artifact signing is skipped when `TAURI_SIGNING_PRIVATE_KEY` is unset; CI and release builds that set the key are unchanged (PR #131).
+- Warn, without failing, when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check` (PR #130).
+- Run every Rust test binary that links `tuic-test-support` against a fixed hermetic gitconfig, so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail tests (PR #144).
+- Build the 2.0 website with area pages, a film and a download page.
+
+### Community
+
+- [@jklap](https://github.com/jklap) — terminal wheel and scroll fixes (#128), Claude usage for enterprise plans (#129), bundle-budget warning (#130), local builds without an updater signing key (#131), SSH tunnel shutdown (#132), panels during worktree consolidation (#133), pane-layout ghost tabs (#134), private temp directories (#135), clock-skew handling (#136), Markdown tab focus frames (#137), denied clipboard writes (#138), default-branch resolution (#139), `merge.ff=only` merges (#140), plugin backup location (#141), mdkb daemon socket (#142), hermetic test gitconfig (#144), remote HEAD symref classification (#145), Unix socket path budget (#146)
+
+Earlier contributions not credited before:
+
+- [@paulovitin](https://github.com/paulovitin) — branch and worktree labels (#29), Keep-worktree cleanup (#40), worktree sidebar resurrection (#41), stale worktree directories and async create/remove (#48), terminal selection viewport and dead-key duplication (#55), renamed-tab title (#83), collapsible terminal tab list (#85), quiet worktree checkout output (#88)
+- [@Sbaia](https://github.com/Sbaia) — dictation permission (#2), microphone entitlements (#14, #15)
+- [@sky10p](https://github.com/sky10p) — Windows navigation guard for `tauri.localhost` (#3)
+- [@fnicolelli-ls](https://github.com/fnicolelli-ls) — new theme and extralight font (#11)
+- [@antoniovizuete](https://github.com/antoniovizuete) — server-side plugin capability registration (#12)
+- [@pabloalcaraz](https://github.com/pabloalcaraz) — fix for a permanent blank terminal from a stuck in-flight flag (#46)
+- [@nyagihime](https://github.com/nyagihime) — ignore Enter during IME composition in the notes panel (#113)
 
 ## [2.0.0-beta.3] - 2026-10-26
 

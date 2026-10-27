@@ -1,5 +1,18 @@
 # Windows CI failure investigation (2310-6e76)
 
+## Landing preparation (2026-10-27, tuic-2310-land)
+
+Merged main `35768ff015ef78dcc74324a4ae2382c75623fc3f` without conflicts,
+retaining the branch and main test changes in `src-tauri/src/git.rs`.
+Removed the temporary branch-only workflow, standalone Git probe and its
+ignore-file exception. These investigation tools are not product requirements.
+The native run URLs below retain the evidence, including the final five-owner
+GREEN at https://github.com/sstraus/tuicommander/actions/runs/40474953148.
+The historical workflow remains available at that run's source commit.
+Changed the retained story-2351 nonempty-ref assertion to `assert_ne!` against
+an empty string for strict Clippy, without changing its expected behavior.
+Full Windows main-push GREEN remains unverified; no push is part of this work.
+
 ## Native five-owner completion (2026-10-27, tuic-2310f)
 
 This section supersedes the remaining-failure status in the historical sections
