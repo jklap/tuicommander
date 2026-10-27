@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Connect AI Chat automatically when opened and retain its selected transcript after disconnect. In-chat model changes keep the conversation and apply to the next turn; global model defaults remain for new runs (#2404-e946).
 - Keep GitHub polling paths on their owning machine after repository additions, removals, parking and disk adoption (#2346-b5b1).
 
 - Stop retrying unavailable PTY child status forever during close or kill, so that error cannot prevent desktop Quit from finishing (#2406-e4e1).
