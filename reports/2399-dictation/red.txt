@@ -70,4 +70,3 @@ null
       Tests  1 failed | 2 passed | 9 skipped (12)
    Start at  20:23:24
    Duration  3.60s (transform 37%, import 37%, environment 19%, setup 6%, tests 2%)
-
