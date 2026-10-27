@@ -1306,7 +1306,10 @@ mod tests {
         tuic_git::worktree::remove_worktree_by_workspace_id(&repo, new, false, None, false)
             .expect("the current sidebar row must be removable");
         assert!(!checkout.exists());
-        assert!(!run_git(&path, &["for-each-ref", &format!("refs/heads/{old}")]).is_empty());
+        assert_ne!(
+            run_git(&path, &["for-each-ref", &format!("refs/heads/{old}")]),
+            ""
+        );
     }
 
     /// Progressive loading splits one refresh into `get_repo_structure` (phase 1)

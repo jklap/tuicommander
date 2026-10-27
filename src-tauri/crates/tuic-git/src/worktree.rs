@@ -524,6 +524,14 @@ pub(crate) fn dirty_files_at(path: &Path) -> Result<usize, String> {
 pub fn dirty_fingerprint_at(
     path: &Path,
 ) -> Result<(String, Vec<SubmoduleUnpushedCommits>), String> {
+    let (_, fingerprint, modules, _) = workspace_safety_at(path)?;
+    Ok((fingerprint, modules))
+}
+
+/// Read one fresh snapshot for the count, fingerprint and checkout HEAD.
+fn workspace_safety_at(
+    path: &Path,
+) -> Result<(usize, String, Vec<SubmoduleUnpushedCommits>, String), String> {
     let status = git_cmd(path)
         .args([
             "status",
@@ -533,18 +541,43 @@ pub fn dirty_fingerprint_at(
         ])
         .run()
         .map_err(|e| format!("could not fingerprint worktree status: {e}"))?;
-    let submodules = git_cmd(path)
-        .args(["submodule", "status", "--recursive"])
+    #[cfg(any(test, feature = "test-support"))]
+    let started = std::time::Instant::now();
+    // `git submodule` starts a shell even when the index has no gitlinks.
+    // Forty concurrent empty scans dominate Windows listing latency. Inspect
+    // the live index first; missing .gitmodules alone is not proof of no links.
+    let index = git_cmd(path)
+        .args(["ls-files", "--stage", "-z"])
         .run()
-        .map_err(|e| format!("could not fingerprint submodules: {e}"))?;
+        .map_err(|e| format!("could not inspect submodule index: {e}"))?;
+    let submodules = if index
+        .stdout
+        .split('\0')
+        .any(|entry| entry.starts_with("160000 "))
+    {
+        git_cmd(path)
+            .args(["submodule", "status", "--recursive"])
+            .run()
+            .map_err(|e| format!("could not fingerprint submodules: {e}"))?
+            .stdout
+    } else {
+        String::new()
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    LIFECYCLE_TIMINGS.with(|timings| {
+        timings
+            .borrow_mut()
+            .push(("submodule status".into(), started.elapsed()))
+    });
     let mut digest = Sha256::new();
     digest.update(status.stdout.as_bytes());
     digest.update([0]);
-    digest.update(rev_at(path, "HEAD")?.as_bytes());
+    let tip = rev_at(path, "HEAD")?;
+    digest.update(tip.as_bytes());
     digest.update([0]);
-    digest.update(submodules.stdout.as_bytes());
+    digest.update(submodules.as_bytes());
     let mut unpushed = Vec::new();
-    for line in submodules.stdout.lines() {
+    for line in submodules.lines() {
         if !matches!(line.chars().next(), Some(' ' | '+')) {
             continue;
         }
@@ -575,7 +608,16 @@ pub fn dirty_fingerprint_at(
             });
         }
     }
-    Ok((hex::encode(digest.finalize()), unpushed))
+    Ok((
+        status
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        hex::encode(digest.finalize()),
+        unpushed,
+        tip,
+    ))
 }
 
 fn initialized_main_submodule(base_repo: &Path, destination: &Path) -> bool {
@@ -1814,6 +1856,16 @@ fn lifecycle_branch_merge(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static LIFECYCLE_TIMINGS: std::cell::RefCell<Vec<(String, Duration)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_lifecycle_timings() -> Vec<(String, Duration)> {
+    LIFECYCLE_TIMINGS.with(|timings| std::mem::take(&mut *timings.borrow_mut()))
+}
+
 fn inspect_workspace_lifecycle_resolved_with_pr(
     base_repo: &Path,
     workspace: Result<WorkspaceWorktree, String>,
@@ -1842,12 +1894,9 @@ fn inspect_workspace_lifecycle_resolved_with_pr(
                 error: None,
             });
         }
-        let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
-        let (dirty_fingerprint, submodule_unpushed_commits) =
-            dirty_fingerprint_at(Path::new(&workspace.path))?;
+        let (dirty_files, dirty_fingerprint, submodule_unpushed_commits, tip) =
+            workspace_safety_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
-        let workspace_path = Path::new(&workspace.path);
-        let tip = rev_at(workspace_path, "HEAD")?;
         let (commit_status, merge_proof) = lifecycle_branch_merge(
             base_repo,
             &workspace.branch,
@@ -4899,6 +4948,34 @@ thread_local! {
     static SHELL_SCRIPT_CONTEXT: std::cell::RefCell<Option<(std::ffi::OsString, PathBuf)>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Git Bash exposes Git for Windows' internal binary ahead of its launcher.
+/// Keep the selected installation, but enter it through its environment wrapper.
+#[cfg(windows)]
+fn windows_git_launcher(git: String) -> String {
+    let binary = Path::new(&git);
+    let Some(bin) = binary.parent() else {
+        return git;
+    };
+    let Some(runtime) = bin.parent() else {
+        return git;
+    };
+    if bin.file_name().is_some_and(|name| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("bin"))
+    }) && runtime.file_name().is_some_and(|name| {
+        name.to_str().is_some_and(|name| {
+            name.eq_ignore_ascii_case("ucrt64") || name.eq_ignore_ascii_case("mingw64")
+        })
+    }) && let Some(installation) = runtime.parent()
+    {
+        let launcher = installation.join("cmd").join("git.exe");
+        if launcher.is_file() {
+            return launcher.to_string_lossy().into_owned();
+        }
+    }
+    git
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -4925,6 +5002,7 @@ fn run_shell_script(
             let git = tuic_core::cli::resolve_cli("git.exe");
             Path::new(&git).is_absolute().then_some(git)
         })
+        .map(windows_git_launcher)
         .and_then(|git| {
             Path::new(&git)
                 .parent()
@@ -11777,7 +11855,7 @@ branch refs/heads/feat
         let after = crate::git_cli::take_command_counts();
         eprintln!("1491: 11 writers x 3 refreshes; before={before:?}; after={after:?}");
         assert!(before.get("cherry").copied().unwrap_or_default() > 0);
-        assert_eq!(before.get("status"), Some(&66));
+        assert_eq!(before.get("status"), Some(&33));
         assert!(
             after.is_empty(),
             "file saves must spawn no Git CLI reads: {after:?}"
@@ -13882,8 +13960,16 @@ branch refs/heads/feat
             .map(|dir| dir.join("git.exe"))
             .find(|git| git.is_file())
             .unwrap_or_else(|| PathBuf::from("git"));
+        if let Ok(destination) = std::env::var("TUIC_WINDOWS_GIT_PROBE_PATH") {
+            std::fs::write(
+                destination,
+                serde_json::to_vec(&path.to_string_lossy()).unwrap(),
+            )
+            .unwrap();
+        }
         let mut diagnostics = vec![format!("same cleanup PATH={path:?}; direct git={git:?}")];
-        for shell in [false, true] {
+        for mode in ["direct", "shell", "launcher", "no-optional-locks"] {
+            let shell = mode == "shell";
             // Give both probes the same stale ref. The original failure is
             // already latched, so these fixture-only writes cannot hide it.
             let reset = git_cmd(repo)
@@ -13899,7 +13985,15 @@ branch refs/heads/feat
                 command.args(["/C", "git fetch --prune origin"]);
                 command
             } else {
-                let mut command = std::process::Command::new(&git);
+                let program = if mode == "launcher" {
+                    PathBuf::from(tuic_core::cli::resolve_cli("git.exe"))
+                } else {
+                    git.clone()
+                };
+                let mut command = std::process::Command::new(program);
+                if mode == "no-optional-locks" {
+                    command.arg("--no-optional-locks");
+                }
                 command.args(["fetch", "--prune", "origin"]);
                 command
             };
@@ -13930,7 +14024,29 @@ branch refs/heads/feat
     // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
     #[test]
     fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
-        // DEFERRED (2026-10-25) — classify the native fault from Windows-only failure probes before changing cleanup execution.
+        #[cfg(windows)]
+        {
+            // Catches: choosing another installation, or rewriting a custom Git path.
+            let selected = tempfile::tempdir().unwrap();
+            let launcher = selected.path().join("cmd").join("git.exe");
+            for runtime in ["ucrt64", "mingw64"] {
+                let internal = selected.path().join(runtime).join("bin").join("git.exe");
+                let internal = internal.to_string_lossy().into_owned();
+                if !launcher.exists() {
+                    assert_eq!(windows_git_launcher(internal.clone()), internal);
+                    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+                    fs::write(&launcher, b"not executed").unwrap();
+                }
+                assert_eq!(windows_git_launcher(internal), launcher.to_string_lossy());
+            }
+            let custom = selected
+                .path()
+                .join("custom")
+                .join("git.exe")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(windows_git_launcher(custom.clone()), custom);
+        }
         SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().clear());
         let (_temp, repo, _) = workspace_fixture();
         let origin = add_origin(&repo);

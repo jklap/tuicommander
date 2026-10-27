@@ -27,6 +27,19 @@ Git **writes** are performed by shelling out to the `git` CLI via the unified `g
 
 Windows checkout comparisons use `tuic-core::path_spelling::portable_spelling`: native and verbatim paths match Git's forward-slash paths. Unix backslashes remain literal filename bytes. Worktree creation passes its destination to Git in this same portable spelling, including the retry for an existing branch; filesystem state retains native paths. Git subprocesses enable `core.longpaths` on Windows, including deep submodule preservation refs. Worktree scripts use the same enriched PATH as Git subprocesses; the Windows search includes the standard Git installation and its `.exe` filename. Hook PATH entries use native Windows separators, put the resolved Git directory first, and remove case-insensitive duplicates. The hook keeps whole directories in precedence order up to cmd.exe's 8191 UTF-16-unit environment-value limit; later directories beyond that limit are omitted.
 
+When Git Bash resolves Git for Windows' internal `ucrt64/bin/git.exe` or
+`mingw64/bin/git.exe`, worktree scripts put that installation's `cmd/git.exe`
+launcher first instead. The launcher initializes its own runtime environment.
+Custom executables and installations without that launcher keep their selected
+path. The bounded hook PATH and user script remain unchanged.
+
+Fresh workspace safety reads share one porcelain status and HEAD between the
+dirty count, fingerprint and merge classification. A live staged-index scan
+checks for mode `160000` before running recursive submodule status. A checkout
+without gitlinks has an empty submodule contribution to the same fingerprint;
+real gitlinks still use Git's recursive status and recovery inventory. The absence
+of `.gitmodules` alone never permits skipping that inventory.
+
 ## Async Execution & Caching
 
 The root Git adapters run blocking domain operations inside `tokio::task::spawn_blocking`; the domain crate does not own a runtime. All Tauri git commands are `async` and run git subprocesses inside `tokio::task::spawn_blocking`. This prevents blocking Tokio worker threads during I/O-heavy operations like `git diff`, `git log`, or `git fetch`.
