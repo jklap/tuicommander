@@ -9,6 +9,7 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { branchListsEqual } from "../../utils/branchListsEqual";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { remoteUrlToGitHub } from "../../utils/remoteUrlToGitHub";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
@@ -31,16 +32,7 @@ function isAlreadyUpToDate(output: string): boolean {
 	return /already up.to.date/i.test(output);
 }
 
-/** Convert a git remote URL (SSH or HTTPS) to a GitHub web URL, or null if not GitHub. */
-export function remoteUrlToGitHub(remoteUrl: string): string | null {
-	// SSH: git@github.com:owner/repo.git
-	const sshMatch = remoteUrl.match(/^git@github\.com:(.+?)(?:\.git)?$/);
-	if (sshMatch) return `https://github.com/${sshMatch[1]}`;
-	// HTTPS: https://github.com/owner/repo.git
-	const httpsMatch = remoteUrl.match(/^https?:\/\/github\.com\/(.+?)(?:\.git)?$/);
-	if (httpsMatch) return `https://github.com/${httpsMatch[1]}`;
-	return null;
-}
+export { remoteUrlToGitHub };
 
 export interface BranchesTabProps {
 	repoPath: string | null;

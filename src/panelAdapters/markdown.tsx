@@ -1,9 +1,12 @@
-import { type Component, onMount } from "solid-js";
-import { MarkdownPanel } from "../components/MarkdownPanel";
+import { type Component, lazy, onMount, Suspense } from "solid-js";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import type { PanelAdapter } from "../panelRouter";
 import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
+
+const MarkdownPanel = lazy(() =>
+	import("../components/MarkdownPanel").then((module) => ({ default: module.MarkdownPanel })),
+);
 
 const DetachedMarkdownPanel: Component<{ params: URLSearchParams }> = (props) => {
 	const repoPath = props.params.get("repoPath");
@@ -14,7 +17,15 @@ const DetachedMarkdownPanel: Component<{ params: URLSearchParams }> = (props) =>
 	});
 
 	return (
-		<MarkdownPanel visible={true} repoPath={repoPath} fsRoot={fsRoot} mode="detached" onClose={() => window.close()} />
+		<Suspense>
+			<MarkdownPanel
+				visible={true}
+				repoPath={repoPath}
+				fsRoot={fsRoot}
+				mode="detached"
+				onClose={() => window.close()}
+			/>
+		</Suspense>
 	);
 };
 

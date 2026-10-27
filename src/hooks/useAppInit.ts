@@ -18,6 +18,7 @@ import { githubStore } from "../stores/github";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
 import { locallyCreatedSessions } from "../stores/locallyCreatedSessions";
+import { mcpPopupStore } from "../stores/mcpPopup";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -603,7 +604,6 @@ export async function initApp(deps: AppInitDeps) {
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
 
-	const { mcpPopupStore } = await import("../stores/mcpPopup");
 	for (const start of [
 		() => mcpPopupStore.startRemoteSync(),
 		() => promptLibraryStore.startRemoteSync(),

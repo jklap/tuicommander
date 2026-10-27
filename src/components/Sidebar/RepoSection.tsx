@@ -34,6 +34,7 @@ import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
+import { remoteUrlToGitHub } from "../../utils/remoteUrlToGitHub";
 import { useSidebarDensity } from "../../utils/sidebarDensity";
 import {
 	agentFacts,
@@ -51,7 +52,6 @@ import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
-import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";

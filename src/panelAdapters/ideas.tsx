@@ -1,5 +1,4 @@
-import { type Component, onMount } from "solid-js";
-import { IdeasPanel } from "../components/IdeasPanel";
+import { type Component, lazy, onMount, Suspense } from "solid-js";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import { invoke } from "../invoke";
 import type { PanelAdapter } from "../panelRouter";
@@ -7,6 +6,8 @@ import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
 import { createPanelSyncReceiver } from "../utils/panelSync";
 import { queueTextToActiveTerminal, sendTextToActiveTerminal } from "../utils/sendToActiveTerminal";
+
+const IdeasPanel = lazy(() => import("../components/IdeasPanel").then((module) => ({ default: module.IdeasPanel })));
 
 const DetachedIdeasPanel: Component<{ params: URLSearchParams }> = (props) => {
 	const repoPath = props.params.get("repoPath");
@@ -17,20 +18,22 @@ const DetachedIdeasPanel: Component<{ params: URLSearchParams }> = (props) => {
 	});
 
 	return (
-		<IdeasPanel
-			visible={true}
-			repoPath={repoPath}
-			mode="detached"
-			onClose={() => window.close()}
-			onSendToTerminal={(text) => {
-				void emitAction("sendToTerminal", { text });
-				void invoke("focus_main_window");
-			}}
-			// A detached window keeps its own empty terminals store, so it cannot
-			// tell whether the active tab runs an agent. It always offers the queue
-			// action; the main window reports a refusal through its own toast.
-			onQueueToTerminal={(text) => void emitAction("queueToTerminal", { text })}
-		/>
+		<Suspense>
+			<IdeasPanel
+				visible={true}
+				repoPath={repoPath}
+				mode="detached"
+				onClose={() => window.close()}
+				onSendToTerminal={(text) => {
+					void emitAction("sendToTerminal", { text });
+					void invoke("focus_main_window");
+				}}
+				// A detached window keeps its own empty terminals store, so it cannot
+				// tell whether the active tab runs an agent. It always offers the queue
+				// action; the main window reports a refusal through its own toast.
+				onQueueToTerminal={(text) => void emitAction("queueToTerminal", { text })}
+			/>
+		</Suspense>
 	);
 };
 

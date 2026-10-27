@@ -1,5 +1,4 @@
-import { type Component, onMount } from "solid-js";
-import { FileBrowserPanel } from "../components/FileBrowserPanel";
+import { type Component, lazy, onMount, Suspense } from "solid-js";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import { invoke } from "../invoke";
 import type { PanelAdapter } from "../panelRouter";
@@ -7,6 +6,10 @@ import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
 import { openFileAction } from "../utils/filePreview";
 import { createPanelSyncReceiver } from "../utils/panelSync";
+
+const FileBrowserPanel = lazy(() =>
+	import("../components/FileBrowserPanel").then((module) => ({ default: module.FileBrowserPanel })),
+);
 
 const DetachedFileBrowser: Component<{ params: URLSearchParams }> = (props) => {
 	const repoPath = props.params.get("repoPath");
@@ -18,17 +21,19 @@ const DetachedFileBrowser: Component<{ params: URLSearchParams }> = (props) => {
 	});
 
 	return (
-		<FileBrowserPanel
-			visible={true}
-			repoPath={repoPath}
-			fsRoot={fsRoot}
-			mode="detached"
-			onClose={() => window.close()}
-			onFileOpen={(repo, filePath, line) => {
-				void emitAction("openFile", { repoPath: repo, filePath, line });
-				void invoke("focus_main_window");
-			}}
-		/>
+		<Suspense>
+			<FileBrowserPanel
+				visible={true}
+				repoPath={repoPath}
+				fsRoot={fsRoot}
+				mode="detached"
+				onClose={() => window.close()}
+				onFileOpen={(repo, filePath, line) => {
+					void emitAction("openFile", { repoPath: repo, filePath, line });
+					void invoke("focus_main_window");
+				}}
+			/>
+		</Suspense>
 	);
 };
 

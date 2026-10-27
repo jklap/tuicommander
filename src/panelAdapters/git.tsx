@@ -1,5 +1,4 @@
-import { type Component, onMount } from "solid-js";
-import { GitPanel } from "../components/GitPanel/GitPanel";
+import { type Component, lazy, onMount, Suspense } from "solid-js";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import { invoke } from "../invoke";
 import type { PanelAdapter } from "../panelRouter";
@@ -7,6 +6,8 @@ import { type DiffStatus, diffTabsStore, isDiffStatus } from "../stores/diffTabs
 import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
 import { createPanelSyncReceiver } from "../utils/panelSync";
+
+const GitPanel = lazy(() => import("../components/GitPanel/GitPanel").then((module) => ({ default: module.GitPanel })));
 
 const DetachedGitPanel: Component<{ params: URLSearchParams }> = (props) => {
 	const repoPath = props.params.get("repoPath");
@@ -23,14 +24,16 @@ const DetachedGitPanel: Component<{ params: URLSearchParams }> = (props) => {
 	};
 
 	return (
-		<GitPanel
-			visible={true}
-			repoPath={repoPath}
-			fsRoot={fsRoot}
-			onClose={() => window.close()}
-			mode="detached"
-			onOpenDiff={onOpenDiff}
-		/>
+		<Suspense>
+			<GitPanel
+				visible={true}
+				repoPath={repoPath}
+				fsRoot={fsRoot}
+				onClose={() => window.close()}
+				mode="detached"
+				onOpenDiff={onOpenDiff}
+			/>
+		</Suspense>
 	);
 };
 
