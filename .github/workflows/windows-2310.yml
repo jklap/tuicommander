@@ -1,0 +1,119 @@
+# Temporary, branch-only native reproduction for story 2310-6e76.
+# Keep ordinary CI unchanged; this runs only the five remaining owner tests.
+name: Windows 2310 targeted
+
+on:
+  push:
+    branches: [fix/ci-win-2310f]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-2310-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCCACHE_IDLE_TIMEOUT: "0"
+  RUST_VERSION: "1.99.1"
+
+jobs:
+  windows:
+    name: Windows five owner tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Keep line endings verbatim (Windows)
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # See the rust job: include_str! reaches into the `plugins` submodule.
+          submodules: recursive
+
+      # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
+      # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
+      # FileTracker enforces (it ignores LongPathsEnabled). The bundled WebRTC
+      # APM needs the same thing for the same reason — abseil's
+      # hashtablez_sampler_force_weak_definition.cc resolves one character past
+      # 260 from the meson build dir under a normal target path.
+      - name: Short CARGO_TARGET_DIR (Windows)
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=C:/t" >> $GITHUB_ENV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # webrtc-audio-processing builds the bundled APM (dictation echo
+      # cancellation) with meson and ninja, which no runner image ships. pip
+      # rather than apt/brew/choco so every leg gets the same version: Ubuntu
+      # 22.04 packages meson 0.61, which is older than the abseil wrap expects.
+      - name: Install meson and ninja
+        shell: bash
+        run: python -m pip install --upgrade meson ninja
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          # On Windows the real target dir is CARGO_TARGET_DIR=C:/t (MAX_PATH workaround).
+          # rust-cache's `workspaces` input joins target with root, so it can't point at
+          # an absolute path — use `cache-directories` instead.
+          cache-directories: 'C:/t'
+          # A failed/cancelled test run must not discard an hour of compilation.
+          # sccache cannot cache linked test/binary targets; retain C:/t too.
+          cache-on-failure: true
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Create dist stub for include_dir
+        shell: bash
+        # Both shells, because the SPA fallback serves mobile.html for /mobile/*
+        # and index.html for everything else. A stub carrying index.html alone
+        # 404s every mobile deep link, which fails a test a real `vite build`
+        # passes — the stub has to have the shape the build produces.
+        run: mkdir -p dist && for f in index mobile; do echo '<html></html>' > "dist/$f.html"; done
+
+      - name: Create sidecar stub for Tauri build.rs
+        shell: bash
+        run: |
+          target=$(rustc --print host-tuple)
+          touch "src-tauri/binaries/tuic-bridge-${target}"
+          touch "src-tauri/binaries/tuic-${target}"
+          # Windows needs .exe extension for sidecar resolution
+          if [[ "$target" == *windows* ]]; then
+            touch "src-tauri/binaries/tuic-bridge-${target}.exe"
+            touch "src-tauri/binaries/tuic-${target}.exe"
+          fi
+
+      - name: Tests
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+          CARGO_INCREMENTAL: "0"
+          # Windows d27aa1739 spent 45m36s compiling tests before the fixture
+          # setup rebuilt dev for 18m15s. As on macOS, skip optimizing workspace
+          # harnesses; Cargo.toml keeps dependencies and tuic-terminal at O1.
+          CARGO_PROFILE_TEST_OPT_LEVEL: "0"
+          # The setup build must share nextest's profile and feature graph.
+          TUIC_FIXTURE_FEATURES: dictation
+          CMAKE_C_COMPILER_LAUNCHER: "sccache"
+          CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
+          # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
+          CMAKE_C_FLAGS: '-Z7'
+          CMAKE_CXX_FLAGS: '-Z7'
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run -p tuicommander -p tuic-git --lib --features dictation --profile ci -j 1 -E 'test(removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof) | test(codex_warm_discovery_does_not_restat_historical_rollouts) | test(session_stats_only_stats_the_changed_transcript_then_reconciles) | test(session_stats_warm_refresh_does_not_stat_unchanged_history) | test(native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees)'
