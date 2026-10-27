@@ -553,6 +553,15 @@ mod tests {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         use std::sync::atomic::AtomicBool;
 
+        // The same native binary serves as a foreground fixture. System shells
+        // on macOS can expose argv without their initial environment, so a shell
+        // blocked on read cannot prove the ego store binding.
+        if std::env::var_os("TUIC_EGO_USAGE_PROBE").is_some() {
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+            return;
+        }
+
         let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let script = crate::test_support::fake_ssh_script(
             "2150-terminal-ego-usage",
@@ -578,13 +587,29 @@ cat "$EGO_HOME/report.json""#,
         .unwrap();
 
         let pair = native_pty_system().openpty(PtySize::default()).unwrap();
-        // A real foreground process with an ego argv0 and isolated initial env.
-        // exec -a avoids writing or compiling a second native test executable.
+        // Reuse the compiled test binary: no new executable or scan-time budget.
         let mut command = CommandBuilder::new("/bin/bash");
-        command.args(["-c", "exec -a \"$1\" /bin/sh -c 'read -r input'", "probe"]);
+        command.args([
+            "-c",
+            "exec -a \"$1\" \"$2\" --exact session_usage::tests::terminal_ego_usage_does_not_require_acp_executable --nocapture",
+            "probe",
+        ]);
         command.arg(&binary);
+        command.arg(std::env::current_exe().unwrap());
+        command.env("TUIC_EGO_USAGE_PROBE", "1");
         command.env("EGO_HOME", dir.path());
         let mut child = pair.slave.spawn_command(command).unwrap();
+        // The parent must not retain the slave: macOS can keep an exiting
+        // controlling-terminal process in teardown until that handle closes.
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Err(error) = std::io::Read::read_to_end(&mut reader, &mut bytes) {
+                assert_eq!(error.raw_os_error(), Some(libc::EIO), "{error}");
+            }
+            String::from_utf8(bytes).unwrap()
+        });
         let pid = child.process_id().unwrap();
         loop {
             if pair.master.process_group_leader() == Some(pid as i32)
@@ -640,12 +665,33 @@ cat "$EGO_HOME/report.json""#,
         let snapshot = get_session_usage_impl(&state, "terminal-ego").await;
         state.config.write().ego_executable = "/unrelated/acp/ego".into();
         let with_other_acp = get_session_usage_impl(&state, "terminal-ego").await;
+        let source_error = if snapshot.availability != "available" {
+            Some(format!(
+                "local={:?}; pid={:?}/{pid}; argv={:?}; home={:?}; binding={:?}",
+                local_usage(&state, "terminal-ego").await.err(),
+                crate::pty::session_leaf_pid(&state, "terminal-ego"),
+                crate::process_env::read_process_argv(pid),
+                crate::process_env::read_process_env_var(pid, "EGO_HOME"),
+                crate::agent_session::ego_chat_session_for_pid(pid),
+            ))
+        } else {
+            None
+        };
         let (_, session) = state.session_maps.sessions.remove("terminal-ego").unwrap();
         let mut session = session.into_inner();
-        session._child.kill().unwrap();
+        // Let the native helper finish its read and exit normally. A PTY hangup
+        // is not the helper protocol and can leave native runtime teardown waiting.
+        std::io::Write::write_all(&mut *session.writer.lock(), b"done\n").unwrap();
         session._child.wait().unwrap();
+        drop(session);
+        let output = output.join().unwrap();
+        assert!(output.contains("test result: ok"), "{output}");
         for snapshot in [snapshot, with_other_acp] {
-            assert_eq!(snapshot.availability, "available", "{:?}", snapshot.reason);
+            assert_eq!(
+                snapshot.availability, "available",
+                "{:?}; source error: {source_error:?}",
+                snapshot.reason
+            );
             assert_eq!(snapshot.model.as_deref(), Some("current/model"));
             assert!(
                 snapshot
