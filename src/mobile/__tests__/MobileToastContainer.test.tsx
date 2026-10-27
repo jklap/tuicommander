@@ -16,6 +16,24 @@ describe("MobileToastContainer", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: removing the composer status label leaves dictation failures unannounced.
+	it("announces dictation failures through a stable live region without moving focus", () => {
+		const { container } = render(() => <MobileToastContainer />);
+		const region = container.querySelector('[aria-live="polite"]');
+		expect(region).not.toBeNull();
+		const focused = document.activeElement;
+		toastsStore.add("Dictation failed", "No microphone found, or it is in use", "error", false);
+		const failure = screen.getByRole("button", { name: /Dictation failed/ });
+		expect(region?.contains(failure)).toBe(true);
+		expect(region?.textContent).toContain("No microphone found, or it is in use");
+		expect(document.activeElement).toBe(focused);
+		fireEvent.keyDown(failure, { key: "Enter" });
+		expect(toastsStore.toasts).toHaveLength(0);
+		expect(container.querySelector('[aria-live="polite"]')).toBe(region);
+		toastsStore.add("Dictation failed", "Speech service unavailable", "error", false);
+		expect(region?.contains(screen.getByText("Speech service unavailable"))).toBe(true);
+	});
+
 	it("shows the origin repository and dismisses without desktop navigation", () => {
 		toastsStore.add("built", "ok", "info", false, undefined, undefined, "/Gits/personal/ego", "remote-session");
 		render(() => <MobileToastContainer />);

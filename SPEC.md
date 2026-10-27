@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] Session Chat shows working feedback from Send and existing terminal busy state on desktop and mobile, hidden for idle and awaiting input (#2397-06b6).
+
 - [x] AI Chat retains per-session ACP command offers, completes slash commands, routes supported host actions locally, and explains unavailable names without sending them (#2393-19fc).
 
 - [x] AI Chat automatically compacts an exhausted ego context and replays the submitted prompt once through the shared manual compaction path; recovery failures stop without looping (#2392-b2e3).
@@ -746,6 +748,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Answer surfaces use a green left rule without a background tint; Paper uses its darker success green for the rule; paragraph spacing and user-question styling stay unchanged (#1896-f355).
 - [x] Terminal Chat groups answer blocks into one reading-width card per turn, copies the whole card, compresses terminal pastes and system notices, and keeps the collapsed tool row with Claude Bash descriptions. Turn separators are omitted until transcript timestamps reach the frontend (#1832-b19a).
 - [x] Collapsed terminal Compose shows the shared FIFO count in a muted pill, hidden at zero, with a command/message breakdown on hover or focus (#2339-056c).
+- [x] Terminal Compose sends on Enter, inserts a new line on Ctrl+Enter or Shift+Enter, and queues on Shift+Ctrl+Enter. IME confirmation does not send (#2395-ed27).
 - [x] Terminal Compose accepts ordered image drops and an image-only multi-file picker through the existing paste save path. Drop inserts at the pointer; unsupported images and failed saves show an error.
 - [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Active exported native questions and permission choices render above Compose and use the same PTY key semantics as mobile, without submitting drafts; unexported/free-form prompts retain CLI fallback.
 - [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks

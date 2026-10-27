@@ -2,9 +2,14 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
+import { useSessionChatView } from "../components/useSessionChatView";
 import { clearDictationPartial, saveDictationPartial } from "../utils/dictationPartial";
 
 const writes: { data: string; at: number }[] = [];
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn(async () => ({ epoch: 1, nextSeq: 0, reset: true, updates: [], unknownRows: 0, malformedRows: 0 })),
+	listen: vi.fn(async () => () => {}),
+}));
 vi.mock("../../transport", () => ({
 	buildHttpUrl: (path: string) => `http://localhost${path}`,
 	rpc: vi.fn((_command: string, args: { data?: string }) => {
@@ -152,4 +157,36 @@ describe("mobile slash submission", () => {
 		releaseWrite();
 		await waitFor(() => expect(writes.map((write) => write.data)).toEqual(["/status", "\r"]));
 	});
+});
+
+// Catches: the mobile Send path does not bridge the gap before terminal busy arrives.
+it("starts Chat working feedback on mobile Send, not while typing", async () => {
+	const [busy, setBusy] = createSignal(false);
+	const view = render(() => {
+		const chat = useSessionChatView({
+			sessionId: () => "mobile-busy-send",
+			agentType: () => "claude",
+			sessionExists: () => true,
+			busy,
+			subscribeWake: () => () => {},
+		});
+		return (
+			<>
+				<chat.Toggle />
+				<chat.View />
+				<CommandInput sessionId="mobile-busy-send" agentType="claude" />
+			</>
+		);
+	});
+	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	await waitFor(() => expect(view.container.textContent).toContain("No messages in this conversation yet."));
+	fireEvent.input(view.container.querySelector("textarea")!, { target: { value: "Next task" } });
+	expect(view.queryByText("Working…")).toBeNull();
+	fireEvent.click(view.getByRole("button", { name: "Send" }));
+	expect(view.getByText("Working…")).toBeTruthy();
+	await waitFor(() => expect(writes.some((write) => write.data === "\r")).toBe(true));
+	setBusy(true);
+	expect(view.getByText("Working…")).toBeTruthy();
+	setBusy(false);
+	expect(view.queryByText("Working…")).toBeNull();
 });

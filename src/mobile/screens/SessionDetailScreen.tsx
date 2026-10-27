@@ -111,6 +111,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		agentType,
 		sessionExists: () => props.sessionExists,
 		subscribeWake: props.subscribeChatWake,
+		busy: () => sessionState()?.shell_state === "busy",
+		awaitingInput: () => !!sessionState()?.awaiting_input || !!sessionState()?.last_error,
+		activityRevision: () => `${sessionState()?.shell_state}:${sessionState()?.last_activity_ms}`,
 	});
 	const [cliAtBottom, setCliAtBottom] = createSignal(true);
 	let jumpCli: (() => void) | undefined;

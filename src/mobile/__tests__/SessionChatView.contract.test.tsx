@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invoke, listen, warnings } = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), warnings: vi.fn() }));
 vi.mock("../../invoke", () => ({ invoke, listen }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: warnings, error: vi.fn(), info: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { warn: warnings, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
 
 import { TerminalChatView, ViewModeToggle } from "../../components/Terminal/TerminalChatView";
 import { chatViewStore } from "../../stores/chatView";
@@ -43,6 +45,9 @@ afterEach(() => {
 
 function mount(host: "desktop" | "mobile") {
 	const [agent, setAgent] = createSignal<string | undefined>("claude");
+	const [busy, setBusy] = createSignal(false);
+	const [awaiting, setAwaiting] = createSignal(false);
+	const [revision, setRevision] = createSignal(0);
 	if (host === "desktop") {
 		const id = terminalsStore.add({
 			sessionId: "contract",
@@ -63,6 +68,13 @@ function mount(host: "desktop" | "mobile") {
 			...view,
 			exit: () => terminalsStore.update(id, { agentType: null }),
 			mode: () => terminalsStore.get(id)?.viewMode,
+			busy: (value: boolean) => terminalsStore.update(id, { shellState: value ? "busy" : "idle" }),
+			awaiting: (value: boolean) =>
+				terminalsStore.update(id, {
+					awaitingInput: value ? "question" : null,
+					questionText: value ? "Approve command?" : null,
+				}),
+			output: () => terminalsStore.update(id, { lastDataAt: 42 }),
 		};
 	}
 	const view = render(() => {
@@ -70,6 +82,9 @@ function mount(host: "desktop" | "mobile") {
 			sessionId: () => "contract",
 			agentType: agent,
 			sessionExists: () => true,
+			busy,
+			awaitingInput: awaiting,
+			activityRevision: revision,
 			subscribeWake: (_id, fn) => {
 				wake = fn;
 				return release;
@@ -86,11 +101,71 @@ function mount(host: "desktop" | "mobile") {
 		...view,
 		exit: () => setAgent(undefined),
 		mode: () => (view.queryByText("CLI")?.getAttribute("aria-pressed") === "false" ? "chat" : "cli"),
+		busy: setBusy,
+		awaiting: setAwaiting,
+		output: () => setRevision((value) => value + 1),
 	};
 }
 
 // Desktop-only file navigation/search are covered by TerminalChatView.test and chatViewSearch.test.
 describe.each(["desktop", "mobile"] as const)("%s terminal chat contract", (host) => {
+	// Catches: sending leaves Chat blank until a transcript message or busy event arrives.
+	it("shows working from submission, through busy, and removes it on idle", async () => {
+		const view = mount(host);
+		view.getByText("Chat").click();
+		await waitFor(() => expect(view.container.textContent).toContain("First answer"));
+		expect(view.queryByText("Working…")).toBeNull();
+		chatViewStore.beginSubmission("contract");
+		expect(view.getByRole("status").textContent).toBe("Working…");
+		// An unchanged keepalive is not evidence of output or completion.
+		wake();
+		await waitFor(() => expect(invoke.mock.calls.length).toBeGreaterThan(1));
+		expect(view.getByText("Working…")).toBeTruthy();
+		view.busy(true);
+		expect(view.getByText("Working…")).toBeTruthy();
+		view.busy(false);
+		expect(view.queryByText("Working…")).toBeNull();
+	});
+	// Catches: optimistic feedback sticks after output arrives without a busy transition.
+	it("ends the submission bridge at the first output", async () => {
+		const view = mount(host);
+		view.getByText("Chat").click();
+		await waitFor(() => expect(view.container.textContent).toContain("First answer"));
+		chatViewStore.beginSubmission("contract");
+		expect(view.getByText("Working…")).toBeTruthy();
+		view.output();
+		expect(view.queryByText("Working…")).toBeNull();
+	});
+	// Catches: the working row competes with an awaiting question or returns after it clears.
+	it("gives awaiting input precedence over busy and pending submission", async () => {
+		const view = mount(host);
+		view.getByText("Chat").click();
+		await waitFor(() => expect(view.container.textContent).toContain("First answer"));
+		chatViewStore.beginSubmission("contract");
+		view.busy(true);
+		view.awaiting(true);
+		expect(view.queryByText("Working…")).toBeNull();
+		if (host === "desktop") expect(view.getByText("Approve command?")).toBeTruthy();
+		view.busy(false);
+		view.awaiting(false);
+		expect(view.queryByText("Working…")).toBeNull();
+	});
+	// Catches: an earlier failed send cancels a newer send, or failed sends remain working.
+	it("rolls back only the failed submission and clears feedback when Chat closes", async () => {
+		const view = mount(host);
+		view.getByText("Chat").click();
+		await waitFor(() => expect(view.container.textContent).toContain("First answer"));
+		const oldFailure = chatViewStore.beginSubmission("contract");
+		const latestFailure = chatViewStore.beginSubmission("contract");
+		oldFailure();
+		expect(view.getByText("Working…")).toBeTruthy();
+		latestFailure();
+		expect(view.queryByText("Working…")).toBeNull();
+		chatViewStore.beginSubmission("contract");
+		view.unmount();
+		expect(chatViewStore.state.submissions.contract).toBeUndefined();
+	});
+
 	// Catches: a shared transcript hint prop/default reintroduces invented guidance.
 	it("renders Chat without invented guidance", async () => {
 		const view = mount(host);
