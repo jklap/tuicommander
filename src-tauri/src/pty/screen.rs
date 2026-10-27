@@ -244,6 +244,32 @@ pub(super) fn background_work_from_snapshot(
     Some(has_meaningful_descendant(agent_root, processes))
 }
 
+/// Read-only power policy query. Reuse the established helper exclusions without
+/// changing terminal working/idle state (idle ego turns keep that distinction).
+pub(crate) fn sleep_work_in_snapshot(
+    state: &AppState,
+    session_id: &str,
+    identity: &str,
+    agent_type: &str,
+    processes: &[ProcessTreeEntry],
+) -> bool {
+    let detached_runner = processes.iter().any(|process| {
+        // Borrow the recorded argv; do not duplicate the machine inventory for
+        // every idle agent. The shared predicate owns runner/session matching.
+        crate::idle_close::live_bg_runner_for_session(
+            std::slice::from_ref(&process.command),
+            session_id,
+        ) || crate::idle_close::live_bg_runner_for_session(
+            std::slice::from_ref(&process.command),
+            identity,
+        )
+    });
+    detached_runner
+        || session_foreground_pid(state, session_id)
+            .and_then(|root| background_work_from_snapshot(root, agent_type, processes))
+            .unwrap_or(true)
+}
+
 /// Interactive shells, and the privilege wrappers that exist only to start one.
 /// `login` and `doas` are here for the same reason as `sudo`/`su`: on their own
 /// they are not work, they are the two hops between the outer prompt and the
