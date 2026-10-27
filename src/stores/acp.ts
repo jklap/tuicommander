@@ -1,6 +1,7 @@
 import { createStore, produce } from "solid-js/store";
 import type {
 	AcpAttachmentSnapshot,
+	AcpAvailableCommand,
 	AcpClientError,
 	AcpConnectionId,
 	AcpConnectionSnapshot,
@@ -114,6 +115,10 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 		}
 		case "sessionUpdate": {
 			const update = event.update;
+			if (update.sessionUpdate === "available_commands_update" && Array.isArray(update.availableCommands)) {
+				const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+				if (attachment) attachment.availableCommands = update.availableCommands as AcpAvailableCommand[];
+			}
 			if (update.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) {
 				const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
 				if (attachment) attachment.configOptions = update.configOptions as AcpSessionConfigOption[];

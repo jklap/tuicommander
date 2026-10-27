@@ -1368,3 +1368,41 @@ summary.headerBtn[data-control-layout="disclosure"]:focus-visible { outline: 2px
   .actionsMenu > summary.headerBtn[data-control-layout="disclosure"] { width: max(44px, var(--control-height, 36px)); }
   .textarea[data-control-layout="composer-editor"] { min-height: max(44px, var(--control-height, 36px)); }
 }
+
+
+/* Slash offers share the composer's width and stay scrollable on small screens. */
+.slashCommands {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+}
+
+button[data-control-layout="row"].slashCommand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  gap: 3px;
+  cursor: pointer;
+}
+
+button[data-control-layout="row"].slashCommand[aria-selected="true"],
+button[data-control-layout="row"].slashCommand:hover {
+  background: var(--bg-highlight);
+}
+
+.slashCommand span,
+.slashCommand code,
+.commandNotice {
+  color: var(--fg-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

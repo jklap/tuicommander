@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
+
 - Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow (#2383-f1a1).
 - Show the agent's reasoning choice label in the AI Chat summary instead of its internal unselected value after a model change (#2388-53a8).
 - Make the desktop AI Chat model, reasoning and mode summary open Session settings, and keep its menu action visible with an explanation while options are unavailable (#2385-1694).

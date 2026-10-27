@@ -14,6 +14,7 @@ import type {
 	AcpRequestPermissionRequest,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import recordedCommands from "../fixtures/ego-available-commands-2393.json";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -445,5 +446,29 @@ describe("acpStore: frames for a connection it does not know", () => {
 
 		expect(acpStore.connection(CONNECTION)).toBeNull();
 		expect(acpStore.cursor(CONNECTION)).toBe(0);
+	});
+});
+
+describe("acpStore: ACP slash commands", () => {
+	it("replaces the command offer only for its owner — catches dropped offers and stale commands after revocation", () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: "sibling" })] }));
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "sessionUpdate", update: recordedCommands }, SESSION));
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual(recordedCommands.availableCommands);
+		expect(acpStore.attachment(CONNECTION, "sibling")?.availableCommands ?? []).toEqual([]);
+		acpStore.applyFrame(
+			CONNECTION,
+			frame(
+				3,
+				{ kind: "sessionUpdate", update: { sessionUpdate: "available_commands_update", availableCommands: [] } },
+				SESSION,
+			),
+		);
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual([]);
+	});
+	it("recovers command offers from snapshots — catches late subscribers losing the current menu", () => {
+		acpStore.applySnapshot(
+			snapshot({ attachments: [attachment({ availableCommands: recordedCommands.availableCommands })] }),
+		);
+		expect(acpStore.attachment(CONNECTION, SESSION)?.availableCommands).toEqual(recordedCommands.availableCommands);
 	});
 });

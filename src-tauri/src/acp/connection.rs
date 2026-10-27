@@ -341,6 +341,11 @@ pub(super) struct ConnectionActor {
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
     /// Pending load/resume sessions and usage received before their reply.
     attaching: HashMap<v1::SessionId, Option<AcpUsageSnapshot>>,
+    /// Initial command offers can follow session/new's reply before the actor
+    /// settles that reply. Hold at most one session offer per pending attachment
+    /// whose id is not yet known, plus offers for explicitly claimed loads.
+    initial_commands: HashMap<v1::SessionId, Vec<v1::AvailableCommand>>,
+    unidentified_attaches: usize,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
     queued_contents: HashMap<AcpTurnId, QueuedContent>,
     /// Open seats in the order the agent asked, which is the order they are
@@ -381,6 +386,8 @@ impl ConnectionActor {
             journal,
             attachments: HashMap::new(),
             attaching: HashMap::new(),
+            initial_commands: HashMap::new(),
+            unidentified_attaches: 0,
             queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
@@ -451,14 +458,17 @@ impl ConnectionActor {
                     "ACP attach"
                 );
                 match self.start_new_session(&authority, profiles, connection) {
-                    Ok(sent) => in_flight.push(Box::pin(async move {
-                        Pending::Attach {
-                            claimed: None,
-                            outcome: sent.await,
-                            authority,
-                            reply,
-                        }
-                    })),
+                    Ok(sent) => {
+                        self.unidentified_attaches += 1;
+                        in_flight.push(Box::pin(async move {
+                            Pending::Attach {
+                                claimed: None,
+                                outcome: sent.await,
+                                authority,
+                                reply,
+                            }
+                        }));
+                    }
                     Err(error) => drop(reply.send(Err(error))),
                 }
             }
@@ -469,14 +479,19 @@ impl ConnectionActor {
                 authority,
                 reply,
             } => match self.start_attach(kind, session_id, &authority, at_message_id, connection) {
-                Ok((claimed, sent)) => in_flight.push(Box::pin(async move {
-                    Pending::Attach {
-                        claimed,
-                        outcome: sent.await,
-                        authority,
-                        reply,
+                Ok((claimed, sent)) => {
+                    if claimed.is_none() {
+                        self.unidentified_attaches += 1;
                     }
-                })),
+                    in_flight.push(Box::pin(async move {
+                        Pending::Attach {
+                            claimed,
+                            outcome: sent.await,
+                            authority,
+                            reply,
+                        }
+                    }));
+                }
                 Err(error) => drop(reply.send(Err(error))),
             },
             Command::Detach {
@@ -1017,8 +1032,24 @@ impl ConnectionActor {
                 authority,
                 reply,
             } => {
-                let usage = claimed.and_then(|id| self.attaching.remove(&id)).flatten();
+                if claimed.is_none() {
+                    self.unidentified_attaches -= 1;
+                }
+                let usage = claimed
+                    .as_ref()
+                    .and_then(|id| self.attaching.remove(id))
+                    .flatten();
+                if outcome.is_err()
+                    && let Some(id) = claimed
+                {
+                    self.initial_commands.remove(&id);
+                }
                 let outcome = outcome.map(|attached| self.record(attached, authority, usage));
+                // No unidentified reply can claim the remaining offers now.
+                if self.unidentified_attaches == 0 {
+                    self.initial_commands
+                        .retain(|id, _| self.attaching.contains_key(id));
+                }
                 let _ = reply.send(outcome);
             }
             Pending::Detach {
@@ -1097,6 +1128,22 @@ impl ConnectionActor {
     /// owner would put one turn's output into another turn's transcript.
     fn project(&mut self, notification: v1::SessionNotification) {
         let Some(attachment) = self.attachments.get_mut(&notification.session_id) else {
+            // Metadata only: this does not admit an unknown session's output.
+            // The successful reply must still name this exact id before use.
+            if let v1::SessionUpdate::AvailableCommandsUpdate(offer) = &notification.update {
+                let claimed = self.attaching.contains_key(&notification.session_id);
+                let has_room =
+                    self.initial_commands.len() < self.attaching.len() + self.unidentified_attaches;
+                if claimed
+                    || self.initial_commands.contains_key(&notification.session_id)
+                    || (self.unidentified_attaches > 0 && has_room)
+                {
+                    self.initial_commands.insert(
+                        notification.session_id.clone(),
+                        offer.available_commands.clone(),
+                    );
+                }
+            }
             // Ego sends replay chunks before answering session/load. This id is
             // known from the request even though its attachment is not yet
             // recorded; other unknown session ids must still be ignored.
@@ -1127,6 +1174,10 @@ impl ConnectionActor {
                         .as_ref()
                         .and_then(|held| held.end_turn.clone()),
                 });
+                true
+            }
+            v1::SessionUpdate::AvailableCommandsUpdate(offer) => {
+                attachment.available_commands = offer.available_commands.clone();
                 true
             }
             v1::SessionUpdate::ConfigOptionUpdate(options) => {
@@ -1729,6 +1780,10 @@ impl ConnectionActor {
         usage: Option<AcpUsageSnapshot>,
     ) -> AcpAttachmentSnapshot {
         let attachment = AcpAttachmentSnapshot {
+            available_commands: self
+                .initial_commands
+                .remove(&attached.session_id)
+                .unwrap_or_default(),
             session_id: attached.session_id,
             state: AcpAttachmentState::Idle,
             cwd: authority.cwd,

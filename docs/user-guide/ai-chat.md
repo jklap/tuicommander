@@ -38,6 +38,36 @@ number and a live countdown. The countdown starts when the update arrives and
 ends at **retrying now**. Recovery removes the line; a final failure replaces it
 with the error. The Copy action beside a user message stays on one line.
 
+## Slash commands
+
+Start a draft with `/` to see the commands available in the selected conversation.
+Type a command name to filter the list. Each agent command shows its description
+and input hint. Use Up/Down and Tab or Enter to complete a name, or click a row.
+Completion does not submit it. Add arguments and press Enter or Send to run it.
+Escape closes the list without stopping a turn.
+
+Agent commands come from ACP `available_commands_update` and are sent as
+`/<name> <arguments>`. The latest offer replaces the previous list, including an
+empty offer. Commands from another conversation do not enter this list.
+
+TUICommander handles these actions locally instead of sending them to the model:
+
+| Command | Action |
+|---|---|
+| `/new` | Start a new conversation with the existing New action. |
+| `/clear` | Clear this composer's text and attachments, not conversation history. |
+| `/quit`, `/q` | Stop the current AI Chat connection through the existing stop action. Saved history remains. Other tabs on that connection also disconnect. |
+| `/usage` | Show the context usage and cost already reported for this conversation. |
+| `/compact` | Run the same action as **Compact context**. Available only when advertised; wait for the turn to finish. |
+| `/fork` | Run **Fork conversation** without a message argument. Available only when advertised; wait for the turn to finish. |
+| `/pause`, `/resume` | Run the advertised pause/resume controls in their applicable turn state. |
+
+Host actions do not accept arguments or attachments, except `/clear`, which
+removes attachments. Unsupported commands, including `/name` and `/retry`, stay
+in the composer with an inline **not available in AI Chat** explanation and a
+list of available names. Nothing is sent silently. Open a conversation with
+**New** or `/new` to receive its agent command offer.
+
 ## Compact panel controls
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
