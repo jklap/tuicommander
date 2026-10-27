@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
+
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
 - Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
 - Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
