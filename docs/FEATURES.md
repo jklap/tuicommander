@@ -2719,6 +2719,7 @@ partial work, and their child processes may continue.
 ### 23.11 Shutdown on Exit
 - `TunnelManager::shutdown_all()` called on `RunEvent::Exit`
 - Stops all supervisors and clears the tunnel map — no orphaned SSH processes after app close
+- Shutdown kills each tunnel's whole process group, not only the `ssh` child, and waits for confirmed exit within a bound; forked `ProxyCommand` grandchildren are not orphaned. A start that arrives after shutdown began is refused.
 
 ### 23.12 UI
 - **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
