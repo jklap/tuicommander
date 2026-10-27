@@ -22,7 +22,11 @@ export function MobileDictationButton(props: {
 				}
 				aria-pressed={props.dictation.recording()}
 				disabled={props.disabled}
-				onPointerDown={(event) => event.preventDefault()}
+				onPointerDown={(event) => {
+					event.preventDefault();
+					// Keep the insertion range, but release editor focus on a mic tap.
+					if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+				}}
 				onClick={props.dictation.toggle}
 			>
 				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
