@@ -541,8 +541,17 @@ function createPaneLayoutStore() {
 				section: "pane_layout",
 				read: () => invoke<PaneLayoutState>("load_pane_layout"),
 				apply: (remote) => {
+					// `load_pane_layout` returns the raw on-disk JSON, so a file missing
+					// `root`/`groups` (e.g. `{}`) arrives as-is. The three-way merge drops
+					// keys that are undefined on every side, which left restore() a state
+					// with no `root` and crashed isSplit(). Fill the defaults first.
 					const merged = layoutWriter.adopt(
-						remote ?? { root: null, groups: {}, activeGroupId: null },
+						{
+							...remote,
+							root: remote?.root ?? null,
+							groups: remote?.groups ?? {},
+							activeGroupId: remote?.activeGroupId ?? null,
+						},
 						layoutSnapshot(),
 					);
 					const pendingSave = saveTimer !== null;
@@ -739,7 +748,7 @@ function createPaneLayoutStore() {
 		/** Check if split mode is active */
 		isSplit(): boolean {
 			treeRevision(); // subscribe
-			return tree !== null && tree.type === "branch";
+			return tree?.type === "branch";
 		},
 
 		/** True when the visible split was built by an agent (tmux shim), not by the user. */
@@ -863,7 +872,9 @@ function createPaneLayoutStore() {
 			}, 0);
 			groupCounter = maxNum;
 
-			tree = saved.root;
+			// A persisted layout can arrive with `root` absent (undefined, not null);
+			// normalize so every `tree !== null` guard stays sound.
+			tree = saved.root ?? null;
 			agentOwned = saved.agentOwned === true;
 			bumpTree();
 			// reconcile, not a wholesale node replace: `saved.groups` is always a
@@ -871,8 +882,8 @@ function createPaneLayoutStore() {
 			// PaneTab a new proxy and remount every CanvasTerminal in the layout.
 			setState(
 				reconcile({
-					groups: saved.groups,
-					activeGroupId: saved.activeGroupId,
+					groups: saved.groups ?? {},
+					activeGroupId: saved.activeGroupId ?? null,
 				}),
 			);
 		},

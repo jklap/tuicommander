@@ -540,6 +540,17 @@ describe("paneLayoutStore", () => {
 		mod.resetGroupCounter();
 	});
 
+	describe("restore with a root-less persisted layout", () => {
+		it("does not throw from isSplit() when root is undefined", () => {
+			testInScope(() => {
+				// Crash report: "undefined is not an object (evaluating 'u.type')" in isSplit
+				store.restore({ groups: {}, activeGroupId: null } as never);
+				expect(store.isSplit()).toBe(false);
+				expect(store.getRoot()).toBeNull();
+			});
+		});
+	});
+
 	describe("createGroup", () => {
 		it("creates an empty group with unique ID", () => {
 			testInScope(() => {
