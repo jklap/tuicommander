@@ -8,10 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Keep the open AI Chat conversation in sync across desktop, phone and tablet, including reconnect. Session CLI | Chat remains per device (#2403-e711).
+
 - Send terminal Compose drafts with Enter; use Ctrl+Enter or Shift+Enter for a new line. Shift+Ctrl+Enter still queues for the next idle moment, and IME candidate confirmation does not send (#2395-ed27).
 
 ### Added
 
+- Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
 
 - Organize the AI Chat composer into a compact card with repository pinning, draft parking, input/send and live context/model details (#2394-e3c4).
@@ -23,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Connect AI Chat automatically when opened and retain its selected transcript after disconnect. In-chat model changes keep the conversation and apply to the next turn; global model defaults remain for new runs (#2404-e946).
+- Keep GitHub polling paths on their owning machine after repository additions, removals, parking and disk adoption (#2346-b5b1).
+
+- Stop retrying unavailable PTY child status forever during close or kill, so that error cannot prevent desktop Quit from finishing (#2406-e4e1).
+- Keep sleep prevention active for background agent jobs, detached runners and managed `keep_open` work, even when a terminal is idle or the WebView is hidden; retain the user opt-out (#2402-12a0).
+- Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
 

@@ -738,8 +738,8 @@ empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default; every tone releases to zero and drains a short silent tail before the output stream closes |
-| `block_sleep` | -- | `()` | Prevent system sleep |
-| `unblock_sleep` | -- | `()` | Allow system sleep |
+| `block_sleep` | -- | `()` | Refresh backend-owned sleep prevention; cannot override the user setting |
+| `unblock_sleep` | -- | `()` | Refresh backend-owned sleep prevention; cannot release live-work protection |
 
 ## ACP client for ego (`acp_commands.rs`)
 
@@ -756,6 +756,8 @@ can choose what the host runs.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
+| `ai_chat_selection` | — | `{ workspace, sessionId: string \| null }` | Read the backend-owned active conversation for the configured workspace; HTTP `GET /acp/chat/selection` |
+| `select_ai_chat_conversation` | `session_id: Option<String>` | `()` | Persist last-writer-wins selection (null clears); HTTP `PUT /acp/chat/selection` with `{ sessionId }`. Changed snapshots invalidate desktop and SSE clients |
 | `acp_workspace_root` | — | `String` | The directory AI Chat runs in, from `ai_chat_workspace` (empty = home directory of this host). A missing folder is created; an unusable one is refused with a message naming the setting |
 | `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
 | `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
@@ -1119,3 +1121,8 @@ Unavailable detached registrations are excluded from automatic orphan cleanup in
 ### Append-only story notes
 
 `add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.
+
+
+### Ego terminal usage
+
+`get_ego_usage({ sessionId })` returns `{ text: string | null, tooltip?: string }` from the live ego terminal's exact pid/lease binding. The backend shares session usage's live-terminal executable resolution and calls that binary with `usage --json --session-dir <bound store> -C <manifest workspace>`, accepts report v3 or v4 and selects only that session. V4 adds observed context capacity and typed remaining limits; current-key balances remain distinct from session observations. The optional tooltip carries limit timestamps, sources, and reported resets. Missing data returns null; command failures return an error. Async: no child work runs on the macOS main thread. HTTP parity: `GET /ego/usage?sessionId=<id>`.

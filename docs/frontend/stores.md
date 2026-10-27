@@ -454,8 +454,7 @@ delays keep the provider text without starting a timer.
 `aiChatTabs` is the single per-root store for open chat session IDs and the
 selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
-The existing `ai_chat_sessions` app config value remains the last selected
-conversation for older documents and clients.
+`ai_chat_sessions` is the backend authority for active selection per configured workspace. `createAiChatSelectionSync` subscribes before its first read, rereads after `ai-chat-selection-changed` or SSE reconnect, and applies snapshots without writing them back. Local tab IDs and pins remain visual state; a local selection invalidates older reads and writes in order. `useAcpChat` attaches the shared selection only while visible.
 `acpStore` replaces only the matching attachment's complete option set on
 `config_option_update`, including an empty set. It applies the published options
 directly, without a snapshot request that could arrive after a confirmed settings

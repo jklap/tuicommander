@@ -7,6 +7,7 @@ let disposePanel: (() => void) | undefined;
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
+		if (command === "ai_chat_selection") return { workspace: "/work", sessionId: null };
 		if (command === "load_config") return structuredClone(backend.config);
 		if (command === "save_config") {
 			backend.config = structuredClone(args?.config) as typeof backend.config;

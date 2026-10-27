@@ -1,5 +1,7 @@
 # AI Chat
 
+The open AI Chat conversation follows across desktop, phone and tablet connected to the same host. Open or select a conversation on either device to show it on the others. The last selection saved by the host wins. A device that was offline reads the current selection when it reconnects. This does not change a session header's **CLI | Chat** choice: that view stays per device. Drafts, tab layout and repository pins also stay local.
+
 On desktop, AI Chat and session Chat share the same 14px default reading scale. Terminal zoom in, zoom out and reset also update AI Chat using the active terminal's zoom step. With no active terminal, AI Chat uses its default size. Font family, line height, weight and colors do not change when you switch between the two Chat views. Mobile keeps its device-local Chat font preference.
 
 Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
@@ -158,7 +160,10 @@ The saved-conversation list loads separately from the active chat. You can keep 
 The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
 focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
-browser keeps its own new-tab shortcut. Click a tab to switch, or close it to
+browser keeps its own new-tab shortcut. **New chat** opens a fresh conversation
+without first loading the saved selection. A saved greeting or title does not
+become the new tab's name, and an unavailable saved conversation cannot block it.
+Click a tab to switch, or close it to
 remove it from the panel. Closing a chat tab does not delete ego's conversation:
 the conversation picker can reopen it. Each tab keeps its own transcript and
 unsent composer draft. Open tabs and the selected tab return when the panel is

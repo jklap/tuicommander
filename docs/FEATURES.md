@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+AI Chat shares the active conversation across desktop and mobile for the configured host workspace. The last saved selection wins; reconnect catches up. Open-tab layout, drafts and the session CLI | Chat switch remain per device.
+
 - **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
 
 AI Chat automatically connects on opening, restores the selected conversation, and keeps its transcript visible when stopped. Session model changes keep the same conversation; the global default affects new ego runs only (#2404-e946).
@@ -68,6 +70,8 @@ chrome. Shell output remains visible after agent exit, and retained agent input
 does not become the shell composer draft (#2178-24da).
 
 ## Desktop close and quit
+
+PTY close and kill stop polling when child status is unavailable. A persistent OS status error does not keep the desktop quit cleanup waiting forever.
 
 Rust owns main-window close: Ask (default) offers Background, Quit and Cancel with Remember; Background hides all visible windows and keeps sessions running. Explicit Quit ignores the close preference and confirms if enabled with live terminals. Detached-panel close affects only that panel. This stage keeps the WebView loaded and does not add a tray.
 
@@ -1067,7 +1071,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
 
-AI Chat keeps the active conversation usable while saved-conversation discovery is pending or fails. Background saved-tab load failures do not replace the selected conversation’s state.
+AI Chat keeps the active conversation usable while saved-conversation discovery is pending or fails. Background saved-tab load failures do not replace the selected conversation’s state. **New chat** opens a fresh session without first replaying the saved conversation, so an old greeting title or refused replay cannot block it.
 
 - **Delete conversations** — the capability-gated Conversations list confirms the named conversation, deletes its ego history and closes its tab; refusals keep the conversation (#1917).
 
@@ -1818,7 +1822,9 @@ All data persisted to platform config directory via Rust:
 - Menu: Check for Updates (app menu and Help menu)
 
 ### 14.2 Sleep Prevention
-- `keepawake` integration prevents system sleep while agents are working
+- Backend-owned `keepawake` assertions cover active turns, meaningful background descendants, detached `tuic bg` runners and live managed agents marked `keep_open`
+- Sleep prevention does not depend on WebView activity; hidden, unloaded or blocked views cannot release it
+- The user setting still disables inhibition; idle agents without live work and closed sessions do not retain the hold
 - Configurable in Settings
 
 ### 14.3 Splash Screen
@@ -3446,3 +3452,7 @@ input hints, prefix filtering and keyboard/mouse completion. Agent invocations k
 with `/q`, `/usage`, and advertised `/compact`, `/fork`, `/pause`, `/resume`) use the
 existing controls, not model prompts. Unknown or unsupported commands retain the
 draft and show an inline list of available commands (#2393-19fc).
+
+### Ego terminal usage (#2386-6f7c)
+
+Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4. The shared badge shows observed context tokens, the observed context capacity when present, complete monetary spend, and complete subscription API-price equivalents. Spend and equivalents remain separate. Version 4 also shows explicitly reported remaining requests, tokens, input tokens, output tokens, or USD. Session observations must match the exact provider/model; a current OpenRouter credential balance is labelled `openrouter key`, not session spend. The hover text includes each limit's observation time, source, and reported reset. Unknown fields stay hidden; TUIC does not calculate remaining balances from limit minus usage or borrow another provider account. The executable comes from the live terminal, not the AI Chat setting.

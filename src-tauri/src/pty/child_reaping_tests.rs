@@ -100,6 +100,61 @@ fn assert_os_child_reaped(pid: libc::pid_t) {
     );
 }
 
+fn assert_teardown_returns_after_os_reaped_child(kill: bool) {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "externally-reaped-child";
+    let (mut input, _waited, pid) = insert_gated_child(&state, sid);
+    input.write_all(b"release\n").expect("release child");
+    drop(input);
+    let mut status = 0;
+    // SAFETY: reap only this test's own shell, leaving its Child handle without
+    // a cached status. This records a real persistent OS polling error.
+    assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+    let error = state
+        .session_maps
+        .sessions
+        .get(sid)
+        .unwrap()
+        .lock()
+        ._child
+        .try_wait()
+        .expect_err("externally reaped child must report an OS error");
+    assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
+
+    let (done, returned) = mpsc::channel();
+    let closing_state = Arc::clone(&state);
+    let worker = std::thread::spawn(move || {
+        if kill {
+            assert!(kill_pty_core(&closing_state, sid));
+        } else {
+            close_pty_core(&closing_state, sid, false);
+        }
+        let _ = done.send(());
+    });
+    // Arm the harness after setup: teardown's 100ms polling windows must not
+    // become an infinite retry just because the OS cannot supply exit status.
+    returned
+        .recv_timeout(Duration::from_secs(2))
+        .expect("PTY teardown retried ECHILD forever instead of returning");
+    worker.join().expect("teardown worker");
+    assert!(!state.session_maps.sessions.contains_key(sid));
+    assert_eq!(state.metrics.active_sessions.load(Ordering::Relaxed), 0);
+    assert_os_child_reaped(pid);
+}
+
+/// Catches: a persistent child-status error bypasses the close grace deadline,
+/// preventing the desktop quit loop from ever reaching app.exit.
+#[test]
+fn close_teardown_returns_after_os_reaped_child() {
+    assert_teardown_returns_after_os_reaped_child(false);
+}
+
+/// Catches: the immediate-kill path retries ECHILD past its reap deadline.
+#[test]
+fn kill_teardown_returns_after_os_reaped_child() {
+    assert_teardown_returns_after_os_reaped_child(true);
+}
+
 /// Catches: EOF/close drops the child after try_wait(None), leaving a zombie
 /// when the real process exits later. Also prevents waiting under session locks.
 #[test]

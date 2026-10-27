@@ -45,6 +45,10 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/workspace", get(workspace_root))
         .route("/chat/open", post(chat_open))
+        .route(
+            "/chat/selection",
+            get(chat_selection).put(select_chat_conversation),
+        )
         .route("/connections", post(connect))
         .route(
             "/connections/{connection_id}",
@@ -277,6 +281,28 @@ async fn one_shot_prompt(
         return resp.into_response();
     }
     answer(crate::acp::oneshot::run_prompt(&state, body.root, body.prompt).await)
+}
+
+async fn chat_selection(State(state): State<Arc<AppState>>) -> Response {
+    answer(crate::ai_chat_selection::read(&state).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChatSelectionBody {
+    session_id: Option<String>,
+}
+
+async fn select_chat_conversation(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ChatSelectionBody>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::json_result(crate::ai_chat_selection::select(state, body.session_id).await)
 }
 
 async fn workspace_root(State(state): State<Arc<AppState>>) -> Response {

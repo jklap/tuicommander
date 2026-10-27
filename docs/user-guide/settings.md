@@ -117,7 +117,7 @@ never all expert: in basic mode it would show an empty page.
 | **Hide Dock icon in background** | On | macOS desktop only. Hide the Dock icon while windows are hidden; restore it on Show. |
 | **Confirm before quitting** | Confirm real quit with active terminals, including Cmd/Ctrl+Q. Background does not prompt. Detached-panel close closes only that panel. |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
-| **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
+| **Prevent sleep when busy** | Keep the machine awake for active turns, background agent jobs and live managed agents marked `keep_open`; the backend retains the hold when the app is hidden or locked (**Power Management** section) |
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |

@@ -3653,3 +3653,11 @@ ACP attachment snapshots include `availableCommands`, the latest complete sessio
 command offer: each entry has `name`, `description`, and optional `input.hint`.
 An empty list revokes earlier commands. IPC and HTTP snapshots use the same shape;
 the existing ACP stream carries the original `available_commands_update` update.
+
+### Shared AI Chat selection
+
+`GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
+
+### Ego terminal usage
+
+`GET /ego/usage?sessionId=<terminal UUID>` returns `{ "text": string | null, "tooltip"?: string }`, identically to `get_ego_usage`. Requires local or authenticated access because it runs the live terminal's ego CLI. Uses the exact live pid/lease and manifest workspace, not the most recent session. Unknown data stays null. The shared reader caps stdout at 4 MiB and has a twenty-five-second child deadline; the status-bar feature polls every five minutes. Reports v3 and v4 are accepted. V4 context capacity is used only when reported. Remaining provider limits keep their typed unit and exact decimal value; optional `tooltip` preserves observation time, source, and reset. Session observations require exact model/provider identity. Root OpenRouter balances are explicitly labelled as current-key data and appear only for an OpenRouter session. Subscription API equivalents are labelled, not reported as spend.

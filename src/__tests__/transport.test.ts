@@ -1514,6 +1514,13 @@ describe("transport", () => {
 				path: "/sessions/private%2Fsession/usage",
 			});
 		});
+		it("maps ego usage to its exact terminal — catches lost or unencoded session binding", () => {
+			expect(mapCommandToHttp("get_ego_usage", { sessionId: "private/session" })).toEqual({
+				method: "GET",
+				path: "/ego/usage?sessionId=private%2Fsession",
+			});
+		});
+
 		it("maps get_claude_usage_api to GET /claude/usage", () => {
 			const result = mapCommandToHttp("get_claude_usage_api", {});
 			expect(result.method).toBe("GET");
@@ -2379,6 +2386,14 @@ describe("transport", () => {
 		// than derived from the mappers: a test that rebuilt the path the same
 		// way the code does would agree with any typo.
 		it.each([
+			["ai_chat_selection", {}, "GET", "/acp/chat/selection", undefined],
+			[
+				"select_ai_chat_conversation",
+				{ sessionId: "selected" },
+				"PUT",
+				"/acp/chat/selection",
+				{ sessionId: "selected" },
+			],
 			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
 			[
 				"acp_chat_open",

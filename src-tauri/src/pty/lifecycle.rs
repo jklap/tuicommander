@@ -4136,6 +4136,27 @@ fn signal_foreground_process_group(session: &PtySession, session_id: &str, signa
     }
 }
 
+/// Wait briefly for exit without retrying an unavailable child status forever.
+fn wait_for_pty_child(child: &mut dyn portable_pty::Child, session_id: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Err(error) => {
+                tracing::warn!(
+                    source = "session",
+                    session_id,
+                    %error,
+                    "Cannot poll PTY child during teardown; ending exit wait"
+                );
+                return;
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => return,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+}
+
 /// Close a PTY session core: signals an interrupt, waits briefly for graceful exit,
 /// captures the exit code for the tombstone, and leaves `output_buffers` +
 /// `vt_log_buffers` + `last_output_ms` + `exit_codes` alive so post-mortem
@@ -4187,15 +4208,8 @@ pub(crate) fn close_pty_core_with_reason(
         tracing::warn!(session_id, %error, "close_pty_core termination failed");
     }
 
-    // Wait up to 100ms for process to exit gracefully
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-    loop {
-        match session._child.try_wait() {
-            Ok(Some(_)) => break, // Process exited cleanly
-            Ok(None) if std::time::Instant::now() >= deadline => break,
-            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
-        }
-    }
+    // Wait up to 100ms for process to exit gracefully.
+    wait_for_pty_child(session._child.as_mut(), session_id);
 
     // If the child is still alive after the grace window, force-kill it.
     // Without this, agents that ignore Ctrl-C (e.g. claude) become orphans —
@@ -4218,14 +4232,7 @@ pub(crate) fn close_pty_core_with_reason(
             tracing::warn!(session_id = %session_id, "close_pty_core SIGKILL fallback failed: {e}");
         }
         // Brief wait so try_wait can observe the termination and record the code.
-        let kill_deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-        loop {
-            match session._child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() >= kill_deadline => break,
-                _ => std::thread::sleep(std::time::Duration::from_millis(10)),
-            }
-        }
+        wait_for_pty_child(session._child.as_mut(), session_id);
     }
 
     // Capture exit code for the tombstone before dropping the child handle.
@@ -4284,14 +4291,7 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
     }
 
     // Give the kernel a brief window to reap the child so try_wait sees it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-    loop {
-        match session._child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() >= deadline => break,
-            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
-        }
-    }
+    wait_for_pty_child(session._child.as_mut(), session_id);
 
     if let Ok(Some(status)) = session._child.try_wait() {
         state

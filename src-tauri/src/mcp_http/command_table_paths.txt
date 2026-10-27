@@ -5,6 +5,7 @@
 /accounts/action
 /accounts/secret-form
 /acp/chat/open
+/acp/chat/selection
 /acp/connections
 /acp/connections/x
 /acp/connections/x/elicitations/x/response
@@ -148,6 +149,7 @@
 /ego/perimeter/roots
 /ego/providers
 /ego/providers/model
+/ego/usage
 /exec/shell-script
 /fs/copy
 /fs/copy-abs
