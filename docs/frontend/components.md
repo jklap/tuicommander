@@ -866,6 +866,10 @@ provider action, with a pending state covering that read. The Rust builder reads
 Read failures use the existing error/Retry state. Host delivery retains the
 untrusted-content wrapper and 12,000-character cap.
 
+### Terminal Compose shortcuts
+
+`ComposePanel` binds Enter to immediate send, Ctrl+Enter and Shift+Enter to a newline, and Shift+Ctrl+Enter to the existing agent-only idle queue. CodeMirror owns IME composition filtering, including Safari candidate-confirmation ordering. Desktop CLI and Chat use this editor; the mobile terminal retains its separate `CommandInput` and keybar.
+
 ### Terminal Compose attachments
 
 `ComposePanel` uses `useComposeImages` for paste, file drops and its image-only multi-file input. All three reuse `saveImageFile` in `pastedImage.ts`. Drop/picker insertion ranges track document edits during saving. Native file drops route to a registered mounted editor before the existing global terminal/tab dispatcher; closing or unmounting unregisters that target. Rejected files and save failures appear in an accessible alert.

@@ -46,6 +46,21 @@ A configurable OS-level shortcut to toggle TUICommander's visibility from any ap
 - Not available in browser/PWA mode
 - Persists across app restarts
 
+## Terminal Compose Panel
+
+These shortcuts apply while the terminal Compose editor has focus, in CLI or Chat.
+They are editor-local, not configurable global keybindings. `Ctrl` means the
+Control key on every platform, including macOS.
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send the draft immediately |
+| `Ctrl+Enter` / `Shift+Enter` | Insert a new line |
+| `Shift+Ctrl+Enter` | Queue for the next idle moment (agent sessions only) |
+
+Enter that confirms an IME candidate does not send the draft. Mobile terminal
+keybar controls send native terminal keys; they do not use Compose shortcuts.
+
 ## AI Chat Composer
 
 AI Chat's composer handles `Ctrl+S` locally to park or restore its prompt,

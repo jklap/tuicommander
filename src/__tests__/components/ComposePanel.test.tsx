@@ -102,13 +102,13 @@ describe("ComposePanel", () => {
 		}
 	});
 
-	it("Ctrl+Enter sends now, Shift+Ctrl+Enter queues instead", async () => {
+	it("Enter sends instead of inserting a newline; Shift+Ctrl+Enter still queues", async () => {
 		const { container, props } = renderPanel();
 		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
 		typeIntoEditor(container, "run the tests");
 		const content = container.querySelector(".cm-content") as HTMLElement;
 
-		fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+		fireEvent.keyDown(content, { key: "Enter" });
 		expect(props.onSend).toHaveBeenCalledWith("run the tests");
 		expect(props.onEnqueue).not.toHaveBeenCalled();
 		// Let the send settle: a second submit while one is in flight is dropped.
@@ -119,6 +119,46 @@ describe("ComposePanel", () => {
 		// The immediate-send path must not fire a second time: queueing exists
 		// precisely so the text does NOT reach a working agent now.
 		expect(props.onSend).toHaveBeenCalledTimes(1);
+	});
+
+	// Catches: Ctrl+Enter still sending, or Shift+Enter falling through to send.
+	it.each([{ ctrlKey: true }, { shiftKey: true }])("inserts a newline without submitting for %o", async (modifiers) => {
+		const { container, props } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		typeIntoEditor(container, "before after");
+		const editor = container.querySelector(".cm-editor") as HTMLElement;
+		const view = EditorView.findFromDOM(editor)!;
+		view.dispatch({ selection: { anchor: 6 } });
+		fireEvent.keyDown(view.contentDOM, { key: "Enter", ...modifiers });
+		expect(editorText(container)).toBe("before\n after");
+		expect(props.onSend).not.toHaveBeenCalled();
+		expect(props.onEnqueue).not.toHaveBeenCalled();
+	});
+
+	// Catches: IME candidate confirmation submitting a half-composed draft.
+	it("does not send IME Enter, then sends with Enter after composition ends", async () => {
+		const { container, props } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		typeIntoEditor(container, "draft");
+		const content = container.querySelector(".cm-content") as HTMLElement;
+		fireEvent.compositionStart(content);
+		// Drive the DOM edit that a browser makes during composition, not an
+		// internal CodeMirror flag. Its observer derives the composing state.
+		content.querySelector(".cm-line")!.textContent = "候補";
+		await waitFor(() => expect(editorText(container)).toBe("候補"));
+		fireEvent.keyDown(content, { key: "Enter", isComposing: true, keyCode: 229 });
+		expect(props.onSend).not.toHaveBeenCalled();
+		expect(props.onEnqueue).not.toHaveBeenCalled();
+		expect(editorText(container)).toBe("候補");
+		fireEvent.compositionEnd(content);
+		fireEvent.keyDown(content, { key: "Enter" });
+		expect(props.onSend).toHaveBeenCalledWith("候補");
+	});
+
+	// Catches: the send control still advertising the old shortcut.
+	it("labels the send control with Enter", () => {
+		const { getByRole } = renderPanel();
+		expect(getByRole("button", { name: "Send (Enter)" }).getAttribute("title")).toBe("Send (Enter)");
 	});
 
 	it("refuses to queue for a session with no agent", async () => {
@@ -231,7 +271,7 @@ describe("ComposePanel", () => {
 			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
 			typeIntoEditor(container, "run the tests");
 
-			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter", ctrlKey: true });
+			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter" });
 			expect(props.onSend).toHaveBeenCalledWith("run the tests");
 			await waitFor(() => expect(editorText(container)).toBe(""));
 			expect(props.onClose).not.toHaveBeenCalled();
@@ -254,7 +294,7 @@ describe("ComposePanel", () => {
 			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
 			typeIntoEditor(container, "run the tests");
 
-			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter", ctrlKey: true });
+			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter" });
 			expect(onSend).toHaveBeenCalledWith("run the tests");
 			// The user starts the next message while sendCommand is still writing.
 			const view = EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement);
@@ -272,8 +312,8 @@ describe("ComposePanel", () => {
 			typeIntoEditor(container, "run the tests");
 			const content = container.querySelector(".cm-content") as HTMLElement;
 
-			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
-			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+			fireEvent.keyDown(content, { key: "Enter" });
+			fireEvent.keyDown(content, { key: "Enter" });
 			fireEvent.click(container.querySelector('[title^="Queue for the next idle moment"]') as HTMLElement);
 			expect(onSend).toHaveBeenCalledTimes(1);
 
@@ -281,7 +321,7 @@ describe("ComposePanel", () => {
 			await waitFor(() => expect(editorText(container)).toBe(""));
 			// Once settled, the panel accepts the next message.
 			typeIntoEditor(container, "then push");
-			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+			fireEvent.keyDown(content, { key: "Enter" });
 			expect(onSend).toHaveBeenCalledTimes(2);
 			resolveSend();
 			await waitFor(() => expect(editorText(container)).toBe(""));

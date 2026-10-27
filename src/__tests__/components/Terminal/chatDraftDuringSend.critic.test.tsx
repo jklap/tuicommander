@@ -91,7 +91,7 @@ describe("Chat draft during delayed send", () => {
 		const editor = element && EditorView.findFromDOM(element);
 		if (!editor) throw new Error("No Compose editor");
 		editor.dispatch({ changes: { from: 0, insert: "Sent message" } });
-		fireEvent.click(view.getByTitle(queue ? "Queue for the next idle moment (Shift+Ctrl+Enter)" : "Send (Ctrl+Enter)"));
+		fireEvent.click(view.getByTitle(queue ? "Queue for the next idle moment (Shift+Ctrl+Enter)" : "Send (Enter)"));
 		editor.dispatch({
 			changes: replace
 				? { from: 0, to: editor.state.doc.length, insert: "Next unsent message" }
