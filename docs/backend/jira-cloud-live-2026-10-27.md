@@ -177,8 +177,8 @@ node scripts/jira-cloud-desktop-e2e.mjs \
 ```
 
 This mode still installs the real plugin, binds the selected account without a
-project override, and uses the actual Settings input and blur handler to save
-`10001`. Authenticated project issue-type metadata succeeds. This repeats Jira's
+project override, and first seeds a different baseline project (`99999`), then uses the actual
+Settings input and blur handler to save `10001`. Authenticated project issue-type metadata succeeds. This repeats Jira's
 settings-to-vendor path without creating another issue. Existing GitLab settings
 persistence and default-consumption evidence remains credential-independent;
 this run does not claim authenticated GitLab acceptance.
@@ -189,8 +189,10 @@ responses or timers. The real registry resolves
 `https://straus-team.atlassian.net/browse/TUIC-3` to its account-bound link and
 start-work draft. For cancellation, it starts another lookup, waits for the
 scheduled abort point, and first requires that the lookup is still pending.
-It aborts the signal and requires a null result within 1000 ms, well below the
-native HTTP client's 30000 ms deadline. A pre-aborted lookup also returns null,
+It aborts the signal and requires a null result within 1000 ms. This proves
+native aborted-result suppression only: the host throws AbortError after native
+HTTP settles even if `plugin_http_cancel` did nothing, so this run is not a
+request-stop receipt. Request stop rests on the module/transport cancellation tests. A pre-aborted lookup also returns null,
 and a fresh signal resolves TUIC-3 afterward.
 
 The final machine-readable evidence is
@@ -199,9 +201,9 @@ The abort ran after **141 ms** (the requested timer delay is a minimum, not a
 scheduling guarantee); the pending lookup settled **133 ms** after abort. The
 production `PluginHost.httpFetch` awaits native HTTP before its aborted result
 settles (`src/plugins/pluginRegistry.ts`), while Rust cancellation drops the
-in-flight HTTP future (`src-tauri/src/plugin_http.rs`). This combines observed
-native behavior with the existing module/transport cancellation regressions.
-It does not claim vendor-side request rollback or an exact count of sockets.
+in-flight HTTP future (`src-tauri/src/plugin_http.rs`). The request-stop
+proof rests on the existing module/transport cancellation regressions, not on
+this run. It does not claim vendor-side request rollback or an exact count of sockets.
 
 ### Diagnosed attempts and cleanup
 

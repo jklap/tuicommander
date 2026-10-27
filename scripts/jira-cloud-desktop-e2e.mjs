@@ -87,7 +87,12 @@ const result = await evaluate(
 		const host = "https://straus-team.atlassian.net";
 		const loader = await import(input.modules.loader);
 		await invoke("install_plugin_from_folder", { path: `${input.root}/plugins/jira` });
-		// Only the selected account is seeded; the default project must come from actual Settings input.
+		// A different baseline project makes the actual Settings input the only way to reach the target.
+		await invoke("write_plugin_data", {
+			pluginId: "jira",
+			path: "config.json",
+			content: JSON.stringify({ projectId: input.baseline }),
+		});
 		await invoke("write_plugin_data", {
 			pluginId: "jira",
 			path: "work-items.json",
@@ -117,6 +122,8 @@ const result = await evaluate(
 				),
 			),
 		);
+		const before = await invoke("read_plugin_data", { pluginId: "jira", path: "config.json" });
+		if (JSON.parse(before || "{}").projectId !== input.baseline) throw Error("Settings baseline was not seeded");
 		field.value = input.projectId;
 		field.dispatchEvent(new Event("input", { bubbles: true }));
 		field.dispatchEvent(new FocusEvent("blur"));
@@ -185,7 +192,8 @@ const result = await evaluate(
 				settledAfterAbortMs: cancelMs,
 				cancelledLink: null,
 				preabortedLink: null,
-				evidence: "production host awaits native HTTP before the aborted resolver settles",
+				evidence:
+				"native aborted-result suppression only: the host throws AbortError after native HTTP settles; request stop is proven by the module/transport cancellation tests, not here",
 			};
 			const recovered = await urls.resolve(url, new AbortController().signal);
 			if (recovered?.link.key !== "TUIC-3") throw Error("Normal URL resolution did not recover after cancel");
@@ -255,6 +263,7 @@ const result = await evaluate(
 		reloadExport,
 		accountId,
 		projectId,
+		baseline: projectId === "99999" ? "99998" : "99999",
 		issueType,
 		resume: extra[0]?.slice("--resume=".length),
 		resolverOnly: consent === "--read-only-resolver",

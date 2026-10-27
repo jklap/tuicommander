@@ -41,7 +41,7 @@
       "settledAfterAbortMs": 133,
       "cancelledLink": null,
       "preabortedLink": null,
-      "evidence": "production host awaits native HTTP before the aborted resolver settles"
+      "evidence": "native aborted-result suppression only: the host throws AbortError after native HTTP settles; request stop is proven by the module/transport cancellation tests, not here"
     },
     "recovered": "TUIC-3"
   }
