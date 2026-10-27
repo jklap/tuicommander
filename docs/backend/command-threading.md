@@ -1,5 +1,13 @@
 # Command threading
 
+## Plugin discovery
+
+`list_user_plugins` is async and runs the complete manifest scan and payload
+hashing through `spawn_blocking_fs`. The HTTP route awaits this same command;
+neither transport reads plugin files on the IPC thread or a Tokio worker.
+Targeted discovery logs the plugin ID and manifest failure reason before
+skipping an invalid manifest, as full discovery does.
+
 ## Plugin settings
 
 `plugin_settings_action` is async. Service reads and locked transactions run through spawn_blocking; apply only publishes the existing plugin reload event. Existing synchronous plugin registration performs its small private-file migration before granting capabilities.

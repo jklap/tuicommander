@@ -186,27 +186,35 @@ mod tests {
         }
         PAYLOAD_READS.with(|reads| reads.set(0));
         let selected =
-            crate::plugins::list_user_plugins(Some(vec!["alpha".into(), "alpha".into()]));
+            crate::plugins::list_user_plugins_blocking(Some(vec!["alpha".into(), "alpha".into()]));
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "alpha");
         PAYLOAD_READS
             .with(|reads| assert_eq!(reads.get(), 2, "only alpha's manifest and main are hashed"));
-        assert!(crate::plugins::list_user_plugins(Some(Vec::new())).is_empty());
+        assert!(crate::plugins::list_user_plugins_blocking(Some(Vec::new())).is_empty());
     }
 
     // Catches: discovery trusts a manifest digest or reuses identity after same-version edits.
-    #[test]
-    fn discovery_recomputes_same_version_payload_identity() {
+    #[tokio::test]
+    async fn discovery_recomputes_same_version_payload_identity() {
         let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
         let plugin = dir.path().join("plugins/example");
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(plugin.join("manifest.json"), r#"{"id":"example","name":"Example","version":"1.0.0","minAppVersion":"0.1.0","main":"main.js","contentSha256":"spoofed"}"#).unwrap();
         std::fs::write(plugin.join("main.js"), b"original").unwrap();
-        let before = crate::plugins::list_user_plugins(None).pop().unwrap();
+        let before = crate::plugins::list_user_plugins(None)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
         assert_ne!(before.content_digest.as_deref(), Some("spoofed"));
         std::fs::write(plugin.join("main.js"), b"replacement").unwrap();
-        let after = crate::plugins::list_user_plugins(None).pop().unwrap();
+        let after = crate::plugins::list_user_plugins(None)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
         assert_eq!(before.version, after.version);
         assert!(before.content_digest.is_some());
         assert_ne!(before.content_digest, after.content_digest);

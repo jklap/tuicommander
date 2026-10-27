@@ -572,14 +572,26 @@ fn plugin_asset_mime(path: &Path) -> &'static str {
 /// Scan the user plugins directory and return all valid manifests.
 /// Invalid manifests are logged and skipped — never cause an error.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_user_plugins(plugin_ids: Option<Vec<String>>) -> Vec<PluginManifest> {
+pub async fn list_user_plugins(
+    plugin_ids: Option<Vec<String>>,
+) -> Result<Vec<PluginManifest>, String> {
+    crate::fs::spawn_blocking_fs(move || Ok(list_user_plugins_blocking(plugin_ids))).await
+}
+
+pub(crate) fn list_user_plugins_blocking(plugin_ids: Option<Vec<String>>) -> Vec<PluginManifest> {
     if let Some(plugin_ids) = plugin_ids {
         let mut seen = std::collections::HashSet::new();
         return plugin_ids
             .into_iter()
             .filter(|id| !id.starts_with('.') && seen.insert(id.clone()))
             .filter_map(|id| {
-                let mut manifest = read_single_manifest(&id).ok()?;
+                let mut manifest = match read_single_manifest(&id) {
+                    Ok(manifest) => manifest,
+                    Err(err) => {
+                        tracing::warn!(source = "plugins", plugin = %id, "Failed to load manifest: {err}");
+                        return None;
+                    }
+                };
                 manifest.content_digest =
                     crate::plugin_content::digest(&plugins_dir().join(&id)).ok();
                 Some(manifest)
@@ -1995,14 +2007,50 @@ mod tests {
 
     // -- list_user_plugins with temp dir --
 
+    /// Catches targeted reload silently discarding the manifest validation reason.
     #[test]
-    fn list_returns_empty_when_no_dir() {
-        // plugins_dir() points to the real config; we test the scanning logic
-        // indirectly through validate_manifest above. The list function itself
-        // just returns an empty vec when the dir doesn't exist.
-        // We can't easily override plugins_dir() in tests, but we can verify
-        // the function doesn't panic
-        let _ = list_user_plugins(None);
+    fn targeted_discovery_logs_manifest_validation_reason() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let plugin_dir = dir.path().join("plugins/invalid-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let mut manifest = valid_manifest("invalid-plugin");
+        manifest.name.clear();
+        std::fs::write(
+            plugin_dir.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let log_path = dir.path().join("discovery.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || log.try_clone().unwrap())
+            .finish();
+        let manifests = tracing::subscriber::with_default(subscriber, || {
+            list_user_plugins_blocking(Some(vec!["invalid-plugin".into()]))
+        });
+        assert!(
+            manifests.is_empty(),
+            "invalid plugins must still be skipped"
+        );
+        let output = std::fs::read_to_string(log_path).unwrap();
+        assert!(
+            output.contains("invalid-plugin"),
+            "missing plugin identity: {output}"
+        );
+        assert!(
+            output.contains("name is empty"),
+            "missing validation reason: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_returns_empty_when_no_dir() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        assert!(list_user_plugins(None).await.unwrap().is_empty());
     }
 
     // -- Plugin data path resolution --
@@ -2608,16 +2656,16 @@ mod tests {
 
     /// A leftover hidden backup dir (e.g. after a crash) must never be listed
     /// as a plugin, even if it contains a manifest.
-    #[test]
-    fn list_user_plugins_ignores_leftover_data_backup_dir() {
-        let dir = tempfile::tempdir().unwrap();
+    #[tokio::test]
+    async fn list_user_plugins_ignores_leftover_data_backup_dir() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
 
         let leftover = dir.path().join("plugins").join(".tuic-data-backup-x-1234");
         std::fs::create_dir_all(&leftover).unwrap();
         std::fs::write(leftover.join("manifest.json"), valid_manifest_json("x")).unwrap();
 
-        assert!(list_user_plugins(None).is_empty());
+        assert!(list_user_plugins(None).await.unwrap().is_empty());
     }
 
     /// A first install (no prior dir) has nothing to back up.

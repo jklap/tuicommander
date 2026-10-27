@@ -1,3 +1,7 @@
+## Plugin discovery (2390-e129) — Rust restart required
+
+- [ ] After an authorized backend rebuild/restart, reload a user plugin with a cold payload cache and confirm discovery remains responsive. Make its manifest name empty and confirm the backend warning names the plugin and `name is empty`. Invalid plugins remain skipped; this change does not add a frontend error card. The daily app was not restarted by this peer.
+
 ## Mobile composer focus (2398-1de9)
 
 - [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
