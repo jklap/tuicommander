@@ -1067,6 +1067,10 @@ mod tests {
         .trim()
         .to_string();
         git(&["switch", "-q", "-c", "no-reflog"]);
+        // A real change: an empty commit has no patch, so a branch holding only
+        // one reads as integrated (a missing reflog no longer blocks that).
+        std::fs::write(path.join("own.txt"), "own work\n").expect("write file");
+        git(&["add", "own.txt"]);
         git(&[
             "-c",
             "user.name=t",
@@ -1074,7 +1078,6 @@ mod tests {
             "user.email=t@t",
             "commit",
             "-q",
-            "--allow-empty",
             "-m",
             "own commit",
         ]);
