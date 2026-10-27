@@ -1459,7 +1459,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
 		});
 		acpStore.applySnapshot(empty);
-		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		expect((container.querySelector('[aria-label="Session settings"]') as HTMLButtonElement).disabled).toBe(true);
 		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
 			.trim()
 			.split("\n")
@@ -3591,6 +3591,74 @@ describe("AIChatPanel: the session's own knobs", () => {
 			{ value: "auto", name: "Automatic" },
 		],
 	};
+
+	// Catches: the composer reports settings as inert text instead of opening their controls.
+	it("opens model reasoning and mode controls from the composer summary and applies each choice", async () => {
+		const effort: AcpSessionConfigOption = {
+			id: "effort",
+			name: "Reasoning",
+			type: "select",
+			currentValue: "medium",
+			options: [
+				{ value: "medium", name: "Medium" },
+				{ value: "high", name: "High" },
+			],
+		};
+		const options = [MODEL_OPTION, effort, mode];
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: options })] }));
+		await settle();
+		const summary = container.querySelector<HTMLButtonElement>(
+			'.composerMeta button[aria-label="Change model, reasoning and mode"]',
+		);
+		expect(summary).not.toBeNull();
+		summary!.click();
+		const dialog = container.querySelector('[role="dialog"]')!;
+		expect(dialog).not.toBeNull();
+		for (const [name, id, value] of [
+			["Model", "model", "sonnet"],
+			["Reasoning", "effort", "high"],
+			["Mode", "mode", "auto"],
+		]) {
+			const picker = dialog.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)!;
+			expect(picker.disabled).toBe(false);
+			picker.value = value;
+			picker.dispatchEvent(new Event("change", { bubbles: true }));
+			await settle();
+			expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, id, { value });
+		}
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: [
+							{ ...MODEL_OPTION, currentValue: "sonnet" },
+							{ ...effort, currentValue: "high" },
+							{ ...mode, currentValue: "auto" },
+						],
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(summary!.textContent).toBe("Sonnet · high · Automatic");
+	});
+
+	// Catches: missing ACP options silently remove the only discoverable settings action.
+	it("keeps session settings visible with an unavailable explanation before options arrive", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [] })] }));
+		await settle();
+		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
+		menu.querySelector("summary")!.click();
+		expect(menu.open).toBe(true);
+		const settings = menu.querySelector<HTMLButtonElement>('button[aria-label="Session settings"]');
+		expect(settings).not.toBeNull();
+		expect(settings!.disabled).toBe(true);
+		expect(settings!.title).toBe("Session settings are available after the conversation publishes its options.");
+	});
 
 	// Catches: an ACP option is hidden or shown without its published name and choice.
 	it("shows every published select with a label, description, and current choice in a dialog", async () => {
