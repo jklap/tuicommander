@@ -773,6 +773,29 @@ mod tests {
                 .unwrap_or_else(|| panic!("no entry for ({event}, {matcher:?})"))
         }
 
+        /// The command with the `B="<path>"` value blanked. The binary path is a
+        /// random temp dir under test (`mktemp`), so a suffix such as `jqXcWk` would
+        /// otherwise trip a substring check on what the script itself does.
+        fn without_binary_path(cmd: &str) -> String {
+            let Some(at) = cmd.find(r#"B=""#) else {
+                return cmd.to_string();
+            };
+            let start = at + r#"B=""#.len();
+            match cmd[start..].find('"') {
+                Some(len) => format!("{}{}", &cmd[..start], &cmd[start + len..]),
+                None => cmd.to_string(),
+            }
+        }
+
+        #[test]
+        fn without_binary_path_ignores_a_path_that_happens_to_contain_jq() {
+            let cmd = r#"[ -n "${TUIC_SESSION:-}" ] && { B="/opt/tuic-run.jqXcWk/bin/tuic-hook"; [ -x "$B" ] && "$B" --agent claude; } || true"#;
+            assert!(cmd.contains("jq"), "fixture must contain the substring");
+            let script = without_binary_path(cmd);
+            assert!(!script.contains("jq"), "got: {script}");
+            assert!(script.contains(r#"[ -x "$B" ]"#), "got: {script}");
+        }
+
         #[test]
         fn every_command_invokes_the_tuic_hook_binary_only_if_executable() {
             for (agent, map) in all_maps() {
@@ -781,8 +804,9 @@ mod tests {
                         cmd.contains(r#"[ -x "$B" ]"#),
                         "{agent} {event}: must not attempt to invoke a missing/non-executable binary: {cmd}"
                     );
+                    let script = without_binary_path(&cmd);
                     assert!(
-                        !cmd.contains("ps -o tty=") && !cmd.contains("jq"),
+                        !script.contains("ps -o tty=") && !script.contains("jq"),
                         "{agent} {event}: tty resolution and JSON parsing live in the binary: {cmd}"
                     );
                 }
