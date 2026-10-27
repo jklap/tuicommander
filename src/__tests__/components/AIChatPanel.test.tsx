@@ -4247,6 +4247,68 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, "Message for B", [], ROOT);
 	});
 
+	it.each(["overflow", "manual", "leave"])(
+		"waits for another conversation compaction (%s) — catches swallowed, duplicated or stale B actions",
+		async (action) => {
+			let finish!: (value: unknown) => void;
+			client.compact
+				.mockReset()
+				.mockImplementationOnce(
+					() =>
+						new Promise((resolve) => {
+							finish = resolve;
+						}),
+				)
+				.mockResolvedValue({
+					sourceSessionId: SECOND_SESSION,
+					targetSessionId: CHILD_SESSION,
+					publication: { kind: "published_durably", diagnostic: null },
+				});
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			await openSession(SECOND_SESSION);
+			aiChatTabs.add("global", SECOND_SESSION);
+			container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+			await settle();
+			if (action !== "leave") client.loadSession.mockImplementationOnce(() => openSession(CHILD_SESSION));
+			if (action === "overflow") {
+				await typeAndSend(container, "Continue B");
+				feed({ kind: "turnStarted" }, SECOND_SESSION, "turn-1");
+				feed({ kind: "turnSettled", stopReason: "_context_overflow", usage: null }, SECOND_SESSION, "turn-1");
+			} else {
+				const button = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!;
+				button.click();
+				button.click();
+			}
+			await settle();
+			expect(client.compact).toHaveBeenCalledExactlyOnceWith(CONNECTION, SESSION);
+			if (action === "leave") {
+				container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SESSION}"]`)!.click();
+				await settle();
+			}
+			finish({
+				sourceSessionId: SESSION,
+				targetSessionId: "compacted-A",
+				publication: { kind: "published_durably", diagnostic: null },
+			});
+			await settle();
+			if (action === "leave") {
+				expect(client.compact).toHaveBeenCalledTimes(1);
+				expect(client.prompt).not.toHaveBeenCalled();
+				expect(aiChatTabs.active("global")).toBe(SESSION);
+				return;
+			}
+			expect(client.compact).toHaveBeenCalledTimes(2);
+			expect(client.compact).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION);
+			expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+			if (action === "overflow") {
+				expect(client.prompt).toHaveBeenCalledTimes(2);
+				expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, CHILD_SESSION, "Continue B", [], ROOT);
+			} else expect(client.prompt).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each(["refused", "unpublished"])(
 		"retains a composer submission during %s compaction — catches concurrent send discarded during compaction",
 		async (failure) => {

@@ -556,8 +556,17 @@ export function createAcpChat(
 	const pinnedRepo = () => aiChatTabs.pinnedRepo(TABS, sessionId() ?? "");
 	const operatingRepo = () => pinnedRepo() ?? viewedRepo();
 	/** Button, slash command and overflow recovery all use this one transition. */
-	function compact(): Promise<boolean> {
-		compaction ??= performCompact().finally(() => {
+	async function compact(): Promise<boolean> {
+		const current = pair();
+		if (!current) return false;
+		const request = selection;
+		while (compaction) {
+			const source = compactingSource();
+			if (source?.id === current.id && source.session === current.session) return compaction;
+			await compaction;
+			if (request !== selection || connectionId() !== current.id || sessionId() !== current.session) return false;
+		}
+		compaction = performCompact().finally(() => {
 			compaction = null;
 		});
 		return compaction;
