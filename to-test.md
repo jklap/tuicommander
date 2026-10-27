@@ -1,3 +1,7 @@
+## Session Chat working indicator (2397-06b6)
+
+- [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.
+- [ ] Capture and inspect the working row visually on desktop and mobile. The isolated Chrome fixture rendered and measured the row, but `Page.captureScreenshot` timed out on both surfaces. No screenshot or native live-agent check is claimed. Retained evidence: `~/Gits/.tmp/results/chat-busy-2397/`.
 ## Compose Enter shortcuts (2395-ed27)
 
 - [x] Enter sends; Ctrl+Enter and Shift+Enter insert a newline; Shift+Ctrl+Enter queues. IME composition confirmation keeps the draft without sending. Verified by the focused ComposePanel component tests, including browser-style composition events and a DOM edit; physical IME hardware was not exercised. Desktop Chat draft cleanup consumers also pass. Mobile production uses its separate CommandInput and native keybar, unchanged by this feature.

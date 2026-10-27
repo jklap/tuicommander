@@ -113,6 +113,9 @@ export const TerminalChatView: Component<{
 		<>
 			<TerminalChatTranscript
 				sessionId={props.sessionId}
+				busy={bound() && term()?.shellState === "busy"}
+				awaitingInput={!!term()?.awaitingInput}
+				activityRevision={`${term()?.shellStateRevision}:${term()?.lastDataAt}`}
 				fontSize={term()?.fontSize}
 				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
 				onSearchRef={props.onSearchRef}

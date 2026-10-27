@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] Session Chat shows working feedback from Send and existing terminal busy state on desktop and mobile, hidden for idle and awaiting input (#2397-06b6).
+
 - [x] AI Chat retains per-session ACP command offers, completes slash commands, routes supported host actions locally, and explains unavailable names without sending them (#2393-19fc).
 
 - [x] AI Chat automatically compacts an exhausted ego context and replays the submitted prompt once through the shared manual compaction path; recovery failures stop without looping (#2392-b2e3).
