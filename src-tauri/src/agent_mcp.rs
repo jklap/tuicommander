@@ -3960,6 +3960,125 @@ mod tests {
         );
     }
 
+    /// Catches an ignored remote opt-out; the enabled pass prevents a false
+    /// success caused by the worktree, sidecar, or config ownership guards.
+    #[test]
+    fn remote_boot_agent_config_switch_preserves_home_and_enabled_repairs_both() {
+        // Keep the runner outside TMPDIR: temporary executables intentionally
+        // cannot own host MCP repair. The child still uses an isolated HOME.
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let sandbox = tempfile::tempdir_in(scratch).unwrap();
+        let exe = sandbox.path().join(if cfg!(windows) {
+            "tuic-test-runner.exe"
+        } else {
+            "tuic-test-runner"
+        });
+        #[cfg(windows)]
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        #[cfg(not(windows))]
+        std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
+        fake_bridge(sandbox.path(), b"remote boot bridge fixture");
+        let home = sandbox.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".claude/installed"), b"present").unwrap();
+        std::fs::write(home.join(".codex/installed"), b"present").unwrap();
+        let configs = [
+            (
+                home.join(".claude.json"),
+                b"{\n  \"unrelated\": \"keep exactly\"\n}\n".as_slice(),
+            ),
+            (
+                home.join(".codex/config.toml"),
+                b"# keep this comment\nmodel = \"worker-model\"\n".as_slice(),
+            ),
+        ];
+        for (path, original) in &configs {
+            std::fs::write(path, original).unwrap();
+        }
+        for enabled in [false, true] {
+            let output = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "agent_mcp::tests::remote_boot_agent_config_child",
+                ])
+                .current_dir(sandbox.path())
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("TUIC_MCP_TEST_HOME", &home)
+                .env("XDG_CONFIG_HOME", home.join(".config"))
+                .env("CODEX_HOME", home.join(".codex"))
+                .env("APPDATA", home.join("AppData"))
+                .env("PATH", sandbox.path())
+                .env("TUIC_MCP_CONFIG_OWNER", "1")
+                .env("TUIC_MCP_TEST_REMOTE_CONFIGS", enabled.to_string())
+                .env_remove("TUIC_APP_INSTANCE")
+                .env_remove("CLAUDE_CONFIG_DIR")
+                .env_remove("PI_CODING_AGENT_DIR")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "child failed: {output:?}");
+            for (path, original) in &configs {
+                let actual = std::fs::read(path).unwrap();
+                if enabled {
+                    assert_ne!(
+                        actual,
+                        *original,
+                        "enabled boot did not repair {}",
+                        path.display()
+                    );
+                } else {
+                    assert_eq!(
+                        actual,
+                        *original,
+                        "disabled boot changed {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        let claude: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&configs[0].0).unwrap()).unwrap();
+        let codex: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&configs[1].0).unwrap()).unwrap();
+        let claude_command = claude["mcpServers"][TUIC_MCP_KEY]["command"]
+            .as_str()
+            .unwrap();
+        let codex_command = codex["mcp_servers"][TUIC_MCP_KEY]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(claude_command, codex_command);
+        assert!(PathBuf::from(claude_command).starts_with(home.join("tuic-config/mcp-bridge")));
+        assert!(usable_executable(std::path::Path::new(claude_command)));
+        assert_eq!(claude["unrelated"], "keep exactly");
+        assert_eq!(codex["model"].as_str(), Some("worker-model"));
+    }
+
+    #[test]
+    fn remote_boot_agent_config_child() {
+        let Some(enabled) = std::env::var("TUIC_MCP_TEST_REMOTE_CONFIGS").ok() else {
+            return;
+        };
+        let expected_home = PathBuf::from(std::env::var_os("TUIC_MCP_TEST_HOME").unwrap());
+        assert_eq!(home(), expected_home);
+        for agent in SUPPORTED_AGENTS {
+            assert!(
+                get_mcp_config_spec(agent)
+                    .unwrap()
+                    .config_path
+                    .starts_with(&expected_home)
+            );
+        }
+        crate::app_instance::select_app_instance_from_env().unwrap();
+        let _config = crate::config::set_config_dir_override(expected_home.join("tuic-config"));
+        let options = crate::RemoteOptions {
+            agent_configs: enabled.parse().unwrap(),
+            ..crate::RemoteOptions::default()
+        };
+        options.configure_agent_mcp(&[]);
+    }
+
     #[test]
     fn startup_migrates_private_claude_root() {
         let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.tmp");
