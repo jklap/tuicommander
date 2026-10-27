@@ -73,17 +73,8 @@
   flex-shrink: 0;
 }
 
-.dictate[aria-pressed="true"],
-.dictate[data-failed="true"] {
+.dictate[aria-pressed="true"] {
   color: var(--error);
-}
-
-.dictationFailure {
-  position: absolute;
-  bottom: 100%;
-  right: 12px;
-  color: var(--error);
-  background: var(--bg-secondary);
 }
 
 .question {

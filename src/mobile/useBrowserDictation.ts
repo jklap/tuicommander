@@ -35,6 +35,8 @@ function failureText(code: string): string {
 		case "no-speech":
 			return t("mobile.dictation.error.noSpeech", "No speech detected");
 		case "audio-capture":
+			// DEFERRED (2026-10-27) — physical iPad capture attribution needs a device replay;
+			// this browser code does not distinguish a missing, busy or interrupted microphone.
 			return t("mobile.dictation.error.audioCapture", "No microphone found, or it is in use");
 		case "network":
 			return t("mobile.dictation.error.network", "Speech service unavailable (network)");
@@ -63,7 +65,6 @@ export function useBrowserDictation(options: {
 	const Constructor =
 		options.enabled === false ? undefined : (browser.SpeechRecognition ?? browser.webkitSpeechRecognition);
 	const [recording, setRecording] = createSignal(false);
-	const [failed, setFailed] = createSignal(false);
 	let recognition: BrowserRecognition | null = null;
 	let discarding = false;
 	let language = navigator.language;
@@ -118,7 +119,6 @@ export function useBrowserDictation(options: {
 	}
 
 	function fail(code: string, cause?: unknown) {
-		setFailed(true);
 		// The code is in the message: the logger coalesces equal messages and would drop the
 		// data of a second failure with another code before it reaches the server log.
 		appLogger.warn("dictation", `Browser dictation failed: ${code}`, {
@@ -198,7 +198,6 @@ export function useBrowserDictation(options: {
 				: null;
 			const current = new Constructor();
 			recognition = current;
-			setFailed(false);
 			current.lang = language;
 			current.continuous = true;
 			current.interimResults = true;
@@ -252,5 +251,5 @@ export function useBrowserDictation(options: {
 		}
 	}
 
-	return { available: !!Constructor, recording, failed, toggle, cancel };
+	return { available: !!Constructor, recording, toggle, cancel };
 }
