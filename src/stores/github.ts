@@ -1,5 +1,6 @@
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { groupGitHubPollingPaths } from "../services/githubPollingPaths";
 import { notifyPrTransition } from "../services/prNativeNotifications";
 import { rpc } from "../transport";
 import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
@@ -386,12 +387,7 @@ function createGitHubStore() {
 		const issueFilter = settingsStore.state.issueFilter ?? "disabled";
 
 		const prHideDrafts = settingsStore.state.prHideDrafts;
-		const grouped = new Map<string | undefined, string[]>();
-		for (const path of paths) {
-			const owner = getRepoConnection(path);
-			grouped.set(owner, [...(grouped.get(owner) ?? []), path]);
-		}
-		if (!grouped.has(undefined)) grouped.set(undefined, []);
+		const grouped = groupGitHubPollingPaths(paths);
 		for (const [owner, ownedPaths] of grouped) {
 			if (owner && !getRemoteBaseUrl(owner)) continue;
 			const args = { paths: ownedPaths, issueFilter, prHideDrafts };
@@ -420,7 +416,7 @@ function createGitHubStore() {
 		listen<RemoteEventPayload & { id: string; status: string }>("remote-connection-status", (event) => {
 			const notice = event.payload;
 			if (notice.__tuic_origin !== undefined || notice.status !== "connected" || !getRemoteBaseUrl(notice.id)) return;
-			const ownedPaths = repositoriesStore.getActivePaths().filter((path) => getRepoConnection(path) === notice.id);
+			const ownedPaths = groupGitHubPollingPaths(repositoriesStore.getActivePaths()).get(notice.id) ?? [];
 			if (!ownedPaths.length) return;
 			rpc(
 				"github_start_polling",
