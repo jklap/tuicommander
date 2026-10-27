@@ -307,20 +307,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			<Show when={sessionSettingsOpen()}>
 				<SessionSettingsDialog chat={chat} onClose={() => setSessionSettingsOpen(false)} />
 			</Show>
-			<Show when={chat.usage()}>
-				{(usage) => (
-					<div class={s.usageFooter}>
-						<span>Context {Math.round((usage().used / usage().size) * 100)}%</span>
-						<Show when={usage().cost}>
-							{(cost) => (
-								<span>
-									{cost().currency} {cost().amount}
-								</span>
-							)}
-						</Show>
-					</div>
-				)}
-			</Show>
 		</div>
 	);
 };
