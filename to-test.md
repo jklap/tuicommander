@@ -1,3 +1,6 @@
+## Headless manual TLS (2344-59cf) — daemon rebuild/restart required
+
+- [ ] After rebuilding `tuic-remote`, restart the affected daemon when safe. With manual PEM configuration, connect via HTTPS and WSS and confirm SSE delivery; confirm local relay/SSH HTTP access stays available. With TLS off, HTTP stays available. The daily app was not restarted; Rust does not hot-reload. Automated GREEN verification belongs to the coordinator critic.
 ## Quit after child-status errors (2406-e4e1) — Rust restart required
 
 - [x] Before the fix, real OS `ECHILD` errors made both PTY close and kill hang on native macOS and Linux rb. The two focused regressions failed at their teardown-return bound; neither simulates the child status. Evidence: `~/Gits/.tmp/results/tuic-quit-evidence/`.

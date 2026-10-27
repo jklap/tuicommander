@@ -3054,6 +3054,8 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     app_logger::init_tracing(log_buffer.clone());
 
     let mut app_config = config::load_app_config();
+    // Reject invalid key material before starting either IPC or TCP listeners.
+    let tls_config = load_remote_tls(&app_config.services.tls).await?;
     app_config.services.server.enabled = true;
     if app_config.services.server.port != options.port {
         tracing::info!(
@@ -3185,29 +3187,6 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         }
     });
 
-    let tls_config = match &app_config.services.tls {
-        config::TlsConfig::Manual {
-            cert_path,
-            key_path,
-        } => {
-            let cert_pem = std::fs::read(cert_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read TLS cert at {cert_path}: {e}"))?;
-            let key_pem = std::fs::read(key_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read TLS key at {key_path}: {e}"))?;
-            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
-                .await
-                .map_err(|e| anyhow::anyhow!("Invalid TLS cert/key: {e}"))?;
-            tracing::info!(
-                source = "remote",
-                cert_path,
-                key_path,
-                "TLS loaded (manual mode)"
-            );
-            Some(tls)
-        }
-        config::TlsConfig::Off => None,
-    };
-
     let protocol_version = remote_runtime::REMOTE_PROTOCOL_VERSION as u32;
     tracing::info!(
         source = "remote",
@@ -3237,7 +3216,6 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?
     };
     listener.set_nonblocking(true)?;
-    let listener = tokio::net::TcpListener::from_std(listener)?;
 
     // Outbound registration with the relay, when `--relay-pair` has stored a
     // pairing. The agent can only reach this daemon's own loopback listener.
@@ -3262,7 +3240,6 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     }
 
     let router = mcp_http::build_remote_router(state.clone());
-    let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let lifetime = remote_lifetime::expired(
         state.clone(),
         options.survive_secs.map(std::time::Duration::from_secs),
@@ -3271,7 +3248,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 
     let mut updated = false;
     let shutdown_result: anyhow::Result<()> = tokio::select! {
-        result = axum::serve(listener, svc) => {
+        result = serve_remote_listener(listener, router, tls_config, state.clone()) => {
             result.map_err(|e| anyhow::anyhow!("TCP server error: {e}"))
         }
         signal = remote_shutdown_signal() => {
@@ -3317,6 +3294,65 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(any(not(feature = "desktop"), test))]
+async fn load_remote_tls(
+    tls: &config::TlsConfig,
+) -> anyhow::Result<Option<axum_server::tls_rustls::RustlsConfig>> {
+    match tls {
+        config::TlsConfig::Manual {
+            cert_path,
+            key_path,
+        } => {
+            let cert_pem = std::fs::read(cert_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS cert at {cert_path}: {e}"))?;
+            let key_pem = std::fs::read(key_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS key at {key_path}: {e}"))?;
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| anyhow::anyhow!("Invalid TLS cert/key: {e}"))?;
+            tracing::info!(
+                source = "remote",
+                cert_path,
+                key_path,
+                "TLS loaded (manual mode)"
+            );
+            Ok(Some(tls))
+        }
+        config::TlsConfig::Off => Ok(None),
+    }
+}
+
+// The daemon has one TCP listener for HTTP, SSE and WebSocket upgrades.
+#[cfg(any(not(feature = "desktop"), test))]
+async fn serve_remote_listener(
+    listener: std::net::TcpListener,
+    router: axum::Router,
+    tls: Option<axum_server::tls_rustls::RustlsConfig>,
+    state: Arc<AppState>,
+) -> std::io::Result<()> {
+    let addr = listener.local_addr()?;
+    let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    if let Some(tls) = tls {
+        // Match desktop remote access: relay and SSH clients still use HTTP on
+        // this listener. TLS negotiation errors must never retry as plaintext.
+        use axum_server_dual_protocol::ServerExt;
+        let server = axum_server_dual_protocol::from_tcp_dual_protocol(listener, tls)?;
+        let tls_lifetime = Arc::new(());
+        *state.tls_listener.write() = Arc::downgrade(&tls_lifetime);
+        tracing::info!(source = "remote", %addr, tls = true, "TCP listening (HTTP+HTTPS)");
+        let result = server.set_upgrade(false).serve(svc).await;
+        drop(tls_lifetime);
+        result
+    } else {
+        let server = axum_server::from_tcp(listener)?;
+        tracing::info!(source = "remote", %addr, tls = false, "TCP listening (HTTP only)");
+        server.serve(svc).await
+    }
+}
+
+#[cfg(test)]
+mod remote_listener_tests;
 
 #[cfg(test)]
 mod github_http_guard_tests;

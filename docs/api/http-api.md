@@ -3661,3 +3661,10 @@ the existing ACP stream carries the original `available_commands_update` update.
 ### Ego terminal usage
 
 `GET /ego/usage?sessionId=<terminal UUID>` returns `{ "text": string | null, "tooltip"?: string }`, identically to `get_ego_usage`. Requires local or authenticated access because it runs the live terminal's ego CLI. Uses the exact live pid/lease and manifest workspace, not the most recent session. Unknown data stays null. The shared reader caps stdout at 4 MiB and has a twenty-five-second child deadline; the status-bar feature polls every five minutes. Reports v3 and v4 are accepted. V4 context capacity is used only when reported. Remaining provider limits keep their typed unit and exact decimal value; optional `tooltip` preserves observation time, source, and reset. Session observations require exact model/provider identity. Root OpenRouter balances are explicitly labelled as current-key data and appear only for an OpenRouter session. Subscription API equivalents are labelled, not reported as spend.
+
+### Headless TLS transport
+
+With `services.tls.mode: "manual"`, daemon TCP routes support HTTPS, SSE over
+HTTPS, and WSS on the same port. Like desktop remote access, plain HTTP/WS stays
+available on that port for local relay and SSH clients. TLS off retains HTTP/WS. Invalid PEM stops startup before bind;
+`tls_active` reports the live TLS listener, not configured certificate paths.
