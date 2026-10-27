@@ -1123,4 +1123,4 @@ Unavailable detached registrations are excluded from automatic orphan cleanup in
 
 ### Ego terminal usage
 
-`get_ego_usage({ sessionId })` returns `{ text: string | null }` from the live ego terminal's exact pid/lease binding. The backend calls its configured ego binary with `usage --json --session-dir <bound store> -C <manifest workspace>`, accepts report v3 and selects only that session. Missing data returns null; command failures return an error. Async: no child work runs on the macOS main thread. HTTP parity: `GET /ego/usage?sessionId=<id>`.
+`get_ego_usage({ sessionId })` returns `{ text: string | null }` from the live ego terminal's exact pid/lease binding. The backend shares session usage's live-terminal executable resolution and calls that binary with `usage --json --session-dir <bound store> -C <manifest workspace>`, accepts report v3 and selects only that session. Missing data returns null; command failures return an error. Async: no child work runs on the macOS main thread. HTTP parity: `GET /ego/usage?sessionId=<id>`.
