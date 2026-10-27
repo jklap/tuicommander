@@ -2,6 +2,10 @@
 
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.
 
+## Mobile composer focus
+
+The composer border highlights only while its textarea has focus. Tapping the mic releases editor focus without changing the insertion range. Recording uses the red mic icon, not an extra accent border. Keyboard navigation retains the mic focus ring. The blue slash key marks an available action, not retained focus.
+
 ## Keyboard Shortcuts
 
 ### Terminal Management
