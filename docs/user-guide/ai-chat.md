@@ -107,6 +107,8 @@ without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 
+The saved-conversation list loads separately from the active chat. You can keep sending while the list is slow or unavailable. A missing background tab does not fail the selected conversation; its refusal is handled when that tab is selected.
+
 The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
 focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the

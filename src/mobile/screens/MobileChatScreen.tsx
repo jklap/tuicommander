@@ -124,6 +124,7 @@ export function MobileChatScreen(props: {
 					</div>
 				)}
 			</Show>
+
 			<Show when={chat.error()}>
 				{(message) => {
 					const view = () => chatErrorView(message());
