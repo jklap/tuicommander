@@ -1,6 +1,11 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { rpc } from "../../transport";
-import { formatQuotaWindow, formatUsageTime, type QuotaWindow } from "../../utils/sessionUsageFormatting";
+import {
+	formatQuotaPlan,
+	formatQuotaWindowDetails,
+	formatUsageTime,
+	type QuotaWindow,
+} from "../../utils/sessionUsageFormatting";
 import styles from "../screens/SessionDetailScreen.module.css";
 
 /** Rust owns selection and cost semantics; the shared presenter owns local display. */
@@ -16,17 +21,19 @@ interface SessionUsage {
 
 /** Mounted only while the overflow is open; no inventory polling or sticky ticker state. */
 export function SessionUsageBlock(props: { sessionId: string }) {
+	// Session list snapshots change on each active poll; only identity changes reload usage.
+	const sessionId = createMemo(() => props.sessionId);
 	const [usage, setUsage] = createSignal<SessionUsage | null>(null);
 	const [loading, setLoading] = createSignal(true);
 	createEffect(() => {
-		const sessionId = props.sessionId;
+		const id = sessionId();
 		let active = true;
 		onCleanup(() => {
 			active = false;
 		});
 		setUsage(null);
 		setLoading(true);
-		void rpc<SessionUsage>("get_session_usage", { sessionId })
+		void rpc<SessionUsage>("get_session_usage", { sessionId: id })
 			.then((snapshot) => {
 				if (active) setUsage(snapshot);
 			})
@@ -55,7 +62,8 @@ export function SessionUsageBlock(props: { sessionId: string }) {
 					<Show when={usage()?.stale}>
 						<div>Last known usage (stale)</div>
 					</Show>
-					<For each={usage()?.quota_windows}>{(quota) => <div>{formatQuotaWindow(quota)}</div>}</For>
+					<Show when={usage()?.quota_windows?.[0]}>{(quota) => <div>{formatQuotaPlan(quota())}</div>}</Show>
+					<For each={usage()?.quota_windows}>{(quota) => <div>{formatQuotaWindowDetails(quota)}</div>}</For>
 					<Show when={usage()?.observed_at_ms && formatUsageTime(usage()!.observed_at_ms!)}>
 						{(time) => <div>Report as of: {time()} local</div>}
 					</Show>

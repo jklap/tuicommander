@@ -21,7 +21,17 @@ export function formatUsageTime(timestamp: string | number, timeZone?: string): 
 	}).format(date);
 }
 
+export function formatQuotaPlan(quota: QuotaWindow): string {
+	const plan = quota.plan ? ` ${quota.plan}` : "";
+	return `${quota.provider}${plan} plan`;
+}
+
 export function formatQuotaWindow(quota: QuotaWindow, timeZone?: string): string {
+	return `${formatQuotaPlan(quota)}, ${formatQuotaWindowDetails(quota, timeZone)}`;
+}
+
+/** Window-only wording for a quota list with one shared plan heading. */
+export function formatQuotaWindowDetails(quota: QuotaWindow, timeZone?: string): string {
 	const seconds = quota.window_seconds;
 	let window = quota.window_name;
 	if (seconds && seconds > 0) {
@@ -33,7 +43,6 @@ export function formatQuotaWindow(quota: QuotaWindow, timeZone?: string): string
 					: (["minute", 60] as const);
 		window = `${seconds / divisor}-${unit}`;
 	}
-	const plan = quota.plan ? ` ${quota.plan}` : "";
 	const reset = quota.resets_at ? formatUsageTime(quota.resets_at, timeZone) : null;
-	return `${quota.provider}${plan} plan, ${window} window: ${quota.used_percent}% used${reset ? `, resets ${reset} local` : ""}`;
+	return `${window} window: ${quota.used_percent}% used${reset ? `, resets ${reset} local` : ""}`;
 }
