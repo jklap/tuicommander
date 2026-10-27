@@ -96,6 +96,8 @@ export const Composer: Component<{
 		queueMicrotask(resize);
 	});
 	const send = () => {
+		// Compaction may refuse or lose selection. Keep the draft until it can be accepted.
+		if (props.chat.compacting?.()) return;
 		if (props.mobileAttachments && uploading()) return;
 		browserDictation.cancel();
 		const text = aiChatDraft.expandedText();

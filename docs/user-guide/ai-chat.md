@@ -40,7 +40,7 @@ with the error. The Copy action beside a user message stays on one line.
 
 ## Automatic context compaction
 
-When ego reports an exhausted context and supports compaction, AI Chat shows **Compacting conversation**, opens the compacted continuation and sends the original prompt again once. Text, images, file references and repository context stay the same. **Conversation compacted** confirms that the continuation opened. A compaction or load failure stops recovery and shows the error. If the repeated prompt exhausts context again, AI Chat stops instead of compacting in a loop. The manual **Compact** action uses the same continuation path. Switching conversations while compaction is pending keeps your newer selection and prevents an automatic replay into it.
+When ego reports an exhausted context and supports compaction, AI Chat shows **Compacting conversation**, opens the compacted continuation and sends the original prompt again once. Text, images, file references and repository context stay the same. **Conversation compacted** confirms that the continuation opened. A compaction or load failure stops recovery and shows the error. If the repeated prompt exhausts context again, AI Chat stops instead of compacting in a loop. The manual **Compact** action uses the same continuation path. Switching conversations while compaction is pending keeps your newer selection and prevents an automatic replay into it. A different conversation can still send while compaction is pending. In the compacting conversation, Send or Queue leaves your draft and attachments in the composer until compaction finishes; submit them again when ready.
 
 ## Compact panel controls
 

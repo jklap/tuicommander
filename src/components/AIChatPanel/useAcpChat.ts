@@ -185,7 +185,9 @@ export function createAcpChat(
 		retried: boolean;
 	};
 	const [submitted, setSubmitted] = createSignal<SubmittedPrompt[]>([]);
-	const [compacting, setCompacting] = createSignal(false);
+	const [compactingSource, setCompactingSource] = createSignal<{ id: AcpConnectionId; session: AcpSessionId } | null>(
+		null,
+	);
 	let compaction: Promise<boolean> | null = null;
 
 	aiChatTabs.refresh();
@@ -529,6 +531,11 @@ export function createAcpChat(
 		return "live";
 	};
 
+	const compacting = (): boolean => {
+		const source = compactingSource();
+		return source != null && source.id === connectionId() && source.session === sessionId();
+	};
+
 	/** A turn is running, so the composer sends nothing and offers to stop. */
 	const busy = (): boolean => {
 		const state = attachment()?.state;
@@ -565,7 +572,7 @@ export function createAcpChat(
 		}
 		const request = selection;
 		const isCurrent = () => request === selection && connectionId() === current.id && sessionId() === current.session;
-		setCompacting(true);
+		setCompactingSource(current);
 		toastsStore.add("Compacting conversation", "Reducing context before continuing", "info");
 		try {
 			const compacted = await guard(
@@ -585,7 +592,7 @@ export function createAcpChat(
 			if (target && connection()?.capabilities?.list) void refreshSessions(connectionId()!, target);
 			return true;
 		} finally {
-			setCompacting(false);
+			setCompactingSource(null);
 		}
 	}
 
@@ -654,6 +661,7 @@ export function createAcpChat(
 		},
 		retry,
 		busy,
+		compacting,
 		queuedPrompts: () => attachment()?.queuedPrompts ?? [],
 		held,
 
@@ -785,7 +793,7 @@ export function createAcpChat(
 			if (!text.trim() && images.length === 0 && files.length === 0) return;
 			// The composer can queue while busy. Wait for the continuation rather
 			// than dropping that new message or sending it to the exhausted source.
-			if (compaction && !(await compaction)) return;
+			if (compacting() && compaction && !(await compaction)) return;
 			if (failedSession) {
 				await selectSession(failedSession);
 				if (failedSession) return;

@@ -4218,6 +4218,70 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		}
 	});
 
+	it("sends in a newer selection during compaction — catches concurrent send discarded during stale compaction", async () => {
+		let finish!: (value: unknown) => void;
+		client.compact.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container } = await renderPanel();
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+		await settle();
+		await openSession(SECOND_SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		container.querySelector<HTMLButtonElement>(`button[data-chat-session="${SECOND_SESSION}"]`)!.click();
+		await settle();
+		const textarea = container.querySelector("textarea")!;
+		textarea.value = "Message for B";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await settle();
+		finish({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted-session",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		await settle();
+		expect(client.prompt).toHaveBeenCalledExactlyOnceWith(CONNECTION, SECOND_SESSION, "Message for B", [], ROOT);
+	});
+
+	it.each(["refused", "unpublished"])(
+		"retains a composer submission during %s compaction — catches concurrent send discarded during compaction",
+		async (failure) => {
+			let finish!: (value: unknown) => void;
+			let refuse!: (error: Error) => void;
+			client.compact.mockImplementationOnce(
+				() =>
+					new Promise((resolve, reject) => {
+						finish = resolve;
+						refuse = reject;
+					}),
+			);
+			const { container } = await renderPanel();
+			container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')!.click();
+			await settle();
+			const files = [{ name: "notes.txt", path: "/repo/notes.txt" }];
+			aiChatDraft.stageFile(files[0]);
+			const textarea = container.querySelector("textarea")!;
+			textarea.value = "Keep this message";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+			container.querySelector<HTMLButtonElement>('button[aria-label="Queue"]')!.click();
+			if (failure === "refused") refuse(new Error("compact refused"));
+			else
+				finish({
+					sourceSessionId: SESSION,
+					targetSessionId: SECOND_SESSION,
+					publication: { kind: "not_published", diagnostic: "checkpoint refused" },
+				});
+			await settle();
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(textarea.value).toBe("Keep this message");
+			expect(aiChatDraft.files()).toEqual(files);
+		},
+	);
+
 	it("compacts the conversation", async () => {
 		client.compact.mockResolvedValueOnce({
 			sourceSessionId: SESSION,
