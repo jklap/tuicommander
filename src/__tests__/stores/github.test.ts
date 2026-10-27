@@ -101,6 +101,54 @@ describe("githubStore", () => {
 		store.stopPolling();
 	});
 
+	// Catches: a remote settings failure suppressing local poller startup or local sidebar event adoption.
+	it("local GitHub monitoring and sidebar data survive a remote settings read failure", async () => {
+		const runtime = await import("../../transportRuntime");
+		const { repoSettingsStore } = await import("../../stores/repoSettings");
+		const { createSettingsRefreshCoordinator, settingsRefresh } = await import("../../services/settingsRefresh");
+		const { appLogger } = await import("../../stores/appLogger");
+		const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+		const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		const coordinator = createSettingsRefreshCoordinator(async () => () => {});
+		const register = vi
+			.spyOn(settingsRefresh, "register")
+			.mockImplementation((reader) => (reader.section === "repo_local" ? coordinator.register(reader) : () => {}));
+		mockGetPaths.mockReturnValue(["/repo1", "/remote"]);
+		runtime.setRepoConnectionLookup((path) => (path === "/remote" ? "offline" : undefined));
+		runtime.setRemoteBaseUrlLookup(() => undefined);
+		mockInvoke.mockResolvedValue(null);
+		remoteRpc.mockResolvedValue(null);
+		await repoSettingsStore.loadLocalConfig("/repo1");
+		await repoSettingsStore.loadLocalConfig("/remote");
+		remoteRpc.mockRejectedValue(new Error("Remote connection offline not connected"));
+		const stopSettings = repoSettingsStore.startRemoteSync();
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			expect(remoteRpc).toHaveBeenCalledWith("load_repo_local_config", { repoPath: "/remote" }, "offline");
+			expect(debug.mock.calls.length + warn.mock.calls.length).toBeGreaterThan(0);
+			store.startPolling();
+			expect(mockInvoke).toHaveBeenCalledWith("github_start_polling", {
+				paths: ["/repo1"],
+				issueFilter: "assigned",
+				prHideDrafts: undefined,
+			});
+			expect(remoteRpc.mock.calls.some(([command]) => command === "github_start_polling")).toBe(false);
+			emitEvent("github-pr-update", { repo_path: "/repo1", statuses: [makePrStatus()] });
+			emitEvent("github-issues-update", {
+				repo_path: "/repo1",
+				issues: [{ number: 1, title: "Local issue", state: "OPEN" }],
+			});
+			expect(store.getPrStatus("/repo1", "feature/x")?.number).toBe(42);
+			expect(store.getRepoIssues("/repo1")).toMatchObject([{ number: 1, title: "Local issue" }]);
+		} finally {
+			stopSettings();
+			store.stopPolling();
+			register.mockRestore();
+			debug.mockRestore();
+			warn.mockRestore();
+		}
+	});
+
 	function makePrStatus(overrides: Partial<BranchPrStatus> = {}): BranchPrStatus {
 		return {
 			branch: "feature/x",
