@@ -260,7 +260,10 @@ export function createAcpChat(
 	 *  Remounts preserve refused loads; explicit selections may retry them.
 	 *  Only the latest selection may change the visible tab. */
 	async function selectSession(session: AcpSessionId, explicit = true, publish = true): Promise<void> {
-		if (publish) sharedSelection.invalidate();
+		if (publish) {
+			await sharedSelection.ready;
+			sharedSelection.invalidate();
+		}
 		if (session === sessionId() && attachment() && !connecting() && !failedSession) return;
 		const request = ++selection;
 		const isCurrent = () => request === selection;
