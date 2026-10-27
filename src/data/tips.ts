@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat across devices",
+		description:
+			"Select an AI Chat conversation on desktop, phone or tablet to show it on the other connected devices. An offline device catches up when it reconnects; session CLI and Chat views stay local.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat slash commands",
 		description:
 			"Type / in AI Chat to see available agent commands and local actions such as compact, fork and quit. Use the arrows and Tab to complete a name before sending.",

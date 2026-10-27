@@ -45,6 +45,7 @@ pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
 pub(crate) use tuic_core::cli;
+mod ai_chat_selection;
 #[expect(
     dead_code,
     reason = "Automation runtime and API consumers follow in plan steps 2–8"
@@ -2258,6 +2259,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
+            ai_chat_selection::ai_chat_selection,
+            ai_chat_selection::select_ai_chat_conversation,
             open_markdown_tabs::sync_open_markdown_tabs,
             open_markdown_tabs::list_open_markdown_tabs,
             pty::get_session_foreground_process,

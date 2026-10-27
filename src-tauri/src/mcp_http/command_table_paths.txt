@@ -5,6 +5,7 @@
 /accounts/action
 /accounts/secret-form
 /acp/chat/open
+/acp/chat/selection
 /acp/connections
 /acp/connections/x
 /acp/connections/x/elicitations/x/response

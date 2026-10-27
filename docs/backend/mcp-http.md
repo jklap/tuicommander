@@ -3015,3 +3015,7 @@ caller's temporary directory.
 ### Append-only story notes
 
 `add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](../api/http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.
+
+### Shared AI Chat selection
+
+`GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.

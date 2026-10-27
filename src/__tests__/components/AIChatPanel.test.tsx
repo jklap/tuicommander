@@ -74,6 +74,7 @@ vi.mock("../../stores/ui", () => ({
 }));
 
 vi.mock("../../transport", () => ({
+	subscribeEvents: vi.fn(async () => () => {}),
 	isTauri: () => true,
 	owningConnectionFor: () => undefined,
 	rpc: vi.fn(async () => ({})),
@@ -140,6 +141,7 @@ import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { subscribeEvents } from "../../transport";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
@@ -1026,6 +1028,7 @@ describe("AIChatPanel: one chat across repositories", () => {
 	// running, with its sessions still attached; loading one again is refused.
 	it("does not replay a conversation the running ego already has attached", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "ai_chat_selection") return { workspace: CHAT_ROOT, sessionId: SESSION };
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: SESSION } };
 			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
@@ -1059,6 +1062,40 @@ describe("AIChatPanel: one chat across repositories", () => {
 });
 
 describe("AIChatPanel: parallel tabs", () => {
+	// Catches: a late startup owner read replaces an explicit tab click (also used by mobile push links).
+	it("keeps an explicit tab selection when the initial shared selection arrives late", async () => {
+		let finishSubscription!: (unsubscribe: () => void) => void;
+		vi.mocked(subscribeEvents).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishSubscription = resolve;
+				}),
+		);
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			if (command === "ai_chat_selection") return { workspace: CHAT_ROOT, sessionId: SESSION };
+			return undefined;
+		});
+		client.loadSession.mockImplementation(async (_id, session) => {
+			await openSession(session);
+		});
+		aiChatTabs.add("global", SESSION);
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		const { container } = renderIdlePanel();
+		await settle();
+		(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		finishSubscription(() => {});
+		await settle();
+		expect(
+			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
+		).toBe("true");
+		expect(vi.mocked(invoke)).toHaveBeenCalledWith("select_ai_chat_conversation", { sessionId: SECOND_SESSION });
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
 	// Catches: selecting a restored tab without a binding never connects or replays.
 	it("restores two saved tabs and loads the second when selected without sending", async () => {
 		aiChatTabs.add("global", SESSION);
@@ -3035,13 +3072,10 @@ describe("AIChatPanel: durable conversations", () => {
 	it("saves the selected session and restores it from the next document's config", async () => {
 		const saved: Record<string, string> = {};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "ai_chat_selection") return { workspace: CHAT_ROOT, sessionId: saved[CHAT_ROOT] ?? null };
 			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
 			if (command === "acp_workspace_root") return CHAT_ROOT;
-			if (command === "save_config")
-				Object.assign(
-					saved,
-					(args as { config: { ai_chat_sessions: Record<string, string> } }).config.ai_chat_sessions,
-				);
+			if (command === "select_ai_chat_conversation") saved[CHAT_ROOT] = (args as { sessionId: string }).sessionId;
 			return undefined;
 		});
 		const first = await renderPanel();
@@ -3097,6 +3131,7 @@ describe("AIChatPanel: durable conversations", () => {
 
 	it("loads the saved conversation after a fresh document opens", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "ai_chat_selection") return { workspace: CHAT_ROOT, sessionId: "prior-session" };
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: "prior-session" } };
 			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
@@ -3120,7 +3155,7 @@ describe("AIChatPanel: durable conversations", () => {
 
 		const { container } = renderIdlePanel();
 		await settle();
-		expect(client.connect).not.toHaveBeenCalled();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", CHAT_ROOT);
 		await typeAndSend(container, "go on");
 
 		expect(client.newSession).not.toHaveBeenCalled();
@@ -5756,4 +5791,35 @@ describe("AIChatPanel: ACP slash commands", () => {
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
 		expect(client.prompt).not.toHaveBeenCalled();
 	});
+});
+
+// Catches: a phone selection updates saved metadata but leaves desktop attached to the old transcript.
+it("follows shared selection events and reconnect without republishing the adopted session", async () => {
+	const view = await renderPanel();
+	let selected = SECOND_SESSION;
+	const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+	vi.mocked(invoke).mockImplementation(async (command, args) => {
+		if (command === "ai_chat_selection") return { workspace: CHAT_ROOT, sessionId: selected };
+		return originalInvoke(command, args);
+	});
+	client.loadSession.mockImplementation(async (_id, session) => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: session })] }));
+	});
+	const writesBefore = vi
+		.mocked(invoke)
+		.mock.calls.filter(([command]) => command === "select_ai_chat_conversation").length;
+	const [handlers, options] = vi.mocked(subscribeEvents).mock.calls[0];
+	handlers["ai-chat-selection-changed"]({});
+	await settle();
+	expect(view.container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).not.toBeNull();
+	await typeAndSend(view.container, "from the phone");
+	expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "from the phone", [], ROOT);
+	selected = CHILD_SESSION;
+	options?.onResync?.("reconnect");
+	await settle();
+	await typeAndSend(view.container, "after reconnect");
+	expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, CHILD_SESSION, "after reconnect", [], ROOT);
+	expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "select_ai_chat_conversation")).toHaveLength(
+		writesBefore,
+	);
 });
