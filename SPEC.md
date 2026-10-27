@@ -99,7 +99,7 @@ TUICommander is a multi-agent terminal orchestrator designed to manage supported
 
 1. **Parallel Agent Orchestration** - Run 50+ coding agents simultaneously
 2. **Git Worktree Isolation** - Each task gets its own isolated workspace
-3. **Per-Pane Font Control** - Independent zoom levels for each terminal, shared by its CLI and Chat views
+3. **Per-Pane Font Control** - Independent zoom levels for each terminal. Desktop session Chat and AI Chat share one 14px default reading scale plus the terminal zoom delta; AI Chat follows the active terminal. Mobile retains its device-local reading size.
 4. **Rate Limit Resilience** - Detection and countdown display when agents hit rate limits
 5. **Productivity Features** - Prompt library, keyboard shortcuts, IDE integration
 

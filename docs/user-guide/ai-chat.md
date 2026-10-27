@@ -1,5 +1,7 @@
 # AI Chat
 
+On desktop, AI Chat and session Chat share the same 14px default reading scale. Terminal zoom in, zoom out and reset also update AI Chat using the active terminal's zoom step. With no active terminal, AI Chat uses its default size. Font family, line height, weight and colors do not change when you switch between the two Chat views. Mobile keeps its device-local Chat font preference.
+
 Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
 
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to

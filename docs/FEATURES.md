@@ -246,7 +246,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Split layout persists per branch
 
 ### 1.4 Zoom (Per-Terminal)
-- A session shares one font size between its CLI and Chat views; active and all-terminal zoom actions update both
+- Desktop session Chat and AI Chat share a 14px default reading scale and the terminal zoom delta; AI Chat follows the active terminal. Active and all-terminal zoom actions update both Chat views; mobile keeps its device-local reading preference
 - Zoom in: `Cmd+=` (+2px)
 - Zoom out: `Cmd+-` (-2px)
 - Reset: `Cmd+0`
