@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
@@ -1069,6 +1070,101 @@ describe("AIChatPanel: parallel tabs", () => {
 		});
 	});
 
+	// Catches: the optional session/list refusal replaces successful attachment
+	// with a fatal missing-session error for both new and restored conversations.
+	it.each(["new", "restored"])(
+		"keeps a %s conversation usable when ego catalogue reports session not found",
+		async (kind) => {
+			client.listSessions.mockRejectedValue(missingCatalogue);
+			client.loadSession.mockImplementation(async () => {
+				acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+			});
+			await createRoot(async (dispose) => {
+				const chat = createAcpChat(
+					() => ROOT,
+					() => true,
+				);
+				if (kind === "new") await chat.startSession();
+				else await chat.selectSession(SESSION);
+				await settle();
+				expect(chat.error()).toBeNull();
+				expect(chat.phase()).toBe("live");
+				await chat.send("Still connected");
+				expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Still connected", [], ROOT);
+				dispose();
+			});
+		},
+	);
+
+	// Catches: awaiting optional catalogue I/O leaves an attached new chat on
+	// Connecting conversation and disables the composer indefinitely.
+	it("enables an attached conversation before its catalogue request settles", async () => {
+		let finish!: (value: { sessions: []; nextCursor: null }) => void;
+		client.listSessions.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		const { container } = await renderPanel();
+		try {
+			expect(container.textContent).not.toContain("Connecting conversation");
+			expect(container.querySelector("textarea")?.disabled).toBe(false);
+			await typeAndSend(container, "Do not wait for the picker");
+			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Do not wait for the picker", [], ROOT);
+		} finally {
+			finish({ sessions: [], nextCursor: null });
+			await settle();
+		}
+	});
+
+	// Catches: an old process's delayed discovery refusal poisons the new
+	// connection after recovery even though the new catalogue succeeded.
+	it("ignores a catalogue refusal from a replaced connection", async () => {
+		let refuse!: (error: unknown) => void;
+		client.listSessions.mockReturnValueOnce(
+			new Promise((_resolve, reject) => {
+				refuse = reject;
+			}),
+		);
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.startSession();
+			client.reconnect.mockImplementation(async () => {
+				const opened = snapshot({ connectionId: "replacement" });
+				acpStore.applySnapshot(opened);
+				return opened;
+			});
+			client.loadSession.mockImplementation(async (id, session) => {
+				acpStore.applySnapshot(snapshot({ connectionId: id, attachments: [attachment({ sessionId: session })] }));
+			});
+			await chat.recover();
+			refuse(missingCatalogue);
+			await settle();
+			expect(chat.error()).toBeNull();
+			expect(chat.phase()).toBe("live");
+			dispose();
+		});
+	});
+
+	// Catches: a missing background tab publishes its refusal as the active
+	// conversation's error when a desktop panel replays several saved tabs.
+	it("keeps the selected conversation live when a background saved tab is missing", async () => {
+		const first = await renderPanel();
+		first.unmount();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.loadSession.mockRejectedValue(missingSession);
+		const { container } = renderIdlePanel();
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(container.textContent).not.toContain("session not found");
+		await typeAndSend(container, "The selected chat still works");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "The selected chat still works", [], ROOT);
+	});
+
 	// Catches: remount replays the selected missing tab without recovery, leaving
 	// the desktop panel failed and its model controls pending until user action.
 	it("recovers a missing selected saved tab on desktop remount without user action", async () => {
@@ -1363,7 +1459,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			attachments: [attachment({ configOptions: [] }), attachment({ sessionId: SECOND_SESSION })],
 		});
 		acpStore.applySnapshot(empty);
-		expect(container.querySelector('[aria-label="Session settings"]')).toBeNull();
+		expect((container.querySelector('[aria-label="Session settings"]') as HTMLButtonElement).disabled).toBe(true);
 		const recording = readFileSync(resolve("src-tauri/tests/fixtures/acp/ego-async-config.jsonl"), "utf8")
 			.trim()
 			.split("\n")
@@ -3495,6 +3591,74 @@ describe("AIChatPanel: the session's own knobs", () => {
 			{ value: "auto", name: "Automatic" },
 		],
 	};
+
+	// Catches: the composer reports settings as inert text instead of opening their controls.
+	it("opens model reasoning and mode controls from the composer summary and applies each choice", async () => {
+		const effort: AcpSessionConfigOption = {
+			id: "effort",
+			name: "Reasoning",
+			type: "select",
+			currentValue: "medium",
+			options: [
+				{ value: "medium", name: "Medium" },
+				{ value: "high", name: "High" },
+			],
+		};
+		const options = [MODEL_OPTION, effort, mode];
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: options })] }));
+		await settle();
+		const summary = container.querySelector<HTMLButtonElement>(
+			'.composerMeta button[aria-label="Change model, reasoning and mode"]',
+		);
+		expect(summary).not.toBeNull();
+		summary!.click();
+		const dialog = container.querySelector('[role="dialog"]')!;
+		expect(dialog).not.toBeNull();
+		for (const [name, id, value] of [
+			["Model", "model", "sonnet"],
+			["Reasoning", "effort", "high"],
+			["Mode", "mode", "auto"],
+		]) {
+			const picker = dialog.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)!;
+			expect(picker.disabled).toBe(false);
+			picker.value = value;
+			picker.dispatchEvent(new Event("change", { bubbles: true }));
+			await settle();
+			expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, id, { value });
+		}
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: [
+							{ ...MODEL_OPTION, currentValue: "sonnet" },
+							{ ...effort, currentValue: "high" },
+							{ ...mode, currentValue: "auto" },
+						],
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(summary!.textContent).toBe("Sonnet · high · Automatic");
+	});
+
+	// Catches: missing ACP options silently remove the only discoverable settings action.
+	it("keeps session settings visible with an unavailable explanation before options arrive", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [] })] }));
+		await settle();
+		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
+		menu.querySelector("summary")!.click();
+		expect(menu.open).toBe(true);
+		const settings = menu.querySelector<HTMLButtonElement>('button[aria-label="Session settings"]');
+		expect(settings).not.toBeNull();
+		expect(settings!.disabled).toBe(true);
+		expect(settings!.title).toBe("Session settings are available after the conversation publishes its options.");
+	});
 
 	// Catches: an ACP option is hidden or shown without its published name and choice.
 	it("shows every published select with a label, description, and current choice in a dialog", async () => {

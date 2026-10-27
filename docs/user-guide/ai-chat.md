@@ -107,6 +107,8 @@ without requiring a message or **Retry**. Other load failures remain visible.
 Opening a new chat leaves that failure behind, including when its connection is still pending. A saved conversation that finishes
 loading later does not switch you away from the new chat.
 
+The saved-conversation list loads separately from the active chat. You can keep sending while the list is slow or unavailable. A missing background tab does not fail the selected conversation; its refusal is handled when that tab is selected.
+
 The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
 focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
@@ -219,10 +221,11 @@ read its full command and output.
   Resume. Every connected view can remove a queued item before ego receives it.
   Stop affects the running turn for every view. A queued message appears in the
   conversation when it reaches ego; steering appears when ego echoes it.
-- **Session settings** are published by the current conversation. The control bar
-  shows the model's short name and the current mode. Its summary shortens before
-  the icon controls, so Pause, Resume and Compact stay on one row. Each
-  control has a tooltip and a name for assistive technology. The settings button opens a dialog with
+- **Session settings** are published by the current conversation. On desktop, click the model,
+  reasoning and mode summary below the input, or use **⋯ → Session settings**.
+  Both open the same dialog. Before the conversation publishes its options, the
+  settings action stays visible but disabled, with a tooltip that explains why.
+  The dialog has
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
   and the displayed values follow ego's reply. A rejected change shows its error
