@@ -320,3 +320,21 @@ share one captured trusted executable, configured profile and AI Chat workspace
 per operation. These owner CLI calls do not change any live ACP session. The
 internal settings adapter preserves this distinction; launch defaults stay in the
 `app` store and apply to later launches.
+
+
+### Session command offers
+
+`AcpAttachmentSnapshot.availableCommands` holds the latest complete
+`available_commands_update` offer, serialized identically over IPC and HTTP.
+Every offer replaces the prior list, including an empty list. The ordered stream
+continues to carry the original update; the frontend projects it into its owning
+attachment, and a snapshot restores the list for a late subscriber.
+
+Initial offers can reach the actor before a new/fork response settles, even when
+the agent wrote the response first. The actor retains command metadata for those
+pending attachments and for claimed load/resume ids, then adopts only the offer
+whose id matches the successful attachment. The holding map is bounded by pending
+attachments, never creates an attachment, and drops unclaimed entries when no
+unidentified attachment remains. Normal unknown-session transcript updates remain
+ignored. The composer sends advertised agent invocations as unchanged slash text;
+its host actions call existing chat handlers instead.

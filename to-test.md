@@ -1,3 +1,7 @@
+## Shared Chat typography and zoom (2396-66e2)
+
+- [ ] Coordinator visual check after unlocking the screen: compare session Chat and AI Chat at default terminal zoom, after zoom in/out and after reset. Both should use AI Chat's original 14px default reading scale, line height, weight and colors. AI Chat follows the active terminal when tabs change. Check body prose, bold text, inline code and tool text; mobile must retain its own Chat font preference. The implementer did not capture screenshots because the required browser wrapper failed while the screen was locked.
+
 ## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
 
 - [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.
@@ -3031,3 +3035,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next backend rebuild/restart, check that MCP automations discovery includes `profiles: saved profile names` (#2370-bf4a).
 
 - [ ] After the next manual Rust rebuild/restart, verify Windows worktree cleanup uses its selected Git installation launcher and a forty-worktree MCP listing remains responsive while fresh dirty fingerprints change (#2310-6e76). The daily backend was not restarted; Rust changes do not hot-reload.
+
+
+- [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).
