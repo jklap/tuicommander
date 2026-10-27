@@ -13,12 +13,13 @@ if (
 	!/^\d+$/.test(projectId ?? "") ||
 	!/^\d+$/.test(issueType ?? "") ||
 	!output ||
-	consent !== "--write-straus-team-only" ||
+	!["--write-straus-team-only", "--read-only-resolver"].includes(consent) ||
+	(consent === "--read-only-resolver" && extra.length > 0) ||
 	extra.length > 1 ||
 	(extra.length === 1 && !/^--resume=TUIC-\d+$/.test(extra[0]))
 ) {
 	throw Error(
-		"Usage: jira-cloud-desktop-e2e.mjs <agent-test-name> <account-id> <project-id> <issue-type-id> <output.json> --write-straus-team-only [--resume=TUIC-N]",
+		"Usage: jira-cloud-desktop-e2e.mjs <agent-test-name> <account-id> <project-id> <issue-type-id> <output.json> --write-straus-team-only [--resume=TUIC-N] (or --read-only-resolver)",
 	);
 }
 const root = resolve(import.meta.dirname, "..");
@@ -130,13 +131,73 @@ const result = await evaluate(
 		}
 		if (!saved) throw Error("Native settings did not persist project ID");
 		await loader[input.reloadExport]("jira");
+		// The native file watcher debounces 500 ms; wait for the final registered
+		// instance instead of racing its automatic reload with vendor requests.
+		let lastProvider;
+		let stableSince = performance.now();
+		await wait(() => {
+			const current = registry.get("jira", input.accountId);
+			if (!current || current !== lastProvider) {
+				lastProvider = current;
+				stableSince = performance.now();
+			}
+			return current && performance.now() - stableSince >= 2000;
+		});
 		const provider = registry.get("jira", input.accountId);
 		if (!provider || registry.list("jira").length !== 1) throw Error("Expected exactly one production Jira provider");
 		if (!provider.resolveUrl(host + "/browse/TUIC-1")) throw Error("Provider is not bound to authorized site");
 		const types = await provider.createFields();
 		if (!types[0].options.some((type) => type.id === input.issueType))
 			throw Error("Vendor rejected configured project/type");
-		const schema = await provider.createFields(input.issueType);
+		const schema = input.resolverOnly ? [] : await provider.createFields(input.issueType);
+		if (input.resolverOnly) {
+			const exports = Object.values(await import(input.modules.registry));
+			const urls = exports.find(
+				(value) => value?.register && value?.resolve?.toString().includes("URL resolver failed"),
+			);
+			if (!urls) throw Error("Production URL resolver registry not found");
+			const url = host + "/browse/TUIC-3";
+			const resolved = await urls.resolve(url, new AbortController().signal);
+			if (
+				resolved?.link.key !== "TUIC-3" ||
+				resolved.link.reference.accountId !== input.accountId ||
+				resolved.startWork?.delivery !== "draft"
+			)
+				throw Error("Registered Jira URL did not resolve");
+			const controller = new AbortController();
+			let settled = false;
+			const started = performance.now();
+			const pending = urls.resolve(url, controller.signal).finally(() => {
+				settled = true;
+			});
+			// A real in-flight read is required: immediate transport failure is not cancellation.
+			await new Promise((done) => setTimeout(done, 25));
+			if (settled) throw Error("Resolver settled before cancellation; no in-flight request proven");
+			const abortedAt = performance.now();
+			controller.abort();
+			if ((await pending) !== null) throw Error("Cancelled resolver returned a link");
+			const cancelMs = performance.now() - abortedAt;
+			if (cancelMs >= 1000) throw Error(`Cancellation took ${cancelMs} ms (native HTTP deadline is 30000 ms)`);
+			if ((await urls.resolve(url, controller.signal)) !== null) throw Error("Pre-aborted URL returned a link");
+			const cancellation = {
+				pendingAtAbort: true,
+				abortAfterMs: abortedAt - started,
+				settledAfterAbortMs: cancelMs,
+				cancelledLink: null,
+				preabortedLink: null,
+				evidence: "production host awaits native HTTP before the aborted resolver settles",
+			};
+			const recovered = await urls.resolve(url, new AbortController().signal);
+			if (recovered?.link.key !== "TUIC-3") throw Error("Normal URL resolution did not recover after cancel");
+			return {
+				settings: { source: "actual input and blur", savedProjectId: saved.projectId },
+				provider: { providerId: provider.providerId, registrationCount: registry.list("jira").length },
+				metadataAccepted: types[0].options.some((type) => type.id === input.issueType),
+				resolved,
+				cancellation,
+				recovered: recovered.link.key,
+			};
+		}
 		const body = "Native plugin creation\n\n- First\n- Second\n\n```js\nconst n = 1;\n```\n\nHard  \nbreak";
 		const created = input.resume
 			? {
@@ -188,7 +249,16 @@ const result = await evaluate(
 			pluginSource: input.root + "/plugins/jira",
 		};
 	},
-	{ root, modules, reloadExport, accountId, projectId, issueType, resume: extra[0]?.slice("--resume=".length) },
+	{
+		root,
+		modules,
+		reloadExport,
+		accountId,
+		projectId,
+		issueType,
+		resume: extra[0]?.slice("--resume=".length),
+		resolverOnly: consent === "--read-only-resolver",
+	},
 );
 const report = { date: new Date().toISOString(), instance, socket, native: "aarch64-apple-darwin", result };
 writeFileSync(output, JSON.stringify(report, null, 2) + "\n");

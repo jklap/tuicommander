@@ -137,9 +137,11 @@ resources; no other site was modified.
 - Candidate 12 is the GitHub core review/actions port criterion and was already
   checked by prior authenticated GitHub evidence. Jira credentials cannot prove
   it; no new GitHub review/action run is claimed here.
-- Jira URL-resolver cancellation (candidate 10) is not part of this new native
-  result. Existing module/transport evidence is not relabeled as a live check.
-- Story statuses and acceptance criteria are unchanged, as requested.
+- The original morning run did not exercise URL-resolver cancellation. The
+  afternoon continuation below supplies that separate native evidence.
+- The morning run did not change story criteria. The afternoon audit checks the
+  recorded-fixture criterion and the applicable candidate criteria; review proofs
+  and story completion remain separate.
 
 ## Reproduce the loaded-provider continuation
 
@@ -156,3 +158,89 @@ node scripts/jira-cloud-desktop-e2e.mjs \
 
 Omit `--resume` to create a new scratch issue. The continuation still adds a
 comment and requests the legal Done transition; it is not read-only.
+
+## Native resolver continuation — 1756 candidate 10
+
+The afternoon continuation uses the same isolated `agent-test-jiralive` instance,
+rebuilt from this worktree. Its native health response identifies macOS arm64 and
+binary SHA-256 `7d09ec7b6520e8727cdc33cf24aa37edaece7c6aca9a63f007d8b353a4714aa9`.
+The actual account remains in the supported account service; no credential store
+or environment value was read for this continuation. No Jira write was sent.
+
+The harness now accepts `--read-only-resolver` instead of the write consent flag:
+
+```sh
+node scripts/jira-cloud-desktop-e2e.mjs \
+  agent-test-jiralive '<account-id>' 10001 10006 \
+  "$PWD/docs/backend/jira-resolver-live-2026-10-27.json" \
+  --read-only-resolver
+```
+
+This mode still installs the real plugin, binds the selected account without a
+project override, and uses the actual Settings input and blur handler to save
+`10001`. Authenticated project issue-type metadata succeeds. This repeats Jira's
+settings-to-vendor path without creating another issue. Existing GitLab settings
+persistence and default-consumption evidence remains credential-independent;
+this run does not claim authenticated GitLab acceptance.
+
+The harness imports the already-loaded production URL registry singleton. It
+neither constructs a provider nor replaces the registry, host, native IPC, vendor
+responses or timers. The real registry resolves
+`https://straus-team.atlassian.net/browse/TUIC-3` to its account-bound link and
+start-work draft. For cancellation, it starts another lookup, waits for the
+scheduled abort point, and first requires that the lookup is still pending.
+It aborts the signal and requires a null result within 1000 ms, well below the
+native HTTP client's 30000 ms deadline. A pre-aborted lookup also returns null,
+and a fresh signal resolves TUIC-3 afterward.
+
+The final machine-readable evidence is
+[jira-resolver-live-2026-10-27.json](jira-resolver-live-2026-10-27.json).
+The abort ran after **141 ms** (the requested timer delay is a minimum, not a
+scheduling guarantee); the pending lookup settled **133 ms** after abort. The
+production `PluginHost.httpFetch` awaits native HTTP before its aborted result
+settles (`src/plugins/pluginRegistry.ts`), while Rust cancellation drops the
+in-flight HTTP future (`src-tauri/src/plugin_http.rs`). This combines observed
+native behavior with the existing module/transport cancellation regressions.
+It does not claim vendor-side request rollback or an exact count of sockets.
+
+### Diagnosed attempts and cleanup
+
+The first harness attempt inspected dispatch before asynchronous registry
+traversal reached Jira. A subsequent attempt tried passive native IPC
+observation, but the native `invoke` property is non-writable and non-configurable;
+that approach was removed, not bypassed. No replacement IPC remained in the final
+harness or run. Automatic plugin reloads also raced early setup requests; the
+harness now waits for a stable registered provider across the native watcher's
+500 ms debounce window before it begins vendor reads.
+
+Two later attempts encountered the existing macOS `Network is down (os error 50)`
+transport failure. A shell curl check reached the test site with HTTP 302, which
+does not explain or fix the native transport failure. The final native run
+succeeded without a production change. Failed logs are retained as
+`tuic-1756-resolver-e2e*.log`; the successful run is
+`~/Gits/.tmp/results/tuic-1756-resolver-e2e-final.log` (exit 0).
+
+The matching `make agent-test-stop` stopped the task-owned instance. Its
+`desktop.pid` was removed and the supervisor exited with make status 2 after the
+requested application termination. No daily instance, browser or Vite server was
+started or stopped. No visual/CSS change was made; the earlier Settings screenshot
+remains the visual evidence. Claude `/wiz:review` proof criteria remain open.
+
+### Continuation validation
+
+The one final targeted plugin run used `build-slot.sh` and
+`scripts/with-test-tmp.sh node --test` with these four files:
+
+- `plugins/jira/main.test.js`
+- `plugins/jira/recorded-cloud.test.js`
+- `plugins/jira/provider.test.js`
+- `plugins/jira/adf.test.js`
+
+All **43 tests passed**, zero failures, cancellations or skips, in **124.59 ms**
+after a **420 s** shared build-slot wait. The retained log is
+`~/Gits/.tmp/results/tuic-1756-plugin-tests.log`. The real native E2E also exited
+zero. This is targeted local Node and native macOS evidence, not a new rb,
+Vitest, full-suite, mutation or clippy result. No production behavior changed;
+previous production RED/GREEN evidence remains applicable. The new harness passes
+`node --check`; it was formatted through Biome stdin using an included `.mjs`
+path because the normal scripts path is excluded by Biome configuration.
