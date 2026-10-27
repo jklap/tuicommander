@@ -2763,6 +2763,78 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.prompt).not.toHaveBeenCalled();
 	});
 
+	// Catches: late catalogue options reset the native picker to another attached session.
+	it("keeps the header on the selected session when a two-session catalogue arrives", async () => {
+		let finishList!: (value: {
+			sessions: { sessionId: string; cwd: string; title: string }[];
+			nextCursor: null;
+		}) => void;
+		client.listSessions.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finishList = resolve;
+				}),
+		);
+		client.newSession.mockImplementation(async () => {
+			await openSession(SECOND_SESSION);
+			return openSession(SESSION);
+		});
+		const { container } = await renderPanel();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Selected design review" } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Selected transcript" } },
+		});
+		feed(
+			{ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Background investigation" } },
+			SECOND_SESSION,
+		);
+		finishList({
+			sessions: [
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Background investigation" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Selected design review" },
+			],
+			nextCursor: null,
+		});
+		await settle();
+
+		const picker = container.querySelector<HTMLSelectElement>('select[title="Conversation"]')!;
+		expect(acpStore.connection(CONNECTION)?.attachments).toHaveLength(2);
+		expect(picker.value).toBe(SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Selected design review");
+		expect(container.querySelector('[class*="conversationLabel"]')?.textContent).toBe("Selected design review");
+		expect(container.textContent).toContain("Selected transcript");
+		await typeAndSend(container, "Continue the selected review");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Continue the selected review", [], ROOT);
+
+		picker.value = SECOND_SESSION;
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		finishList({
+			sessions: [
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Selected design review" },
+				{ sessionId: SECOND_SESSION, cwd: CHAT_ROOT, title: "Background investigation" },
+			],
+			nextCursor: null,
+		});
+		await settle();
+		expect(picker.value).toBe(SECOND_SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Background investigation");
+		expect(container.querySelector('[class*="conversationLabel"]')?.textContent).toBe("Background investigation");
+		expect(container.textContent).not.toContain("Selected transcript");
+		expect(client.loadSession).not.toHaveBeenCalled();
+
+		feed(
+			{ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Renamed background review" } },
+			SECOND_SESSION,
+		);
+		await settle();
+		expect(picker.value).toBe(SECOND_SESSION);
+		expect(picker.selectedOptions[0].textContent).toBe("Renamed background review");
+		await typeAndSend(container, "Continue the other review");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "Continue the other review", [], ROOT);
+	});
+
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [

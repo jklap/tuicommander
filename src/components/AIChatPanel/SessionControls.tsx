@@ -191,12 +191,16 @@ export const SessionControls: Component<{
 					}}
 				>
 					<Show when={!sessions().some((session) => session.sessionId === props.chat.sessionId())}>
-						<option value={props.chat.sessionId() ?? ""}>{props.chat.title() || "AI Chat"}</option>
+						<option value={props.chat.sessionId() ?? ""} selected>
+							{props.chat.title() || "AI Chat"}
+						</option>
 					</Show>
+					{/* Catalogue rows can arrive without changing sessionId; select each new option explicitly. */}
 					<For each={sessions()}>
 						{(session) => (
 							<option
 								value={session.sessionId}
+								selected={session.sessionId === props.chat.sessionId()}
 								title={session.sessionId}
 								disabled={session._meta?.tuicommander?.deleted === true}
 							>
