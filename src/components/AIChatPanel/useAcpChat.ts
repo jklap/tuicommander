@@ -171,7 +171,6 @@ export function createAcpChat(
 	const [connecting, setConnecting] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
 	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
-	const [catalogueFailure, setCatalogueFailure] = createSignal<{ id: AcpConnectionId; message: string } | null>(null);
 	let catalogueRequest = 0;
 	let selection = 0;
 	let failedSession: AcpSessionId | null = null;
@@ -224,10 +223,8 @@ export function createAcpChat(
 				cursor = page.nextCursor || undefined;
 			} while (cursor);
 			setListedSessions(rows);
-			setCatalogueFailure(null);
 		} catch (failure) {
 			appLogger.warn("ai-chat", "listing conversations failed", failure);
-			if (isCurrent()) setCatalogueFailure({ id, message: describe(failure) });
 		}
 	}
 
@@ -553,15 +550,6 @@ export function createAcpChat(
 		sessionId,
 		phase,
 		error,
-		catalogueError: () => {
-			const failure = catalogueFailure();
-			return failure?.id === connectionId() ? failure.message : null;
-		},
-		refreshCatalogue: async (): Promise<void> => {
-			const id = connectionId();
-			const target = root();
-			if (id && target && connection()?.capabilities?.list) await refreshSessions(id, target);
-		},
 		clearError: () => setError(null),
 		connection,
 		attachment,

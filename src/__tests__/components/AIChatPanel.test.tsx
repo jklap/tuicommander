@@ -1117,27 +1117,6 @@ describe("AIChatPanel: parallel tabs", () => {
 		}
 	});
 
-	// Catches: retrying discovery restarts the working agent or erases an
-	// unrelated turn error instead of retrying only session/list.
-	it("retries a visible catalogue warning without replacing the working conversation", async () => {
-		client.listSessions.mockRejectedValue(missingCatalogue);
-		const { container } = await renderPanel();
-		expect(container.textContent).toContain("Saved conversations unavailable");
-		client.prompt.mockRejectedValue(new Error("Turn refused"));
-		await typeAndSend(container, "Keep this refusal");
-		client.listSessions.mockResolvedValue({ sessions: [], nextCursor: null });
-		(
-			[...container.querySelectorAll("button")].find(
-				(button) => button.textContent === "Retry list",
-			) as HTMLButtonElement
-		).click();
-		await settle();
-		expect(container.textContent).not.toContain("Saved conversations unavailable");
-		expect(container.textContent).toContain("Turn refused");
-		expect(client.newSession).toHaveBeenCalledTimes(1);
-		expect(client.reconnect).not.toHaveBeenCalled();
-	});
-
 	// Catches: an old process's delayed discovery refusal poisons the new
 	// connection after recovery even though the new catalogue succeeded.
 	it("ignores a catalogue refusal from a replaced connection", async () => {
@@ -1164,7 +1143,6 @@ describe("AIChatPanel: parallel tabs", () => {
 			await chat.recover();
 			refuse(missingCatalogue);
 			await settle();
-			expect(chat.catalogueError()).toBeNull();
 			expect(chat.error()).toBeNull();
 			expect(chat.phase()).toBe("live");
 			dispose();

@@ -124,16 +124,6 @@ export function MobileChatScreen(props: {
 					</div>
 				)}
 			</Show>
-			<Show when={chat.catalogueError()}>
-				{(message) => (
-					<div class={styles.banner} role="status">
-						Saved conversations unavailable: {message()}. You can continue this chat.{" "}
-						<Button variant="ghost" onClick={() => void chat.refreshCatalogue()}>
-							Retry list
-						</Button>
-					</div>
-				)}
-			</Show>
 
 			<Show when={chat.error()}>
 				{(message) => {
