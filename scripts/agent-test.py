@@ -44,13 +44,14 @@ def plan(instance: str, port: str, speech_output: bool = False) -> dict:
     config = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
     window = {**config["app"]["windows"][0], "visible": False, "focus": False,
               "focusable": False, "center": False, "alwaysOnTop": True,
-              "width": 1400, "height": 900, "minWidth": 640, "minHeight": 420,
+              "width": 1400, "height": 900, "minWidth": 390, "minHeight": 420,
               "backgroundThrottling": "disabled"}
     override = {"identifier": "com.tuic.commander.agent-test",
                 "productName": "TUICommander Agent Test", "bundle": {"externalBin": []},
                 "app": {"windows": [window], "security": {"capabilities": ["default", {
                     "identifier": "agent-test-presentation", "windows": ["main"],
-                    "permissions": ["core:window:deny-set-focus", "core:window:deny-show"]
+                    "permissions": ["core:window:deny-set-focus", "core:window:deny-show",
+                                    "core:window:allow-set-size"]
                 }]}}}
     cargo = ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "tuicommander", "-p", "tuic-bridge", "-p", "tuic-cli", "--bin", BINARY, "--bin", "tuic-bridge", "--bin", "tuic", "--features", "tauri/custom-protocol", "--message-format=json-render-diagnostics"]
     if speech_output:
