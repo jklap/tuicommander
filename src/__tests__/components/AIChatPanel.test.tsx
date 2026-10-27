@@ -5880,6 +5880,55 @@ describe("AI Chat reconnect lifecycle", () => {
 });
 
 describe("AI Chat automatic connection boundaries", () => {
+	it.each(["succeeds", "fails"])(
+		"cold Retry starts a connection without Send when the attempt %s — catches clearing the error without connecting",
+		async (outcome) => {
+			client.connect.mockReset().mockRejectedValueOnce(new Error("Agent unavailable"));
+			const { container } = renderIdlePanel();
+			await settle();
+			expect(container.textContent).toContain("Agent unavailable");
+			expect(client.connect).toHaveBeenCalledTimes(1);
+			let finish!: (value: AcpConnectionSnapshot) => void;
+			let fail!: (reason: Error) => void;
+			client.connect.mockImplementationOnce(
+				() =>
+					new Promise<AcpConnectionSnapshot>((resolve, reject) => {
+						finish = resolve;
+						fail = reject;
+					}),
+			);
+			const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry");
+			expect(retry).toBeDefined();
+			retry?.click();
+			await settle();
+			expect(client.connect).toHaveBeenCalledTimes(2);
+			expect(client.connect).toHaveBeenLastCalledWith(CHAT_ROOT);
+			expect(container.textContent).toContain("Connecting conversation…");
+			expect(client.newSession).not.toHaveBeenCalled();
+			if (outcome === "succeeds") {
+				const opened = snapshot();
+				acpStore.applySnapshot(opened);
+				acpStore.markStreaming(CONNECTION);
+				finish(opened);
+			} else {
+				fail(new Error("Retry unavailable"));
+			}
+			await settle();
+			await settle();
+			expect(container.textContent).not.toContain("Connecting conversation…");
+			if (outcome === "succeeds") {
+				expect(container.textContent).not.toContain("Agent unavailable");
+				expect(client.newSession).toHaveBeenCalledExactlyOnceWith(CONNECTION, CHAT_ROOT);
+			} else {
+				expect(container.textContent).toContain("Retry unavailable");
+				expect(client.newSession).not.toHaveBeenCalled();
+			}
+			expect(client.connect).toHaveBeenCalledTimes(2);
+			expect(client.reconnect).not.toHaveBeenCalled();
+			expect(client.prompt).not.toHaveBeenCalled();
+		},
+	);
+
 	it("does not start a hidden panel — catches eager background process launches", async () => {
 		const view = render(() => <AIChatPanel visible={false} repoPath={ROOT} onClose={() => {}} />);
 		await settle();

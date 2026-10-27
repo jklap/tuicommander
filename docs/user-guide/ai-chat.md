@@ -104,7 +104,8 @@ Opening the configured panel automatically connects ego and restores the selecte
 conversation. With no saved conversation, it opens a new one without sending a
 message. Terminal input remains available while it connects. Switching repositories
 does not start another agent. A failed connection stays visible for explicit Retry;
-it does not retry in a loop. Stopping ego keeps the selected transcript visible.
+Retry starts the connection and shows its connecting state without requiring Send.
+It does not retry in a loop. Stopping ego keeps the selected transcript visible.
 Reopening the panel, or sending another message, reconnects the same conversation.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.

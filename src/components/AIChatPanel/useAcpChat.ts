@@ -1016,7 +1016,7 @@ export function createAcpChat(
 			if (failedSession || !connectionId()) {
 				const session = failedSession ?? sessionId();
 				if (session) await selectSession(session);
-				else setError(null);
+				else await start();
 				return;
 			}
 			const target = root();
