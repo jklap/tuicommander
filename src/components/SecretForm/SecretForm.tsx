@@ -25,6 +25,53 @@ export interface SecretSubmission {
 	template: string[] | null;
 }
 
+function SecretUrl(props: {
+	url: string;
+	copyLabel: string;
+	copyUrl?: (url: string) => Promise<void>;
+	openUrl?: (url: string) => Promise<void>;
+}) {
+	const [status, setStatus] = createSignal("");
+	const isWebUrl = () => {
+		try {
+			const url = new URL(props.url);
+			return url.protocol === "http:" || url.protocol === "https:";
+		} catch {
+			return false;
+		}
+	};
+	const copy = async () => {
+		try {
+			await (props.copyUrl ? props.copyUrl(props.url) : navigator.clipboard.writeText(props.url));
+			setStatus("Copied");
+		} catch {
+			setStatus("Copy failed. Select and copy the URL manually.");
+		}
+	};
+	return (
+		<Show when={isWebUrl()} fallback={<pre>{props.url}</pre>}>
+			<a
+				class="secret-phone-url"
+				href={props.url}
+				target="_blank"
+				rel="noopener noreferrer"
+				referrerpolicy="no-referrer"
+				onClick={(event) => {
+					if (!props.openUrl) return;
+					event.preventDefault();
+					void props.openUrl(props.url).catch(() => setStatus("Could not open the browser. Copy the URL instead."));
+				}}
+			>
+				{props.url}
+			</a>
+			<Button aria-label={props.copyLabel} onClick={() => void copy()}>
+				Copy URL
+			</Button>
+			<p role="status">{status()}</p>
+		</Show>
+	);
+}
+
 export function SecretForm(props: {
 	form: PrivateForm;
 	submit: (submission: SecretSubmission) => Promise<void>;
@@ -33,18 +80,7 @@ export function SecretForm(props: {
 }) {
 	const [closed, setClosed] = createSignal(false);
 	const [message, setMessage] = createSignal("");
-	const [copyStatus, setCopyStatus] = createSignal("");
 	const [qr] = createResource(() => !closed() && props.form.mobile_url, qrCodeDataUrl);
-	const copyUrl = async () => {
-		const url = props.form.mobile_url;
-		if (!url) return;
-		try {
-			await (props.copyUrl ? props.copyUrl(url) : navigator.clipboard.writeText(url));
-			setCopyStatus("Copied");
-		} catch {
-			setCopyStatus("Copy failed. Select and copy the URL manually.");
-		}
-	};
 	const inputs = new Map<string, HTMLInputElement>();
 	let remember: HTMLInputElement | undefined;
 	const finish = async (declined: boolean) => {
@@ -106,7 +142,12 @@ export function SecretForm(props: {
 								fallback={
 									<div class="secret-sso">
 										<strong>{field.name}</strong>
-										<pre>{field.display}</pre>
+										<SecretUrl
+											url={field.display ?? ""}
+											copyLabel={`Copy ${field.name} URL`}
+											copyUrl={props.copyUrl}
+											openUrl={props.openUrl}
+										/>
 										<p>Open this link on your trusted device to complete SSO.</p>
 									</div>
 								}
@@ -134,26 +175,12 @@ export function SecretForm(props: {
 							<div class="secret-phone-content">
 								<div class="secret-phone-link">
 									<p>Scan or open this one-time link on a trusted device. Use HTTPS to protect entry in transit.</p>
-									<a
-										class="secret-phone-url"
-										href={props.form.mobile_url!}
-										target="_blank"
-										rel="noopener noreferrer"
-										referrerpolicy="no-referrer"
-										onClick={(event) => {
-											if (!props.openUrl) return;
-											event.preventDefault();
-											void props
-												.openUrl(props.form.mobile_url!)
-												.catch(() => setCopyStatus("Could not open the browser. Copy the URL instead."));
-										}}
-									>
-										{props.form.mobile_url}
-									</a>
-									<Button aria-label="Copy form URL" onClick={() => void copyUrl()}>
-										Copy URL
-									</Button>
-									<p role="status">{copyStatus()}</p>
+									<SecretUrl
+										url={props.form.mobile_url!}
+										copyLabel="Copy form URL"
+										copyUrl={props.copyUrl}
+										openUrl={props.openUrl}
+									/>
 								</div>
 								<Show
 									when={!qr.error && qr()}

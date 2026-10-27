@@ -61,23 +61,37 @@ describe("SecretForm", () => {
 		).toBeTruthy();
 	});
 
-	it("SSO display does not create an input or silently run the link", () => {
+	// Catches: SSO URLs staying non-interactive or opening without a human click.
+	it("SSO display exposes the exact URL through browser and copy actions", async () => {
+		const url = "https://example.invalid/login?next=%2Ftoken&account=demo";
+		const openUrl = vi.fn().mockResolvedValue(undefined);
+		const copyUrl = vi.fn().mockResolvedValue(undefined);
 		render(() => (
 			<SecretForm
 				form={{
 					nonce: "test-nonce",
-					id: "test",
+					id: "sso",
 					reason: "Login",
-					fields: [{ name: "SSO", kind: "sso", display: "https://example.invalid/login" }],
+					fields: [{ name: "SSO", kind: "sso", display: url }],
 					argv: null,
 				}}
 				submit={async () => {}}
+				openUrl={openUrl}
+				copyUrl={copyUrl}
 			/>
 		));
 		expect(screen.queryByRole("textbox")).toBeNull();
-		expect(screen.getByText("https://example.invalid/login")).toBeTruthy();
-		expect(screen.queryByRole("link")).toBeNull();
+		expect(openUrl).not.toHaveBeenCalled();
+		const link = screen.getByRole("link", { name: url });
+		expect(link.getAttribute("href")).toBe(url);
+		expect(link.getAttribute("referrerpolicy")).toBe("no-referrer");
+		fireEvent.click(link);
+		expect(openUrl).toHaveBeenCalledExactlyOnceWith(url);
+		fireEvent.click(screen.getByRole("button", { name: "Copy SSO URL" }));
+		await waitFor(() => expect(copyUrl).toHaveBeenCalledExactlyOnceWith(url));
+		expect(screen.getByRole("status").textContent).toBe("Copied");
 	});
+
 	// Catches: the form forwarding an editable/wildcard template instead of
 	// retaining only the exact argv that the human sees and approves.
 	it("remembers only the displayed exact argv", async () => {
@@ -186,4 +200,61 @@ it("retains the link and copy action when QR generation fails", async () => {
 	await waitFor(() => expect(view.getByText("QR unavailable. Open or copy the URL instead.")).toBeTruthy());
 	expect(view.getByRole("link", { name: url, hidden: true })).toBeTruthy();
 	expect(view.getByRole("button", { name: "Copy form URL", hidden: true })).toBeTruthy();
+});
+
+// Catches: unsupported schemes or malformed display text becoming navigable links.
+it.each([
+	"javascript:alert(1)",
+	"file:///tmp/token",
+	"/relative/login",
+	"https://",
+	"Sign in on your trusted device",
+	"",
+])("keeps non-web SSO display plain: %s", (display) => {
+	const openUrl = vi.fn();
+	const view = render(() => (
+		<SecretForm
+			form={{
+				id: "plain",
+				nonce: "test",
+				reason: "Login",
+				fields: [{ name: "SSO", kind: "sso", display }],
+				argv: null,
+			}}
+			submit={async () => {}}
+			openUrl={openUrl}
+		/>
+	));
+	expect(view.container.querySelector("pre")?.textContent).toBe(display);
+	expect(view.queryByRole("link")).toBeNull();
+	expect(view.queryByRole("button", { name: "Copy SSO URL" })).toBeNull();
+	expect(openUrl).not.toHaveBeenCalled();
+});
+
+// Catches: HTTP being rejected, or browser-open failure hiding the usable fallback.
+it("retains HTTP SSO copy controls when the system browser fails", async () => {
+	const url = "http://example.invalid/login";
+	const openUrl = vi.fn().mockRejectedValue(new Error("No browser"));
+	const copyUrl = vi.fn().mockRejectedValue(new Error("No clipboard"));
+	const view = render(() => (
+		<SecretForm
+			form={{
+				id: "error",
+				nonce: "test",
+				reason: "Login",
+				fields: [{ name: "SSO", kind: "sso", display: url }],
+				argv: null,
+			}}
+			submit={async () => {}}
+			openUrl={openUrl}
+			copyUrl={copyUrl}
+		/>
+	));
+	fireEvent.click(view.getByRole("link", { name: url }));
+	await waitFor(() => expect(view.getByText("Could not open the browser. Copy the URL instead.")).toBeTruthy());
+	expect(openUrl).toHaveBeenCalledExactlyOnceWith(url);
+	fireEvent.click(view.getByRole("button", { name: "Copy SSO URL" }));
+	await waitFor(() => expect(view.getByText("Copy failed. Select and copy the URL manually.")).toBeTruthy());
+	expect(copyUrl).toHaveBeenCalledExactlyOnceWith(url);
+	expect(view.getByRole("link", { name: url }).getAttribute("href")).toBe(url);
 });

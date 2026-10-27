@@ -771,7 +771,9 @@ mounted in a separate backend-created WebView or a capability-gated browser.
 It imports no App stores, debug globals or logging handlers. Sensitive input
 values stay in input elements until submit, then are cleared and unmounted
 before IPC/HTTP entry. Only requested fields render; approval instead shows
-exact argv/names/directory and optional template consent.
+exact argv/names/directory and optional template consent. SSO and phone URLs share
+selectable HTTP(S) links, copy actions and explicit system-browser opening;
+non-web SSO display values remain selectable plain text.
 
 `SettingsPanel/tabs/TelegramTab` renders the shared Telegram setup controls in desktop Settings and, when opened, in mobile `SettingsScreen`. All validation, pairing, private-file writes and polling ownership remain in Rust. The registered agent is read-only; agents opt in through MCP rather than a destination selector.
 

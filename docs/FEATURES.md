@@ -2913,7 +2913,9 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 The private window offers a selectable full phone-entry URL, Copy URL, a browser
 link and QR code using the Remote Mobile address policy. Disabled remote access
-shows setup guidance. Account-vault entry remains native-only.
+shows setup guidance. SSO HTTP(S) display URLs share the selectable link, copy
+and system-browser actions; other display values stay plain text. Account-vault
+entry remains native-only.
 
 The `secret` MCP tool opens a separate native form for requested sensitive
 fields and returns names/status only. Approved argv commands receive values in
