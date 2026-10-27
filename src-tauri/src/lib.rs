@@ -2978,6 +2978,7 @@ impl RemoteOptions {
     }
 
     /// Apply the remote boot policy before touching host agent configuration.
+    #[cfg(any(not(feature = "desktop"), test))]
     pub(crate) fn configure_agent_mcp(&self, disabled: &[String]) {
         if self.agent_configs {
             agent_mcp::ensure_mcp_configs(disabled);
