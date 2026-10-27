@@ -5836,3 +5836,5 @@ stale-lock-sweep checks are gone.
   then reverts, and confirm the tab title/accent border settle immediately with no flicker.
 
 - [ ] **Completion chime suppressed while Claude has declared background work** — frontend-only (`completionDecision.ts` `declared-background-work` reason; unit-tested). Live check after a rebuild: in a Claude session start a `run_in_background` task, let the turn end while the task keeps running with the tab in the background, and confirm no Completion chime plays until the task's follow-up turn finishes. `[HUMAN]` for the audio part only; `GET /logs` should show no `[Notify] ... completion` line while `declaredBackgroundWork` is true.
+
+- [ ] **Smart Selection "Open" on a relative path** — frontend-only (`CanvasTerminal.tsx` `openFile` dep now goes through `openTerminalPathLink`; mount-tested). After a rebuild: in a terminal whose cwd is a repo, print a relative path to an mp4 (`echo e2e/fixtures/112222.mp4`), right-click the match → Path → Open, and confirm the video plays (previously a broken player because the tab got `/e2e/fixtures/...`).

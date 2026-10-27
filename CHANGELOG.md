@@ -55,6 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Smart Selection "Open" on a relative path (e.g. `e2e/fixtures/clip.mp4`) now opens the file.** The action handed the raw matched text to the opener without resolving it against the terminal's working directory, so a relative match opened as `/e2e/fixtures/clip.mp4` — a broken video player, or "file not found" for other types. It now resolves like a link click does (and a matched directory opens in the file browser).
 - **Session Diff "Ask" mode shows a toast again** ("Session made changes" with "Open Session Diff"), above the terminal input, plus its bell notice.
 - Fix Smart Selection "Ask AI" doing nothing (and flipping the hidden panel's flag) while AI Chat is disabled — it now says so.
 - Fix Cmd+Shift+. folding an evicted (invisible) command block after scrollback eviction.

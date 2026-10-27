@@ -11,6 +11,8 @@ import { fireEvent, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
 import { settingsStore } from "../../../stores/settings";
+import { toastsStore } from "../../../stores/toasts";
+import { uiStore } from "../../../stores/ui";
 import { handleOpenUrl as openUrlSpy } from "../../../utils/openUrl";
 import { GUTTER_PX } from "../canvasTerminalUtils";
 import { buildTextFrame } from "./helpers/frameFixture";
@@ -119,6 +121,90 @@ describe("CanvasTerminal smart-selection gestures (Phase 4/5)", () => {
 		// The default action ran IN ADDITION to selecting the match — the
 		// selection itself isn't suppressed by Alt.
 		await selectionText(mounted.ref, "https://example.com/a");
+		await mounted.dispose();
+	});
+
+	it("Alt+double-click on a relative Path match resolves it on the backend before opening (not '/e2e/...')", async () => {
+		const onOpenFilePath = vi.fn();
+		const mounted = await mountCanvasTerminal({ sessionId: "a4", terminalId: "ta4", onOpenFilePath });
+		fakeTransport.current!.setInvokeHandler("resolve_terminal_path", () => ({
+			absolute_path: "/repo/e2e/fixtures/a.mp4",
+			is_directory: false,
+		}));
+		fakeTransport.current!.pushFrame(buildTextFrame(["see e2e/fixtures/a.mp4 now"], 40));
+
+		const point = cellPoint(8, 0);
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseUp(mounted.canvas, { button: 0, altKey: true, ...point });
+
+		await waitFor(() => expect(onOpenFilePath).toHaveBeenCalledWith("/repo/e2e/fixtures/a.mp4", undefined, undefined));
+		expect(fakeTransport.current!.invokeCalls).toContainEqual({
+			cmd: "resolve_terminal_path",
+			args: expect.objectContaining({ candidate: "e2e/fixtures/a.mp4" }),
+		});
+		await mounted.dispose();
+	});
+
+	it("a file:line:col match resolves the bare path and passes line/col to the opener", async () => {
+		const onOpenFilePath = vi.fn();
+		const mounted = await mountCanvasTerminal({ sessionId: "a5", terminalId: "ta5", onOpenFilePath });
+		fakeTransport.current!.setInvokeHandler("resolve_terminal_path", () => ({
+			absolute_path: "/repo/src/a.ts",
+			is_directory: false,
+		}));
+		fakeTransport.current!.pushFrame(buildTextFrame(["error at src/a.ts:12:3 here"], 40));
+
+		const point = cellPoint(12, 0);
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseUp(mounted.canvas, { button: 0, altKey: true, ...point });
+
+		await waitFor(() => expect(onOpenFilePath).toHaveBeenCalledWith("/repo/src/a.ts", 12, 3));
+		expect(fakeTransport.current!.invokeCalls).toContainEqual({
+			cmd: "resolve_terminal_path",
+			args: expect.objectContaining({ candidate: "src/a.ts" }),
+		});
+		await mounted.dispose();
+	});
+
+	it("a Path match that resolves to a directory opens the file browser, not a file tab", async () => {
+		const onOpenFilePath = vi.fn();
+		const mounted = await mountCanvasTerminal({ sessionId: "a6", terminalId: "ta6", onOpenFilePath });
+		uiStore.setFileBrowserExternalRoot(null);
+		fakeTransport.current!.setInvokeHandler("resolve_terminal_path", () => ({
+			absolute_path: "/repo/e2e/fixtures",
+			is_directory: true,
+		}));
+		fakeTransport.current!.pushFrame(buildTextFrame(["see e2e/fixtures/ now"], 40));
+
+		const point = cellPoint(8, 0);
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseUp(mounted.canvas, { button: 0, altKey: true, ...point });
+
+		await waitFor(() => expect(uiStore.state.fileBrowserExternalRoot).toBe("/repo/e2e/fixtures"));
+		expect(onOpenFilePath).not.toHaveBeenCalled();
+		uiStore.setFileBrowserExternalRoot(null);
+		await mounted.dispose();
+	});
+
+	it("a Path match that does not exist opens nothing and tells the user", async () => {
+		const onOpenFilePath = vi.fn();
+		// Stubbed: the real add() arms an auto-dismiss timer that happy-dom reports as a leak.
+		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue("" as never);
+		const mounted = await mountCanvasTerminal({ sessionId: "a7", terminalId: "ta7", onOpenFilePath });
+		fakeTransport.current!.setInvokeHandler("resolve_terminal_path", () => null);
+		fakeTransport.current!.pushFrame(buildTextFrame(["see no/such/file.mp4 now"], 40));
+
+		const point = cellPoint(8, 0);
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseDown(mounted.canvas, { button: 0, altKey: true, ...point });
+		fireEvent.mouseUp(mounted.canvas, { button: 0, altKey: true, ...point });
+
+		await waitFor(() => expect(addToast).toHaveBeenCalledWith("Open path", "Path not found: no/such/file.mp4", "warn"));
+		expect(onOpenFilePath).not.toHaveBeenCalled();
+		addToast.mockRestore();
 		await mounted.dispose();
 	});
 

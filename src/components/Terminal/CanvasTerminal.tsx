@@ -446,7 +446,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const path = parsed?.[1] ?? pathSpec;
 				const line = parsed?.[2] ? Number(parsed[2]) : undefined;
 				const col = parsed?.[3] ? Number(parsed[3]) : undefined;
-				props.onOpenFilePath?.(path, line, col);
+				// The match is raw terminal text (often cwd-relative, e.g. `e2e/fixtures/a.mp4`):
+				// resolve it on the backend like a link click, or a relative path reaches the
+				// opener unrooted and opens `/e2e/...` instead of `<cwd>/e2e/...`.
+				if (!invokeRef) return;
+				void openTerminalPathLink(path, currentTerminalCwd(), invokeRef, props.onOpenFilePath, line, col);
 			},
 			sendText: async (text, autoSubmitAllowed) => {
 				const agentType = terminalsStore.getAgentTypeForSession(props.sessionId);
