@@ -8497,6 +8497,47 @@ async fn capped_main_screen_origin_closes_a_titleless_intent() {
     assert_eq!(entries, ["Inspect capped scrollback"]);
 }
 
+/// Run a titleless intent through a 16-row grid whose screen origin is 3
+/// (18 line feeds scroll three rows into history), then feed `after`.
+#[cfg(unix)]
+fn scrolled_intent_events(after: &[&str]) -> Vec<(String, Option<String>)> {
+    let filler = "f\r\n".repeat(18);
+    let mut chunks = vec![
+        filler.as_str(),
+        "\x1b[4;1H\x1b[2K• intent: Inspect the scrolled start",
+    ];
+    chunks.extend_from_slice(after);
+    run_progress_intent_case_grid(&chunks, 80, true, false, None, true, false, 100, false).0
+}
+
+/// Bug caught: an intent that starts below the top of a scrolled screen is
+/// anchored at the wrong absolute row (origin 3, screen row 3), so prose that
+/// replaces it is not recognized and the intent stays open instead of closing.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn scrolled_intent_is_anchored_at_its_screen_row_plus_origin() {
+    assert_eq!(
+        scrolled_intent_events(&["\x1b[4;1H\x1b[2KReplacement prose"]),
+        [("Inspect the scrolled start".into(), None)]
+    );
+}
+
+/// Bug caught: a line break whose cursor lands exactly on the intent's last
+/// row counts as breaking the line; only a cursor below it does.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn cursor_on_the_last_intent_row_after_a_line_feed_keeps_it_open() {
+    assert_eq!(
+        scrolled_intent_events(&["\n"]),
+        [("Inspect the scrolled start".into(), None)],
+        "cursor one row below the intent closes it"
+    );
+    assert!(
+        scrolled_intent_events(&["\n\x1b[A"]).is_empty(),
+        "cursor back on the intent's row keeps it open"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn narrow_intent_absorbs_three_hard_wrap_rows() {
