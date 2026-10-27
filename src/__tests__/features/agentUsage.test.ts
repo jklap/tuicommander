@@ -91,7 +91,10 @@ describe("agent usage ticker — no vendor default", () => {
 
 	it("reads the ego terminal only — catches accidental Claude/Codex account fallback", async () => {
 		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "ego", sessionId: "ego-one" } } });
-		invoke.mockResolvedValue({ text: "ctx: 32768 · USD 0.00156247 · API eq: USD 1.25" });
+		invoke.mockResolvedValue({
+			text: "ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+			tooltip: "openrouter key: observed 2026-10-27T17:53:47.635+00:00; source: openrouter_key:data.limit_remaining",
+		});
 		initAgentUsage();
 		await settle();
 		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_ego_usage", { sessionId: "ego-one" });
@@ -99,7 +102,8 @@ describe("agent usage ticker — no vendor default", () => {
 			expect.objectContaining({
 				label: "ego",
 				sessionId: "ego-one",
-				text: "ctx: 32768 · USD 0.00156247 · API eq: USD 1.25",
+				text: "ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+				tooltip: "openrouter key: observed 2026-10-27T17:53:47.635+00:00; source: openrouter_key:data.limit_remaining",
 				onClick: undefined,
 			}),
 		]);

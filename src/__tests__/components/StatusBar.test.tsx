@@ -408,19 +408,25 @@ describe("StatusBar", () => {
 		expect(openDashboard).toHaveBeenCalledOnce();
 	});
 
-	it("absorbs matching ego usage into the active agent badge — catches ego allow-list omission", () => {
+	it("absorbs matching ego usage into the active agent badge — catches ego allow-list omission and dropped limit provenance", () => {
 		mockTerminalGetActive.mockReturnValue({ agentType: "ego", sessionId: "ego-one", usageLimit: null });
 		statusBarTicker.addMessage({
 			id: "claude-usage:rate",
 			pluginId: "claude-usage",
 			label: "ego",
 			sessionId: "ego-one",
-			text: "ctx: 32768 · USD 1.25",
+			text: "ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+			tooltip: "openrouter key: observed 2026-10-27T17:53:47.635+00:00; source: openrouter_key:data.limit_remaining",
 			priority: 0,
 			ttlMs: 0,
 		});
 		const { container } = render(() => <StatusBar {...defaultProps} />);
-		expect(container.querySelector(".agentBadge")?.textContent).toContain("ctx: 32768 · USD 1.25");
+		expect(container.querySelector(".agentBadge")?.textContent).toContain(
+			"ctx: 14/128000 · openrouter key: USD 195.970819484 left",
+		);
+		expect(container.querySelector(".agentBadge")?.getAttribute("title")).toContain(
+			"source: openrouter_key:data.limit_remaining",
+		);
 		expect(container.querySelector(".tickerMessage")).toBeNull();
 	});
 

@@ -344,7 +344,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 									rl()
 										? `${agentType()} — ${rl()!.count} session(s) rate limited (${rl()!.remaining})`
 										: usageTicker()
-											? usageTicker()!.text
+											? (usageTicker()!.tooltip ?? usageTicker()!.text)
 											: ul()
 												? `${agentType()} — ${ul()!.percentage}% of ${ul()!.limitType} limit used`
 												: `${t("statusBar.agent", "Agent:")} ${agentType()}`

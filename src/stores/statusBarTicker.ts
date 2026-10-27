@@ -11,6 +11,8 @@ export interface TickerMessage {
 	pluginId: string;
 	/** Display text (short, ~40 chars max for status bar) */
 	text: string;
+	/** Optional observation provenance; defaults to the display text. */
+	tooltip?: string;
 	/** Human-readable source label shown before the text (e.g. "Usage") */
 	label?: string;
 	/** Terminal binding for session-specific usage; absent for provider-wide tickers. */

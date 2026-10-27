@@ -510,7 +510,7 @@ async fn ego_report(program: &Path, home: &Path, workspace: &str) -> Result<Valu
 }
 
 fn ego_snapshot(report: &Value, session_id: &str) -> Result<SessionUsage, String> {
-    if report.get("v").and_then(Value::as_u64) != Some(3) {
+    if !matches!(report.get("v").and_then(Value::as_u64), Some(3 | 4)) {
         return Err("Failed to parse ego usage version".into());
     }
     let sessions = report
@@ -527,7 +527,8 @@ fn ego_snapshot(report: &Value, session_id: &str) -> Result<SessionUsage, String
     let total = &row["lines"]["total"];
     let usage = &total["usage"];
     let cost = &total["cost"];
-    let mut snapshot = SessionUsage::available("ego", "session_usage", "ego_usage_v3");
+    let source = format!("ego_usage_v{}", report["v"]);
+    let mut snapshot = SessionUsage::available("ego", "session_usage", &source);
     snapshot.model = row.get("model").and_then(Value::as_str).map(str::to_owned);
     snapshot.observed_at_ms = report.get("as_of").and_then(Value::as_u64);
     let categories = [
@@ -733,6 +734,13 @@ cat "$EGO_HOME/report.json""#,
         let mixed_report = serde_json::json!({"v": 3, "sessions": [mixed]});
         std::fs::write(dir.path().join("report.json"), mixed_report.to_string()).unwrap();
         let mixed_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+        // Catches: provider limits in v4 JSON ignored, so the badge has no remaining limit.
+        let mut v4: Value =
+            serde_json::from_str(include_str!("fixtures/ego-usage-v4.json")).unwrap();
+        v4["sessions"][0]["session"] = serde_json::json!(id);
+        std::fs::write(dir.path().join("report.json"), v4.to_string()).unwrap();
+        let v4_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+        let v4_snapshot = ego_snapshot(&v4, id);
         let source_error = if snapshot.availability != "available" {
             Some(format!(
                 "local={:?}; pid={:?}/{pid}; argv={:?}; home={:?}; binding={:?}",
@@ -761,6 +769,26 @@ cat "$EGO_HOME/report.json""#,
         assert_eq!(
             mixed_badge.unwrap().text.as_deref(),
             Some("USD 0 · API eq: USD 3.1727124")
+        );
+        let v4_badge = v4_badge.unwrap();
+        assert!(
+            v4_badge
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .contains("source: openrouter_key:data.limit_remaining")
+        );
+        assert!(
+            v4_badge
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .contains("2026-10-27T17:53:47.635+00:00")
+        );
+        assert_eq!(v4_snapshot.unwrap().source.as_deref(), Some("ego_usage_v4"));
+        assert_eq!(
+            v4_badge.text.as_deref(),
+            Some("ctx: 14/128000 · openrouter key: USD 195.970819484 left")
         );
         for snapshot in [snapshot, with_other_acp] {
             assert_eq!(
@@ -813,7 +841,7 @@ cat "$EGO_HOME/report.json""#,
         assert!(ego_snapshot(&report, "absent").is_err());
         report["sessions"][0] = report["sessions"][1].clone();
         assert!(ego_snapshot(&report, "exact").is_err());
-        report["v"] = serde_json::json!(4);
+        report["v"] = serde_json::json!(5);
         assert!(ego_snapshot(&report, "exact").is_err());
     }
 

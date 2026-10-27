@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently (#2386-6f7c).
+- Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 
 - Send selected Markdown text to an open AI Chat composer as a quoted file-and-line reference on desktop and mobile, preserving source lines around inline and reference-style links (#2361-8099).
 

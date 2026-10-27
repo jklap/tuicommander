@@ -45,6 +45,7 @@ interface AgentUsageSpec {
 	label: string;
 	command: string;
 	buildText: (api: never) => string;
+	tooltip?: (api: never) => string | undefined;
 	priority: (api: never) => number;
 	/** Substring of the backend's "no credentials" error, for a clearer ticker. */
 	missingTokenHint: string;
@@ -57,6 +58,7 @@ const SPECS: Record<UsageAgent, AgentUsageSpec> = {
 		label: "ego",
 		command: "get_ego_usage",
 		buildText: (api: { text: string | null }) => api.text ?? "",
+		tooltip: (api: { tooltip?: string }) => api.tooltip,
 		priority: () => 0,
 		missingTokenHint: "not configured",
 	} as AgentUsageSpec,
@@ -134,7 +136,7 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 	const spec = SPECS[agent];
 	const seq = ++pollSeq;
 
-	const write = (text: string, priority: number) => {
+	const write = (text: string, priority: number, tooltip?: string) => {
 		// A late response from the agent we just switched away from must not win.
 		if (seq !== pollSeq) return;
 		if (agent === "ego" && !text) {
@@ -147,6 +149,7 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 			label: spec.label,
 			...(agent === "ego" && sessionId ? { sessionId } : {}),
 			text,
+			...(tooltip ? { tooltip } : {}),
 			icon: CHART_SVG,
 			priority,
 			ttlMs: API_POLL_MS + 30_000,
@@ -166,7 +169,7 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 			agent === "claude" || agent === "ego"
 				? await invoke<never>(spec.command, { sessionId })
 				: await invoke<never>(spec.command);
-		write(spec.buildText(api), spec.priority(api));
+		write(spec.buildText(api), spec.priority(api), spec.tooltip?.(api));
 	} catch (err) {
 		const errStr = String(err);
 		const text =

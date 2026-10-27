@@ -3029,3 +3029,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next manual Rust rebuild/restart, verify Windows worktree cleanup uses its selected Git installation launcher and a forty-worktree MCP listing remains responsive while fresh dirty fingerprints change (#2310-6e76). The daily backend was not restarted; Rust changes do not hot-reload.
 
 - [ ] Ego status-bar context and cost (#2386-6f7c): after the next manual Rust rebuild/restart, open an ego terminal with recorded usage and enable the usage feature. Verify the shared badge shows context and known cost or labelled API equivalent, and no invented provider quota. The isolated agent-test evidence does not reload the daily app.
+
+- [ ] Ego v4 usage (#2386-6f7c): after a manual backend restart, verify observed context capacity and provider remaining limits in the shared badge; hover for timestamp/source/reset. Current OpenRouter key balances must stay labelled as key data, and missing observations must remain hidden. Rust changes do not hot-reload.
