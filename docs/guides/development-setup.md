@@ -336,6 +336,10 @@ test-run directories under `~/Gits/.tmp/tuic-tests` and the checkout's
 `.tmp/tuic-tests` after they have been unused for more than seven days. Run
 standalone Rust tests through that wrapper.
 
+Every Rust test binary that links `tuic-test-support` runs its git processes against a fixed hermetic gitconfig: `GIT_CONFIG_GLOBAL` points at it, `GIT_CONFIG_NOSYSTEM=1` is set and inherited `GIT_CONFIG_*` variables are dropped. Your own `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings therefore do not change test results.
+
+When a named instance's Unix socket path does not fit `sun_path`, the error names the path length, the 103-byte limit, the longest `TMPDIR` that would fit and `TUIC_SOCKET`; the bind is not retried.
+
 ### Live peer-mail wake canary
 
 After a Rust rebuild, run this against the isolated test instance, not the
@@ -489,7 +493,7 @@ See [Configuration docs](../backend/config.md) for all config files.
 
 ```bash
 make dev         # Tauri dev mode
-make build       # Production build
+make build       # Production build (skips updater artifact signing when TAURI_SIGNING_PRIVATE_KEY is unset)
 make test        # Run tests
 make lint        # Run linter
 make docs        # Build this documentation + search index into docs/book
