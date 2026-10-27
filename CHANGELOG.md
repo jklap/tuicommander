@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
+
 - Keep sleep prevention active for background agent jobs, detached runners and managed `keep_open` work, even when a terminal is idle or the WebView is hidden; retain the user opt-out (#2402-12a0).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 

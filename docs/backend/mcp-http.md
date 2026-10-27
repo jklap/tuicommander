@@ -3015,3 +3015,12 @@ caller's temporary directory.
 ### Append-only story notes
 
 `add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](../api/http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.
+
+### Headless manual TLS listener
+
+`run_remote()` validates `services.tls` before starting listeners. Manual mode
+uses the same axum-server/rustls dual-protocol acceptor as desktop remote access.
+HTTP responses, SSE and WebSocket upgrades share one HTTP+HTTPS TCP listener,
+preserving local relay and SSH HTTP clients; TLS off uses the plain acceptor. The
+`tls_listener` weak lifetime is published only after TLS listener setup and
+expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.

@@ -826,6 +826,14 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 }
 ```
 
+Manual mode serves **HTTP and HTTPS** on the same daemon TCP port, like desktop
+remote access. HTTPS includes SSE and WebSocket (`wss://`) traffic; HTTP remains
+available for local relay and SSH clients.
+Missing or invalid PEM files stop startup before any listener binds; there is no
+plaintext fallback. With `mode: "off"` (the default), the port serves plain HTTP.
+Startup logs report the bound listener mode, and `tls_active` reflects the live
+TLS listener rather than the presence of certificate configuration.
+
 ### Differences from Desktop Remote Access
 
 | | Desktop Remote Access | tuic-remote |

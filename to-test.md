@@ -1,3 +1,7 @@
+## Headless manual TLS (2344-59cf) — daemon rebuild/restart required
+
+- [ ] After rebuilding `tuic-remote`, restart the affected daemon when safe. With manual PEM configuration, connect via HTTPS and WSS and confirm SSE delivery; confirm local relay/SSH HTTP access stays available. With TLS off, HTTP stays available. The daily app was not restarted; Rust does not hot-reload. Automated GREEN verification belongs to the coordinator critic.
+
 ## Mobile usage menu (2400-d006)
 
 - [x] Nine focused mobile usage and shared formatter tests pass. Equal/changed session snapshots keep the existing quota rows mounted; one plan heading groups both windows, with no invented tier.

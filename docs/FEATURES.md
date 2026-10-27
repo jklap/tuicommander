@@ -2657,7 +2657,9 @@ partial work, and their child processes may continue.
 
 ### 22.3 TLS
 - Manual TLS via `services.tls` in the instance's `config.json` (`mode: "manual"`,
-  plus cert and key PEM paths)
+  plus cert and key PEM paths); the daemon port supports HTTP+HTTPS, including SSE and WSS
+- Missing or invalid PEM files fail before bind, with no plaintext fallback; live
+  listener state drives TLS diagnostics
 - No TLS by default — use a reverse proxy or Tailscale for production
 
 ### 22.4 Lifecycle
