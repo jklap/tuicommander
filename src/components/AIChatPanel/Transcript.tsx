@@ -23,6 +23,7 @@ import {
 } from "solid-js";
 import type { AcpNoticeAction, AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
 import { transcriptPreferences } from "../../stores/transcriptPreferences";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
@@ -299,6 +300,8 @@ export interface TranscriptSearchRef {
 }
 
 export interface TranscriptProps {
+	/** Terminal font zoom input; Chat keeps its own shared default type scale. */
+	fontSize?: number;
 	/** Let a host expose the existing follow state and jump action outside the transcript. */
 	onAtBottomChange?: (atBottom: boolean) => void;
 	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
@@ -728,7 +731,14 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<div class={s.transcriptViewport}>
+		<div
+			class={s.transcriptViewport}
+			data-chat-typography={props.mobile ? undefined : ""}
+			style={{
+				"--chat-zoom-step":
+					props.fontSize !== undefined ? `${props.fontSize - settingsStore.state.defaultFontSize}px` : "0px",
+			}}
+		>
 			<div
 				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 				ref={container}

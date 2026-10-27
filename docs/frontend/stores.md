@@ -443,6 +443,8 @@ from a notification burst to overlap.
 ACP interaction notifications are keyed by connection and request ID, so a
 re-render cannot send a duplicate. Settlement closes the matching notification.
 
+`acpStore.turnOutcome` retains the latest streamed completion per attached session, including the turn ID on ACP v1 failures after `activeTurn` clears. Older replayed completions cannot replace it, and removed attachments release it. AI Chat matches it to locally submitted prompts before using the shared compact action and a single replay; history or another client's turn cannot start recovery.
+
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
 Provider-retry patches retain the provider text and an arrival-based presentation

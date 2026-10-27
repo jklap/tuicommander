@@ -214,7 +214,7 @@ Per-terminal font size control:
 | Zoom out | `Cmd+-` | -2px font size |
 | Reset | `Cmd+0` | Back to default size |
 
-Range: 8px to 32px. Each terminal has its own zoom level, shared by its CLI and Chat views. Zoom shortcuts work in either view; the all-terminals variants update both views too. The current zoom is shown in the status bar.
+Range: 8px to 32px for the CLI grid. Each terminal has its own zoom level. Desktop session Chat and AI Chat share a 14px default reading scale, independent of the configured grid default. A terminal zoom step changes its Chat text by the same amount; AI Chat follows the active terminal. Reset returns both Chat views to their default reading scale. Chat body text stays between 8px and 32px. Zoom shortcuts work in either terminal view; the all-terminals variants update both views too. The current grid font size is shown in the status bar. Mobile keeps its device-local Chat font preference.
 
 ## Split Panes
 
