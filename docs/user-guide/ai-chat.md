@@ -124,6 +124,7 @@ activity time. A conversation without these details shows **Untitled conversatio
 its session ID is available in the tooltip. The model/mode row remains visible
 with **pending** values until the selected session publishes its options.
 
+The header and conversation picker stay on the selected transcript when the saved-conversation list loads or refreshes, even when other sessions are attached.
 When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
 percentage and shows the cumulative cost when ego reports one.

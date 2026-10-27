@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow (#2383-f1a1).
 - Show the agent's reasoning choice label in the AI Chat summary instead of its internal unselected value after a model change (#2388-53a8).
 - Make the desktop AI Chat model, reasoning and mode summary open Session settings, and keep its menu action visible with an explanation while options are unavailable (#2385-1694).
+- Keep the AI Chat conversation picker on the selected transcript when saved conversations arrive or refresh, instead of showing another attached session (#2391-8d6a).
 
 - Allow remote terminal WebSocket streams over SSH and Direct HTTP(S) connections in the macOS desktop CSP, fixing blank terminals with “The operation is insecure” (#147, #2382-97aa).
 
