@@ -7354,6 +7354,7 @@ mod tests {
         let src = remote_source();
         let repo = setup_test_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        without_local_trunk(repo.path());
         // A tag pointing at a tree never peels to a commit, but still wins
         // name resolution over refs/remotes/upstream/develop.
         git_cmd(repo.path())
@@ -7369,6 +7370,7 @@ mod tests {
         let src = remote_source();
         let repo = setup_test_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        without_local_trunk(repo.path());
         // refs/upstream/develop outranks refs/remotes/upstream/develop.
         git_cmd(repo.path())
             .args(["update-ref", "refs/upstream/develop", "HEAD"])
@@ -11259,7 +11261,7 @@ branch refs/heads/feat
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-merged");
         assert_eq!(status.error, None);
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("ancestry"));
+        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
         assert!(merged.exists());
 
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-ahead");
