@@ -1,3 +1,7 @@
+## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
+
+- [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.
+
 ## Plans and Stories editor layout (2356-5c36)
 
 - [ ] Coordinator pixel review: inspect the native before/after editor captures and the 1400/700/390px browser state captures in `~/Gits/.tmp/results/2356-review/`. Confirm the picker, wrapping title/source, disabled-Save reason, full-width New story, compact grouped plan actions, and archived toggle placement. The 80 focused component/i18n tests and TypeScript check pass. Screenshots and measured geometry are available; this text-only peer did not decode PNG content.

@@ -1,6 +1,23 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
+it("remote_terminal_websocket_schemes_are_explicitly_allowed", () => {
+	// Catches #147: HTTP(S) sources alone leave remote WS(S) streams blocked
+	// in WebKit. SSH uses a dynamic loopback port; Direct accepts user-owned
+	// HTTP or HTTPS hosts/ports, so neither scheme can be loopback-only.
+	const {
+		app: { security },
+	} = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+	const directives = security.csp.split(";").map((value: string) => value.trim().split(/\s+/));
+	const sources = (
+		directives.find(([name]: string[]) => name === "connect-src") ??
+		directives.find(([name]: string[]) => name === "default-src")
+	)?.slice(1);
+	expect(sources, "connect-src (or default-src fallback) must explicitly allow remote WebSocket schemes").toEqual(
+		expect.arrayContaining(["ws:", "wss:"]),
+	);
+});
+
 it("csp_must_stay_wide_open_boss_decision", () => {
 	// AGENTS.md, Accepted Security Decisions: the user is the trust boundary.
 	// Per-directive restrictions blank URL tabs and break plugin scripts/styles.
