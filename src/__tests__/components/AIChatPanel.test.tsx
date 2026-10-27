@@ -10,6 +10,7 @@ import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
+import recordedModelChange from "../fixtures/ego-model-change-2388.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
 
@@ -1516,7 +1517,7 @@ describe("AIChatPanel: parallel tabs", () => {
 	])("keeps model and mode pending until options arrive, starting with $configOptions", async ({ configOptions }) => {
 		const { container } = await renderPanel();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions })] }));
-		expect(container.textContent).toContain(configOptions.length ? "high" : "Model: pending · Mode: pending");
+		expect(container.textContent).toContain(configOptions.length ? "High" : "Model: pending · Mode: pending");
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
 		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Model: pending");
@@ -3714,7 +3715,48 @@ describe("AIChatPanel: the session's own knobs", () => {
 			}),
 		);
 		await settle();
-		expect(summary!.textContent).toBe("Sonnet · high · Automatic");
+		expect(summary!.textContent).toBe("Sonnet · High · Automatic");
+	});
+
+	// Catches: changing models exposes ego's internal unselected effort value in composer metadata.
+	it("uses the published reasoning label after the recorded model change, never the internal sentinel", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: recordedModelChange.before as AcpSessionConfigOption[],
+					}),
+				],
+			}),
+		);
+		await settle();
+		const summary = container.querySelector<HTMLButtonElement>(
+			'.composerMeta button[aria-label="Change model, reasoning and mode"]',
+		)!;
+		expect(summary.textContent).toBe("gpt-6.1-sol · low · default");
+		summary.click();
+		const picker = container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
+		picker.value = "ollama/gemma4:12b-mlx";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", {
+			value: "ollama/gemma4:12b-mlx",
+		});
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						configOptions: recordedModelChange.after as AcpSessionConfigOption[],
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(summary.textContent).not.toContain("__ego_unselected__");
+		expect(summary.textContent).toBe("gemma4:12b-mlx · Choose a value · default");
+		expect(client.prompt).not.toHaveBeenCalled();
 	});
 
 	// Catches: missing ACP options silently remove the only discoverable settings action.

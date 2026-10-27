@@ -429,13 +429,7 @@ export function sessionSummary(chat: AcpChat): string {
 			.configOptions()
 			.filter((option): option is SelectOption => option.type === "select")
 			.filter((option) => option.id === "model" || option.id === "effort" || option.id === "mode")
-			.map((option) =>
-				option.id === "model"
-					? choiceName(option).split("/").at(-1)
-					: option.id === "effort"
-						? option.currentValue
-						: choiceName(option),
-			)
+			.map((option) => (option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)))
 			.join(" · ") || "Model: pending · Mode: pending"
 	);
 }

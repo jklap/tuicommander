@@ -229,7 +229,9 @@ read its full command and output.
   The dialog has
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
-  and the displayed values follow ego's reply. A rejected change shows its error
+  and the displayed values follow ego's reply. The summary uses the published
+  choice labels, including **Choose a value** when a model change leaves reasoning
+  effort unselected. A rejected change shows its error
   in the dialog. TUICommander keeps no separate model list.
   The model every *new* run starts from is ego's own default, editable in
   Settings → **AI Chat** (see [Settings](settings.md#ai-chat)).
