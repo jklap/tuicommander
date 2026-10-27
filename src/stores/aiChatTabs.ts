@@ -61,6 +61,11 @@ export const aiChatTabs = {
 		save(root, { ...current, pinnedRepos });
 	},
 	active: (root: string) => byRoot()[root]?.active ?? null,
+	/** Apply the host selection without publishing another selection. */
+	adopt(root: string, session: string | null): void {
+		const ids = byRoot()[root]?.ids ?? [];
+		save(root, { ids: session && !ids.includes(session) ? [...ids, session] : ids, active: session ?? "" });
+	},
 	refresh(): void {
 		setByRoot(read());
 	},

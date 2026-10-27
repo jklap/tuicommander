@@ -315,6 +315,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::SettingsChanged(_) => "settings-changed",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::IdeasChanged => "ideas-changed",
+        AppEvent::AiChatSelectionChanged => "ai-chat-selection-changed",
         AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
@@ -362,6 +363,7 @@ pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
 
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
+        AppEvent::AiChatSelectionChanged => serde_json::json!({}),
         AppEvent::OpenMarkdownTabsChanged => serde_json::json!({}),
         AppEvent::WorkItemProviderRequest {
             request_id,

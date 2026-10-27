@@ -142,6 +142,12 @@ and issues for the rest of the session. Named accounts cache their own login in
 | `github_set_issue_filter` | `(filter: String) -> ()` | Change the issue filter mode live |
 | `github_set_pr_hide_drafts` | `(hide: bool) -> ()` | Toggle draft-PR filtering live |
 
+Frontend startup and repository add, remove, park/unpark, and disk adoption use
+`services/githubPollingPaths.ts` to group active paths by connection owner. Local
+polling receives only local paths; connected daemons receive only their own paths.
+An empty local set clears local polling. Removing or parking an owner's last active
+repository sends an empty path set to that owner. Disconnected owners are skipped.
+
 The diagnostics `repos_monitored` gauge counts repository paths with successful
 PR snapshots in the running poller's transition history, including empty snapshots.
 It does not count entries in the TTL query cache. Cache expiry and failed poll ticks

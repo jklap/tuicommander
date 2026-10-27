@@ -374,6 +374,8 @@ normalized snapshot are shared with `GET /sessions/{id}/usage`. Provider/CLI
 I/O is bounded and never runs through a synchronous Tauri command on the
 macOS main thread.
 
+AI Chat selection: `ai_chat_selection` is async (workspace resolution); `select_ai_chat_conversation` is async and runs the config transaction through `spawn_blocking`, never on the macOS main thread.
+
 `get_ego_usage` is async. It shares the live-terminal source and bounded report reader with session usage; no process wait runs on the macOS UI thread.
 
 ## Sleep assertion refresh (2402-12a0)

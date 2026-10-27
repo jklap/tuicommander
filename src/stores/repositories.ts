@@ -3,6 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import type { DetachedWorktree, WorktreeDiagnostic } from "../hooks/useRepository";
 import { invoke, listen } from "../invoke";
+import { updateGitHubPollingPaths } from "../services/githubPollingPaths";
 import { settingsRefresh } from "../services/settingsRefresh";
 import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
@@ -732,6 +733,7 @@ function createRepositoriesStore() {
 			state.groups,
 			state.groupOrder,
 		);
+		const previousOwners = Object.values(state.repositories).map((repo) => repo.connectionId);
 		const next = cloneJson(baseline);
 		let adopted = false;
 
@@ -822,7 +824,7 @@ function createRepositoriesStore() {
 		if (!adopted) return;
 		persistedSnapshot = next;
 		syncHotRepos(state.repositories);
-		invoke("github_update_paths", { paths: actions.getActivePaths() }).catch(() => {});
+		updateGitHubPollingPaths(actions.getActivePaths(), previousOwners);
 	};
 
 	let remoteSyncStarted = false;
@@ -1047,14 +1049,15 @@ function createRepositoriesStore() {
 				setState("repoOrder", [...state.repoOrder, repo.path]);
 			}
 			save();
-			invoke("github_update_paths", { paths: this.getActivePaths() }).catch(() => {});
+			updateGitHubPollingPaths(this.getActivePaths());
 		},
 
 		/** Remove a repository */
 		remove(path: string): void {
+			const previousOwner = state.repositories[path]?.connectionId;
 			dropRepositoryFromState(path);
 			save();
-			invoke("github_update_paths", { paths: this.getActivePaths() }).catch(() => {});
+			updateGitHubPollingPaths(this.getActivePaths(), [previousOwner]);
 		},
 
 		/** Set active repository */
@@ -1496,7 +1499,7 @@ function createRepositoriesStore() {
 			if (!state.repositories[path]) return;
 			setState("repositories", path, "parked", parked);
 			save();
-			invoke("github_update_paths", { paths: this.getActivePaths() }).catch(() => {});
+			updateGitHubPollingPaths(this.getActivePaths(), [state.repositories[path].connectionId]);
 			const cmd = parked ? "stop_repo_watcher" : "start_repo_watcher";
 			invoke(cmd, { repoPath: path }).catch((err) => {
 				appLogger.warn("store", `${cmd} failed for ${path}`, err);

@@ -756,6 +756,8 @@ can choose what the host runs.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
+| `ai_chat_selection` | — | `{ workspace, sessionId: string \| null }` | Read the backend-owned active conversation for the configured workspace; HTTP `GET /acp/chat/selection` |
+| `select_ai_chat_conversation` | `session_id: Option<String>` | `()` | Persist last-writer-wins selection (null clears); HTTP `PUT /acp/chat/selection` with `{ sessionId }`. Changed snapshots invalidate desktop and SSE clients |
 | `acp_workspace_root` | — | `String` | The directory AI Chat runs in, from `ai_chat_workspace` (empty = home directory of this host). A missing folder is created; an unusable one is refused with a message naming the setting |
 | `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
 | `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
