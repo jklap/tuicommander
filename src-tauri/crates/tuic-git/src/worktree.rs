@@ -4948,6 +4948,34 @@ thread_local! {
     static SHELL_SCRIPT_CONTEXT: std::cell::RefCell<Option<(std::ffi::OsString, PathBuf)>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Git Bash exposes Git for Windows' internal binary ahead of its launcher.
+/// Keep the selected installation, but enter it through its environment wrapper.
+#[cfg(windows)]
+fn windows_git_launcher(git: String) -> String {
+    let binary = Path::new(&git);
+    let Some(bin) = binary.parent() else {
+        return git;
+    };
+    let Some(runtime) = bin.parent() else {
+        return git;
+    };
+    if bin.file_name().is_some_and(|name| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("bin"))
+    }) && runtime.file_name().is_some_and(|name| {
+        name.to_str().is_some_and(|name| {
+            name.eq_ignore_ascii_case("ucrt64") || name.eq_ignore_ascii_case("mingw64")
+        })
+    }) && let Some(installation) = runtime.parent()
+    {
+        let launcher = installation.join("cmd").join("git.exe");
+        if launcher.is_file() {
+            return launcher.to_string_lossy().into_owned();
+        }
+    }
+    git
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -4974,6 +5002,7 @@ fn run_shell_script(
             let git = tuic_core::cli::resolve_cli("git.exe");
             Path::new(&git).is_absolute().then_some(git)
         })
+        .map(windows_git_launcher)
         .and_then(|git| {
             Path::new(&git)
                 .parent()
@@ -13995,7 +14024,29 @@ branch refs/heads/feat
     // Catches: cleanup fetch prunes the sole remote proof, but deletion still drops local work.
     #[test]
     fn removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof() {
-        // DEFERRED (2026-10-25) — classify the native fault from Windows-only failure probes before changing cleanup execution.
+        #[cfg(windows)]
+        {
+            // Catches: choosing another installation, or rewriting a custom Git path.
+            let selected = tempfile::tempdir().unwrap();
+            let launcher = selected.path().join("cmd").join("git.exe");
+            for runtime in ["ucrt64", "mingw64"] {
+                let internal = selected.path().join(runtime).join("bin").join("git.exe");
+                let internal = internal.to_string_lossy().into_owned();
+                if !launcher.exists() {
+                    assert_eq!(windows_git_launcher(internal.clone()), internal);
+                    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+                    fs::write(&launcher, b"not executed").unwrap();
+                }
+                assert_eq!(windows_git_launcher(internal), launcher.to_string_lossy());
+            }
+            let custom = selected
+                .path()
+                .join("custom")
+                .join("git.exe")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(windows_git_launcher(custom.clone()), custom);
+        }
         SHELL_SCRIPT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().clear());
         let (_temp, repo, _) = workspace_fixture();
         let origin = add_origin(&repo);

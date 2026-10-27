@@ -584,7 +584,6 @@ async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
 /// worktrees on the listing path; fresh dirt and fingerprints must still move.
 #[tokio::test]
 async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
-    // DEFERRED (2026-10-25) — Windows repeat listing takes 13.621s with the fork budget satisfied; profile per-checkout reads there, not a larger response deadline.
     let (_temp, repo, _) = branch_delete_fixture();
     crate::git_cli::git_cmd(&repo)
         .args(["checkout", "main"])
@@ -653,6 +652,42 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
             .map(|entry| entry.value().clone())
     );
 
+    // Catches: the empty-index fast path changes the established fingerprint bytes.
+    for index in [0, 1] {
+        use sha2::Digest;
+        let checkout = &checkouts[index];
+        let mut digest = sha2::Sha256::new();
+        let status = crate::git_cli::git_cmd(checkout)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .unwrap()
+            .stdout;
+        let head = crate::git_cli::git_cmd(checkout)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout;
+        let modules = crate::git_cli::git_cmd(checkout)
+            .args(["submodule", "status", "--recursive"])
+            .run()
+            .unwrap()
+            .stdout;
+        digest.update(status.as_bytes());
+        digest.update([0]);
+        digest.update(head.trim().as_bytes());
+        digest.update([0]);
+        digest.update(modules.as_bytes());
+        assert_eq!(
+            second[format!("work-{index}")]["lifecycle_status"]["dirty_fingerprint"],
+            hex::encode(digest.finalize())
+        );
+    }
+
     // Changed refs must invalidate monitoring proofs, unlike a plain file save.
     branch_delete_commit(&checkouts[1], "feature.txt", "own commit\n");
     let changed = handle_worktree(&state, &args, false).await;
@@ -661,6 +696,23 @@ async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
         "unmerged"
     );
     assert_eq!(changed["work-0"]["lifecycle_status"]["dirty_files"], 1);
+
+    // Catches: skipping submodule safety merely because .gitmodules is absent.
+    let head = crate::git_cli::git_cmd(&checkouts[2])
+        .args(["rev-parse", "HEAD"])
+        .run()
+        .unwrap()
+        .stdout;
+    crate::git_cli::git_cmd(&checkouts[2])
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{},missing-module", head.trim()),
+        ])
+        .run()
+        .unwrap();
+    assert!(tuic_git::worktree::dirty_fingerprint_at(&checkouts[2]).is_err());
 }
 
 /// worktree_list must share the sidebar and removal classifier rather than
