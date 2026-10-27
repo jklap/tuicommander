@@ -903,27 +903,19 @@ export function createAcpChat(
 					if (await openCustom(options, isCurrent)) failedSession = null;
 					return;
 				}
-				if (binding?.launch || (!binding && failedSession)) {
+				if (binding?.launch || !binding) {
 					binding = defaultBinding;
 					setConnectionId(binding?.connectionId ?? null);
 					setSessionId(binding?.sessionId ?? null);
-					const target = await chatRoot();
-					if (!isCurrent()) return;
+					const target = await guard("finding the workspace", chatRoot, isCurrent);
+					if (!target || !isCurrent()) return;
 					setRoot(target);
-					// A default new chat must not restore the currently selected custom chat.
+					// New chat never replays the saved selection or inherits its title.
 					if (!binding) {
 						const current = await guard("connecting to ego", () => connectDefault(target), isCurrent);
 						if (!current || !isCurrent()) return;
 						binding = current;
 						setConnectionId(current.connectionId);
-					}
-				}
-				if (!pair() && !binding) {
-					const started = await start();
-					if (!started || !isCurrent()) return;
-					if (started.fresh) {
-						failedSession = null;
-						return;
 					}
 				}
 				const id = connectionId();

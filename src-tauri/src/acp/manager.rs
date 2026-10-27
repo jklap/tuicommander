@@ -890,6 +890,16 @@ impl AcpClientManager {
             .map_err(|_| AcpClientError::transport_closed(connection_id))?
     }
 
+    /// Process-owned turns still need power when no WebView can report busy.
+    pub(crate) fn has_active_work(&self) -> bool {
+        self.connections.lock().values().any(|connection| {
+            connection.snapshot.settlement.is_none()
+                && connection.snapshot.attachments.iter().any(|attachment| {
+                    attachment.active_turn.is_some() || !attachment.queued_prompts.is_empty()
+                })
+        })
+    }
+
     pub fn snapshot(
         &self,
         connection_id: AcpConnectionId,

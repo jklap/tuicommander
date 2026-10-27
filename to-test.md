@@ -3062,5 +3062,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next manual Rust rebuild/restart, verify Windows worktree cleanup uses its selected Git installation launcher and a forty-worktree MCP listing remains responsive while fresh dirty fingerprints change (#2310-6e76). The daily backend was not restarted; Rust changes do not hot-reload.
 
+- [ ] Ego status-bar context and cost (#2386-6f7c): after the next manual Rust rebuild/restart, open an ego terminal with recorded usage and enable the usage feature. Verify the shared badge shows context and known cost or labelled API equivalent, and no invented provider quota. The isolated agent-test evidence does not reload the daily app.
+
+- [ ] Ego v4 usage (#2386-6f7c): after a manual backend restart, verify observed context capacity and provider remaining limits in the shared badge; hover for timestamp/source/reset. Current OpenRouter key balances must stay labelled as key data, and missing observations must remain hidden. Rust changes do not hot-reload.
 
 - [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).
+
+- [ ] Sleep prevention after backend rebuild (#2402-12a0): enable Prevent sleep when busy, run a managed agent background job or `keep_open` peer, let its composer become idle, then lock/hide the app. Check `pmset -g assertions` retains TUIC's Agent session active assertions; finish/close the work and confirm release. Disable the setting and confirm release while work remains. The Rust change needs a manual `make dev` restart or `make build`; it does not hot-reload.

@@ -1514,6 +1514,13 @@ describe("transport", () => {
 				path: "/sessions/private%2Fsession/usage",
 			});
 		});
+		it("maps ego usage to its exact terminal — catches lost or unencoded session binding", () => {
+			expect(mapCommandToHttp("get_ego_usage", { sessionId: "private/session" })).toEqual({
+				method: "GET",
+				path: "/ego/usage?sessionId=private%2Fsession",
+			});
+		});
+
 		it("maps get_claude_usage_api to GET /claude/usage", () => {
 			const result = mapCommandToHttp("get_claude_usage_api", {});
 			expect(result.method).toBe("GET");

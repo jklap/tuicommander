@@ -1957,7 +1957,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     };
 
     #[cfg(feature = "desktop")]
-    let builder = builder.manage(sleep_prevention::SleepBlocker::new());
+    let builder = builder.manage(Arc::new(sleep_prevention::SleepBlocker::new()));
 
     #[cfg(feature = "dictation")]
     let builder = builder.manage(dictation::DictationState::new());
@@ -2004,6 +2004,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
             *app_state.app_handle.write() = Some(app.handle().clone());
+            sleep_prevention::spawn(
+                app_state,
+                app.state::<Arc<sleep_prevention::SleepBlocker>>().inner().clone(),
+            )?;
             background_mode::tray::desktop::sync(app.handle());
 
             // Ensure main window exists — if tauri.conf.json windows[] is
@@ -2688,6 +2692,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
             ego_cli::ego_providers,
+            ego_cli::usage::get_ego_usage,
             ego_cli::perimeter::ego_perimeter,
             ego_cli::perimeter::ego_set_perimeter_roots,
             ego_cli::perimeter::ego_set_perimeter_network,
@@ -2913,6 +2918,9 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     mcp_http::spawn_maintenance_sweep(state);
 
     // Deliberately NOT started on the daemon:
+    //
+    // - `sleep_prevention::spawn` — desktop setup owns the machine's native
+    //   power assertion. Remote daemon lifetime is not a desktop sleep policy.
     //
     // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
     //   not exist in this build. There is no WebView whose document can be lost.
