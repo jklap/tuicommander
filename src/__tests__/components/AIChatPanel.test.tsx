@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import recordedCommands from "../fixtures/ego-available-commands-2393.json";
 import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedModelChange from "../fixtures/ego-model-change-2388.json";
@@ -277,14 +278,14 @@ async function renderPanel() {
 	return view;
 }
 
-/** Type a message and press Send. */
+/** Type a message and press the active Send or Queue control. */
 async function typeAndSend(container: HTMLElement, text: string): Promise<void> {
 	const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 	textarea.value = text;
 	textarea.dispatchEvent(new Event("input", { bubbles: true }));
 	(
-		[...container.querySelectorAll("button")].find(
-			(button) => button.getAttribute("aria-label") === "Send",
+		[...container.querySelectorAll("button")].find((button) =>
+			["Send", "Queue"].includes(button.getAttribute("aria-label") ?? ""),
 		) as HTMLButtonElement
 	).click();
 	await settle();
@@ -5596,4 +5597,144 @@ it("closes the detached window from its header", async () => {
 	const { container } = await renderPanel();
 	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
 	expect(mockClosePanel).toHaveBeenCalledWith("ai-chat");
+});
+
+describe("AIChatPanel: ACP slash commands", () => {
+	const offer = () => feed({ kind: "sessionUpdate", update: recordedCommands });
+	const type = (container: HTMLElement, text: string) => {
+		const input = container.querySelector("textarea")!;
+		input.value = text;
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		return input;
+	};
+	it("shows descriptions and input hints — catches available_commands_update dropped so no menu appears", async () => {
+		const { container } = await renderPanel();
+		offer();
+		type(container, "/capture");
+		await settle();
+		const menu = container.querySelector('[aria-label="Slash commands"]');
+		expect(menu?.textContent).toContain("/capture-meeting");
+		expect(menu?.textContent).toContain("Extract a meeting into the operational memory graph");
+		expect(menu?.textContent).toContain("<path-to-notes | pasted text | Spinach reference>");
+		expect(menu?.textContent).not.toContain("/imagegen");
+	});
+	it("runs the existing compact action — catches /compact sent to the model", async () => {
+		const { container } = await renderPanel();
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "compacted",
+			publication: { kind: "not_published", diagnostic: "empty" },
+		});
+		await typeAndSend(container, "/compact");
+		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it.each(["/quit", "/q"])("ends the chat for %s — catches quit sent to the model", async (command) => {
+		const { container } = await renderPanel();
+		await typeAndSend(container, command);
+		expect(client.disconnect).toHaveBeenCalledWith(CONNECTION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("forks the chat — catches /fork sent to the model", async () => {
+		supportsFork = true;
+		client.forkSession.mockResolvedValueOnce(CHILD_SESSION);
+		const { container } = await renderPanel();
+		await typeAndSend(container, "/fork");
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	it("selects with keyboard and mouse and preserves prompt arguments — catches completion submitting or rewriting agent commands", async () => {
+		const { container } = await renderPanel();
+		offer();
+		const input = type(container, "/capt");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+		expect(input.value).toBe("/capture-meeting ");
+		expect(client.prompt).not.toHaveBeenCalled();
+		await typeAndSend(container, "/capture-meeting notes with spaces");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "/capture-meeting notes with spaces", [], ROOT);
+		type(container, "/ima");
+		container.querySelector<HTMLButtonElement>('[role="option"]')!.click();
+		expect(input.value).toBe("/imagegen ");
+	});
+	it("navigates, dismisses and completes without sending — catches arrows ignored or Escape cancelling a busy turn", async () => {
+		const { container } = await renderPanel();
+		const input = type(container, "/");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(input.value).toBe("/clear ");
+		expect(client.prompt).not.toHaveBeenCalled();
+		type(container, "/");
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+		expect(client.cancel).not.toHaveBeenCalled();
+	});
+	it.each(["/not-a-command", "/name new title", "/retry"])(
+		"retains %s with available actions — catches unknown commands silently sent",
+		async (command) => {
+			const { container } = await renderPanel();
+			await typeAndSend(container, command);
+			expect(client.prompt).not.toHaveBeenCalled();
+			expect(container.querySelector("textarea")!.value).toBe(command);
+			expect(container.textContent).toContain("not available in AI Chat");
+			expect(container.textContent).toContain("Available commands: /new, /clear");
+		},
+	);
+	it("revokes stale offers and isolates sessions — catches commands leaking across tabs or surviving an empty replacement", async () => {
+		const { container } = await renderPanel();
+		offer();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "available_commands_update", availableCommands: [] } });
+		type(container, "/capture");
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+		feed({ kind: "sessionUpdate", update: recordedCommands }, SECOND_SESSION);
+		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
+	});
+	it("keeps unadvertised host verbs unavailable — catches unsupported /fork or /compact falling through to a model", async () => {
+		const { container } = await renderPanel();
+		const current = acpStore.connection(CONNECTION)!;
+		acpStore.applySnapshot({
+			...current,
+			capabilities: { ...current.capabilities!, fork: false, egoHoldVersion: null, egoCompactVersion: null },
+		});
+		for (const command of ["/fork", "/compact", "/pause", "/resume"]) {
+			await typeAndSend(container, command);
+			expect(container.textContent).toContain("not available in AI Chat");
+		}
+		expect(client.prompt).not.toHaveBeenCalled();
+		expect(client.forkSession).not.toHaveBeenCalled();
+		expect(client.compact).not.toHaveBeenCalled();
+	});
+	it("clears only the composer and reports existing usage — catches local actions becoming model turns", async () => {
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 100, size: 400, cost: { amount: 2, currency: "USD" } },
+		});
+		await typeAndSend(container, "/usage");
+		expect(container.textContent).toContain("Context 100 / 400 tokens (25%) · USD 2");
+		await typeAndSend(container, "/clear");
+		expect(container.querySelector("textarea")!.value).toBe("");
+		expect(acpTranscript.usage(SESSION)?.used).toBe(100);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("starts a new conversation without sending /new — catches new action becoming a model turn", async () => {
+		const { container } = await renderPanel();
+		client.newSession.mockImplementationOnce(() => openSession(SECOND_SESSION));
+		await typeAndSend(container, "/new");
+		expect(aiChatTabs.active("global")).toBe(SECOND_SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+	it("uses hold actions and preserves busy drafts — catches pause/resume or busy compact sent as prompts", async () => {
+		const { container } = await renderPanel();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await typeAndSend(container, "/compact");
+		expect(container.querySelector("textarea")!.value).toBe("/compact");
+		expect(client.compact).not.toHaveBeenCalled();
+		await typeAndSend(container, "/pause");
+		expect(client.pause).toHaveBeenCalledWith(CONNECTION, SESSION);
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+		await typeAndSend(container, "/resume");
+		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
 });

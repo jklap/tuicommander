@@ -3647,3 +3647,9 @@ The shared story service accepts `add_note` with `story_id`, `expected_revision`
 The backend derives actor provenance and time. It checks the current story revision atomically with the append. A note does not advance the story revision or change its status, claim, criteria, or integration proof. Notes have no edit or delete action. Text must be nonblank and at most 16,000 characters; a note can reference at most 16 distinct receipts. Invalid note input is a user error (HTTP 422).
 
 Receipt references identify persisted workflow event receipts by run ID and command ID, not a policy check name. Each receipt must exist in the same project and plan as the story. The note stores only these identifiers, not a copy of the receipt. A reference is historical evidence, not an assertion that the story is approved or its integration checks are current. All actions use the existing project-scoped IPC, HTTP, MCP, and CLI boundary.
+
+
+ACP attachment snapshots include `availableCommands`, the latest complete session
+command offer: each entry has `name`, `description`, and optional `input.hint`.
+An empty list revokes earlier commands. IPC and HTTP snapshots use the same shape;
+the existing ACP stream carries the original `available_commands_update` update.

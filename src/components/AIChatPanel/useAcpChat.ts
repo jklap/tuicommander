@@ -684,6 +684,7 @@ export function createAcpChat(
 			return current ? current.session : ((await start())?.sessionId ?? null);
 		},
 		configOptions: (): AcpSessionConfigOption[] => attachment()?.configOptions ?? [],
+		availableCommands: () => attachment()?.availableCommands ?? [],
 		gap: () => {
 			const id = connectionId();
 			return id ? acpStore.gap(id) : null;

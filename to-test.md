@@ -3031,3 +3031,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next backend rebuild/restart, check that MCP automations discovery includes `profiles: saved profile names` (#2370-bf4a).
 
 - [ ] After the next manual Rust rebuild/restart, verify Windows worktree cleanup uses its selected Git installation launcher and a forty-worktree MCP listing remains responsive while fresh dirty fingerprints change (#2310-6e76). The daily backend was not restarted; Rust changes do not hot-reload.
+
+
+- [ ] After a backend rebuild, open an AI Chat conversation and type `/`. Confirm agent offers show descriptions and input hints; filter and select with keyboard and mouse. `/compact` and advertised `/fork` must use host controls, `/quit` must disconnect without sending a prompt, and an unknown name must keep the draft with an inline explanation (#2393-19fc).

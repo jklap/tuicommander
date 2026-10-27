@@ -40,6 +40,36 @@ number and a live countdown. The countdown starts when the update arrives and
 ends at **retrying now**. Recovery removes the line; a final failure replaces it
 with the error. The Copy action beside a user message stays on one line.
 
+## Slash commands
+
+Start a draft with `/` to see the commands available in the selected conversation.
+Type a command name to filter the list. Each agent command shows its description
+and input hint. Use Up/Down and Tab or Enter to complete a name, or click a row.
+Completion does not submit it. Add arguments and press Enter or Send to run it.
+Escape closes the list without stopping a turn.
+
+Agent commands come from ACP `available_commands_update` and are sent as
+`/<name> <arguments>`. The latest offer replaces the previous list, including an
+empty offer. Commands from another conversation do not enter this list.
+
+TUICommander handles these actions locally instead of sending them to the model:
+
+| Command | Action |
+|---|---|
+| `/new` | Start a new conversation with the existing New action. |
+| `/clear` | Clear this composer's text and attachments, not conversation history. |
+| `/quit`, `/q` | Stop the current AI Chat connection through the existing stop action. Saved history remains. Other tabs on that connection also disconnect. |
+| `/usage` | Show the context usage and cost already reported for this conversation. |
+| `/compact` | Run the same action as **Compact context**. Available only when advertised; wait for the turn to finish. |
+| `/fork` | Run **Fork conversation** without a message argument. Available only when advertised; wait for the turn to finish. |
+| `/pause`, `/resume` | Run the advertised pause/resume controls in their applicable turn state. |
+
+Host actions do not accept arguments or attachments, except `/clear`, which
+removes attachments. Unsupported commands, including `/name` and `/retry`, stay
+in the composer with an inline **not available in AI Chat** explanation and a
+list of available names. Nothing is sent silently. Open a conversation with
+**New** or `/new` to receive its agent command offer.
+
 ## Automatic context compaction
 
 When ego reports an exhausted context and supports compaction, AI Chat shows **Compacting conversation**, opens the compacted continuation and sends the original prompt again once. Text, images, file references and repository context stay the same. **Conversation compacted** confirms that the continuation opened. A compaction or load failure stops recovery and shows the error. If the repeated prompt exhausts context again, AI Chat stops instead of compacting in a loop. The manual **Compact** action uses the same continuation path. Switching conversations while compaction is pending keeps your newer selection and prevents an automatic replay into it. A different conversation can still send while compaction is pending. Its own manual or automatic compaction waits for the first operation, then runs only if that conversation is still selected. In the compacting conversation, Send or Queue leaves your draft and attachments in the composer until compaction finishes; submit them again when ready.
