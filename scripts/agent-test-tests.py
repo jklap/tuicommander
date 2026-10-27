@@ -99,7 +99,7 @@ class AgentTestPlanTests(unittest.TestCase):
             "focusable": False,
             "width": 1400,
             "height": 900,
-            "minWidth": 640,
+            "minWidth": 390,
             "minHeight": 420,
             "alwaysOnTop": True,
             "backgroundThrottling": "disabled",
@@ -110,7 +110,8 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(capabilities[0], "default")
         self.assertEqual(capabilities[1]["windows"], ["main"])
         self.assertEqual(capabilities[1]["permissions"],
-                         ["core:window:deny-set-focus", "core:window:deny-show"])
+                         ["core:window:deny-set-focus", "core:window:deny-show",
+                          "core:window:allow-set-size"])
         source = (ROOT / "src-tauri/src/lib.rs").read_text()
         # The negated runtime policy is essential: test=false, daily=true.
         # Window focus=false alone cannot stop Tauri's application activation.
@@ -127,6 +128,33 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertNotIn("makeKeyAndOrderFront", policy)
         self.assertNotIn(".show()", policy)
         self.assertTrue(".with_filter(|_| !agent_test::active())" in source, "saved window restore must not focus agent-test")
+
+    def test_agent_test_can_resize_to_phone_width_without_granting_daily_resize(self):
+        # Bug caught (2359): native setSize is denied, or the minimum width
+        # clamps a 390x844 logical-pixel visual check back to desktop width.
+        permission = "core:window:allow-set-size"
+        for arguments in [[], ["AGENT_TEST_INSTANCE=agent-test-2359"],
+                          ["AGENT_TEST_INSTANCE=agent-test-2359", "AGENT_TEST_SPEECH_OUTPUT=1"]]:
+            with self.subTest(arguments=arguments):
+                override = json.loads(self.plan(*arguments)["build_environment"]["TAURI_CONFIG"])
+                capabilities = override["app"]["security"]["capabilities"]
+                resize = [capability for capability in capabilities
+                          if isinstance(capability, dict) and permission in capability["permissions"]]
+                self.assertEqual(len(resize), 1, "agent-test main must be allowed to call setSize")
+                self.assertEqual(resize[0]["windows"], ["main"])
+                window = override["app"]["windows"][0]
+                self.assertLessEqual(window["minWidth"], 390)
+                self.assertLessEqual(window["minHeight"], 844)
+                self.assertTrue(window["resizable"])
+                self.assertIn("core:window:deny-set-focus", resize[0]["permissions"])
+                self.assertIn("core:window:deny-show", resize[0]["permissions"])
+        # Daily builds auto-load these capability files; keep the grant inline
+        # in the launcher overlay, never in an auto-loaded capability file.
+        for path in (ROOT / "src-tauri/capabilities").glob("*.json"):
+            self.assertNotIn(permission, path.read_text(), str(path))
+        daily = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
+        self.assertNotIn(permission, json.dumps(daily))
+        self.assertEqual(daily["app"]["windows"][0]["minWidth"], 800)
 
     def test_overrides_remain_named_and_use_a_separate_socket(self):
         default = self.plan()
