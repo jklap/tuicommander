@@ -524,6 +524,14 @@ pub(crate) fn dirty_files_at(path: &Path) -> Result<usize, String> {
 pub fn dirty_fingerprint_at(
     path: &Path,
 ) -> Result<(String, Vec<SubmoduleUnpushedCommits>), String> {
+    let (_, fingerprint, modules, _) = workspace_safety_at(path)?;
+    Ok((fingerprint, modules))
+}
+
+/// Read one fresh snapshot for the count, fingerprint and checkout HEAD.
+fn workspace_safety_at(
+    path: &Path,
+) -> Result<(usize, String, Vec<SubmoduleUnpushedCommits>, String), String> {
     let status = git_cmd(path)
         .args([
             "status",
@@ -535,10 +543,26 @@ pub fn dirty_fingerprint_at(
         .map_err(|e| format!("could not fingerprint worktree status: {e}"))?;
     #[cfg(any(test, feature = "test-support"))]
     let started = std::time::Instant::now();
-    let submodules = git_cmd(path)
-        .args(["submodule", "status", "--recursive"])
+    // `git submodule` starts a shell even when the index has no gitlinks.
+    // Forty concurrent empty scans dominate Windows listing latency. Inspect
+    // the live index first; missing .gitmodules alone is not proof of no links.
+    let index = git_cmd(path)
+        .args(["ls-files", "--stage", "-z"])
         .run()
-        .map_err(|e| format!("could not fingerprint submodules: {e}"))?;
+        .map_err(|e| format!("could not inspect submodule index: {e}"))?;
+    let submodules = if index
+        .stdout
+        .split('\0')
+        .any(|entry| entry.starts_with("160000 "))
+    {
+        git_cmd(path)
+            .args(["submodule", "status", "--recursive"])
+            .run()
+            .map_err(|e| format!("could not fingerprint submodules: {e}"))?
+            .stdout
+    } else {
+        String::new()
+    };
     #[cfg(any(test, feature = "test-support"))]
     LIFECYCLE_TIMINGS.with(|timings| {
         timings
@@ -548,11 +572,12 @@ pub fn dirty_fingerprint_at(
     let mut digest = Sha256::new();
     digest.update(status.stdout.as_bytes());
     digest.update([0]);
-    digest.update(rev_at(path, "HEAD")?.as_bytes());
+    let tip = rev_at(path, "HEAD")?;
+    digest.update(tip.as_bytes());
     digest.update([0]);
-    digest.update(submodules.stdout.as_bytes());
+    digest.update(submodules.as_bytes());
     let mut unpushed = Vec::new();
-    for line in submodules.stdout.lines() {
+    for line in submodules.lines() {
         if !matches!(line.chars().next(), Some(' ' | '+')) {
             continue;
         }
@@ -583,7 +608,16 @@ pub fn dirty_fingerprint_at(
             });
         }
     }
-    Ok((hex::encode(digest.finalize()), unpushed))
+    Ok((
+        status
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        hex::encode(digest.finalize()),
+        unpushed,
+        tip,
+    ))
 }
 
 fn initialized_main_submodule(base_repo: &Path, destination: &Path) -> bool {
@@ -1860,28 +1894,9 @@ fn inspect_workspace_lifecycle_resolved_with_pr(
                 error: None,
             });
         }
-        #[cfg(any(test, feature = "test-support"))]
-        let started = std::time::Instant::now();
-        let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
-        #[cfg(any(test, feature = "test-support"))]
-        LIFECYCLE_TIMINGS.with(|timings| {
-            timings
-                .borrow_mut()
-                .push(("dirty files".into(), started.elapsed()))
-        });
-        #[cfg(any(test, feature = "test-support"))]
-        let started = std::time::Instant::now();
-        let (dirty_fingerprint, submodule_unpushed_commits) =
-            dirty_fingerprint_at(Path::new(&workspace.path))?;
-        #[cfg(any(test, feature = "test-support"))]
-        LIFECYCLE_TIMINGS.with(|timings| {
-            timings
-                .borrow_mut()
-                .push(("fingerprint".into(), started.elapsed()))
-        });
+        let (dirty_files, dirty_fingerprint, submodule_unpushed_commits, tip) =
+            workspace_safety_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
-        let workspace_path = Path::new(&workspace.path);
-        let tip = rev_at(workspace_path, "HEAD")?;
         let (commit_status, merge_proof) = lifecycle_branch_merge(
             base_repo,
             &workspace.branch,
@@ -13924,7 +13939,8 @@ branch refs/heads/feat
             .unwrap();
         }
         let mut diagnostics = vec![format!("same cleanup PATH={path:?}; direct git={git:?}")];
-        for shell in [false, true] {
+        for mode in ["direct", "shell", "launcher", "no-optional-locks"] {
+            let shell = mode == "shell";
             // Give both probes the same stale ref. The original failure is
             // already latched, so these fixture-only writes cannot hide it.
             let reset = git_cmd(repo)
@@ -13940,7 +13956,15 @@ branch refs/heads/feat
                 command.args(["/C", "git fetch --prune origin"]);
                 command
             } else {
-                let mut command = std::process::Command::new(&git);
+                let program = if mode == "launcher" {
+                    PathBuf::from(tuic_core::cli::resolve_cli("git.exe"))
+                } else {
+                    git.clone()
+                };
+                let mut command = std::process::Command::new(program);
+                if mode == "no-optional-locks" {
+                    command.arg("--no-optional-locks");
+                }
                 command.args(["fetch", "--prune", "origin"]);
                 command
             };
