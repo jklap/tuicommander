@@ -1201,6 +1201,7 @@ mod tests {
         let porcelain = run_git(&path, &["worktree", "list", "--porcelain"]);
         assert_eq!(porcelain.matches("prunable ").count(), 4, "{porcelain}");
 
+        run_git(&path, &["branch", new]);
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let repo = path.to_string_lossy().into_owned();
         let initial = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
@@ -1208,21 +1209,26 @@ mod tests {
         assert_eq!(initial.worktree_diagnostics.len(), 4);
         let mut events = state.event_bus.subscribe();
         crate::repo_watcher::start_watching(&repo, &state).unwrap();
-        run_git(&checkout, &["switch", "-c", new]);
-        assert!(!run_git(&path, &["for-each-ref", &format!("refs/heads/{old}")]).is_empty());
-
+        // Both refs already exist at the same commit. Repeating the switch
+        // primes the main-checkout fingerprint, then proves a sibling HEAD
+        // event bypasses it without a ref creation or main-checkout change.
         let refreshed = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-            loop {
-                if let Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) =
-                    events.recv().await
-                    && repo_path == repo
-                {
-                    let fresh = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
-                    if fresh.worktree_paths.contains_key(new) {
-                        return fresh;
+            let mut fresh = initial;
+            for branch in [new, old, new] {
+                run_git(&checkout, &["switch", branch]);
+                loop {
+                    if let Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) =
+                        events.recv().await
+                        && repo_path == repo
+                    {
+                        fresh = get_repo_structure_impl(&state, repo.clone()).await.unwrap();
+                        if fresh.worktree_paths.contains_key(branch) {
+                            break;
+                        }
                     }
                 }
             }
+            fresh
         })
         .await;
         crate::repo_watcher::stop_watching(&repo, &state);

@@ -95,3 +95,65 @@ failure or an older build. Do not infer one from the Git listing alone.
 fresh sidebar discovery; do not delete branch A or remove B's checkout merely
 to clear the stale label. No verified safe Git command that clears this UI row
 has been established.
+
+
+## Release follow-up — 2026-10-27
+
+The failure remains **not reproducible** on production revision `a5232c9650`.
+The original guard is retained on `fix/2351-stale-branch-row`; no production
+behavior has changed. This is regression coverage, not a demonstrated fix.
+
+### Watcher and backend cache
+
+The Rust guard now creates B before watching, at the same commit as A, then
+switches A → B → A → B. Each switch waits for the real watcher event and reads
+the production cached structure. The first event primes the main-checkout
+fingerprint. Later switches must bypass that unchanged fingerprint through
+the linked admin HEAD event; creating a new ref cannot mask a missing event.
+The retained A ref, A-named directory, four missing detached registrations,
+current-row removal and preservation of A remain covered.
+
+The targeted rb run passed: **1 test**, 1.715 s test time, 1m 48s compilation.
+Command: `build-slot.sh --remote scripts/with-test-tmp.sh cargo nextest run
+--manifest-path src-tauri/Cargo.toml --lib -E
+'test(sidebar_2351_switch_with_retained_ref_and_prunable_checkouts)'`.
+This is Linux watcher evidence, not native macOS FSEvents evidence.
+
+### Refresh coordinator and sidebar store
+
+`useGitOperations.test.ts` adds `2351 real Git replaces retained A with B`,
+parameterized for active and background rows. Each case creates an actual Git
+repository and linked checkout; Git, not a mock, supplies the branch inventory.
+The test adapts porcelain into the frontend port shape. It does not execute
+Rust through the mocked IPC transport.
+
+Each case warms the production refresh coordinator and repository store on A,
+attaches a terminal at that checkout, then delays an A inventory response.
+Git switches to the already-existing B while A remains. A queued refresh reads
+B after the stale response completes. Assertions require A to disappear, B to
+carry the correct branch and path, the terminal to survive without closing,
+and active selection to follow only when the replaced row was active.
+
+The initial targeted local Vitest run passed **2 tests** in 3.30 s. Its Git
+commands capture stdout and stderr. The test adapter normalizes Git's path
+separators for the host; Windows execution has not been performed.
+After this test-only path normalization, the final targeted run passed both
+cases in 6.21 s; Biome also passed for the changed TypeScript file.
+Command: `build-slot.sh scripts/with-test-tmp.sh pnpm vitest run
+src/__tests__/hooks/useGitOperations.test.ts -t '2351 real Git'`.
+
+Combined first-run log: `~/Gits/.tmp/tuic-2351-close/targeted.log`.
+Final frontend log: `~/Gits/.tmp/tuic-2351-close/frontend-final.log`.
+Dependency setup used `pnpm install --offline --frozen-lockfile`; no dependency
+or lockfile changed.
+
+### Limits and release disposition
+
+The retained-ref scenario passes at the Git inventory/removal, real Linux
+watcher/cache, frontend refresh-coordinator and sidebar-store boundaries.
+The two test layers are not a live end-to-end desktop test. No agent-test
+instance or daily application was launched. Native macOS event delivery,
+Roberto's running build, persisted workspace paths/keys and failing-instance
+refresh errors remain unverified. The original RED acceptance criterion must
+remain unchecked: no test failed for the reported defect. Do not present these
+passing guards as proof that Roberto's symptom has been fixed.
