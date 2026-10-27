@@ -533,10 +533,18 @@ pub fn dirty_fingerprint_at(
         ])
         .run()
         .map_err(|e| format!("could not fingerprint worktree status: {e}"))?;
+    #[cfg(any(test, feature = "test-support"))]
+    let started = std::time::Instant::now();
     let submodules = git_cmd(path)
         .args(["submodule", "status", "--recursive"])
         .run()
         .map_err(|e| format!("could not fingerprint submodules: {e}"))?;
+    #[cfg(any(test, feature = "test-support"))]
+    LIFECYCLE_TIMINGS.with(|timings| {
+        timings
+            .borrow_mut()
+            .push(("submodule status".into(), started.elapsed()))
+    });
     let mut digest = Sha256::new();
     digest.update(status.stdout.as_bytes());
     digest.update([0]);
@@ -1814,6 +1822,16 @@ fn lifecycle_branch_merge(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static LIFECYCLE_TIMINGS: std::cell::RefCell<Vec<(String, Duration)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_lifecycle_timings() -> Vec<(String, Duration)> {
+    LIFECYCLE_TIMINGS.with(|timings| std::mem::take(&mut *timings.borrow_mut()))
+}
+
 fn inspect_workspace_lifecycle_resolved_with_pr(
     base_repo: &Path,
     workspace: Result<WorkspaceWorktree, String>,
@@ -1842,9 +1860,25 @@ fn inspect_workspace_lifecycle_resolved_with_pr(
                 error: None,
             });
         }
+        #[cfg(any(test, feature = "test-support"))]
+        let started = std::time::Instant::now();
         let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
+        #[cfg(any(test, feature = "test-support"))]
+        LIFECYCLE_TIMINGS.with(|timings| {
+            timings
+                .borrow_mut()
+                .push(("dirty files".into(), started.elapsed()))
+        });
+        #[cfg(any(test, feature = "test-support"))]
+        let started = std::time::Instant::now();
         let (dirty_fingerprint, submodule_unpushed_commits) =
             dirty_fingerprint_at(Path::new(&workspace.path))?;
+        #[cfg(any(test, feature = "test-support"))]
+        LIFECYCLE_TIMINGS.with(|timings| {
+            timings
+                .borrow_mut()
+                .push(("fingerprint".into(), started.elapsed()))
+        });
         let dirty = dirty_files > 0;
         let workspace_path = Path::new(&workspace.path);
         let tip = rev_at(workspace_path, "HEAD")?;
@@ -13882,6 +13916,13 @@ branch refs/heads/feat
             .map(|dir| dir.join("git.exe"))
             .find(|git| git.is_file())
             .unwrap_or_else(|| PathBuf::from("git"));
+        if let Ok(destination) = std::env::var("TUIC_WINDOWS_GIT_PROBE_PATH") {
+            std::fs::write(
+                destination,
+                serde_json::to_vec(&path.to_string_lossy()).unwrap(),
+            )
+            .unwrap();
+        }
         let mut diagnostics = vec![format!("same cleanup PATH={path:?}; direct git={git:?}")];
         for shell in [false, true] {
             // Give both probes the same stale ref. The original failure is

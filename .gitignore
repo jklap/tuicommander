@@ -49,6 +49,7 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/windows-2310-git-probe.ps1
 !scripts/test-headless-github.py
 !scripts/backend-build-identity.mjs
 !scripts/backend-build-identity.test.mjs

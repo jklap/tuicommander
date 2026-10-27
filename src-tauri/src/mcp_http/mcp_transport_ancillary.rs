@@ -289,6 +289,8 @@ async fn handle_worktree_with_caller(
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
                     #[cfg(test)]
                     let started = std::time::Instant::now();
+                    #[cfg(test)]
+                    let _ = tuic_git::worktree::take_lifecycle_timings();
                     let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
                         &workspace,
@@ -308,6 +310,17 @@ async fn handle_worktree_with_caller(
                                 started.elapsed(),
                             ),
                         ]);
+                    #[cfg(test)]
+                    WORKTREE_LIST_TIMINGS
+                        .entry(base_repo.clone())
+                        .or_default()
+                        .extend(
+                            tuic_git::worktree::take_lifecycle_timings()
+                                .into_iter()
+                                .map(|(stage, elapsed)| {
+                                    (format!("{workspace_id}: {stage}"), elapsed)
+                                }),
+                        );
                     (workspace_id, lifecycle)
                 }));
             }

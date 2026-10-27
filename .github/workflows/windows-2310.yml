@@ -111,9 +111,15 @@ jobs:
           CARGO_PROFILE_TEST_OPT_LEVEL: "0"
           # The setup build must share nextest's profile and feature graph.
           TUIC_FIXTURE_FEATURES: dictation
+          TUIC_WINDOWS_GIT_PROBE_PATH: ${{ runner.temp }}/2310-hook-path.json
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
           CMAKE_C_FLAGS: '-Z7'
           CMAKE_CXX_FLAGS: '-Z7'
         run: bash ../scripts/with-test-tmp.sh cargo nextest run -p tuicommander -p tuic-git --lib --features dictation --profile ci -j 1 -E 'test(removal_keeps_local_branch_when_cleanup_prunes_its_remote_proof) | test(codex_warm_discovery_does_not_restat_historical_rollouts) | test(session_stats_only_stats_the_changed_transcript_then_reconciles) | test(session_stats_warm_refresh_does_not_stat_unchanged_history) | test(native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees)'
+
+      - name: Standalone native Git differential
+        if: always()
+        shell: pwsh
+        run: ./scripts/windows-2310-git-probe.ps1
