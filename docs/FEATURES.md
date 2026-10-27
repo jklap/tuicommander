@@ -3416,7 +3416,9 @@ Detached checkout visibility: the sidebar shows directory name, short HEAD SHA a
 
 ### Mobile session usage (#2150-4e0c)
 
-The session overflow loads a read-only usage block when opened. Claude and Codex
+The session overflow loads a read-only usage block when opened. Session polling
+does not reload this block unless the selected session ID changes. One plan
+heading groups its quota windows; an absent tier is not inferred. Claude and Codex
 show shared account quota for the live process profile. ego shows only the exact
 PID-bound session row from its v3 usage report, including separate API-equivalent
 estimates and unknown cost reasons. Available model metadata is shown; missing

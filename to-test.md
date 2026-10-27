@@ -1,3 +1,8 @@
+## Mobile usage menu (2400-d006)
+
+- [x] Nine focused mobile usage and shared formatter tests pass. Equal/changed session snapshots keep the existing quota rows mounted; one plan heading groups both windows, with no invented tier.
+- [ ] Capture and inspect the updated mobile menu after unlocking the Mac. The isolated browser snapshot shows one Claude Max plan, its 5-hour window and its 7-day window, but screenshot capture failed with macOS locked and agent-browser error 35. Evidence: `~/Gits/.tmp/2400-visual/transcript.json`. The reported live session identity could not be inspected because the HTTP endpoint returned 401; no cross-agent quota leakage is claimed or ruled out from that live session.
+
 ## Plugin discovery (2390-e129) — Rust restart required
 
 - [ ] After an authorized backend rebuild/restart, reload a user plugin with a cold payload cache and confirm discovery remains responsive. Make its manifest name empty and confirm the backend warning names the plugin and `name is empty`. Invalid plugins remain skipped; this change does not add a frontend error card. The daily app was not restarted by this peer.
