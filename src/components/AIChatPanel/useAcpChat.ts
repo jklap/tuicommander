@@ -171,6 +171,8 @@ export function createAcpChat(
 	const [connecting, setConnecting] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
 	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
+	const [catalogueFailure, setCatalogueFailure] = createSignal<{ id: AcpConnectionId; message: string } | null>(null);
+	let catalogueRequest = 0;
 	let selection = 0;
 	let failedSession: AcpSessionId | null = null;
 
@@ -207,15 +209,26 @@ export function createAcpChat(
 		});
 	}
 
+	/** Listing is optional discovery, never evidence that the selected session
+	 * failed to attach. A slow or broken catalogue must not hold the composer. */
 	async function refreshSessions(id: AcpConnectionId, target: string): Promise<void> {
-		const rows: AcpListedSession[] = [];
-		let cursor: string | undefined;
-		do {
-			const page = await client.listSessions(id, target, cursor);
-			rows.push(...page.sessions.filter((session) => session.cwd === target));
-			cursor = page.nextCursor || undefined;
-		} while (cursor);
-		setListedSessions(rows);
+		const request = ++catalogueRequest;
+		const isCurrent = () => request === catalogueRequest && connectionId() === id;
+		try {
+			const rows: AcpListedSession[] = [];
+			let cursor: string | undefined;
+			do {
+				const page = await client.listSessions(id, target, cursor);
+				if (!isCurrent()) return;
+				rows.push(...page.sessions.filter((session) => session.cwd === target));
+				cursor = page.nextCursor || undefined;
+			} while (cursor);
+			setListedSessions(rows);
+			setCatalogueFailure(null);
+		} catch (failure) {
+			appLogger.warn("ai-chat", "listing conversations failed", failure);
+			if (isCurrent()) setCatalogueFailure({ id, message: describe(failure) });
+		}
 	}
 
 	/** Share the default connection even when several tab selections start it. */
@@ -273,8 +286,7 @@ export function createAcpChat(
 			setSessionId(attached);
 			failedSession = null;
 			await guard("saving conversation", () => remember(attached), isCurrent);
-			if (isCurrent() && connection()?.capabilities?.list)
-				await guard("listing conversations", () => refreshSessions(current.connectionId, target), isCurrent);
+			if (isCurrent() && connection()?.capabilities?.list) void refreshSessions(current.connectionId, target);
 		} finally {
 			if (isCurrent()) setConnecting(false);
 		}
@@ -295,14 +307,15 @@ export function createAcpChat(
 
 	/** Replay one session, at most once at a time. `explicit` is a person asking
 	 *  again, the only thing that retries a refused load. Answers whether the
-	 *  session can be shown: false when this load failed or a refusal stands. */
+	 *  session can be shown: false when this load failed or a refusal stands.
+	 *  Background tab refusals stay cached for selection, never fail the visible tab. */
 	async function replay(
 		what: string,
 		id: AcpConnectionId,
 		session: AcpSessionId,
 		target: string,
 		explicit = false,
-		isCurrent = () => true,
+		isCurrent = () => connectionId() === id && sessionId() === session,
 	): Promise<boolean> {
 		// A connection taken back after a reload still holds its attachments,
 		// and a second load of one is refused.
@@ -397,7 +410,6 @@ export function createAcpChat(
 			const current = binding;
 			setConnectionId(current.connectionId);
 			const capabilities = acpStore.connection(current.connectionId)?.capabilities;
-			if (capabilities?.list) await guard("listing conversations", () => refreshSessions(current.connectionId, target));
 			const config = await guard("reading saved conversation", () =>
 				invoke<{ ai_chat_sessions?: Record<string, string> }>("load_config"),
 			);
@@ -422,6 +434,7 @@ export function createAcpChat(
 					if (tab !== saved && !launches()[tab])
 						await replay("replaying a chat tab", current.connectionId, tab, target);
 				}
+				if (capabilities?.list) void refreshSessions(current.connectionId, target);
 				return { connectionId: current.connectionId, sessionId: loaded, fresh: false };
 			}
 			const session = await guard("opening a session", () => client.newSession(current.connectionId, target));
@@ -430,7 +443,7 @@ export function createAcpChat(
 			aiChatTabs.replace(TABS, session);
 			setSessionId(session);
 			await guard("saving conversation", () => remember(session));
-			if (capabilities?.list) await guard("listing conversations", () => refreshSessions(current.connectionId, target));
+			if (capabilities?.list) void refreshSessions(current.connectionId, target);
 			return { connectionId: current.connectionId, sessionId: session, fresh: true };
 		} finally {
 			setConnecting(false);
@@ -540,6 +553,15 @@ export function createAcpChat(
 		sessionId,
 		phase,
 		error,
+		catalogueError: () => {
+			const failure = catalogueFailure();
+			return failure?.id === connectionId() ? failure.message : null;
+		},
+		refreshCatalogue: async (): Promise<void> => {
+			const id = connectionId();
+			const target = root();
+			if (id && target && connection()?.capabilities?.list) await refreshSessions(id, target);
+		},
 		clearError: () => setError(null),
 		connection,
 		attachment,
@@ -740,8 +762,7 @@ export function createAcpChat(
 			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
 			await selectSession(compacted.targetSessionId);
 			const target = root();
-			if (target && connection()?.capabilities?.list)
-				await guard("listing conversations", () => refreshSessions(current.id, target));
+			if (target && connection()?.capabilities?.list) void refreshSessions(current.id, target);
 		},
 
 		/** Branch this conversation at its tip into a new tab; the parent keeps its own. */
@@ -756,8 +777,7 @@ export function createAcpChat(
 			);
 			if (child === null) return;
 			await selectSession(child);
-			if (connection()?.capabilities?.list)
-				await guard("listing conversations", () => refreshSessions(current.id, target));
+			if (connection()?.capabilities?.list) void refreshSessions(current.id, target);
 		},
 
 		async setOption(configId: string, value: AcpSessionConfigOptionValue): Promise<void> {
@@ -829,8 +849,7 @@ export function createAcpChat(
 				setSessionId(session);
 				failedSession = null;
 				await guard("saving conversation", () => remember(session), isCurrent);
-				if (isCurrent() && connection()?.capabilities?.list)
-					await guard("listing conversations", () => refreshSessions(id, target), isCurrent);
+				if (isCurrent() && connection()?.capabilities?.list) void refreshSessions(id, target);
 			} finally {
 				if (isCurrent()) setConnecting(false);
 			}
@@ -874,8 +893,6 @@ export function createAcpChat(
 				setConnectionId(snapshot.connectionId);
 				binding = { connectionId: snapshot.connectionId, sessionId: null, root: target };
 				defaultBinding = binding;
-				if (snapshot.capabilities?.list)
-					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
 				let resumeId = previous;
 				if (!resumeId) {
 					const config = await guard("reading saved conversation", () =>
@@ -897,6 +914,7 @@ export function createAcpChat(
 						if (tab !== resumeId && !launches()[tab])
 							await replay("replaying a chat tab", snapshot.connectionId, tab, target, true);
 					}
+					if (snapshot.capabilities?.list) void refreshSessions(snapshot.connectionId, target);
 					return;
 				}
 				const session = await guard("opening a session", () => client.newSession(snapshot.connectionId, target));
@@ -905,8 +923,7 @@ export function createAcpChat(
 				aiChatTabs.replace(TABS, session);
 				setSessionId(session);
 				await guard("saving conversation", () => remember(session));
-				if (snapshot.capabilities?.list)
-					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
+				if (snapshot.capabilities?.list) void refreshSessions(snapshot.connectionId, target);
 			} finally {
 				setConnecting(false);
 			}

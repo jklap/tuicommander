@@ -217,6 +217,17 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				)}
 			</Show>
 
+			<Show when={chat.catalogueError()}>
+				{(message) => (
+					<div class={s.frozenBanner} role="status">
+						<span>Saved conversations unavailable: {message()}. You can continue this chat.</span>
+						<Button type="button" variant="ghost" onClick={() => void chat.refreshCatalogue()}>
+							Retry list
+						</Button>
+					</div>
+				)}
+			</Show>
+
 			<Show when={chat.error()}>
 				{(message) => (
 					<div class={s.errorBanner}>

@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
 import { cleanupToasts } from "../helpers/toasts";
@@ -1067,6 +1068,123 @@ describe("AIChatPanel: parallel tabs", () => {
 			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Phone reply", [], ROOT);
 			dispose();
 		});
+	});
+
+	// Catches: the optional session/list refusal replaces successful attachment
+	// with a fatal missing-session error for both new and restored conversations.
+	it.each(["new", "restored"])(
+		"keeps a %s conversation usable when ego catalogue reports session not found",
+		async (kind) => {
+			client.listSessions.mockRejectedValue(missingCatalogue);
+			client.loadSession.mockImplementation(async () => {
+				acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+			});
+			await createRoot(async (dispose) => {
+				const chat = createAcpChat(
+					() => ROOT,
+					() => true,
+				);
+				if (kind === "new") await chat.startSession();
+				else await chat.selectSession(SESSION);
+				await settle();
+				expect(chat.error()).toBeNull();
+				expect(chat.phase()).toBe("live");
+				await chat.send("Still connected");
+				expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Still connected", [], ROOT);
+				dispose();
+			});
+		},
+	);
+
+	// Catches: awaiting optional catalogue I/O leaves an attached new chat on
+	// Connecting conversation and disables the composer indefinitely.
+	it("enables an attached conversation before its catalogue request settles", async () => {
+		let finish!: (value: { sessions: []; nextCursor: null }) => void;
+		client.listSessions.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		const { container } = await renderPanel();
+		try {
+			expect(container.textContent).not.toContain("Connecting conversation");
+			expect(container.querySelector("textarea")?.disabled).toBe(false);
+			await typeAndSend(container, "Do not wait for the picker");
+			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Do not wait for the picker", [], ROOT);
+		} finally {
+			finish({ sessions: [], nextCursor: null });
+			await settle();
+		}
+	});
+
+	// Catches: retrying discovery restarts the working agent or erases an
+	// unrelated turn error instead of retrying only session/list.
+	it("retries a visible catalogue warning without replacing the working conversation", async () => {
+		client.listSessions.mockRejectedValue(missingCatalogue);
+		const { container } = await renderPanel();
+		expect(container.textContent).toContain("Saved conversations unavailable");
+		client.prompt.mockRejectedValue(new Error("Turn refused"));
+		await typeAndSend(container, "Keep this refusal");
+		client.listSessions.mockResolvedValue({ sessions: [], nextCursor: null });
+		(
+			[...container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Retry list",
+			) as HTMLButtonElement
+		).click();
+		await settle();
+		expect(container.textContent).not.toContain("Saved conversations unavailable");
+		expect(container.textContent).toContain("Turn refused");
+		expect(client.newSession).toHaveBeenCalledTimes(1);
+		expect(client.reconnect).not.toHaveBeenCalled();
+	});
+
+	// Catches: an old process's delayed discovery refusal poisons the new
+	// connection after recovery even though the new catalogue succeeded.
+	it("ignores a catalogue refusal from a replaced connection", async () => {
+		let refuse!: (error: unknown) => void;
+		client.listSessions.mockReturnValueOnce(
+			new Promise((_resolve, reject) => {
+				refuse = reject;
+			}),
+		);
+		await createRoot(async (dispose) => {
+			const chat = createAcpChat(
+				() => ROOT,
+				() => true,
+			);
+			await chat.startSession();
+			client.reconnect.mockImplementation(async () => {
+				const opened = snapshot({ connectionId: "replacement" });
+				acpStore.applySnapshot(opened);
+				return opened;
+			});
+			client.loadSession.mockImplementation(async (id, session) => {
+				acpStore.applySnapshot(snapshot({ connectionId: id, attachments: [attachment({ sessionId: session })] }));
+			});
+			await chat.recover();
+			refuse(missingCatalogue);
+			await settle();
+			expect(chat.catalogueError()).toBeNull();
+			expect(chat.error()).toBeNull();
+			expect(chat.phase()).toBe("live");
+			dispose();
+		});
+	});
+
+	// Catches: a missing background tab publishes its refusal as the active
+	// conversation's error when a desktop panel replays several saved tabs.
+	it("keeps the selected conversation live when a background saved tab is missing", async () => {
+		const first = await renderPanel();
+		first.unmount();
+		aiChatTabs.add("global", SECOND_SESSION);
+		aiChatTabs.add("global", SESSION);
+		client.loadSession.mockRejectedValue(missingSession);
+		const { container } = renderIdlePanel();
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(container.textContent).not.toContain("session not found");
+		await typeAndSend(container, "The selected chat still works");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "The selected chat still works", [], ROOT);
 	});
 
 	// Catches: remount replays the selected missing tab without recovery, leaving

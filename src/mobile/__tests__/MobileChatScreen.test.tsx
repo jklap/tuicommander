@@ -35,6 +35,8 @@ function chat() {
 		held: () => false,
 		gap: () => null,
 		error: () => null,
+		catalogueError: () => null,
+		refreshCatalogue: vi.fn(),
 		isStreaming: () => true,
 		interactions: () => [
 			{

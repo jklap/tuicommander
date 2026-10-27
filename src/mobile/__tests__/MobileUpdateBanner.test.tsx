@@ -25,6 +25,8 @@ vi.mock("../../components/AIChatPanel/useAcpChat", () => ({
 		held: () => false,
 		gap: () => null,
 		error: () => null,
+		catalogueError: () => null,
+		refreshCatalogue: vi.fn(),
 		isStreaming: () => true,
 		interactions: () => [],
 		sessions: () => [{ sessionId: "chat-1", title: "Current" }],
