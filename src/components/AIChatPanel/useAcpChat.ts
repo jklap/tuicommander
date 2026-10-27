@@ -907,8 +907,8 @@ export function createAcpChat(
 					binding = defaultBinding;
 					setConnectionId(binding?.connectionId ?? null);
 					setSessionId(binding?.sessionId ?? null);
-					const target = await chatRoot();
-					if (!isCurrent()) return;
+					const target = await guard("finding the workspace", chatRoot, isCurrent);
+					if (!target || !isCurrent()) return;
 					setRoot(target);
 					// New chat never replays the saved selection or inherits its title.
 					if (!binding) {
