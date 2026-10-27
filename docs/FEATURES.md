@@ -4,7 +4,7 @@ AI Chat shares the active conversation across desktop and mobile for the configu
 
 - **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
 
-AI Chat automatically connects on opening, restores the selected conversation, and keeps its transcript visible when stopped. Session model changes keep the same conversation; the global default affects new ego runs only (#2404-e946).
+AI Chat automatically connects on opening, restores the selected conversation, and keeps its transcript visible when stopped. Retry after a failed initial connection starts connecting without Send (#2407-84f5). Session model changes keep the same conversation; the global default affects new ego runs only (#2404-e946).
 
 AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).
 
