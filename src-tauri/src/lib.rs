@@ -3685,7 +3685,7 @@ mod tests {
             .find("spawn_ipc_listener")
             .expect("run_remote must start the IPC listener the bridge connects to");
         let configs = body
-            .find("ensure_mcp_configs")
+            .find("configure_agent_mcp")
             .expect("run_remote must install the bridge configs for this machine's agents");
         assert!(
             listener < configs,
