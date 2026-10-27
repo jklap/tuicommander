@@ -138,7 +138,7 @@
 .danger { background: var(--error); border-color: var(--error); color: var(--text-on-error); }
 .secondary:hover:enabled, .ghost:hover:enabled, .circleButton:hover:enabled > :is(.secondary, .ghost) { background: var(--bg-highlight); }
 .primary:hover:enabled, .danger:hover:enabled, .circleButton:hover:enabled > :is(.primary, .danger) { filter: brightness(1.1); }
-.button[aria-pressed="true"], .circleButton[aria-pressed="true"] > .circleSurface { border-color: var(--accent); }
+.button:where(:not(.noPressedIndicator))[aria-pressed="true"], .circleButton:where(:not(.noPressedIndicator))[aria-pressed="true"] > .circleSurface { border-color: var(--accent); }
 
 /* Promoted from Settings: Expert's 36x20 track is the shared switch look. */
 .switchControl, .colorInput {
