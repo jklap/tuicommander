@@ -4438,8 +4438,30 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
     assert!(text.ends_with(&format!("MARKERS v{}", env!("CARGO_PKG_VERSION"))));
 }
 
+// A run without `ARGV_OUTPUT` (a capability probe such as `--help`, which does not
+// get the run config's env) records nothing: unset, `"$ARGV_OUTPUT.tmp"` is the
+// bare `.tmp`, which landed in the test process's cwd (`src-tauri/.tmp`).
 #[cfg(unix)]
-const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\n[ -n \"${ARGV_OUTPUT:-}\" ] || exit 0\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+
+// Catches: the mock run without `ARGV_OUTPUT` creating a stray `.tmp` in its cwd.
+#[cfg(unix)]
+#[test]
+fn codex_mock_argv_script_writes_nothing_without_an_output_path() {
+    let cwd = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let status = std::process::Command::new("/bin/sh")
+        .args(["-c", MOCK_CODEX_ARGV_SCRIPT, "mock-codex", "--help"])
+        .current_dir(cwd.path())
+        .env_remove("ARGV_OUTPUT")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let left: Vec<_> = std::fs::read_dir(cwd.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "the mock left files behind: {left:?}");
+}
 
 // Catches: a paused mock writer publishes a partial argv prefix before finishing.
 #[cfg(unix)]
