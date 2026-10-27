@@ -385,7 +385,8 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
 
 - **Chat input** — Chat opens and focuses Compose automatically below the conversation. It stays docked after send or queue and clears submitted text. Chat hides the close and pin controls; `Esc` returns to CLI, where permission prompts must be answered. Returning to CLI restores the tab's previous open/pin state, and unsent drafts survive both directions, including while send or queue is pending
-- **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
+- **Send now** — `Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
+- **New line** — `Ctrl+Enter` or `Shift+Enter` inserts a line break without sending. Enter used to confirm an IME candidate does not send
 - **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
 - **Queue count** — the collapsed Compose button shows a muted pill for every waiting FIFO item, including commands and peer/orchestrator notices, hidden at zero. Hover or focus shows the command/message breakdown. The open panel shows `N queued`; click it to inspect and remove entries, or clear the queue. Counts come from the backend (`state.queued_commands`), including across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting. Hands-free speech does not use this queue at all — see 9.9
@@ -1883,6 +1884,8 @@ Buffer eviction is reported; it does not create another output store.
 ---
 
 ## 15. Keyboard Shortcut Reference
+
+Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
 
 ### Terminal
 | Shortcut | Action |

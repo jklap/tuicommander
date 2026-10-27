@@ -110,7 +110,7 @@ describe("Chat Compose input", () => {
 		terminalsStore.update(id, { shellState: "idle" });
 		expect(view.queryByText("Working…")).toBeNull();
 		typeDraft(view.container, "Next task");
-		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: true });
+		fireEvent.keyDown(cm.contentDOM, { key: "Enter" });
 		expect(view.getByText("Working…")).toBeTruthy();
 		await waitFor(() => expect(pty.sendCommand).toHaveBeenCalled());
 		expect(view.getByText("Working…")).toBeTruthy();
@@ -166,7 +166,7 @@ describe("Chat Compose input", () => {
 		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 		const cm = await readyEditor(view.container);
 		typeDraft(view.container, "Next task");
-		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: true, shiftKey: queue });
+		fireEvent.keyDown(cm.contentDOM, { key: "Enter", ctrlKey: queue, shiftKey: queue });
 		await waitFor(() => expect(cm.state.doc.toString()).toBe(""));
 		expect(cm.hasFocus).toBe(true);
 		expect(terminalsStore.get(id)?.viewMode).toBe("chat");

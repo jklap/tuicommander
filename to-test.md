@@ -2,6 +2,9 @@
 
 - [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.
 - [ ] Capture and inspect the working row visually on desktop and mobile. The isolated Chrome fixture rendered and measured the row, but `Page.captureScreenshot` timed out on both surfaces. No screenshot or native live-agent check is claimed. Retained evidence: `~/Gits/.tmp/results/chat-busy-2397/`.
+## Compose Enter shortcuts (2395-ed27)
+
+- [x] Enter sends; Ctrl+Enter and Shift+Enter insert a newline; Shift+Ctrl+Enter queues. IME composition confirmation keeps the draft without sending. Verified by the focused ComposePanel component tests, including browser-style composition events and a DOM edit; physical IME hardware was not exercised. Desktop Chat draft cleanup consumers also pass. Mobile production uses its separate CommandInput and native keybar, unchanged by this feature.
 ## Mobile composer focus (2398-1de9)
 
 - [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
