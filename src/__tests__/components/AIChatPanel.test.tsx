@@ -12,6 +12,7 @@ import missingCatalogue from "../fixtures/ego-missing-catalogue-2383.json";
 import missingSession from "../fixtures/ego-missing-session-2348.json";
 import recordedModelChange from "../fixtures/ego-model-change-2388.json";
 import recordedProviderRetry from "../fixtures/ego-provider-retry.json";
+import { chatFontSize, loadChatTypography } from "../helpers/chatFontSize";
 import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -435,7 +436,8 @@ describe("AIChatPanel: repository profile warnings", () => {
 });
 
 // Catches: AI Chat stays at its fixed size when the active terminal zooms or changes.
-it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", () => {
+it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", async () => {
+	const removeStyles = loadChatTypography();
 	const previous = terminalsStore.state.activeId;
 	const first = terminalsStore.add({
 		name: "zoom one",
@@ -466,26 +468,29 @@ it("ai_chat_follows_active_terminal_zoom_and_resets_without_a_terminal", () => {
 		});
 		return <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />;
 	});
-	const step = () =>
-		getComputedStyle(view.container.querySelector<HTMLElement>("[data-chat-typography]")!).getPropertyValue(
-			"--chat-zoom-step",
-		);
+	await settle();
+	(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+	await settle();
+	acpTranscript.restore(SESSION, [{ id: "zoom-answer", kind: "agent", text: "Readable zoom answer" }]);
+	await settle();
+	const size = () => chatFontSize(view.getByText("Readable zoom answer").closest<HTMLElement>(".assistantMsg")!);
 	try {
-		expect(step()).toBe("0px");
+		expect(size()).toBe("14px");
 		zoom.zoomIn();
-		expect(step()).toBe("2px");
+		expect(size()).toBe("16px");
 		zoom.zoomOut();
-		expect(step()).toBe("0px");
+		expect(size()).toBe("14px");
 		terminalsStore.setActive(second);
-		expect(step()).toBe("6px");
+		expect(size()).toBe("20px");
 		zoom.zoomReset();
-		expect(step()).toBe("0px");
+		expect(size()).toBe("14px");
 		terminalsStore.remove(second);
 		terminalsStore.remove(first);
 		terminalsStore.setActive(null);
-		expect(step()).toBe("0px");
+		expect(size()).toBe("14px");
 	} finally {
 		view.unmount();
+		removeStyles();
 		terminalsStore.remove(first);
 		terminalsStore.remove(second);
 		if (previous) terminalsStore.setActive(previous);

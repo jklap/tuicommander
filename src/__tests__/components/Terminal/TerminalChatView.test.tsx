@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chatFontSize, loadChatTypography } from "../../helpers/chatFontSize";
 import claudeNativeQuestion from "./fixtures/native-claude-question-2079.json";
 
 const { mockOpenFile } = vi.hoisted(() => ({ mockOpenFile: vi.fn() }));
@@ -44,7 +45,8 @@ beforeEach(() => {
 
 describe("TerminalChatView", () => {
 	// Catches: session Chat keeps the 13px grid default or loses its terminal zoom delta.
-	it("chat_follows_session_zoom_actions", () => {
+	it("chat_follows_session_zoom_actions", async () => {
+		const removeStyles = loadChatTypography();
 		const id = addTerminal("claude", "uuid");
 		terminalsStore.setFontSize(id, 13);
 		const other = terminalsStore.add({
@@ -56,7 +58,7 @@ describe("TerminalChatView", () => {
 		});
 		terminalsStore.setActive(id);
 		let zoom!: ReturnType<typeof useTerminalLifecycle>;
-		const { getByTestId } = render(() => {
+		const view = render(() => {
 			zoom = useTerminalLifecycle({
 				pty: { canSpawn: async () => true, close: async () => {} },
 				dialogs: {
@@ -69,29 +71,35 @@ describe("TerminalChatView", () => {
 			});
 			return <TerminalChatView terminalId={id} sessionId="sess-1" />;
 		});
-		const size = () => {
-			const transcript = getByTestId("terminal-chat-view").querySelector<HTMLElement>("[data-chat-typography]")!;
-			return getComputedStyle(transcript).getPropertyValue("--chat-zoom-step");
-		};
-		expect(size()).toBe("0px");
-		expect(getByTestId("terminal-chat-view").style.getPropertyValue("--font-base")).toBe("");
-		zoom.zoomIn();
-		expect(size()).toBe("2px");
-		zoom.zoomIn();
-		expect(size()).toBe("4px");
-		zoom.zoomOut();
-		expect(size()).toBe("2px");
-		zoom.zoomReset();
-		expect(size()).toBe("0px");
-		expect(terminalsStore.get(other)?.fontSize).toBe(20);
-		zoom.zoomInAll();
-		expect(size()).toBe("2px");
-		expect(terminalsStore.get(other)?.fontSize).toBe(22);
-		zoom.zoomOutAll();
-		expect(size()).toBe("0px");
-		zoom.zoomResetAll();
-		expect(size()).toBe("0px");
-		expect(terminalsStore.get(other)?.fontSize).toBe(13);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		acpTranscript.restore(chatViewKey("sess-1"), [
+			{ id: "zoom-answer", kind: "agent", text: "Readable session answer" },
+		]);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		const size = () => chatFontSize(view.getByText("Readable session answer").closest<HTMLElement>(".assistantMsg")!);
+		try {
+			expect(size()).toBe("14px");
+			zoom.zoomIn();
+			expect(size()).toBe("16px");
+			zoom.zoomIn();
+			expect(size()).toBe("18px");
+			zoom.zoomOut();
+			expect(size()).toBe("16px");
+			zoom.zoomReset();
+			expect(size()).toBe("14px");
+			expect(terminalsStore.get(other)?.fontSize).toBe(20);
+			zoom.zoomInAll();
+			expect(size()).toBe("16px");
+			expect(terminalsStore.get(other)?.fontSize).toBe(22);
+			zoom.zoomOutAll();
+			expect(size()).toBe("14px");
+			zoom.zoomResetAll();
+			expect(size()).toBe("14px");
+			expect(terminalsStore.get(other)?.fontSize).toBe(13);
+		} finally {
+			view.unmount();
+			removeStyles();
+		}
 	});
 	// Catches: a blank panel after the agent dies (grid hidden, nothing in its place).
 	it("view_falls_back_to_cli_when_agent_exits", async () => {
