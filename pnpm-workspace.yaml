@@ -37,3 +37,16 @@ overrides:
   # only consumer is postcss, which imports the CJS `nanoid/non-secure`, and
   # a bare ">=" resolves to the ESM-only 6.x.
   nanoid: "^3.3.18"
+
+# Phantom dependencies: packages that import something they do not declare. They only
+# work when pnpm hoists the import into reach, which an isolated layout does not do
+# (pnpm 11's global virtual store, i.e. enableGlobalVirtualStore or
+# pnpm_config_enable_global_virtual_store=true: `Cannot find package '@lezer/common'`
+# from the ten CodeMirror editor test files). Declare each one here instead of relying
+# on hoisting; the range matches the version we already resolve at the top level.
+packageExtensions:
+  # 6.3.0 declares only @codemirror/{language,state,view} as peers but its dist
+  # imports @lezer/common.
+  "@replit/codemirror-css-color-picker@6":
+    dependencies:
+      "@lezer/common": "^1.5.2"
