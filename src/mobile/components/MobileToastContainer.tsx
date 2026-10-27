@@ -9,5 +9,7 @@ function dismiss(toast: Toast): void {
 
 /** Mobile has no desktop terminal registry; session navigation belongs to its router. */
 export const MobileToastContainer: Component = () => (
-	<ToastList onDismiss={dismiss} repoName={(toast) => (toast.repoPath ? pathBasename(toast.repoPath) : null)} />
+	<div aria-live="polite" aria-relevant="additions text">
+		<ToastList onDismiss={dismiss} repoName={(toast) => (toast.repoPath ? pathBasename(toast.repoPath) : null)} />
+	</div>
 );

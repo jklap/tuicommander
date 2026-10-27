@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast (#2399-e2ae).
+- Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
 
 - Keep new and restored AI Chat conversations usable when ego’s saved-conversation list fails or is slow (#2383-f1a1).
 - Show the agent's reasoning choice label in the AI Chat summary instead of its internal unselected value after a model change (#2388-53a8).
