@@ -32,6 +32,7 @@ fn main() {
     // `protocol-offer-probe` answers a question about a *past* request, so it
     // needs one bit of memory across the loop.
     let mut offered = "wrong";
+    let mut muted_health_probes = 0_u64;
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -79,6 +80,26 @@ fn main() {
                 reply(&id, echoed(args["message"].as_str().unwrap()));
             }
             ("delayed-tool-call", _) => {}
+
+            // An owned fault-injection server: calls arm unanswered health
+            // requests; a fresh process starts responsive and reports its pid.
+            ("mute-health-probes", "initialize") => {
+                reply(&id, initialize_result("2025-11-25", json!({"tools": {}})));
+            }
+            ("mute-health-probes", "tools/list") => {
+                if muted_health_probes > 0 {
+                    muted_health_probes -= 1;
+                } else {
+                    reply(&id, json!({"tools": [tool("probe", "Process identity")]}));
+                }
+            }
+            ("mute-health-probes", "tools/call") => {
+                muted_health_probes = request["params"]["arguments"]["mute_probes"]
+                    .as_u64()
+                    .unwrap_or(muted_health_probes);
+                reply(&id, echoed(&std::process::id().to_string()));
+            }
+            ("mute-health-probes", _) => {}
 
             // A real crash/recovery probe. Each process reports its own pid.
             ("crash-on-call", "initialize") => {
