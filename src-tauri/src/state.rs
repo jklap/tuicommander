@@ -3488,7 +3488,7 @@ impl AppState {
     }
 
     /// Reservation sequence, including attempts refused before any PTY write.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn orchestrator_wake_attempt_sequence(&self, tuic_session: &str) -> u64 {
         self.active_agent_waiters
             .get(tuic_session)

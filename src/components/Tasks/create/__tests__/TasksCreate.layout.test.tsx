@@ -19,7 +19,7 @@ async function openWideForm() {
 				field.id === "environment" ? { ...field, required: true } : field,
 			),
 	};
-	const schema = formFields(await provider.createFields(WIDE_LAN_TYPE));
+	const schema = formFields(await provider.createFields(WIDE_LAN_TYPE)).filter((field) => field.id !== "description");
 	render(() => <TasksCreate provider={provider} onCreated={() => {}} />);
 	const picker = await screen.findByLabelText("Type *");
 	await screen.findByRole("option", { name: "Task" });

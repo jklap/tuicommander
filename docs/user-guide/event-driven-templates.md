@@ -37,12 +37,24 @@ block alone does not prove lack of support because the owner can supply defaults
 If the configuration cannot be inspected, ask for owner-side verification.
 
 When the owner supports `event_intake`, continue the interview and preview its
-`repositories`, `label` and `definition_id`. Verify that each allowlisted
+`repositories`, `label`, `definition_id` and the optional pinned `workflow`. Verify that each allowlisted
 repository is registered on that owner and that the selected definition is
 enabled. See [GitHub issue intake](automations.md#github-issue-intake-allowlisted-off-by-default)
 for configuration and durable issue/label deduplication. Read back the saved
 state after any explicitly approved change; do not invent an intake tool action.
 Do not enable a cron recipe and call it an event integration.
+
+For review-gated issue publication, verify the owner supports `event_intake.workflow`
+and select an explicit published story workflow revision with deterministic checks
+and independent implementer/reviewer profiles. Without this opt-in, existing intake
+keeps completion-only publication. See [reviewed issue workflows](automations.md#opt-in-reviewed-issue-workflows).
+
+Event runs now retain an `outcome` in owner-side run details: the decision,
+PR URL, comment URL slot and failure/refusal reason. Publication saves its intent
+before the GitHub write and looks up an uncertain result instead of repeating
+creation. Filtered and duplicate intake decisions are retained in history.
+This does not add triage comments. See
+[durable event outcomes](automations.md#durable-event-outcomes).
 
 The following capabilities are still unsupported on this baseline. Verify their
 status on the addressed owner before using them:
@@ -50,7 +62,6 @@ status on the addressed owner before using them:
 | Capability | Follow-up story | Boundary today |
 | --- | --- | --- |
 | Automatic triage of unlabelled issues | **2324-424d** | Intake only admits already-labelled open issues; it does not reject issues with a comment and label |
-| Independent review and check receipts bound to the pushed commit before draft publication | **2325-10c4** | A completed issue run can publish a draft without this machine-enforced gate |
 | Incoming PR event trigger with latest-head review | **2327-1ca0** | Issue intake is not PR/head-SHA admission |
 
 Continue supported configuration drafting, but stop before a mutation that needs

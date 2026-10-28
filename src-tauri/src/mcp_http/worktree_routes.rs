@@ -332,6 +332,7 @@ pub(super) async fn remove_worktree_http(
             override_lock,
             expected_fingerprint.as_deref(),
             confirm_missing_checkout,
+            q.permanent_delete.unwrap_or(false),
         )?;
         Ok::<_, String>((outcome, warnings))
     })
@@ -1082,6 +1083,108 @@ mod warm_tests {
 mod survivor_tests {
     use super::*;
 
+    // Catches: stale Delete confirmation bypassing dirt or live descendant ownership.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn permanent_delete_rechecks_dirty_files_and_live_sessions() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = super::warm_tests::setup_repo(temp.path());
+        for hazard in ["dirty", "live"] {
+            let checkout = temp.path().join(hazard);
+            crate::git_cli::git_cmd(&repo)
+                .args(["worktree", "add", "-b", hazard, checkout.to_str().unwrap()])
+                .run()
+                .unwrap();
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            if hazard == "dirty" {
+                std::fs::write(checkout.join("untracked.txt"), "keep this work").unwrap();
+            } else {
+                let nested = checkout.join("nested");
+                std::fs::create_dir(&nested).unwrap();
+                crate::state::tests_support::insert_dummy_session(&state, "agent");
+                crate::state::tests_support::set_session_cwd(
+                    &state,
+                    "agent",
+                    nested.to_str().unwrap(),
+                );
+            }
+            let response = remove_worktree_http(
+                State(state), Path(hazard.into()),
+                Query(serde_json::from_value(serde_json::json!({
+                    "repoPath": repo.to_string_lossy(), "deleteBranch": true, "permanentDelete": true
+                })).unwrap()),
+            ).await;
+            assert!(
+                !response.status().is_success(),
+                "{hazard} deletion was allowed"
+            );
+            assert!(checkout.exists(), "{hazard} checkout was lost");
+            assert!(
+                crate::git_cli::git_cmd(&repo)
+                    .args([
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{hazard}")
+                    ])
+                    .run()
+                    .is_ok()
+            );
+            if hazard == "dirty" {
+                assert_eq!(
+                    std::fs::read_to_string(checkout.join("untracked.txt")).unwrap(),
+                    "keep this work"
+                );
+            }
+        }
+    }
+
+    // Catches: explicit Delete silently recycling the checkout or retaining its local branch.
+    #[tokio::test]
+    async fn permanent_delete_removes_checkout_and_branch_instead_of_archiving() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = super::warm_tests::setup_repo(temp.path());
+        let checkout = temp.path().join("finished");
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "finished",
+                checkout.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = remove_worktree_http(
+            State(state), Path("finished".into()),
+            Query(serde_json::from_value(serde_json::json!({
+                "repoPath": repo.to_string_lossy(), "deleteBranch": true, "permanentDelete": true
+            })).unwrap()),
+        ).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!checkout.exists());
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["show-ref", "--verify", "--quiet", "refs/heads/finished"])
+                .run()
+                .is_err(),
+            "Delete kept the branch in an archived checkout"
+        );
+        let inventory = crate::git_cli::git_cmd(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap();
+        assert!(
+            !inventory.stdout.contains("refs/heads/finished"),
+            "Delete left a registered archive"
+        );
+    }
+
     async fn json(response: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
@@ -1117,6 +1220,7 @@ mod survivor_tests {
                     override_lock: None,
                     expected_fingerprint: fingerprint.map(str::to_owned),
                     confirm_missing_checkout: Some(missing),
+                    permanent_delete: None,
                 }),
             )
             .await;

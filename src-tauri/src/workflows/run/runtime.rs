@@ -118,6 +118,16 @@ impl WorkflowRuntime {
         state: &AppState,
         request: &GraphStartRequest,
     ) -> Result<RunSnapshot, String> {
+        self.start_graph_in_worktree(state, request, None)
+    }
+
+    /// Event intake binds its already-created isolated artifact before any actor wakes.
+    pub(crate) fn start_graph_in_worktree(
+        &self,
+        state: &AppState,
+        request: &GraphStartRequest,
+        worktree: Option<(&str, &str)>,
+    ) -> Result<RunSnapshot, String> {
         let owner = self
             .owner
             .lock()
@@ -126,7 +136,35 @@ impl WorkflowRuntime {
         let definition = crate::workflows::WorkflowStore::open()?
             .get_published(&request.definition_id, request.definition_revision)?;
         require_supported_nodes(&definition)?;
-        let snapshot = owner.store.start_graph_run(request)?;
+        let mut snapshot = owner.store.start_graph_run(request)?;
+        if let Some((story_id, path)) = worktree {
+            let bound = (|| {
+                drive_turn(&owner.store, &snapshot.id)?;
+                owner
+                    .store
+                    .command(
+                        &snapshot.id,
+                        &format!("event-worktree:{}", request.request_id),
+                        RunCommand::AssignWorktree {
+                            story_id: story_id.into(),
+                            path: path.into(),
+                        },
+                    )
+                    .map(|receipt| receipt.snapshot)
+            })();
+            match bound {
+                Ok(bound) => snapshot = bound,
+                Err(error) => {
+                    let receipt = owner.store.command(
+                        &snapshot.id,
+                        &format!("event-start-failed:{}", request.request_id),
+                        RunCommand::Cancel,
+                    )?;
+                    emit_run_changed(state, &snapshot.project, &snapshot.id, receipt.sequence);
+                    return Err(error);
+                }
+            }
+        }
         emit_run_changed(state, &snapshot.project, &snapshot.id, snapshot.sequence);
         Ok(snapshot)
     }

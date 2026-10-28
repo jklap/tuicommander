@@ -1,5 +1,18 @@
 # Plugin review: native live evidence for 1756-4d42
 
+## 2026-10-27 authenticated Jira addendum
+
+The [Jira Cloud live report](jira-cloud-live-2026-10-27.md) and its JSON/window
+capture supersede the credential-boundary limitation below **for Jira candidate
+9 only**. The real native plugin consumed project `10001` saved through Settings,
+fetched authenticated metadata, created `TUIC-3`, read back supported ADF, added a
+comment, moved it to Done and found it through search. The first create read-back
+hit a transient macOS network error; an explicit continuation reused the created
+issue rather than replaying the write. GitLab and new candidate 10/12 evidence
+are not claimed by that Jira run. Story status/criteria were not changed.
+
+## Original 2026-10-22 evidence
+
 Date: 2026-10-22. Worktree: `fix/1693-provider-closure`. Core baseline: `54ce1e8ff`. Plugin checkout: `d9d9f294dfceae27d6f797b8b421a00952cfe171`. No production implementation changed in this evidence update.
 
 ## Contract and isolation

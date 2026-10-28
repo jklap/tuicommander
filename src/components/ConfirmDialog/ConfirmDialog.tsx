@@ -11,6 +11,7 @@ export interface ConfirmDialogProps {
 	cancelLabel?: string;
 	/** Optional middle button (e.g. "Don't Save"). Rendered only when set. */
 	discardLabel?: string;
+	discardDanger?: boolean;
 	kind?: "warning" | "info" | "error";
 	/** Which button Enter activates. Defaults to "confirm". */
 	defaultButton?: "confirm" | "cancel";
@@ -116,7 +117,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 							{props.autoCancelMs && remaining() !== null ? ` (${remaining()})` : ""}
 						</Button>
 						<Show when={props.discardLabel}>
-							<Button class={d.cancelBtn} onClick={() => props.onDiscard?.()}>
+							<Button variant={props.discardDanger ? "danger" : "secondary"} onClick={() => props.onDiscard?.()}>
 								{props.discardLabel}
 							</Button>
 						</Show>

@@ -52,6 +52,16 @@ impl AutomationRuntime {
                 return;
             }
             let Some(state) = weak.upgrade() else { return };
+            match owner.store().unsettled_publications() {
+                Ok(runs) => {
+                    for run in runs {
+                        super::completion::publish_event_draft_pr(&state, &run);
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(source="automations", %error, "Publication recovery failed")
+                }
+            }
             let mut events = state.event_bus.subscribe();
             drop(state);
             // An issue refused for capacity is retried on the scheduler tick.
@@ -93,12 +103,23 @@ impl AutomationRuntime {
                 let Some(state) = weak.upgrade() else {
                     return;
                 };
-                if let Err(error) = super::completion::reconcile(
-                    owner.store(),
-                    &super::completion::NativeCompletion(&state),
-                    chrono::Utc::now().timestamp_millis(),
-                ) {
-                    tracing::warn!(source="automations", %error, "Automation reconciliation failed");
+                let reconcile_state = state.clone();
+                let reconcile_store = owner.store().clone();
+                match tokio::task::spawn_blocking(move || {
+                    super::completion::reconcile(
+                        &reconcile_store,
+                        &super::completion::NativeCompletion(&reconcile_state),
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    error => tracing::warn!(
+                        source = "automations",
+                        ?error,
+                        "Automation reconciliation failed"
+                    ),
                 }
                 if !scheduled_wake && !intake_wake {
                     continue;
@@ -270,6 +291,141 @@ fn intake_poll_paths(
 mod tests {
     use super::*;
 
+    // Catches: native completion logs a created PR URL but loses it from run details on restart.
+    #[tokio::test]
+    async fn native_publication_url_survives_owner_restart() {
+        use super::super::{
+            completion::{CompletionEffects, NativeCompletion},
+            model::AutomationDefinition,
+            run::{RunDetails, RunStatus, RunTrigger},
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(scratch.path().to_owned());
+        let git = |args: &[&str]| super::super::publish::run_git(scratch.path(), args).unwrap();
+        git(&["init", "--initial-branch=tidy-dev-prepare-team-pr-skill"]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "test",
+        ]);
+        git(&["remote", "add", "origin", "https://github.com/cli/cli.git"]);
+        std::fs::write(scratch.path().join("automations.json"), serde_json::json!({
+            "event_intake": {"repositories": ["cli/cli"], "label": "run", "definition_id": "event"}
+        }).to_string()).unwrap();
+
+        // The recorded provider response is served through the real RepoApi URL,
+        // using isolated trust roots/DNS and a dummy token, never live credentials.
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("publish/fixtures/pulls.json")).unwrap();
+        let created = recorded[0].clone();
+        let posts = Arc::new(AtomicUsize::new(0));
+        let posted = posts.clone();
+        let router = axum::Router::new().route(
+            "/repos/cli/cli/pulls",
+            axum::routing::get(|| async { axum::Json(serde_json::json!([])) }).post(move || {
+                posted.fetch_add(1, Ordering::SeqCst);
+                let response = created.clone();
+                async move { axum::Json(response) }
+            }),
+        );
+        let cert = include_bytes!("../fixtures/github_volume/cert.pem");
+        let key = include_bytes!("../fixtures/github_volume/key.pem");
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert.to_vec(), key.to_vec())
+            .await
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = axum_server::Handle::new();
+        let server = tokio::spawn(
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .handle(handle.clone())
+                .serve(router.into_make_service()),
+        );
+        let mut state = crate::state::tests_support::make_test_app_state_in(scratch.path());
+        state.http_client = reqwest::Client::builder()
+            .no_proxy()
+            .tls_certs_only([reqwest::Certificate::from_pem(cert).unwrap()])
+            .resolve("api.github.com", address)
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        *state.github.token.write() = Some("test-only-credential".into());
+        let state = Arc::new(state);
+        let path = scratch.path().join("automation_runs.sqlite3");
+        let now = chrono::Utc::now().timestamp_millis();
+        let owner = RunOwner::acquire_at(&path, now).unwrap();
+        *state.automation_runtime.owner.lock() = Some(owner.store().clone());
+        let definition: AutomationDefinition = serde_json::from_value(serde_json::json!({
+            "id":"event", "name":"Event", "prompt":"Resolve issue", "run_config":"codex",
+            "repository":scratch.path(), "workspace":{"mode":"new_per_run", "base_branch":"trunk"},
+            "cron":"0 9 * * *", "timezone":"UTC", "enabled":true,
+            "grace_secs":1800, "overlap":"skip", "max_duration_secs":3600, "precheck":null
+        }))
+        .unwrap();
+        let run = owner
+            .store()
+            .reserve(
+                &definition,
+                RunTrigger::Event {
+                    repository: "cli/cli".into(),
+                    issue_number: 3,
+                    label: "run".into(),
+                },
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        let run = owner
+            .store()
+            .transition(
+                &run.id,
+                RunStatus::Completed,
+                RunDetails {
+                    workspace: Some(scratch.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                now + 1,
+            )
+            .unwrap();
+        NativeCompletion(&state).publish(&run);
+        // The native callback owns an Arc until all publication/settlement work
+        // finishes. Wait for that task, not a timing guess after the POST arrives.
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while Arc::strong_count(&state) > 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("native publication task did not finish");
+        handle.shutdown();
+        server.await.unwrap().unwrap();
+        assert_eq!(
+            posts.load(Ordering::SeqCst),
+            1,
+            "native completion must create the PR"
+        );
+        drop(state);
+        drop(owner);
+        let restarted = RunOwner::acquire_at(&path, now + 2).unwrap();
+        let details = serde_json::to_value(restarted.store().get(&run.id).unwrap()).unwrap();
+        assert_eq!(details["status"], "completed");
+        assert_eq!(
+            details["outcome"]["pr_url"], "https://github.com/cli/cli/pull/14846",
+            "created PR URL must remain in run details after owner restart"
+        );
+    }
+
     // Catches: intake waiting for a client to start the shared GitHub poller.
     #[tokio::test]
     async fn headless_intake_polls_without_client() {
@@ -328,6 +484,7 @@ mod tests {
                 repositories,
                 label: "tuic-run".into(),
                 definition_id: "not-dispatched".into(),
+                workflow: None,
             },
             ..Default::default()
         };

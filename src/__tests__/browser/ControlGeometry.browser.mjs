@@ -104,6 +104,22 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           else assert.notEqual(control.end,'0px','Last action retains outer radius');
         }
       }
+      const composeGrowth = await evaluate('window.composeGrowthGeometry ? window.composeGrowthGeometry() : null');
+      if (composeGrowth) {
+        console.log('COMPOSE_GROWTH', JSON.stringify({width, ...composeGrowth}));
+        await context.test(`catches fixed multiline composer height and no growth at ${width}px`, () => {
+          const minimum = width <= 600 ? 44 : 36;
+          assert.equal(composeGrowth.empty.height, minimum, 'Empty composer must occupy one shared control line');
+          assert.ok(composeGrowth.two.height > composeGrowth.empty.height, 'Second line must grow the editor');
+          assert.ok(composeGrowth.three.height > composeGrowth.two.height, 'Third line must grow the editor');
+          assert.equal(composeGrowth.long.height, 96, 'Retain the existing editor maximum');
+          assert.ok(composeGrowth.long.scroll > composeGrowth.long.client, 'Long drafts must scroll inside');
+          assert.equal(composeGrowth.long.overflow, 'auto');
+          assert.equal(composeGrowth.cleared.height, minimum, 'Clearing must shrink');
+          assert.equal(composeGrowth.sent.height, minimum, 'Successful send must shrink');
+          assert.ok(composeGrowth.narrow.height > composeGrowth.wide.height, 'Width-only wrapping must grow');
+        });
+      }
       const textarea = await evaluate('window.textareaGeometry ? window.textareaGeometry() : null');
       if(textarea) {
         const minimum=width<=600?44:36, maximum=width<=600?132:108;
@@ -263,7 +279,7 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
           assert.equal(target.height,44,JSON.stringify({width,target}));
         }
       }
-      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,states,composer,targets,aiChat});
+      measurements.push({width,...result,icons,actionIcons,stretch,joined,textarea,composeGrowth,states,composer,targets,aiChat});
 
       const image=await send('Page.captureScreenshot',{format:'png',clip:result.clip},sessionId);
       const path=resolve(directory,`controls-${width}.png`);

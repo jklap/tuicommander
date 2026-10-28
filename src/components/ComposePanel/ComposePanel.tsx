@@ -7,6 +7,7 @@ import { cx } from "../../utils";
 import { IMAGE_FILE_ACCEPT } from "../../utils/pastedImage";
 import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
 import { Button } from "../ui/Button";
+import controls from "../ui/FormControls.module.css";
 import s from "./ComposePanel.module.css";
 import { useComposeImages } from "./useComposeImages";
 
@@ -14,12 +15,14 @@ const composeTheme = EditorView.theme(
 	{
 		"&": {
 			width: "100%",
-			height: "100%",
+			height: "auto",
 			fontSize: "13px",
 			background: "var(--bg-primary)",
 		},
 		".cm-scroller": {
 			fontFamily: "var(--font-mono)",
+			minHeight: "inherit",
+			maxHeight: "inherit",
 			overflow: "auto",
 		},
 		".cm-content": {
@@ -140,6 +143,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	};
 
 	createExtension(composeTheme);
+	createExtension(EditorView.editorAttributes.of({ class: controls.autoGrow }));
 	createExtension(drawSelection());
 	createExtension(history());
 	createExtension(EditorView.lineWrapping);

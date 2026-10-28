@@ -1228,6 +1228,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
   - Parent tracked and untracked changes are not carried into the new checkout
   - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal. Branch-name status diagnostics appear once; main-checkout tooltips do not describe removal
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
+  - The Archive workspace dialog offers a red Delete alternative for a clean, integrated checkout without live sessions. Delete removes the checkout and local branch through the existing safety checks instead of recycling it; Archive remains the default.
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
   - Merged-PR proof uses paginated HTTP GraphQL with the repository-bound account and host; incomplete reads remain unknown and retryable
@@ -1900,6 +1901,8 @@ Buffer eviction is reported; it does not create another output store.
 ---
 
 ## 15. Keyboard Shortcut Reference
+
+Terminal Compose starts at one control line, grows with newlines and wrapping up to 96px, and scrolls longer drafts internally. Clearing or sending restores one line.
 
 Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
 
@@ -2795,6 +2798,8 @@ partial work, and their child processes may continue.
   connection at a time: manual and automatic updates both show in-progress,
   and overlapping requests over IPC, HTTP, or MCP receive an error.
 
+- **Daemon version guidance** — Show the last `/health.build` version in every retained runtime state. A semantic version older than the client warns before authentication succeeds. Host refusals explain that an outdated daemon may be responsible and recommend installing the current `tuic-remote` and restarting the service. A bare 403 carries no version; without a prior health observation, the version stays unknown. Explicit disconnect clears the observation.
+
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
@@ -3113,6 +3118,13 @@ retains bounded final output, and expires active runs at their persisted deadlin
 If stopping one run fails, it stays active while other runs still enforce their
 deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
+
+Event-run details retain durable publication outcomes and exact pre-POST intent.
+Restart and lost-response reconciliation use a repository/head/base PR lookup;
+uncertain writes are never automatically repeated. Filtered, duplicate and
+capacity decisions retain coalesced skipped history without consuming admission.
+The outcome includes PR/comment URL slots, decision and failure/refusal reason;
+comment publication and machine-enforced review/check gating are not added.
 
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
 The Automations editor exposes **Include precheck stdout in the agent prompt**,
@@ -3509,3 +3521,13 @@ connection, retry unavailable daemons every 30 seconds, and retain deletion
 tombstones. Story mutations do not depend on daemon availability. Closed and
 archived stories stay searchable. No story file is written to the project;
 plans and the story mutation API are unchanged. See the native stories guide.
+
+
+#### Reviewed event issue publication
+
+Event intake can opt in through `event_intake.workflow` to an explicit published
+native story workflow revision. Dispatch creates the native story and reuses its
+isolated artifact, independent review and configured check receipts. Draft
+publication requires current evidence matching the pushed SHA and includes review
+findings. Configurations without a workflow retain legacy behavior. See the
+[guide](user-guide/automations.md#opt-in-reviewed-issue-workflows).

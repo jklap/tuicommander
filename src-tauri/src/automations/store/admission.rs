@@ -22,11 +22,12 @@ impl RunStore {
     }
 
     /// Reserve one run for an event, once per event key. A refusal for overlap or
-    /// capacity records nothing, so the same event is admitted by a later poll.
+    /// capacity records a refusal without consuming its event key, allowing retry.
     pub(in crate::automations) fn admit_event(
         &self,
         definition: &AutomationDefinition,
         trigger: RunTrigger,
+        workflow: Option<super::super::model::EventWorkflow>,
         max_concurrent_runs: u32,
         now_ms: i64,
     ) -> Result<Option<AutomationRun>, String> {
@@ -35,9 +36,6 @@ impl RunStore {
         let key = trigger.event_key().ok_or("Not an event trigger")?;
         if max_concurrent_runs == 0 {
             return Err("Automation concurrency must be greater than zero".into());
-        }
-        if !definition.enabled {
-            return Ok(None);
         }
         let mut conn = self.connect()?;
         let tx = conn
@@ -50,11 +48,32 @@ impl RunStore {
                 |r| r.get(0),
             )
             .map_err(error)?;
-        if seen || capacity_status(&tx, definition, max_concurrent_runs)? != RunStatus::Reserved {
+        let refusal = if seen {
+            Some((RunStatus::SkippedDuplicate, "Event already admitted"))
+        } else if !definition.enabled {
+            Some((RunStatus::SkippedFiltered, "Event definition is disabled"))
+        } else {
+            match capacity_status(&tx, definition, max_concurrent_runs)? {
+                RunStatus::SkippedOverlap => Some((
+                    RunStatus::SkippedOverlap,
+                    "Definition already has an open run",
+                )),
+                RunStatus::SkippedConcurrency => Some((
+                    RunStatus::SkippedConcurrency,
+                    "Global automation capacity reached",
+                )),
+                _ => None,
+            }
+        };
+        if let Some((status, reason)) = refusal {
+            super::outcomes::record_refusal_in(&tx, definition, trigger, status, reason, now_ms)?;
+            tx.commit().map_err(error)?;
             return Ok(None);
         }
-        let run = reserve_in(&tx, definition, trigger, RunStatus::Reserved, now_ms)?
+        let mut run = reserve_in(&tx, definition, trigger, RunStatus::Reserved, now_ms)?
             .ok_or("Event reservation was not recorded")?;
+        run.event_workflow = workflow;
+        write(&tx, &run)?;
         tx.execute(
             "INSERT INTO automation_event_keys(automation_id,event_key,run_id) VALUES(?1,?2,?3)",
             params![definition.id, key, run.id],

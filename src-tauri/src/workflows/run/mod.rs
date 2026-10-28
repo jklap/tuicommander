@@ -4,8 +4,10 @@ pub mod graph;
 mod incidents;
 mod model;
 pub use incidents::RunIncident;
+mod publication;
 mod reducer;
 mod runtime;
+pub(crate) use publication::{PublicationReview, publication_review};
 mod store;
 pub(crate) use runtime::WorkflowRuntime;
 #[cfg(test)]

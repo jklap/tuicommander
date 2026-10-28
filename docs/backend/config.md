@@ -1901,3 +1901,16 @@ mdkb's `external.list`, `external.upsert` and `external.delete` methods through
 `mdkb_client.rs`. Only IDs in this instance's ledger are owned. The projection
 is optional and read-only; neither RPC failures nor daemon absence roll back
 story mutations. No story mirror or new user configuration is created.
+
+
+### Event workflow selection
+
+`automations.json` can opt in with `event_intake.workflow` containing
+`definition_id` and positive `definition_revision`. Omission or null preserves
+legacy event behavior. Event admission pins this selection in `AutomationRun.event_workflow`;
+`workflow_binding` records the native `run_id` and `story_id`. Both fields default
+to null for earlier snapshots. The native workflow uses the prepared isolated
+workspace and its own role profiles. Publication reloads its authoritative
+review/check receipts and verifies GitHub's pushed branch SHA. Publication success
+or refusal updates the completed event's durable `outcome`, not its execution status.
+See [reviewed issue workflows](../user-guide/automations.md#opt-in-reviewed-issue-workflows).

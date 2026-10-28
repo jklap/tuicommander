@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
+import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 
 describe("useConfirmDialog", () => {
 	let dialog: ReturnType<typeof useConfirmDialog>;
@@ -204,6 +205,30 @@ describe("useConfirmDialog", () => {
 	});
 
 	describe("confirmRemoveWorktree()", () => {
+		// Catches: Delete is missing for safe workspaces or remains available for dirty/live workspaces.
+		it("offers Delete only while the workspace is clean integrated and has no live users", async () => {
+			const safe = { dirtyFiles: 0, commitStatus: "in_sync", removalSafety: "safe" } as const;
+			const pending = dialog.confirmRemoveWorktree("finished", safe, true);
+			const label = dialog.dialogState()?.discardLabel;
+			dialog.handleDiscard();
+			const answer = await pending;
+			expect(label).toBe("Delete");
+			expect(answer).toBe("delete");
+			for (const hazard of [
+				{ dirtyFiles: 1, removalSafety: "requires_force" },
+				{ liveSessions: [{ sessionId: "agent", name: "Codex" }] },
+				{ commitStatus: "unmerged" },
+				{ dirtyFiles: null, removalSafety: "unknown" },
+				{ missingCheckout: true },
+				{ submoduleUnpushedCommits: [{ path: "sub", count: 1 }] },
+			] satisfies Partial<WorkspaceLifecycleStatus>[]) {
+				const blocked = dialog.confirmRemoveWorktree("finished", { ...safe, ...hazard }, true);
+				expect(dialog.dialogState()?.discardLabel, JSON.stringify(hazard)).toBeUndefined();
+				dialog.handleDiscard();
+				expect(await blocked).toBe(false);
+			}
+		});
+
 		it("distinguishes unstarted work from merged commits before confirmation", async () => {
 			const pending = dialog.confirmRemoveWorktree(
 				"unstarted",

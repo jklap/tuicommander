@@ -730,6 +730,9 @@ arrange the wrapping picker but must not resize its swatches.
 - Use `Textarea autoGrow` for compact content-sized editors. The shared minimum
   is 36px desktop or 44px touch, and the maximum is three control heights.
   Remove consumer auto-resize callbacks and height caps when adopting it.
+- Rich editors use the same `FormControls.autoGrow` intrinsic bounds. A rich
+  editor can retain its established maximum through `--auto-grow-max-height`;
+  CodeMirror owns content measurement, with no textarea sizing loop.
 
 ### Shared validation and removable toggles
 
