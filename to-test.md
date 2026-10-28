@@ -3239,6 +3239,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
 
 
+- [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
 ## Reviewed event issue publication (#2325-10c4)
 
 - [ ] After a manual `make dev` restart or release rebuild, configure an allowlisted sandbox event with a published story workflow revision and passing deterministic checks. Verify native story/run links in automation history, independent review, draft findings and stale-push refusal. No live GitHub publication was authorized in the implementation assignment.

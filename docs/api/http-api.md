@@ -3720,3 +3720,15 @@ turn, including before it starts, and removes the handle. A running draft reques
 settles after connection shutdown. Dropping an HTTP caller does not skip cleanup.
 Unused handles expire after 301 seconds. These calls never save a story.
 `create_story` accepts optional `problem` beside `input` and saves both atomically.
+
+
+### Bound issue triage decisions (#2324-424d)
+
+Issue triage: `run` and `list_runs` can return
+`trigger={kind:"triage",repository,issue_number,policy_version}` and optional
+`triage_decision={outcome:"accepted"|"rejected"|"needs_input",reason}`.
+The shared parser also recognizes `triage_decision` with `id` and `decision`,
+but HTTP/IPC callers have no managed-agent binding and receive
+`Triage decision requires a bound agent caller`; only the bound managed MCP
+evaluator can submit. A decision completes the run; GitHub publication remains
+a separate host effect.

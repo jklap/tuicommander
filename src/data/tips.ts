@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Optional issue triage",
+		description:
+			"Configure event_intake.triage on the owning daemon to evaluate trusted authors' open issues before labelled implementation. The read-only profile is operator-attested; TUIC does not enforce credential isolation.",
+		shortcut: null,
+	},
+	{
 		feature: "Delete instead of archive",
 		description:
 			"The Archive workspace dialog offers Delete for a clean, integrated workspace with no live sessions. Delete removes its checkout and local branch; Archive keeps them for reuse.",

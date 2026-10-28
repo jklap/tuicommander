@@ -1903,6 +1903,26 @@ is optional and read-only; neither RPC failures nor daemon absence roll back
 story mutations. No story mirror or new user configuration is created.
 
 
+### Issue triage configuration and ledger (#2324-424d)
+
+The optional `event_intake.triage` array defaults to empty. Each entry contains
+`repository`, `definition_id`, `policy_version`, `read_only_attested` and
+`rejection_label`. The repository must be a unique member of the intake allowlist.
+The separate triage definition uses `workspace.mode=existing` and no precheck; its
+cron admission is suppressed. Attestation is required, but does not restrict host
+git/gh credentials, environment, filesystem or MCP authority. Enforced ego
+isolation is future 2450-6845. See the [operator contract](../user-guide/automations.md#optional-triage-before-labelled-intake).
+
+Run snapshots add `trigger.kind=triage` with repository, issue_number and
+policy_version, plus optional `triage_decision={outcome,reason}`. The event key's
+`@triage` namespace is independent of the selected definition id. Triage records
+are exempt from normal history pruning so admission does not lose their decisions.
+Existing delivery rows with channel `github` and transitions `triage-comment` and
+`triage-label` record attempted/confirmed/unknown publication separately. An
+unknown send requires operator reconciliation and is never automatically replayed.
+This extends version-1 snapshot JSON; downgrading to a build without triage support
+after saving triage configuration or runs is unsupported.
+
 ### Event workflow selection
 
 `automations.json` can opt in with `event_intake.workflow` containing

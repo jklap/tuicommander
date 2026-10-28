@@ -530,3 +530,16 @@ fn automation_profiles_uses_the_same_saved_profiles_as_validation() {
     .unwrap();
     assert_eq!(reply, json!(["Review profile"]));
 }
+
+// Catches: an unbound HTTP/IPC client or agent submits a triage decision for another run.
+#[tokio::test]
+async fn triage_decision_requires_bound_agent_transport_identity() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let input = serde_json::json!({"action":"triage_decision","id":"not-owned", "decision":{"outcome":"accepted","reason":"Policy permits"}});
+    for caller in [super::Caller::Client, super::Caller::Agent(None)] {
+        let error = super::execute_as(input.clone(), state.clone(), caller)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Triage decision requires a bound agent caller");
+    }
+}
