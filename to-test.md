@@ -1,3 +1,8 @@
+## Plans and Stories action placement (2380-23f1)
+
+- [ ] Coordinator critic: run the focused StoriesDialog action regressions, existing dialog/edit/metadata/filter consumers, and i18nKeyCollisions.test.ts. Pre-fix RED reproduced all three defects; local TypeScript passes. No implementation-lane GREEN run is claimed.
+- [ ] Capture New story, story detail and Edit plan at 1400, 700 and 390 pixels. Isolated worktree fixture attempts returned no DOM or screenshot with both installed Chrome for Testing builds; the harness reported `Capture not ready`. No screenshot or visual pass is claimed. Logs: `~/Gits/.tmp/tuic-2380-capture-retry.log`.
+
 ## MDKB hook telemetry state (2442-61f6)
 
 - [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.

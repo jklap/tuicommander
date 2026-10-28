@@ -545,6 +545,8 @@ Native plan and story records have a separate config-directory SQLite authority 
 
 Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
 
+New story and Edit plan keep the primary action, then Cancel, together at the bottom-left. Story Edit stays in the story header. Disabled Add dependency exposes its reason as a native tooltip and accessible description.
+
 Native stories have an optional persisted story type (feature, fix, refactor, chore, task). Old and omitted values remain untyped. Rust derives combined open/closed/type filters and per-status board membership without filtering dependency records or plan aggregation. Open excludes only Done and WontFix. The dialog retains filters and the List/Kanban switch for the application session, including detach and reattach through panel parameters and return actions. The core Solid board follows the separate Wiz plugin layout without importing its code; native cards open details without plugin drag/status mutation.
 
 
