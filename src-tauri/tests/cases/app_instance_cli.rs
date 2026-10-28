@@ -247,6 +247,108 @@ fn headless_credential_file_boots_without_a_session_bus() {
     }
 }
 
+// Catches automatic update/relaunch forwarding the old token over a rotated seed.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_credential_file_rotation_wins_after_automatic_update() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::process::CommandExt;
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("mounted-vault.json");
+    fs::write(&seed, r#"{"remote/session-token":"before-update"}"#).unwrap();
+    // The update replaces only this disposable copy, never the build artifact.
+    let executable = env._dir.path().join("tuic-remote");
+    fs::copy(env!("CARGO_BIN_EXE_tuic-remote"), &executable).unwrap();
+    let binary = fs::read(&executable).unwrap();
+    let digest = hex::encode(Sha256::digest(&binary));
+    let port = isolated_port();
+    let mut child = Command::new(&executable)
+        .args([
+            "--instance",
+            NAMED_ID,
+            "--credential-file",
+            seed.to_str().unwrap(),
+            "--no-agent-configs",
+        ])
+        .env("HOME", &env.home)
+        .env("XDG_CONFIG_HOME", &env.config)
+        .env("APPDATA", &env.appdata)
+        .env("USERPROFILE", &env.userprofile)
+        .env("TUIC_PORT", port.to_string())
+        .env_remove("TUIC_PAIRING_TOKEN")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent-tuic-test-bus",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = i32::try_from(child.id()).unwrap();
+    // Always reap our own process group, including the automatic relaunch child.
+    let result = std::panic::AssertUnwindSafe(async {
+        assert!(matches!(
+            wait_for_ready_or_exit(&mut child, port, READY_SETUP_TIMEOUT, |p| {
+                probe_authenticated_session_once(p, "before-update")
+            }),
+            ReadinessOutcome::Ready
+        ));
+        let client = reqwest::Client::builder()
+            .timeout(READY_SETUP_TIMEOUT)
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let health: serde_json::Value = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rotated = r#"{"remote/session-token":"after-update"}"#;
+        fs::write(&seed, rotated).unwrap();
+        let response = client
+            .post(format!("{base}/remote/update"))
+            .header("Cookie", "tui-session=before-update")
+            .header("x-tuic-target", health["build"]["target"].as_str().unwrap())
+            .header("x-tuic-sha256", digest)
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(binary)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        let deadline = Instant::now() + READY_SETUP_TIMEOUT;
+        while !probe_authenticated_session_once(port, "after-update") {
+            assert!(
+                Instant::now() < deadline,
+                "automatic relaunch did not authenticate the rotated credential-file token"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            !probe_authenticated_session_once(port, "before-update"),
+            "automatic relaunch retained the old credential-file token"
+        );
+        assert_eq!(fs::read_to_string(&seed).unwrap(), rotated);
+    });
+    use futures_util::FutureExt;
+    let outcome = result.catch_unwind().await;
+    // SAFETY: this group was created above for this test's daemon only.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 // Catches bad mounted data silently falling back to a keyring or empty vault.
 #[test]
 fn headless_credential_file_rejects_bad_input_without_secret_diagnostics() {
