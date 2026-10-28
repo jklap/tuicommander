@@ -166,6 +166,39 @@ mod tests {
         assert_eq!(state.dir_watchers.len(), 2);
     }
 
+    #[tokio::test]
+    async fn releasing_one_client_keeps_shared_directory_notifications_alive() {
+        let tmp = TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let state = make_test_state();
+        let mut events = state.event_bus.subscribe();
+
+        start_watching(path, &state).unwrap();
+        start_watching(path, &state).unwrap();
+        stop_watching(path, &state);
+        std::fs::create_dir(tmp.path().join("roles")).unwrap();
+
+        // Catches a collapsing desktop tree dropping the phone's shared watch.
+        // The timeout is only a hang bound, not an assertion about notify latency.
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let AppEvent::DirChanged { dir_path } = events.recv().await.unwrap()
+                    && dir_path == path
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("another client's release stopped shared directory notifications");
+
+        stop_watching(path, &state);
+        assert!(
+            !state.dir_watchers.contains_key(path),
+            "last release leaked the watcher"
+        );
+    }
+
     /// FSEvents on macOS has inherent latency (~2s), making event emission tests
     /// flaky in CI. The watcher integration is covered by manual testing.
     /// This test verifies the event bus wiring without relying on FSEvents timing.
