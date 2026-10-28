@@ -385,12 +385,6 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                                     "unspawned completion lacks native approval receipt".into()
                                 );
                             }
-                            evidence = Some(DecisionEvidence {
-                                actor: "native-story".into(),
-                                reason: "Story already approved without an implementer spawn"
-                                    .into(),
-                                references: vec![format!("story:{}:{revision}", graph.target_id)],
-                            });
                         }
                         if attempt.state == super::AttemptState::Running {
                             continue 'graphs;
