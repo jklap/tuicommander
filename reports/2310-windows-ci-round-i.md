@@ -1,5 +1,12 @@
 # Windows CI round i: watcher fixture path identity
 
+## Follow-up
+
+Run `40773627108` confirms that the path-oracle repair made the required events
+arrive, but exposes a second failure in production sibling-cache reuse. The
+classification below applies to the old event-wait timeouts only, not the later
+computation-count failures. See `2310-windows-ci-round-j.md`.
+
 ## Classification
 
 The three remaining failures in native Windows CI run `40762628254` on

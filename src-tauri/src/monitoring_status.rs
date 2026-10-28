@@ -115,6 +115,14 @@ impl StatusCache {
             .collect();
         let common = base.join(".git");
         for path in &event.paths {
+            // Windows reports parent-directory metadata changes for Git writes.
+            // Child events carry index/ref/config changes; directory metadata is
+            // not replacement and must not retire unchanged siblings' watches.
+            if path.starts_with(&common)
+                && crate::fs::is_directory_metadata_event(&event.kind, path)
+            {
+                continue;
+            }
             // Replacement and unmapped paths cannot retain watch authority. A
             // new registration/restart must establish the mapping again.
             let lost = entries.iter().any(|(root, entry)| {
@@ -435,6 +443,62 @@ mod tests {
             .run()
             .unwrap();
         assert_eq!(dirty.unwrap(), out.stdout.lines().count());
+    }
+
+    /// Catches Git directory metadata retiring every sibling's watch authority.
+    #[test]
+    fn monitoring_status_git_directory_metadata_preserves_sibling_but_not_index_writes() {
+        let (_guard, repo) = setup_test_repo_with_commit();
+        let repo = repo.canonicalize().unwrap();
+        let holder = tempfile::tempdir().unwrap();
+        let sibling = holder.path().canonicalize().unwrap().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "metadata-sibling",
+                sibling.to_str().unwrap(),
+            ],
+        );
+        let admin = crate::git::resolve_git_dir(&sibling)
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        let cache = StatusCache::default();
+        cache.set_watching(&repo, &repo, true);
+        cache.set_watching(&repo, &sibling, true);
+        assert_cli_status(&cache, &sibling);
+        assert_eq!(computations(&cache, &sibling), 1);
+
+        // Exercise the raw-event boundary with real Git directories, not a
+        // claim that these events were captured from this host's OS backend.
+        for directory in [
+            repo.join(".git"),
+            repo.join(".git/worktrees"),
+            admin.clone(),
+        ] {
+            changed(&cache, &repo, &directory);
+            assert_cli_status(&cache, &sibling);
+            assert_eq!(computations(&cache, &sibling), 1, "{}", directory.display());
+        }
+
+        std::fs::write(sibling.join("staged.txt"), "staged\n").unwrap();
+        run_git(&sibling, &["add", "staged.txt"]);
+        changed(&cache, &repo, &admin.join("index"));
+        assert_cli_status(&cache, &sibling);
+        assert_eq!(cache.read(&sibling).1.unwrap(), 1);
+        assert_eq!(computations(&cache, &sibling), 2);
+
+        // Topology events must still revoke trust even if the path exists.
+        let event =
+            notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Folder))
+                .add_path(repo.join(".git"));
+        assert!(!cache.event(&repo, &event));
+        assert_cli_status(&cache, &sibling);
+        assert_cli_status(&cache, &sibling);
+        assert_eq!(computations(&cache, &sibling), 4);
     }
 
     /// Catches stale snapshots after tracked/ignored, rename, untracked and index writes.
