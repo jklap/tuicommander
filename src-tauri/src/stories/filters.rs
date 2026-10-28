@@ -50,16 +50,41 @@ pub(super) fn project(
     (ids, columns)
 }
 
+fn validate(filter: &StoryFilter) -> Result<(), String> {
+    if filter.untyped_only && filter.story_type.is_some() {
+        return Err("untypedOnly and storyType are mutually exclusive".into());
+    }
+    Ok(())
+}
+
 impl StoryStore {
+    /// Keep aggregation and column membership identical for every transport and client.
+    pub fn project_story_view(
+        &self,
+        project_path: &str,
+        archived_plans: bool,
+        filter: &StoryFilter,
+    ) -> Result<super::ProjectStoryView, String> {
+        validate(filter)?;
+        let mut stories = Vec::new();
+        for plan in self.list_plans_archived(project_path, archived_plans)? {
+            stories.extend(self.plan_view_archived(&plan.id, filter.archived)?.stories);
+        }
+        let (visible_story_ids, columns) = project(&stories, filter);
+        Ok(super::ProjectStoryView {
+            stories,
+            visible_story_ids,
+            columns,
+        })
+    }
+
     /// Filter only the presentation projection. Plan completion and dependency detail use all records.
     pub fn filtered_plan_view(
         &self,
         plan_id: &str,
         filter: &StoryFilter,
     ) -> Result<PlanView, String> {
-        if filter.untyped_only && filter.story_type.is_some() {
-            return Err("untypedOnly and storyType are mutually exclusive".into());
-        }
+        validate(filter)?;
         let mut view = self.plan_view_archived(plan_id, filter.archived)?;
         (view.visible_story_ids, view.columns) = project(&view.stories, filter);
         Ok(view)

@@ -59,7 +59,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -75,6 +75,8 @@ Story transition provenance comes from host-validated credentials: desktop IPC a
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled,visibleStoryIds,columns}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
 
 `list_stories` accepts optional snake-case `state` (a native story status), `priority` (1–3), and `story_type` (feature, fix, refactor, chore, task). Filters combine with AND; omitted filters match all values, including untyped records. The type filter reads persisted `storyType`, not origin. With no `limit`, the reply remains the complete filtered `{type:"stories",value:Story[]}` in ascending id order. A `limit` of 1–100 opts into keyset pagination; `next_cursor` is an optional sibling of `value` and is absent on the final page. Send it as `cursor` with a limit and the same plan and filters. Cursors are versioned, limited to 1024 bytes, and rejected for another plan/query; invalid priority, limit, or cursor values return HTTP 422 user errors. Page size may change between requests. These are live reads, not retained snapshots: changes at or before an already consumed id require starting again without a cursor. Internal workflow dispatch still reads the full plan and retains priority/id ordering. Archive filtering uses the `archived` flag described below.
+
+`project_story_view` takes `archived_plans` (default false) and a camel-case `filter` with the same fields and defaults as `filtered_plan_view`. It returns `{type:"project_story_view",value:{stories,visibleStoryIds,columns}}` across every plan in the envelope project and selected plan archive scope. `archived_plans:true` selects archived plans only; `filter.archived:true` independently selects archived stories. Full records remain available for detail and dependency reads; only display ids and columns are filtered. The reply has no combined plan state. The shared StoryAction service exposes this action through IPC, HTTP, MCP and CLI.
 
 `filtered_plan_view` takes `plan_id` and a camel-case `filter`: `{visibility:"all"|"open"|"closed",storyType?:"feature"|"fix"|"refactor"|"chore"|"task"|null,untypedOnly?:boolean}`. Defaults are all statuses and all types. Open excludes only `done` and `wont_fix`; closed includes those two states. `untypedOnly:true` cannot be combined with a non-null `storyType`. The reply is the same `plan_view` shape. Full `stories` and plan summary remain unfiltered for detail and dependency reads; `visibleStoryIds` and `columns:[{status,storyIds}]` are the Rust-owned display projection. The unfiltered action supplies the all-stories projection. Creation input and stored story JSON accept optional `storyType`; omitted historical values stay absent and untyped. No database migration assigns a type.
 
@@ -2796,7 +2798,7 @@ opinion about it:
 | `protocol_violation` | 502 — the agent denied a method it advertised; the connection is now failed |
 
 ```
-POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot
+POST   /acp/connections                                          {root, env?}                    -> AcpConnectionSnapshot
 GET    /acp/connections/{connection_id}                                                    -> AcpConnectionSnapshot
 DELETE /acp/connections/{connection_id}                                                    -> AcpConnectionSettlement
 POST   /acp/connections/{connection_id}/kill                                               -> AcpConnectionSettlement
@@ -2819,6 +2821,9 @@ GET    /acp/connections/{connection_id}/interactions                            
 POST   /acp/connections/{cid}/permissions/{request_id}/response  {outcome}                 -> AcpInteractionSettlement
 POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}                  -> AcpInteractionSettlement
 POST   /acp/one-shot                                            {root, prompt}            -> EgoTurn
+POST   /acp/one-shot/prepare                                                               -> String
+POST   /acp/one-shot/{request_id}/cancel                                                    -> bool
+POST   /acp/story-draft                                         {project, request, requestId} -> StoryDraft
 ```
 
 The ACP session prompt route accepts a buffered JSON body large enough for the
@@ -2829,6 +2834,16 @@ text. Other JSON routes retain the 2 MiB default body limit.
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+Connect accepts an optional `env` object of string names and values. Overrides
+apply only to the new child, never the host or another launch. Host-issued
+`TUIC_SESSION` takes precedence. A supplied map, including an empty map, is
+rejected with disconnect-first guidance if the root already has a live peer;
+omitting `env` adopts that peer as before. Reconnect starts without the previous
+overrides. Values are not stored in connection state, returned by read endpoints,
+or included in request diagnostics. The host does not censor agent-generated
+content if an agent itself prints a value.
+
 
 `prompt` returns an ID immediately. When the session already has a turn, the
 host queues the prompt and sends it only after the current ACP response leaves
@@ -3637,7 +3652,12 @@ are null, not inferred from defaults. Scope is `account_quota` or `session_usage
 Claude/Codex quota windows describe shared account windows, not session spend.
 Claude mobile refreshes retain the local credential plan in the profile-scoped cache
 shared with desktop. A missing credential plan stays absent; stale fallback data
-keeps its original plan and is marked stale.
+keeps its original plan and is marked stale. A mobile primary GET that returns HTTP 429 sets the
+same profile backoff used by desktop reads. The delay is at least 120 seconds;
+a numeric Retry-After can extend it up to 300 seconds. During backoff, reads
+return stale cache or unavailable without another request. Mobile quota reads
+never use the generating messages fallback. Timeouts and other errors do not
+activate rate-limit backoff.
 ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
@@ -3677,3 +3697,15 @@ With `services.tls.mode: "manual"`, daemon TCP routes support HTTPS, SSE over
 HTTPS, and WSS on the same port. Like desktop remote access, plain HTTP/WS stays
 available on that port for local relay and SSH clients. TLS off retains HTTP/WS. Invalid PEM stops startup before bind;
 `tls_active` reports the live TLS listener, not configured certificate paths.
+
+### Cancellable story drafts
+
+The prepare, cancel and story-draft routes require loopback or authentication.
+Prepare returns a single-use cancellation handle. Pass it as `requestId` to
+story-draft; this invokes the same isolated ego one-shot driver and returns
+`{title, storyType, priority, problem, criteria}` only after Rust validation.
+The request is nonblank and at most 20000 characters. Cancel signals the owned
+turn, including before it starts, and removes the handle. A running draft request
+settles after connection shutdown. Dropping an HTTP caller does not skip cleanup.
+Unused handles expire after 301 seconds. These calls never save a story.
+`create_story` accepts optional `problem` beside `input` and saves both atomically.

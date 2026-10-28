@@ -126,7 +126,7 @@ pub(crate) const MODULES: [(&str, &str); 5] = [
     ),
     (
         "git_worktree",
-        "## Git and worktrees\nCreate and remove worktrees only with `repo action=worktree_create` / `repo action=worktree_remove`, never `git worktree add/remove`: TUIC tracks the checkout and session. Never `git switch` or `git checkout <branch>` in your session's own worktree: switching closes the session.\n",
+        "## Git and worktrees\nCreate and remove worktrees only with `repo action=worktree_create` / `repo action=worktree_remove`, never `git worktree add/remove`: TUIC tracks the checkout and session. Never `git switch` or `git checkout <branch>` in your session's own worktree: switching closes the session. Delegate or parallelize via TUIC `agent action=spawn`/`launch`, never client-native subagents such as Claude Code Agent/Task, except for the CC-only `cc_agent_hint` isolated-task path.\n",
     ),
     (
         "process_safety",

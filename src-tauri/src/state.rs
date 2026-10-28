@@ -2367,6 +2367,7 @@ pub struct AppState {
     /// here — it is read from configuration at each connect, so a changed
     /// setting takes effect without a restart.
     pub(crate) acp: crate::acp::AcpClientManager,
+    pub(crate) one_shot_requests: crate::acp::oneshot::OneShotRequests,
     /// Mobile alert windows for ACP conversations, separate from PTY state.
     acp_push_last_ms: DashMap<String, Option<u64>>,
     /// When true, the desktop window is currently focused and the user is at
@@ -3850,6 +3851,7 @@ impl AppState {
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
             acp: crate::acp::AcpClientManager::new(),
+            one_shot_requests: Default::default(),
             acp_push_last_ms: DashMap::new(),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
@@ -4330,8 +4332,33 @@ pub(crate) struct SettledReviewThreads {
     pub(crate) walked_at: Instant,
 }
 
+/// Only storage settings participate: unrelated settings saves must keep inventory hot.
+#[derive(PartialEq)]
+struct WorktreeStorageSettings {
+    default: crate::config::WorktreeStorage,
+    overrides: std::collections::BTreeMap<String, crate::config::WorktreeStorage>,
+}
+
+impl WorktreeStorageSettings {
+    fn load() -> Self {
+        let default = crate::config::load_repo_defaults().worktree_storage;
+        let overrides = crate::config::load_repo_settings()
+            .repos
+            .into_iter()
+            .filter_map(|(path, entry)| {
+                entry
+                    .worktree_storage
+                    .filter(|strategy| strategy != &default)
+                    .map(|strategy| (path, strategy))
+            })
+            .collect();
+        Self { default, overrides }
+    }
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
+    worktree_storage_settings: Mutex<WorktreeStorageSettings>,
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
     pub(crate) merged_branches: GitCache<Vec<String>>,
     pub(crate) repo_diff_stats: GitCache<crate::git::RepoDiffStats>,
@@ -4358,6 +4385,7 @@ impl GitCacheState {
     pub(crate) fn new() -> Self {
         let ttl_fallbacks = Arc::new(AtomicU64::new(0));
         Self {
+            worktree_storage_settings: Mutex::new(WorktreeStorageSettings::load()),
             repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             repo_diff_stats: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
@@ -4369,6 +4397,18 @@ impl GitCacheState {
             github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,
+        }
+    }
+
+    /// Called after durable repository settings saves, never from the inventory read path.
+    pub(crate) fn refresh_worktree_storage_settings(&self) {
+        let mut previous = self.worktree_storage_settings.lock();
+        let current = WorktreeStorageSettings::load();
+        if *previous != current {
+            *previous = current;
+            // Both caches derive their workspace set from the configured recycling pool.
+            self.worktree_paths.invalidate_all();
+            self.repo_diff_stats.invalidate_all();
         }
     }
 
@@ -9696,6 +9736,7 @@ mod tests {
                 },
                 crate::acp::AcpConnectRequest {
                     root: root.path().to_path_buf(),
+                    env: None,
                 },
             )
             .await
