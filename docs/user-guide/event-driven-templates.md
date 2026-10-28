@@ -44,6 +44,13 @@ for configuration and durable issue/label deduplication. Read back the saved
 state after any explicitly approved change; do not invent an intake tool action.
 Do not enable a cron recipe and call it an event integration.
 
+Event runs now retain an `outcome` in owner-side run details: the decision,
+PR URL, comment URL slot and failure/refusal reason. Publication saves its intent
+before the GitHub write and looks up an uncertain result instead of repeating
+creation. Filtered and duplicate intake decisions are retained in history.
+This does not add triage comments or the review/check gate below. See
+[durable event outcomes](automations.md#durable-event-outcomes).
+
 The following capabilities are still unsupported on this baseline. Verify their
 status on the addressed owner before using them:
 

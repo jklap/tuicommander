@@ -105,6 +105,9 @@ impl RunStore {
             }
             run.precheck_outcome = Some(value);
         }
+        if !next.is_open() && next != RunStatus::Completed && run.trigger.event_key().is_some() {
+            run.outcome = Some(RunOutcome::decision(&status(next)?, run.reason.clone()));
+        }
         write(&tx, &run)?;
         tx.commit().map_err(error)?;
         Ok(run)
@@ -134,6 +137,9 @@ impl RunStore {
             run.finished_ms = Some(run.updated_ms);
             run.reason =
                 Some("Application restarted before execution finished; not retried".into());
+            if run.trigger.event_key().is_some() {
+                run.outcome = Some(RunOutcome::decision("interrupted", run.reason.clone()));
+            }
             write(&tx, &run)?;
         }
         // An attempted send may already have arrived. Mark it unknown, never claim again.
