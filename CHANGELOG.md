@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep hidden terminal panes out of unsized warnings, avoid duplicate API-error handlers after reconnect, and log successful MCP peer rebinds at info instead of warn (#2439-027f).
 - Remove the permanent manual-prefix hint from New story without changing `[MANUAL]` criteria (#2444-9461).
 
 - Share bounded, cached ego usage reads between the status-bar badge and session details to avoid repeated or overlapping CLI processes (#2431-0847).

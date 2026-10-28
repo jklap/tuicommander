@@ -646,13 +646,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function remeasure() {
 		cancelSizeRetry?.();
 		cancelSizeRetry = undefined;
-		if (measureNow()) return;
-		cancelSizeRetry = retryUntilMeasured(measureNow, () =>
+		// A hidden pane has no layout box by design. The visibility observer
+		// remeasures on show, so only visible panes need the bounded retry.
+		if (measureNow() || hidden || !containerRef.isConnected) return;
+		cancelSizeRetry = retryUntilMeasured(measureNow, () => {
+			if (hidden || !containerRef.isConnected) return;
 			appLogger.warn(
 				"terminal",
 				`Pane stayed unsized for ${SIZE_RETRY_MAX_FRAMES} frames — canvas geometry not applied for ${props.terminalId}`,
-			),
-		);
+			);
+		});
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
@@ -2650,6 +2653,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					}
 				} else if (!isVisible && !hidden) {
 					hidden = true;
+					cancelSizeRetry?.();
+					cancelSizeRetry = undefined;
 					recordWorkloadVisibility(props.sessionId, true);
 					transport?.setVisible?.(false);
 					stopBlink();

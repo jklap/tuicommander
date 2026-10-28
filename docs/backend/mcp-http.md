@@ -616,6 +616,9 @@ during initialize` — fires only when a prior peer binding still exists, which 
 reaped session no longer has. Claims about the connection dropping were therefore
 confirmable but never refutable.
 
+Successful stale peer-binding recovery during initialize or explicit registration logs at
+info. A rejected takeover of a live peer identity remains a warning.
+
 The identity-scoped actions (`agent action=register|send|inbox|wait`) still refuse
 without a protocol session — but each refuses on its own, with the concrete next step
 (`initialize`, or `agent action=register`) that the previous blanket `-32600` never
