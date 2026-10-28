@@ -1901,6 +1901,8 @@ Buffer eviction is reported; it does not create another output store.
 
 ## 15. Keyboard Shortcut Reference
 
+Terminal Compose starts at one control line, grows with newlines and wrapping up to 96px, and scrolls longer drafts internally. Clearing or sending restores one line.
+
 Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
 
 ### Terminal
@@ -2794,6 +2796,8 @@ partial work, and their child processes may continue.
   Progress, success and errors appear in Remote Machines. One update owns each
   connection at a time: manual and automatic updates both show in-progress,
   and overlapping requests over IPC, HTTP, or MCP receive an error.
+
+- **Daemon version guidance** — Show the last `/health.build` version in every retained runtime state. A semantic version older than the client warns before authentication succeeds. Host refusals explain that an outdated daemon may be responsible and recommend installing the current `tuic-remote` and restarting the service. A bare 403 carries no version; without a prior health observation, the version stays unknown. Explicit disconnect clears the observation.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`

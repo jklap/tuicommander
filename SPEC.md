@@ -713,7 +713,7 @@ and an invalid ID or unavailable named release vault terminates before network
 bind. Runtime switching is unsupported.
 
 Production black-box consumers pin and verify the digest of the exact
-`tuic-remote` artifact they launch. The daemon also reports its running build's
+`tuic-remote` artifact they launch. Remote cards retain the last successful `/health.build` version through failed or reconnecting runtime states and warn when it is older than the client. A bare Host refusal has no version; the error names an outdated daemon as a possible cause and recommends installing the current daemon and restarting its service. No alternate Host probe is made; explicit disconnect discards runtime build knowledge. The daemon also reports its running build's
 version, target triple and SHA-256 in `/health`; the desktop uses that identity
 to detect an outdated remote and to verify an update after restart.
 
@@ -771,6 +771,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Answer surfaces use a green left rule without a background tint; Paper uses its darker success green for the rule; paragraph spacing and user-question styling stay unchanged (#1896-f355).
 - [x] Terminal Chat groups answer blocks into one reading-width card per turn, copies the whole card, compresses terminal pastes and system notices, and keeps the collapsed tool row with Claude Bash descriptions. Turn separators are omitted until transcript timestamps reach the frontend (#1832-b19a).
 - [x] Collapsed terminal Compose shows the shared FIFO count in a muted pill, hidden at zero, with a command/message breakdown on hover or focus (#2339-056c).
+- [x] Terminal Compose starts at one control line, grows intrinsically up to its existing 96px editor maximum, scrolls longer drafts internally, and shrinks after clear or successful send through shared auto-grow bounds (#2447-9d28).
 - [x] Terminal Compose shows only Ctrl+Enter in the newline hint and hides shortcut hints in panels up to 640px wide instead of wrapping (#2411-c7c9).
 - [x] Terminal Compose sends on Enter, inserts a new line on Ctrl+Enter or Shift+Enter, and queues on Shift+Ctrl+Enter. IME confirmation does not send (#2395-ed27).
 - [x] Terminal Compose accepts ordered image drops and an image-only multi-file picker through the existing paste save path. Drop inserts at the pointer; unsupported images and failed saves show an error.
