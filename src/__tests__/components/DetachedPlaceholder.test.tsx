@@ -58,6 +58,6 @@ describe("DetachedPlaceholder", () => {
 
 		const { getByText } = render(() => <DetachedPlaceholder panel="AI Chat" panelId="ai-chat" />);
 		await fireEvent.click(getByText("Bring back"));
-		expect(uiStore.isDetached("ai-chat")).toBe(false);
+		await vi.waitFor(() => expect(uiStore.isDetached("ai-chat")).toBe(false));
 	});
 });

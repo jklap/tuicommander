@@ -103,7 +103,7 @@ describe("RemoteOnlyPrPopover — 405 merge method auto-fallback", () => {
 				expect.objectContaining({ mergeMethod: "squash" }),
 			);
 		});
-		expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("squash");
+		await waitFor(() => expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("squash"));
 	});
 
 	it("falls back to rebase when both merge and squash are rejected", async () => {

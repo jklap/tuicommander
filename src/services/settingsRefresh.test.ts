@@ -60,7 +60,7 @@ it("refetches_after_an_invalidated_deduplicated_ipc_read_instead_of_adopting_its
 	await flush();
 	finishOld({ enabled: false });
 	await flush();
-	expect(apply.mock.calls.at(-1)).toEqual([{ enabled: true }]);
+	await vi.waitFor(() => expect(apply.mock.calls.at(-1)).toEqual([{ enabled: true }]));
 	expect(apply.mock.calls).not.toContainEqual([{ enabled: false }]);
 	stop();
 });
