@@ -901,6 +901,8 @@ TasksDetail provides Follow task / Unfollow task in its toolbar. Settings → No
 
 FileBrowserPanel subscribes to successful folder-drop completion and routes it through its existing mutation refresh. The subscription is scoped to the filesystem root and owning connection, and is removed when the panel unmounts.
 
+External changes use nonrecursive directory watches for the current listing and each visible expanded tree node. The panel reconciles this set without restarting unchanged watches, invalidates the changed relative cache key, and reloads cached children when their watch resumes after a collapse or hidden panel. Watches stop when their directory leaves the visible tree, during search, or when the panel closes. This path does not depend on Git status or repository revisions. The backend shares one native watch per absolute path and counts successful acquisitions across IPC and HTTP consumers, so one panel releasing a path does not stop another panel's watch.
+
 ### Settings presentation vocabulary
 
 `SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.

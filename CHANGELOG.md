@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Refresh expanded Files tree folders after external file or folder changes, including non-Git roots and nested repositories; reload collapsed folders when reopened (#2452-8076).
 - Mask split Basic-auth credentials, unfinished escape sequences at process exit, and overlapping secret tails before terminal output publication (#2319-02f6).
 
 - Start terminal Compose at one line, grow with the draft up to its existing 96px editor height, and scroll longer drafts inside (#2447-9d28).

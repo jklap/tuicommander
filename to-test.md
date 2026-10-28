@@ -1,3 +1,7 @@
+## Shared Files directory watches (2452-8076) — Rust rebuild/restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm that collapsing a desktop tree folder does not stop external-change refresh in a phone/browser listing rooted at that same folder. Rust does not hot-reload; the daily app was not restarted. Automated coverage uses native Rust notify on rb and mounted frontend rows on the Mac.
+
 ## Terminal Compose growth (2447-9d28)
 
 - [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
