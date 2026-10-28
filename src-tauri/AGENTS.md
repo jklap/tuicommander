@@ -330,7 +330,7 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **Write a test's shell script once, through `test_support`.** `cmd` has no `printf`, `seq`, `cat`, `touch` or `sleep`, and `/tmp` and `/bin/*` do not exist there, so a POSIX one-liner in a test fails on the shell rather than on the behaviour it exists to check. `host_shell`, `print_file_script`, `replay_file_command` and friends hold the one spelling per step. A rejection probe needs an existing directory outside HOME: override HOME to one temp dir and target a sibling (`plugin_fs.rs`'s `home_and_outside`), never a system directory.
 
-**`Path::is_absolute` answers for the host only.** `C:\…` and `\\…` are not absolute on unix, and a leading `/` is merely *rooted* on Windows — while `Path::join` there **replaces** the root, so an unrejected `/etc/passwd` lands at the root of the repo's drive. Any validator deciding whether a path may escape a boundary uses `fs::is_absolute_on_any_platform`.
+**`Path::is_absolute` answers for the host only.** `C:\…` and `\\…` are not absolute on unix, and a leading `/` is merely *rooted* on Windows — while `Path::join` there **replaces** the root, so an unrejected `/etc/passwd` lands at the root of the repo's drive. Any validator deciding whether a path may escape a boundary uses `fs::is_absolute_on_any_platform` (re-exported from `tuic_core::path_spelling`).
 
 
 **Terminal keydown vs. global shortcuts** (a Ctrl/Cmd + printable-key interaction
@@ -1535,7 +1535,7 @@ finished, idle teammate as `{type: "teammate", status: "running"}` for as long a
 exists (minutes), and a teammate's completion fires **no hook in the lead** (it is its own Claude
 session; `SubagentStart`/`SubagentStop` never fire for it). So a teammate counts as work only
 while its own terminal is busy: `tuic-hook` sends `bgtasksummary` (`type/status*N` pairs),
-`pty.rs` stores `DeclaredTaskSummary`, and `SilenceState::declared_background_work_for_epoch_with`
+`pty/lifecycle.rs` stores `DeclaredTaskSummary` in `SilenceState`, and `SilenceState::declared_background_work_for_epoch_with`
 takes a lazy closure backed by `AppState::lead_teammates_may_be_working(lead, declared)` (tmux
 topology + shell-state atomics only — never a `SilenceState` lock, which the caller holds). It is
 fail-safe: more declared teammates than linked panes means "working", so a missing link is never
@@ -1618,7 +1618,10 @@ the snapshot and the clear was silently wiped out by `clear()` — never asked t
 on — directly reproducing the exact "orphaned SSH process on exit" bug this whole fix exists to
 close. Fixed by collecting just the *keys*, then removing each one individually
 (`self.tunnels.remove(&id)`) instead of a blanket `clear()` — a tunnel published after the key
-snapshot was taken is simply left alone (picked up by a later call) rather than destroyed. **Any
+snapshot was taken is simply left alone (picked up by a later call) rather than destroyed. **Only
+the wipe is fixed, not the race:** a tunnel started DURING exit, after the exit path's single
+`shutdown_all_and_wait` took its key snapshot, is still never stopped — nothing makes a second
+pass (Batch 34 review). **Any
 "snapshot then bulk-clear a concurrent map" pattern has this same shape of gap — prefer per-key
 remove over iterate-then-clear whenever the map can be mutated by another task/thread between the
 two steps.**
