@@ -1,3 +1,8 @@
+## Archived external worktrees (2412-11f3) — Rust restart required
+
+- [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.
+- [ ] Coordinator: run `archived_external_checkout_stays_out_of_live_inventory`, `discovery_2156_unowned_archive_name_keeps_checkout` and pooled-removal regressions against the final commit. GREEN belongs to the critic/integration lane.
+- [ ] After an authorized `make dev` restart or `make build`, confirm an archived external checkout stays absent from the sidebar and MCP worktree list after a storage-setting change. The daily app was not restarted; Rust does not hot-reload.
 ## Orchestrator mail wake budget (2418-fd33) — Rust restart required
 
 - [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
