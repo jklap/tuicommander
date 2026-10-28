@@ -340,7 +340,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 						<kbd>↵</kbd> send
 					</span>
 					<span class={s.hint}>
-						<kbd>ctrl ↵ / ⇧ ↵</kbd> newline
+						<kbd>ctrl ↵</kbd> newline
 					</span>
 					<Show when={props.canEnqueue()}>
 						<span class={s.hint}>

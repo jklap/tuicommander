@@ -236,6 +236,17 @@ it('catches shared control geometry drifting at desktop and touch widths', {time
       }
       // Catches: enlarged queue actions consuming the compose editor's fixed-height panel.
       if (process.env.TUIC_GEOMETRY_FIXTURE === 'composeGeometry') {
+        // Catches: a compact terminal panel wrapping shortcut hints into a second footer line.
+        // Constrain the panel inside a wide viewport too: the terminal, not the window, owns its width.
+        for (const panelWidth of [390, 640, Math.min(width, 900)]) {
+          const footer = await evaluate(`(async()=>{const s=(await import('/src/components/ComposePanel/ComposePanel.module.css')).default;const panel=document.querySelector('.'+s.panel);panel.style.width='${panelWidth}px';await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const hints=panel.querySelector('.'+s.hints),bar=panel.querySelector('.'+s.statusBar),actions=panel.querySelector('.'+s.actions);const box=bar.getBoundingClientRect(),actionBox=actions.getBoundingClientRect();return {hints:getComputedStyle(hints).display,height:box.height,actionsHeight:actionBox.height,actionsLeft:actionBox.left,actionsRight:actionBox.right,left:box.left,right:box.right};})()`);
+          await context.test(`catches shortcut hints wrapping at panel ${panelWidth}px in viewport ${width}px`, () => {
+            assert.equal(footer.hints, panelWidth <= 640 ? 'none' : 'flex', 'Hide compact hints; retain the wide legend');
+            assert.ok(footer.height <= footer.actionsHeight + 9, 'Footer must contain only one action line plus padding and border');
+            assert.ok(footer.actionsLeft >= footer.left && footer.actionsRight <= footer.right, 'Actions must stay inside the panel');
+          });
+        }
+        await evaluate(`(async()=>{const s=(await import('/src/components/ComposePanel/ComposePanel.module.css')).default;document.querySelector('.'+s.panel).style.width='';await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));})()`);
         const draft = await evaluate(`(()=>{const editor=document.querySelector('[data-compose-editor]');const line=editor?.querySelector('.cm-line');if(!editor||!line)throw new Error('Compose fixture must mount a real draft line');const viewport=editor.getBoundingClientRect(),text=line.getBoundingClientRect();return {viewportTop:viewport.top,viewportBottom:viewport.bottom,lineTop:text.top,lineBottom:text.bottom};})()`);
         await context.test(`catches queue review clipping the composing draft at ${width}px`, () => {
           assert.ok(draft.lineTop >= draft.viewportTop && draft.lineBottom <= draft.viewportBottom,

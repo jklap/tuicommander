@@ -373,7 +373,7 @@ In Compose, paste an image, drop PNG, JPEG, WebP or GIF files on the editor, or 
 The Compose panel can leave work for an agent without steering its current turn:
 
 - **Enter** sends immediately.
-- **Ctrl+Enter** or **Shift+Enter** inserts a new line without sending.
+- **Ctrl+Enter** or **Shift+Enter** inserts a new line without sending. The hint shows only **Ctrl+Enter**. Shortcut hints disappear in compact panels instead of wrapping; the bindings still work.
 - Enter that confirms an IME candidate does not send the draft.
 - **Shift+Ctrl+Enter** or the queue button submits immediately when the agent is
   already idle; otherwise it waits for the next idle window.

@@ -168,4 +168,6 @@ the command/message breakdown; the count remains available if details fail.
 
 ### Compose editor shortcuts
 
+The newline legend shows only Ctrl+Enter. A panel-relative CSS container query hides shortcut hints at widths up to 640px, including split terminals inside a wide window. The footer does not wrap its hints around the action controls.
+
 In the terminal Compose panel, Enter sends the draft. Ctrl+Enter and Shift+Enter insert a new line. Shift+Ctrl+Enter queues for the next idle moment when an agent is detected. Enter used to confirm an IME candidate does not submit the draft. These shortcuts do not change native terminal keybar controls.

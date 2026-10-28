@@ -155,11 +155,11 @@ describe("ComposePanel", () => {
 		expect(props.onSend).toHaveBeenCalledWith("候補");
 	});
 
-	// Catches: the visible legend still advertising Ctrl+Enter to send.
-	it("shows the current send, newline, and queue shortcuts in the visible legend", () => {
+	// Catches: the newline legend advertising both bindings and crowding compact panels.
+	it("shows only Ctrl+Enter for newline in the shortcut legend", () => {
 		const { getByText } = renderPanel();
 		expect(getByText("send").textContent).toBe("↵ send");
-		expect(getByText("newline").textContent).toBe("ctrl ↵ / ⇧ ↵ newline");
+		expect(getByText("newline").textContent).toBe("ctrl ↵ newline");
 		expect(getByText("queue").textContent).toBe("⇧ ctrl ↵ queue");
 	});
 
