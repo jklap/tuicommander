@@ -776,6 +776,40 @@ describe("useGitOperations", () => {
 	});
 
 	describe("handleRemoveWorkspace", () => {
+		// Catches: Delete losing its explicit intent or leaving the successful sidebar row behind.
+		it("routes explicit Delete through removal by workspace id and removes the sidebar row", async () => {
+			mockDialogs.confirmRemoveWorktree.mockResolvedValueOnce("delete");
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "opaque-id", { branchName: "finished", worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "opaque-id");
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith(
+				"/repo",
+				"opaque-id",
+				true,
+				false,
+				false,
+				undefined,
+				false,
+				true,
+			);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["opaque-id"]).toBeUndefined();
+		});
+
+		// Catches: closing a newly live PTY before the backend can reject a stale Delete confirmation.
+		it("preserves newly live terminals and the workspace when explicit Delete is rejected", async () => {
+			mockDialogs.confirmRemoveWorktree.mockResolvedValueOnce("delete");
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("Cannot delete workspace: live sessions"));
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "opaque-id", { branchName: "finished", worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "New agent", cwd: "/repo/wt" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "opaque-id", id);
+			await gitOps.handleRemoveWorkspace("/repo", "opaque-id");
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["opaque-id"]?.isRemoving).toBe(false);
+		});
+
 		it("keeps an unmerged worktree and its terminals when branch deletion was requested", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 0,

@@ -182,6 +182,7 @@ function ConfirmationOverlays(props: { contract: ConfirmationOverlaysContract })
 				confirmLabel={confirmations.dialogState()?.confirmLabel}
 				cancelLabel={confirmations.dialogState()?.cancelLabel}
 				discardLabel={confirmations.dialogState()?.discardLabel}
+				discardDanger={confirmations.dialogState()?.discardDanger}
 				kind={confirmations.dialogState()?.kind}
 				defaultButton={confirmations.dialogState()?.defaultButton}
 				autoCancelMs={confirmations.dialogState()?.autoCancelMs}
