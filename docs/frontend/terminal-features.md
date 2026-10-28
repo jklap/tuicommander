@@ -166,6 +166,10 @@ including user commands and TUIC messages. It hides at zero and follows the
 backend session state without opening the editor. Hover or keyboard focus loads
 the command/message breakdown; the count remains available if details fail.
 
+### Compose editor size
+
+Terminal Compose uses the shared auto-grow control bounds: one control line when empty (36px desktop, 44px touch), intrinsic CodeMirror growth for newlines and wrapping, and the existing 96px editor maximum. Longer drafts scroll inside the editor. Clearing or successfully submitting a draft restores the minimum. The queue list keeps its independent height cap.
+
 ### Compose editor shortcuts
 
 The newline legend shows only Ctrl+Enter. A panel-relative CSS container query hides shortcut hints at widths up to 640px, including split terminals inside a wide window. The footer does not wrap its hints around the action controls.

@@ -76,6 +76,7 @@ export interface ConnectionState {
 	status: ConnectionStatus;
 	baseUrl?: string;
 	protocolVersion?: number;
+	build?: RemoteBuildIdentity;
 	outOfDate?: boolean;
 	liveSessions?: number;
 	updateNotice?: string;
@@ -94,6 +95,7 @@ interface RemoteConnectionStatusPayload {
 	base_url?: string;
 	token?: string;
 	protocol_version?: number;
+	build?: RemoteBuildIdentity;
 	out_of_date?: boolean;
 	live_sessions?: number;
 	update_notice?: string;
@@ -197,6 +199,7 @@ function createRemoteConnectionsStore() {
 			status: payload.status,
 			baseUrl: payload.base_url,
 			protocolVersion: payload.protocol_version,
+			build: payload.build,
 			outOfDate: payload.out_of_date,
 			liveSessions: payload.live_sessions,
 			updateNotice: payload.update_notice,
