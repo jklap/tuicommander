@@ -1901,6 +1901,8 @@ Buffer eviction is reported; it does not create another output store.
 
 ## 15. Keyboard Shortcut Reference
 
+Terminal Compose starts at one control line, grows with newlines and wrapping up to 96px, and scrolls longer drafts internally. Clearing or sending restores one line.
+
 Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
 
 ### Terminal

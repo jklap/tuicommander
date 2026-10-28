@@ -1,3 +1,6 @@
+## Terminal Compose growth (2447-9d28)
+
+- [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
 ## Remote daemon version guidance (2445-fc5d) — Rust rebuild/restart required
 
 - [ ] Coordinator: capture the remote card with a known older daemon in Error and Connected states. Renderer-only screenshot attempts with both installed Chrome 149 builds returned empty DOM and no PNG; no visual pass is claimed. Focused component/store tests passed, but do not prove layout.
