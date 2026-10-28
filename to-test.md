@@ -1,3 +1,8 @@
+## Ideas repository identity (2414-9805) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `config::ideas::tests` on the final commit, plus the existing Ideas store/panel consumers. RED reproduced the canonical-versus-registered split on Linux rb; no post-fix GREEN run was made by the implementer. Run the same regression on Windows to verify native extended/portable path handling.
+- [ ] After an authorized `make dev` restart or `make build`, create/list/update Ideas through an agent bound to a registered symlink repository and check the same collection in the panel. The daily app was not restarted; Rust does not hot-reload.
+
 ## Workflow resume after manual QA (2416-52e8) — Rust restart required
 
 - [ ] Coordinator critic: run the focused workflow runtime regressions for approved QA, pending QA, blocked/cancelled stories, Ready/Review starts and restart recovery. The implementation lane ran only the pre-fix RED test on rb; no GREEN result is claimed.

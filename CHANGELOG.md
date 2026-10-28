@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep agent and panel Ideas in the same registered repository collection across Windows canonical paths and symlink aliases, including existing Ideas (#2414-9805).
+
 - Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).
 
 - Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
