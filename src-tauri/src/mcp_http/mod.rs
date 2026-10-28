@@ -6752,7 +6752,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_instructions_include_worktree_hint_for_cc() {
+    async fn test_mcp_instructions_do_not_duplicate_launch_worktree_hint_for_cc() {
         let state = test_state();
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -6768,13 +6768,10 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
         let instructions = json["result"]["instructions"].as_str().unwrap();
+        // Catches: the launch-only CC exception leaking back into MCP initialize.
         assert!(
-            instructions.contains("cc_agent_hint"),
-            "CC instructions should mention cc_agent_hint: {instructions}"
-        );
-        assert!(
-            instructions.contains("absolute paths"),
-            "CC instructions should mention absolute paths"
+            !instructions.contains("cc_agent_hint"),
+            "CC worktree exception belongs to launch instructions, not MCP: {instructions}"
         );
     }
 

@@ -1,3 +1,7 @@
+## Managed delegation instructions (2441-bbcf) — Rust restart required
+
+- [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, launch a fresh agent and inspect Git and worktrees for the managed-delegation sentence and CC-only exception. Confirm MCP only carries the delegation fallback for clients without a launch channel. Existing module off switches and child scope stay in effect. The daily app was not restarted; Rust does not hot-reload.
 ## Worktree archive-pool cache (2424-e871) — Rust restart required
 
 - [ ] Coordinator critic: run `cached_worktree_inventory_does_not_reload_archive_pool`, `cached_worktree_inventory_tracks_storage_changes`, and existing `discovery_2157` / `discovery_2156` inventory consumers on the final commit. RED reproduced three pool resolutions instead of one for both cache-entry orders on Linux rb; no post-fix GREEN run is claimed.
