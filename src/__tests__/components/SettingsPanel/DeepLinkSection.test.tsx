@@ -9,7 +9,12 @@ import "../../mocks/tauri";
 // incidental to the scroll assertions, but load_config still needs the real
 // config shape so the mounted MCP page can adopt it without a reload failure.
 vi.mock("../../../transport", async (importOriginal) => {
-	const { default: config } = await import("../../fixtures/settings-concurrency/app-defaults.json");
+	const { default: defaults } = await import("../../fixtures/settings-concurrency/app-defaults.json");
+	const config = {
+		...defaults,
+		// Current McpCapabilities::default(); the recorded snapshot predates this field.
+		mcp_capabilities: { denied: ["settings", "diagnostics"], migration_unknown_tools: [] },
+	};
 	return {
 		...(await importOriginal<typeof import("../../../transport")>()),
 		rpc: vi.fn(async (command: string) => (command === "load_config" ? structuredClone(config) : [])),
