@@ -164,11 +164,22 @@ pub struct AutomationRun {
     pub reason: Option<String>,
     #[serde(default)]
     pub outcome: Option<RunOutcome>,
+    #[serde(default)]
+    pub event_workflow: Option<super::model::EventWorkflow>,
+    #[serde(default)]
+    pub workflow_binding: Option<EventWorkflowBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EventWorkflowBinding {
+    pub run_id: String,
+    pub story_id: String,
 }
 
 /// Fields learned after reservation; terminal records reject later mutations.
 #[derive(Clone, Debug, Default)]
 pub struct RunDetails {
+    pub workflow_binding: Option<EventWorkflowBinding>,
     pub task_id: Option<String>,
     pub session_id: Option<String>,
     pub workspace: Option<String>,

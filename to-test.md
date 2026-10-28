@@ -3238,6 +3238,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
 
+
+## Reviewed event issue publication (#2325-10c4)
+
+- [ ] After a manual `make dev` restart or release rebuild, configure an allowlisted sandbox event with a published story workflow revision and passing deterministic checks. Verify native story/run links in automation history, independent review, draft findings and stale-push refusal. No live GitHub publication was authorized in the implementation assignment.
 ## Workspace Delete alternative (#2446-2de7)
 
 Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering is not yet verified. Focused component, coordinator and backend tests pass.

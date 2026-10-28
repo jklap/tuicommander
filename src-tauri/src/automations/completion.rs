@@ -20,6 +20,7 @@ pub(crate) struct Observation {
     pub exit: Option<i32>,
     pub progress: Option<crate::progress::ProgressKind>,
     pub output: Option<String>,
+    pub reason: Option<String>,
 }
 
 pub(crate) trait CompletionEffects {
@@ -58,7 +59,7 @@ pub(crate) fn reconcile(
             next,
             RunDetails {
                 stdout: (!next.is_open()).then_some(observed.output).flatten(),
-                reason: Some(
+                reason: Some(observed.reason.unwrap_or_else(|| {
                     match next {
                         RunStatus::Completed => {
                             "Completion confirmed by task, progress or known process exit"
@@ -71,8 +72,8 @@ pub(crate) fn reconcile(
                         }
                         _ => "Owned agent resumed",
                     }
-                    .into(),
-                ),
+                    .into()
+                })),
                 ..Default::default()
             },
             now.max(run.updated_ms),
@@ -117,6 +118,9 @@ fn classify(o: &Observation) -> Option<RunStatus> {
 pub(crate) struct NativeCompletion<'a>(pub &'a std::sync::Arc<AppState>);
 impl CompletionEffects for NativeCompletion<'_> {
     fn observe(&self, run: &AutomationRun) -> Observation {
+        if run.event_workflow.is_some() {
+            return super::event_workflow::observe(self.0, run);
+        }
         let Some(session) = run.session_id.as_deref() else {
             return Observation::default();
         };
@@ -176,6 +180,7 @@ impl CompletionEffects for NativeCompletion<'_> {
                 .get(session)
                 .map(|code| *code),
             progress,
+            reason: None,
             output: self
                 .0
                 .session_maps
@@ -189,6 +194,9 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn stop(&self, run: &AutomationRun) -> Result<(), String> {
+        if let Some(binding) = &run.workflow_binding {
+            return super::event_workflow::stop(self.0, binding);
+        }
         let Some(session) = run.session_id.as_deref() else {
             return Ok(());
         };
@@ -284,6 +292,7 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
         workspace.clone(),
         run.id.clone(),
     );
+    let run = run.clone();
     let Some(store) = state.automation_runtime.notification_store() else {
         return;
     };
@@ -295,7 +304,21 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
     tokio::spawn(async move {
         let outcome = async {
             let recovering = saved_intent.is_some();
-            let (intake, repository, head, base, issue_number, api_path) = match saved_intent {
+            let review = if !recovering && run.event_workflow.is_some() {
+                let review_run = run.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || super::event_workflow::review(&review_run))
+                        .await
+                        .map_err(|e| format!("Event publication review task: {e}"))??,
+                )
+            } else {
+                None
+            };
+            let workspace = review
+                .as_ref()
+                .map(|r| r.workspace.clone())
+                .unwrap_or(workspace);
+            let (mut intake, repository, head, base, issue_number, api_path) = match saved_intent {
                 Some(intent) => {
                     // Recovery uses the durable identity, even if the worktree was removed.
                     let intake = tokio::task::spawn_blocking(|| {
@@ -328,6 +351,9 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
                     )
                 }
             };
+            // Admission pins whether this run requires review; later settings cannot
+            // upgrade a legacy run or downgrade an already reviewed workflow run.
+            intake.workflow = run.event_workflow.clone();
             let api = crate::github_pr_api::RepoApi::resolve(&state, &api_path).await?;
             let bound = format!("{}/{}", api.owner, api.repo);
             super::publish::publish_run(
@@ -341,6 +367,7 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
                     head: &head,
                     base: &base,
                     issue_number,
+                    review: review.as_ref(),
                 },
                 recovering,
             )

@@ -485,6 +485,11 @@ pub enum RunCommand {
     },
     FinalVerificationPassed,
     Complete,
+    /// Internal event bridge: finish an independently reviewed standalone story graph.
+    #[schemars(skip)]
+    CompleteReviewedStory {
+        story_id: String,
+    },
     Pause,
     /// Internal: the daemon pauses a run and keeps the cause it already knows.
     #[schemars(skip)]

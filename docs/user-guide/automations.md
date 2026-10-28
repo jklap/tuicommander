@@ -174,9 +174,48 @@ For step-by-step policy setup, use the three [event configuration Smart Prompts]
 
 After acquiring executor ownership, the daemon starts the shared GitHub poller for the allowlisted repositories without a UI call. Each entry must resolve to a registered, unambiguous github.com repository on that daemon; otherwise its logs show an **Event intake configuration error** with the repository name. Each failing entry is reported separately; valid entries continue polling. The runtime re-reads configuration on its existing 30-second tick and on repository/settings changes. Intake requests all open issues regardless of a client's issue filter or subscribed paths. If a repository belongs to both subscriptions, one GraphQL request selects unfiltered intake issues and separately filtered client issues. The sidebar and SSE snapshots retain the client filter, including disabled issues; internal intake snapshots never reach clients. Client stop releases only the client subscription while intake remains enabled. Removing the allowlist removes the intake subscription; normal client polling remains unchanged. An open issue that carries the label starts the named, enabled definition once per issue and label; the key is stored in the run ledger and survives restarts. If an open run or the concurrency limit refuses it, a later 30-second tick admits it. The agent receives only the issue URL, never its title or body.
 
-When such a run completes in an isolated workspace (`new_per_run`), TUIC creates a draft pull request for the workspace branch through its GitHub API layer, using the TUIC GitHub login. The agent must push that branch itself. Publication re-checks the allowlist and that the workspace remote is the admitted repository; no other repository is ever written.
+Without a configured workflow, when such a run completes in an isolated workspace (`new_per_run`), TUIC creates a draft pull request for the workspace branch through its GitHub API layer, using the TUIC GitHub login. The agent must push that branch itself. Publication re-checks the allowlist and that the workspace remote is the admitted repository; no other repository is ever written.
 
 Downgrading TUICommander after an event run exists is not supported: an older build cannot read `Event` runs or the `event_intake` block.
+
+
+### Opt-in reviewed issue workflows
+
+To require independent review and checks before draft publication, set an explicit
+published story workflow on the owning daemon:
+
+```json
+"event_intake": {
+  "repositories": ["owner/name"],
+  "label": "tuic-run",
+  "definition_id": "issue-automation",
+  "workflow": { "definition_id": "published-story-workflow", "definition_revision": 1 }
+}
+```
+
+The workflow must belong to the automation's registered project and have configured
+deterministic checks. Use `new_per_run`: the existing automation workspace and
+precheck are retained, then that isolated workspace is bound to the native workflow
+before any worker starts. TUIC creates one native plan and GitHub-origin story for
+the event, with the prepared automation prompt as its problem statement (maximum
+20,000 characters). The workflow's profiles select its implementer and independent
+reviewer; the legacy automation `run_config` is not launched on this path.
+
+The admitted run pins the workflow selection and records its native run/story IDs.
+Removing or changing the setting cannot downgrade that run. The daemon follows
+native workflow completion, not an implementer's `done` report. Workflow pauses
+show as `needs_you`; the automation deadline cancels the bound workflow and stops
+its owned sessions. Existing configurations without `workflow` keep their previous
+execution and publication behavior. There is no automatic workflow default.
+
+Before creating the draft, TUIC reuses the native independent review and configured
+check gate against the current clean artifact, then reads the branch from GitHub
+and requires its pushed SHA to match that artifact. Missing or stale evidence
+refuses publication and records the reason in automation history. The draft body
+includes the independent review summary and findings. The implementer must still
+push its branch; this path does not merge or approve a GitHub PR. As with any
+branch-addressed GitHub PR creation, the remote SHA read and PR creation are separate
+API operations; do not let another writer move the branch during publication.
 
 #### Durable event outcomes
 

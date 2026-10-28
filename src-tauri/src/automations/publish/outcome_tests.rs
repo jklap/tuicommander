@@ -20,6 +20,7 @@ fn request() -> DraftPr<'static> {
         head: HEAD,
         base: "trunk",
         issue_number: 3,
+        review: None,
     }
 }
 fn intake() -> EventIntake {
@@ -27,6 +28,7 @@ fn intake() -> EventIntake {
         repositories: vec![REPOSITORY.into()],
         label: "run".into(),
         definition_id: "event".into(),
+        workflow: None,
     }
 }
 fn completed(store: &RunStore) -> String {

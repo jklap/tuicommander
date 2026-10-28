@@ -57,6 +57,9 @@ impl RunStore {
         if !next.is_open() {
             run.finished_ms = Some(now_ms);
         }
+        if let Some(value) = details.workflow_binding {
+            run.workflow_binding = Some(value);
+        }
         if let Some(value) = details.task_id {
             run.task_id = Some(value);
         }

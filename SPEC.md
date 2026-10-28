@@ -1481,3 +1481,13 @@ connection, retry unavailable daemons every 30 seconds, and retain deletion
 tombstones. Story mutations do not depend on daemon availability. Closed and
 archived stories stay searchable. No story file is written to the project;
 plans and the story mutation API are unchanged. See the native stories guide.
+
+
+#### Reviewed event issue publication
+
+Event intake can opt in through `event_intake.workflow` to an explicit published
+native story workflow revision. Dispatch creates the native story and reuses its
+isolated artifact, independent review and configured check receipts. Draft
+publication requires current evidence matching the pushed SHA and includes review
+findings. Configurations without a workflow retain legacy behavior. See the
+[guide](docs/user-guide/automations.md#opt-in-reviewed-issue-workflows).

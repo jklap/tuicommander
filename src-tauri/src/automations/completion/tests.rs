@@ -34,6 +34,7 @@ impl CompletionEffects for Effects {
             exit: o.exit,
             progress: o.progress,
             output: o.output.clone(),
+            reason: o.reason.clone(),
         }
     }
     fn stop(&self, run: &AutomationRun) -> Result<(), String> {
@@ -421,4 +422,48 @@ async fn event_publication_prerequisites_preserve_config_and_git_errors() {
         .err()
         .unwrap();
     assert_eq!(error, "git rev-parse --abbrev-ref HEAD failed");
+}
+
+// Catches: losing the actionable stale-evidence refusal after terminal execution.
+#[test]
+fn publication_refusal_is_durable_without_changing_completed_execution() {
+    let (_dir, owner, run) = setup();
+    // The real owner store supplies the event identity; completion is immutable.
+    let mut definition = run.definition.clone();
+    definition.id = "event".into();
+    let event = owner
+        .store()
+        .admit_event(
+            &definition,
+            RunTrigger::Event {
+                repository: "owner/repo".into(),
+                issue_number: 1,
+                label: "run".into(),
+            },
+            None,
+            2,
+            300,
+        )
+        .unwrap()
+        .unwrap();
+    owner
+        .store()
+        .transition(&event.id, RunStatus::Completed, Default::default(), 400)
+        .unwrap();
+    owner
+        .store()
+        .settle_outcome(
+            &event.id,
+            "publication_refused",
+            None,
+            Some("Review artifact moved".into()),
+            500,
+        )
+        .unwrap();
+    let saved = owner.store().get(&event.id).unwrap();
+    assert_eq!(saved.status, RunStatus::Completed);
+    assert_eq!(
+        saved.outcome.as_ref().unwrap().failure_reason.as_deref(),
+        Some("Review artifact moved")
+    );
 }

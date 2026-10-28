@@ -35,6 +35,7 @@ fn config(repositories: &[&str]) -> AutomationsConfig {
             repositories: repositories.iter().map(|r| (*r).into()).collect(),
             label: "tuic-run".into(),
             definition_id: "pilot".into(),
+            workflow: None,
         },
         ..Default::default()
     }
@@ -201,6 +202,46 @@ fn a_snapshot_emptied_by_lost_updates_admits_nothing_until_refilled() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+// Catches: a later settings edit silently downgrading an admitted workflow event.
+#[test]
+fn event_workflow_selection_is_pinned_in_the_admission_record() {
+    let (_dir, owner) = owner();
+    let mut config = config(&[SANDBOX]);
+    config.event_intake.workflow = Some(crate::automations::model::EventWorkflow {
+        definition_id: "published-story".into(),
+        definition_revision: 3,
+    });
+    let runs = admit_issues(
+        owner.store(),
+        &config,
+        &[issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+        10,
+    )
+    .unwrap();
+    config.event_intake.workflow = None;
+    assert_eq!(
+        owner
+            .store()
+            .get(&runs[0].id)
+            .unwrap()
+            .event_workflow
+            .as_ref()
+            .unwrap()
+            .definition_revision,
+        3
+    );
+    assert_eq!(
+        admit_issues(
+            owner.store(),
+            &config,
+            &[issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+            20
+        )
+        .unwrap(),
+        Vec::new()
     );
 }
 
