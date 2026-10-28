@@ -906,7 +906,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
-					await attachSessionListeners(sessionId);
+					// Existing sessions attach eagerly; resume attaches its replacement.
+					// Resizing must not install a second parsed-event consumer.
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
@@ -1063,6 +1064,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				} else {
 					sessionId = terminalsStore.get(props.id)?.sessionId ?? null;
 					setCurrentSessionId(sessionId);
+					if (sessionId)
+						attachSessionListeners(sessionId).catch((err) =>
+							appLogger.error("terminal", "Failed to attach resumed session listeners", err),
+						);
 					if (isVisible())
 						initSession().catch((e) =>
 							appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),

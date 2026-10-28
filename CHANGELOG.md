@@ -27,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Keep hidden terminal panes out of unsized warnings and log successful MCP peer rebinds at info instead of warn (#2439-027f).
+- Keep hidden terminal panes out of unsized warnings, avoid duplicate API-error handlers after reconnect, and log successful MCP peer rebinds at info instead of warn (#2439-027f).
 
 - Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
 

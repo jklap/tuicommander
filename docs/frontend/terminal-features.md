@@ -181,3 +181,7 @@ Mobile CLI output releases a terminal subscription when the transport reports ex
 Canvas sizing retries run only for a visible pane connected to the layout. A pane
 that stays unsized for 120 animation frames logs a warning. Hiding or closing the
 pane cancels the retry; showing it starts a new measurement.
+
+Restored PTY sessions attach their event listeners before the first layout pass.
+The reconnect resize reuses those listeners instead of adding another API-error
+consumer. Suspend detaches them; resume attaches the replacement PTY once.
