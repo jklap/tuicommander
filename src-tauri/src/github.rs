@@ -953,6 +953,20 @@ pub(crate) async fn get_all_batch_with_intake_impl(
         GitHubAccountRegistry, RepoBindingStore, RepoResolution, resolve_repo_account,
     };
 
+    let intake_label = if intake {
+        Some(
+            tokio::task::spawn_blocking(|| {
+                crate::automations::definitions::DefinitionStore::new().load()
+            })
+            .await
+            .map_err(|e| format!("intake config load task panicked: {e}"))??
+            .event_intake
+            .label,
+        )
+    } else {
+        None
+    };
+
     let now = Instant::now();
     state
         .git_cache
@@ -1053,7 +1067,7 @@ pub(crate) async fn get_all_batch_with_intake_impl(
             pr_hide_drafts,
             &mut pr_results,
             &mut issue_results,
-            intake,
+            intake_label.as_deref(),
             &mut intake_results,
         )
         .await
@@ -1132,7 +1146,7 @@ async fn poll_one_account(
     pr_hide_drafts: bool,
     pr_results: &mut std::collections::HashMap<String, Vec<BranchPrStatus>>,
     issue_results: &mut std::collections::HashMap<String, Vec<GitHubIssue>>,
-    intake: bool,
+    intake_label: Option<&str>,
     intake_results: &mut std::collections::HashMap<String, Vec<GitHubIssue>>,
 ) -> Result<(), String> {
     // Always fetch viewer login — needed for both issue filtering and viewer PR search.
@@ -1158,9 +1172,9 @@ async fn poll_one_account(
         filter_mode,
         &viewer,
         pr_hide_drafts,
-        intake,
+        intake_label,
     );
-    let response = graphql_with_retry(
+    let mut response = graphql_with_retry(
         state,
         account,
         &query,
@@ -1169,17 +1183,71 @@ async fn poll_one_account(
     )
     .await?;
 
-    if intake {
-        for (alias, path) in &aliases {
-            if let Some(nodes) = response["data"][alias]["intakeIssues"]["nodes"].as_array() {
-                intake_results.insert(
-                    path.clone(),
-                    nodes.iter().filter_map(parse_issue_node).collect(),
-                );
-                // A disabled or unresolved-viewer client must also clear any stale badge.
-                if !include_issues {
-                    issue_results.insert(path.clone(), Vec::new());
+    if let Some(label) = intake_label {
+        for (i, (alias, path)) in aliases.iter().enumerate() {
+            let mut connection = response["data"][alias]["intakeIssues"].clone();
+            // A denied repository is not an empty successful intake snapshot.
+            if connection.is_null() {
+                continue;
+            }
+            let mut issues = Vec::new();
+            let mut cursors = std::collections::HashSet::new();
+            loop {
+                let nodes = connection["nodes"]
+                    .as_array()
+                    .ok_or("GitHub intake issues page is missing nodes")?;
+                issues.extend(nodes.iter().filter_map(|node| {
+                    let mut issue = parse_issue_node(node)?;
+                    // The server predicate proves membership even when the matching
+                    // label is outside the node's first ten display labels.
+                    if !issue
+                        .labels
+                        .iter()
+                        .any(|l| l.name.eq_ignore_ascii_case(label))
+                    {
+                        issue.labels.push(tuic_git::github::PrLabel {
+                            name: label.to_string(),
+                            color: String::new(),
+                            text_color: String::new(),
+                            background_color: String::new(),
+                        });
+                    }
+                    Some(issue)
+                }));
+                match connection["pageInfo"]["hasNextPage"].as_bool() {
+                    Some(false) => break,
+                    Some(true) => {}
+                    None => return Err("GitHub intake issues page is missing pageInfo".into()),
                 }
+                let cursor = connection["pageInfo"]["endCursor"]
+                    .as_str()
+                    .filter(|c| !c.is_empty())
+                    .ok_or("GitHub intake issues page is missing its next cursor")?;
+                if !cursors.insert(cursor.to_string()) {
+                    return Err("GitHub intake issues cursor did not advance".into());
+                }
+                let (_, owner, name) = &repos[i];
+                let section = tuic_git::github::intake_issues_section(label, Some(cursor));
+                let query = format!(
+                    "query IntakeIssues {{ repository(owner: \"{owner}\", name: \"{name}\") {{ {section} }} rateLimit {{ cost remaining resetAt }} }}"
+                );
+                let page = graphql_with_retry(
+                    state,
+                    account,
+                    &query,
+                    serde_json::Value::Null,
+                    prefetched_token,
+                )
+                .await?;
+                if !page["data"]["rateLimit"].is_null() {
+                    response["data"]["rateLimit"] = page["data"]["rateLimit"].clone();
+                }
+                connection = page["data"]["repository"]["intakeIssues"].clone();
+            }
+            // Publish only complete pages so capacity retries retain the whole eligible set.
+            intake_results.insert(path.clone(), issues);
+            if !include_issues {
+                issue_results.insert(path.clone(), Vec::new());
             }
         }
     }
@@ -7570,7 +7638,7 @@ mod pr_panel_mutant_tests {
             false,
             &mut prs,
             &mut issues,
-            false,
+            None,
             &mut std::collections::HashMap::new(),
         )
         .await

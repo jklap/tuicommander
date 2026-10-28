@@ -28,6 +28,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
+- Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
+- Keep repository structure available when a branch reflog is empty or absent; classify that branch as unknown without repeated refresh errors (#2437-b45b).
+- Preserve Claude subscription metadata when mobile quota refreshes the account cache shared with desktop (#2420-f7a6).
+- Keep agent and panel Ideas in the same registered repository collection across Windows canonical paths and symlink aliases, including existing Ideas (#2414-9805).
+
+- Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).
+
+- Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
+- Do not show bare repository metadata as a missing checkout, including when refreshing from a linked worktree (#2413-19e4).
+
+- Keep TUIC-archived external worktrees and former-storage checkouts out of live sidebar and MCP inventory without hiding unrelated `__archived` folders (#2412-11f3).
+- Stop stable idle timer ticks from repeatedly retrying orchestrator mail wakes blocked by a user draft; retry on new Ready confirmation without changing queued-command flushing (#2418-fd33).
+- Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
+- Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
+- Recover live but unresponsive stdio MCP upstreams after two consecutive failed health probes, without changing ordinary tool-call reply timeout behavior or respawn throttling (#2417-793a).
 
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 

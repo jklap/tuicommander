@@ -175,7 +175,9 @@ subjects. MCP exposes the reason with `repo branch_integration` or
 `repo branch_integrations`. A branch that only follows its base is `in_sync`,
 not integrated: its query returns `integrated: false` and no merge proof. A content-based result still needs a recovery ref
 at `refs/archive/<branch>` pointing to the current tip before safe branch
-deletion; incomplete or uncertain changes remain protected.
+deletion; incomplete or uncertain changes remain protected. If a branch reflog
+is empty or absent, its origin is unknown. The repository still loads, but that
+branch has no merge proof and safe branch deletion is refused.
 
 The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 
@@ -345,7 +347,7 @@ checkout still holds the branch.
 
 ### Detached checkouts
 
-A checkout without a branch remains visible in the sidebar. Its row shows the directory name, short commit SHA and **detached**. The row is informational: it cannot select a branch or run branch actions. A repository header shows the detached count even when its rows are folded. Checkouts in TUIC’s configured recycling pool stay out of the active inventory; an unrelated folder named `__archived` does not hide worktrees.
+A checkout without a branch remains visible in the sidebar. Its row shows the directory name, short commit SHA and **detached**. The row is informational: it cannot select a branch or run branch actions. A repository header shows the detached count even when its rows are folded. Checkouts in TUIC’s configured recycling pool stay out of the active inventory. Checkouts archived by TUIC outside that pool also stay hidden, including after you change the storage setting. An unrelated folder named `__archived` does not hide worktrees.
 
 ### Worktree discovery diagnostics
 
@@ -354,3 +356,5 @@ Missing or moved registrations appear as read-only diagnostic rows with their re
 If `git worktree add --force` puts a branch in several checkouts, the lexicographically smallest path keeps the existing branch workspace. Other checkouts appear as read-only diagnostics. Use a distinct branch when you need an independent selectable workspace. Bisect and rebase keep the original branch identity when Git records it.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+Bare repository metadata does not appear as a missing checkout. Linked checkouts from a bare repository remain available; deleted or broken linked checkouts still show repair guidance.

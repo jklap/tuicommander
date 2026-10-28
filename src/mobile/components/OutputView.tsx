@@ -286,6 +286,7 @@ export function OutputView(props: OutputViewProps) {
 			if (unsubscribe) recordMobileSocketState(props.sessionId, "paused");
 		},
 		() => {
+			if (props.sessionExists === false) return;
 			if (unsubscribe) {
 				recordMobileSocketState(props.sessionId, "connecting");
 				unsubscribe.resume();
@@ -307,6 +308,9 @@ export function OutputView(props: OutputViewProps) {
 	});
 
 	async function startStream() {
+		// Session health is reactive and can change while the handshake awaits.
+		const sessionExists = () => props.sessionExists;
+		if (disposed || sessionExists() === false) return;
 		clearTimeout(retryTimer);
 		const generation = ++streamGeneration;
 		unsubscribe?.();
@@ -322,6 +326,12 @@ export function OutputView(props: OutputViewProps) {
 					props.sessionId,
 					() => {}, // unused — onLogLines handles log delivery
 					() => {
+						if (disposed || generation !== streamGeneration) return;
+						// Exit retires this subscription, including one whose promise has
+						// not settled yet. Visibility must start anew, not resume it.
+						streamGeneration++;
+						unsubscribe?.();
+						unsubscribe = null;
 						recordMobileSocketState(props.sessionId, "closed");
 						// Transport retry exhaustion also reports exit. The session poll,
 						// not a failed socket, decides whether the terminal still exists.
@@ -353,10 +363,12 @@ export function OutputView(props: OutputViewProps) {
 						onStateChange: props.onStateChange,
 						onInputLine: props.onInputLine,
 						onReconnecting: () => {
+							if (disposed || generation !== streamGeneration) return;
 							connecting();
 							recordMobileSocketState(props.sessionId, "reconnecting");
 						},
 						onReconnected: () => {
+							if (disposed || generation !== streamGeneration) return;
 							connected();
 							recordMobileSocketState(props.sessionId, "open");
 						},
