@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).
+
 ## [2.0.0-beta.4] - 2026-10-28
 
 - Index native stories and notes through the mdkb daemon without project files; preserve mutations while the daemon is down and reconcile durable revisions on reconnect (#2333-b498).
