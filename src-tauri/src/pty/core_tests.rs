@@ -16129,14 +16129,15 @@ fn task_secret_overlap_exposes_masked_tail_2319() {
 // Catches: EOF publishes a secret held inside an unfinished OSC without sanitizing.
 #[test]
 fn task_secret_unfinished_osc_eof_leaks_2319() {
-    let (state, _silence) = secret_output_fixture_2319("canary-secret-2319");
+    let (state, silence) = secret_output_fixture_2319("canary-secret-2319");
     let id = "secret-boundary-2319";
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     state.ws_clients.insert(id.into(), vec![tx]);
     let mut utf8 = Utf8ReadBuffer::new();
     let mut escape = EscapeAwareBuffer::new();
     assert_eq!(escape.push("\x1b]0;canary-secret-2319"), "");
-    let remaining = flush_eof(&mut utf8, &mut escape, id, &state);
+    let mut processor = ChunkProcessor::new(None, None);
+    let remaining = flush_eof(&mut utf8, &mut escape, &mut processor, &silence, id, &state);
     let live = rx.try_recv().expect("EOF WS output");
     assert!(!remaining.contains("canary-secret-2319") && !live.contains("canary-secret-2319"), "EOF secret leaked to watchers or WS");
 }

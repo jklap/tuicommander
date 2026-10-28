@@ -3617,11 +3617,13 @@ fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kin
     }
 }
 
-/// Flush remaining bytes at EOF and write to ring buffer + WebSocket.
+/// Flush remaining bytes at EOF through the normal publication sanitizer.
 /// Returns the flushed data (may be empty).
 fn flush_eof(
     utf8_buf: &mut Utf8ReadBuffer,
     esc_buf: &mut EscapeAwareBuffer,
+    processor: &mut ChunkProcessor,
+    silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
     state: &AppState,
 ) -> String {
@@ -3633,15 +3635,8 @@ fn flush_eof(
         flushed.push_str(&esc_buf.flush());
         flushed
     };
-    if !esc_remaining.is_empty()
-        && let Some(ring) = state.session_maps.output_buffers.get(session_id)
-    {
-        let mut ring_guard = ring.lock();
-        ring_guard.write(esc_remaining.as_bytes());
-        crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, &esc_remaining);
-        drop(ring_guard);
-    }
-    esc_remaining
+    processor.process_chunk(&esc_remaining, silence, session_id, state);
+    processor.masked_data.take().unwrap_or(esc_remaining)
 }
 
 type VtProcessResult = (
@@ -4312,7 +4307,7 @@ pub(crate) fn spawn_reader_thread(
                 }
             }
 
-            let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
+            let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &mut processor, &silence, &session_id, &state);
             // The remainder goes through the assembler, not straight out: it may
             // close a line the last read left partial. Then drain unconditionally
             // — teardown has no later tick to flush the batch.
