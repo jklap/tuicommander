@@ -1,3 +1,8 @@
+## Complete labelled issue intake (2415-dccf) — Rust restart required
+
+- [ ] Coordinator: run the focused intake regressions, overlapping client delivery tests, and existing capacity-retry/event-deduplication tests on the final commit. The implementer ran only pre-fix RED; no post-fix GREEN run is claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), confirm an allowlisted labelled open issue outside the latest 30 unfiltered issues can start a run. Rust does not hot-reload; the daily app was not restarted.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.

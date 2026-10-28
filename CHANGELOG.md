@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
+
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 
 - Start the AI Chat connection on Retry after a failed initial connection, without requiring Send (#2407-84f5).
