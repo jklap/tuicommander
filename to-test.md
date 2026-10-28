@@ -1,3 +1,8 @@
+## Compact Compose shortcut hints (2411-c7c9)
+
+- [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
+- [ ] Coordinator: inspect the captured wide and compact PNGs and run the focused ComposePanel and composeGeometry checks against the final commit. No post-fix GREEN test run was performed in the implementation lane.
+
 ## Headless manual TLS (2344-59cf) — daemon rebuild/restart required
 
 - [ ] After rebuilding `tuic-remote`, restart the affected daemon when safe. With manual PEM configuration, connect via HTTPS and WSS and confirm SSE delivery; confirm local relay/SSH HTTP access stays available. With TLS off, HTTP stays available. The daily app was not restarted; Rust does not hot-reload. Automated GREEN verification belongs to the coordinator critic.

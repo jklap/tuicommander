@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Shorten the terminal Compose newline hint to Ctrl+Enter and hide shortcut hints in compact panels instead of wrapping (#2411-c7c9).
+
 - Keep the open AI Chat conversation in sync across desktop, phone and tablet, including reconnect. Session CLI | Chat remains per device (#2403-e711).
 
 - Send terminal Compose drafts with Enter; use Ctrl+Enter or Shift+Enter for a new line. Shift+Ctrl+Enter still queues for the next idle moment, and IME candidate confirmation does not send (#2395-ed27).
