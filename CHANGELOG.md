@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Index native stories and notes through the mdkb daemon without project files; preserve mutations while the daemon is down and reconcile durable revisions on reconnect (#2333-b498).
+
 ### Changed
 
 - Show an explicit telemetry-off state in the MDKB dashboard instead of treating disabled hook metrics as zero activity (#2442-61f6).

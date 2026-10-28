@@ -1,8 +1,29 @@
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) fn immediate(conn: &mut Connection) -> Result<Transaction<'_>, String> {
+/// Every committed store transaction wakes ingestion after SQLite has committed.
+/// The wake carries no data; rollback and failed commits never publish a snapshot.
+pub(super) struct StoryTransaction<'a>(Transaction<'a>);
+
+impl<'a> std::ops::Deref for StoryTransaction<'a> {
+    type Target = Transaction<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl StoryTransaction<'_> {
+    pub(super) fn commit(self) -> rusqlite::Result<()> {
+        self.0.commit()?;
+        super::super::ingest::notify_committed();
+        Ok(())
+    }
+}
+
+pub(super) fn immediate(conn: &mut Connection) -> Result<StoryTransaction<'_>, String> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map(StoryTransaction)
         .map_err(|e| format!("begin story transaction: {e}"))
 }
 

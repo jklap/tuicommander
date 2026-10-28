@@ -3474,3 +3474,13 @@ Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4
 ACP controllers can supply a launch-only environment map to one fresh connection.
 Overrides are not persisted or exposed in connection reads; reconnect drops them,
 and an env-bearing connect to a live peer requires an explicit disconnect first.
+
+### Native story search projection
+
+Native story commits feed an optional read-only mdkb daemon projection under
+`tuic-stories`. Persisted ingest revisions include notes without advancing the
+subject revision. Desktop and headless hosts compare ID/revision inventories on
+connection, retry unavailable daemons every 30 seconds, and retain deletion
+tombstones. Story mutations do not depend on daemon availability. Closed and
+archived stories stay searchable. No story file is written to the project;
+plans and the story mutation API are unchanged. See the native stories guide.

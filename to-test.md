@@ -3180,4 +3180,15 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
 
+## Native story mdkb search (#2333-b498)
+
+- [ ] After rebuilding/restarting the Rust backend when convenient, use an isolated
+  `make agent-test AGENT_TEST_INSTANCE=agent-test-2333` instance and a scratch
+  project admitted by mdkb. Create, amend, add a note, check and close a native
+  story; `mdkb search "criterion phrase" --root <scratch-project>` must find its
+  read-only record. Stop/restart only the scratch mdkb daemon and confirm changes
+  made while it is down become searchable after reconnect. Check that no story
+  file or `.tuic/stories` directory appears. Automated isolated-daemon coverage:
+  `ingest_closed_story_is_findable_in_real_mdkb_without_a_story_file` (requires
+  installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_

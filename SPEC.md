@@ -1444,3 +1444,13 @@ requires separate authorization for a scratch project.
 ### Ego terminal usage (#2386-6f7c)
 
 Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4. The shared badge shows observed context tokens, the observed context capacity when present, complete monetary spend, and complete subscription API-price equivalents. Spend and equivalents remain separate. Version 4 also shows explicitly reported remaining requests, tokens, input tokens, output tokens, or USD. Session observations must match the exact provider/model; a current OpenRouter credential balance is labelled `openrouter key`, not session spend. The hover text includes each limit's observation time, source, and reported reset. Unknown fields stay hidden; TUIC does not calculate remaining balances from limit minus usage or borrow another provider account. The executable comes from the live terminal, not the AI Chat setting.
+
+### Native story search projection
+
+Native story commits feed an optional read-only mdkb daemon projection under
+`tuic-stories`. Persisted ingest revisions include notes without advancing the
+subject revision. Desktop and headless hosts compare ID/revision inventories on
+connection, retry unavailable daemons every 30 seconds, and retain deletion
+tombstones. Story mutations do not depend on daemon availability. Closed and
+archived stories stay searchable. No story file is written to the project;
+plans and the story mutation API are unchanged. See the native stories guide.
