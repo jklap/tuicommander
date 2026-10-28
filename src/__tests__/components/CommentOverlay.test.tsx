@@ -1,14 +1,74 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { marked } from "marked";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentOverlay } from "../../components/MarkdownTab/CommentOverlay";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 
-afterEach(() => cleanup());
+afterEach(() => {
+	cleanup();
+	vi.restoreAllMocks();
+});
 
 describe("Markdown reference visible source boundaries", () => {
+	// Catches: full-document relexing on every desktop/mobile selection, or stale definitions after edits.
+	it.each([false, true])("selection_changes_reuse_reference_link_definitions (mobile=%s)", (mobile) => {
+		const [source, setSource] = createSignal(
+			"| Name |\n| --- |\n| [docs][Repeated] ![Repeated](image.png) |\n| Repeated |\n\n[Repeated]: https://example.com\n",
+		);
+		let content!: HTMLDivElement;
+		render(() => (
+			<ContentRenderer
+				content={source()}
+				commentableBlocks
+				contentRef={(el) => {
+					content = el;
+				}}
+			/>
+		));
+		const insert = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onDelete={vi.fn()}
+				observeSelection={mobile}
+				chatReference={{ source: source(), path: "/repo/map.md", insert }}
+			/>
+		));
+		const lexer = vi.spyOn(marked, "lexer"); // Call through: real reference definitions and source matching.
+		for (const [prefix, line] of [
+			["", 4],
+			["# Edited\n\n", 6],
+		] as const) {
+			if (prefix)
+				setSource(
+					prefix + source().replace("[docs][Repeated]", "[docs][changed]").replace("[Repeated]:", "[changed]:"),
+				);
+			lexer.mockClear(); // Exclude ContentRenderer's own parse after a source edit.
+			for (let update = 0; update < 3; update++) {
+				const selected = content.querySelector("tbody tr:last-child td")!;
+				const range = document.createRange();
+				range.selectNodeContents(selected);
+				range.getClientRects = () => [] as unknown as DOMRectList;
+				range.getBoundingClientRect = () => ({ right: 100, top: 20, height: 20 }) as DOMRect;
+				const selection = window.getSelection()!;
+				selection.removeAllRanges();
+				selection.addRange(range);
+				if (mobile) fireEvent(document, new Event("selectionchange"));
+				else fireEvent.mouseUp(selected);
+				const action = document.body.querySelector<HTMLButtonElement>('[aria-label="Send to AI Chat"]');
+				expect(action).not.toBeNull();
+				fireEvent.click(action!);
+				expect(insert).toHaveBeenLastCalledWith(`/repo/map.md:${line}-${line}\n\n> Repeated`);
+			}
+			expect.soft(lexer.mock.calls.filter(([input]) => input === source()).length).toBe(1);
+		}
+		window.getSelection()!.removeAllRanges();
+	});
+
 	// Catches: hidden link delimiters introducing spaces, or reference ids consuming a visible occurrence.
 	it.each([
 		{
