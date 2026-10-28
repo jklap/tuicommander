@@ -177,6 +177,24 @@ describe("RemoteMachinesPanel", () => {
 		expect(view.queryByText("Connecting...")).toBeNull();
 	});
 
+	// Catches: a refused or reconnecting older daemon hides its known version and update remedy.
+	it("shows known daemon version and update guidance in every connection state", () => {
+		for (const status of ["connected", "connecting", "deploying", "disconnected", "unauthenticated", "error"]) {
+			connections["machine-1"] = {
+				...sshConnection(),
+				status,
+				outOfDate: true,
+				build: { version: "1.8.0", target: "x86_64-unknown-linux-gnu", sha256: "recorded-digest" },
+				error: "HTTP 403 Untrusted Host",
+			};
+			const view = render(() => <RemoteMachinesPanel />);
+			expect(view.getByText("tuic-remote 1.8.0")).toBeTruthy();
+			expect(view.getByText("Install the current tuic-remote and restart the service.")).toBeTruthy();
+			expect(!!view.queryByRole("button", { name: "Update & restart remote" })).toBe(status === "connected");
+			view.unmount();
+		}
+	});
+
 	// Catches: the current-build warning clears but the update action remains on connected rows.
 	it("hides update action when the connected remote reports the current build", () => {
 		const state = createMutable({ ...sshConnection(), status: "connected", outOfDate: true });

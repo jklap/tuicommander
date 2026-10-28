@@ -82,6 +82,7 @@ authors and communities behind each project.
 | safetensors | 0.6.2 | Apache-2.0 |
 | same-file | 1.0.6 | Unlicense OR MIT |
 | schemars | 1.2.1 | MIT |
+| semver | 1.0.28 | MIT OR Apache-2.0 |
 | sentencepiece-model | 0.1.4 | BSD-2-Clause |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
@@ -235,7 +236,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 81 |
+| MIT OR Apache-2.0 | 82 |
 | MIT | 70 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |

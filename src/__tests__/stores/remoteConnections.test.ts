@@ -37,7 +37,7 @@ vi.mock("../../stores/agentConfigs", () => ({
 	invalidateAgentConfigs: (...args: unknown[]) => invalidateAgentConfigsMock(...(args as [])),
 }));
 
-import type { RemoteConnection } from "../../stores/remoteConnections";
+import type { RemoteBuildIdentity, RemoteConnection } from "../../stores/remoteConnections";
 
 type Store = typeof import("../../stores/remoteConnections").remoteConnectionsStore;
 type StatusPayload = {
@@ -46,6 +46,7 @@ type StatusPayload = {
 	base_url?: string;
 	token?: string;
 	protocol_version?: number;
+	build?: RemoteBuildIdentity;
 	out_of_date?: boolean;
 	error?: string;
 	retry_after_secs?: number;
@@ -236,6 +237,18 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 				status: "deploying",
 				deployStep: "starting daemon",
 			});
+		});
+
+		// Catches: the renderer discards diagnostic build metadata outside Connected or retains a withdrawn build.
+		it("applies known daemon build in failed states and drops it only when the backend does", () => {
+			const build = { version: "1.8.0", target: "x86_64-unknown-linux-gnu", sha256: "recorded-digest" };
+			for (const status of ["connected", "connecting", "deploying", "disconnected", "unauthenticated", "error"]) {
+				push({ id: "c1", status, build, out_of_date: true });
+				expect(store.getConnectionState("c1")?.build).toEqual(build);
+				expect(store.getConnectionState("c1")?.outOfDate).toBe(true);
+			}
+			push({ id: "c1", status: "disconnected" });
+			expect(store.getConnectionState("c1")?.build).toBeUndefined();
 		});
 
 		it("shows the backend's out-of-date result and clears it when the connection drops", () => {
