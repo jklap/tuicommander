@@ -1,3 +1,7 @@
+## ACP launch environment (2320-f493) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `story2320_connection_env` plus ACP launch/reuse consumers and the focused client/transport tests. The implementer recorded pre-implementation RED; no post-implementation Rust GREEN is claimed.
+- [ ] After an authorized rebuild and restart, connect with disposable environment overrides, confirm only that child receives them, and confirm env-bearing live-peer reuse asks for disconnect first. Reconnect must drop overrides. Rust does not hot-reload; the daily app was not restarted.
 ## MDKB hook telemetry state (2442-61f6)
 
 - [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.

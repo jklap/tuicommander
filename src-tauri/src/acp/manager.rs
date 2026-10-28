@@ -261,6 +261,11 @@ impl AcpClientManager {
             // client asking again gets the ego this peer already has; `reconnect`
             // is the way to a fresh one.
             if let Some(connection_id) = self.live_connection_for_peer(peer_id) {
+                if request.env.is_some() {
+                    return Err(AcpClientError::invalid_input(
+                        "ACP env applies only to a fresh launch; disconnect the live connection first",
+                    ));
+                }
                 return self.snapshot(connection_id);
             }
         }
@@ -274,6 +279,21 @@ impl AcpClientManager {
             &root,
         )?;
         let mut agent_config = AcpAgentConfig::new(spec.program).args(spec.args);
+        for (key, value) in request.env.into_iter().flatten() {
+            if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                return Err(AcpClientError::invalid_input(
+                    "ACP env requires nonempty names without '=' or NUL and values without NUL",
+                ));
+            }
+            // The peer is host-issued; Windows environment names ignore case.
+            if peer_id.is_some()
+                && (key == "TUIC_SESSION"
+                    || (cfg!(windows) && key.eq_ignore_ascii_case("TUIC_SESSION")))
+            {
+                continue;
+            }
+            agent_config = agent_config.env(key, value);
+        }
         if let Some(peer_id) = &peer_id {
             agent_config = agent_config.env("TUIC_SESSION", peer_id);
         }
@@ -403,7 +423,7 @@ impl AcpClientManager {
         self.disconnect(request.connection_id).await?;
         self.connect_within_with_peer(
             config,
-            AcpConnectRequest { root },
+            AcpConnectRequest { root, env: None },
             INITIALIZE_TIMEOUT,
             peer_id,
         )

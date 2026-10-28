@@ -124,6 +124,7 @@ pub(crate) async fn open(
             &launch.ego_config(),
             AcpConnectRequest {
                 root: launch.workspace.clone(),
+                env: None,
             },
             launch.peer_id.clone(),
         )

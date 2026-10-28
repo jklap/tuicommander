@@ -340,7 +340,9 @@ There is no hybrid route and no fallback between them.
 - **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
   `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
   adding `--profile <name>` only when a user selected an ego profile, and
-  owns its stdio JSON-RPC connection. A workspace's `.tuic.json` `ego_profile`
+  owns its stdio JSON-RPC connection. Optional connect `env` overrides apply only
+  to a fresh child, are not retained in snapshots, and are dropped on reconnect.
+  Supplied env on a live peer is refused; omitted env preserves peer adoption. A workspace's `.tuic.json` `ego_profile`
   selects a session profile bounded by the explicit machine profile via ACP
   `_meta.ego.ceilingProfile`; ego owns the clamp and TUIC displays its warnings. No terminal is allocated, no shell is
   invoked, and no output is scraped. The host issues a durable `TUIC_SESSION`
