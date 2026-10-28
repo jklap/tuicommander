@@ -1,3 +1,9 @@
+## Orchestrator mail wake budget (2418-fd33) — Rust restart required
+
+- [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
+- [ ] Coordinator: run `stable_ready_ticks_do_not_rearm_not_started_mail_wake`, `a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle`, `rearming_never_disturbs_a_wake_in_flight`, and `queued_codex_command_submits_when_ready_confirms_after_shell_idle` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] Load the Rust change with an authorized `make dev` restart or `make build` when ready to end live sessions. The daily app was not restarted; Rust does not hot-reload.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
