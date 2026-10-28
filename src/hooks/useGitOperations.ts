@@ -67,6 +67,7 @@ export interface GitOperationsDeps {
 			overrideLock?: boolean,
 			expectedFingerprint?: string,
 			confirmMissingCheckout?: boolean,
+			permanentDelete?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		createWorktree: (
 			baseRepo: string,
@@ -148,7 +149,7 @@ export interface GitOperationsDeps {
 			branchName: string,
 			status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 			deleteBranch: boolean,
-		) => Promise<boolean>;
+		) => Promise<boolean | "delete">;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (

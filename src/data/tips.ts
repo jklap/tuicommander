@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Delete instead of archive",
+		description:
+			"The Archive workspace dialog offers Delete for a clean, integrated workspace with no live sessions. Delete removes its checkout and local branch; Archive keeps them for reuse.",
+		shortcut: null,
+	},
+	{
 		feature: "Story drafts from requests",
 		description:
 			"In New story, describe what you need and choose Fill with AI. Review and edit the generated fields before Create story saves them. Cancel fill stops the owned model turn and keeps your request.",

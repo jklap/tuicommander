@@ -410,9 +410,31 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
     confirm_missing_checkout: bool,
+    permanent_delete: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
     guard_suspended_workspace(Path::new(repo_path), workspace_id)?;
-    if expected_fingerprint.is_none()
+    if permanent_delete {
+        // Delete is not force removal: a stale dialog must never discard new work
+        // or close an agent before the ownership check can see it.
+        let preview = inspect_worktree_removal(state, Path::new(repo_path), workspace_id);
+        if !delete_branch
+            || force
+            || override_lock
+            || confirm_missing_checkout
+            || preview.lifecycle.dirty_files != Some(0)
+            || preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
+            || !preview.lifecycle.submodule_unpushed_commits.is_empty()
+            || !preview.live_sessions.is_empty()
+            || !matches!(
+                preview.lifecycle.commit_status,
+                WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+            )
+        {
+            return Err("Cannot delete workspace: it must be clean, integrated and have no live sessions; review its current state".into());
+        }
+    }
+    if !permanent_delete
+        && expected_fingerprint.is_none()
         && !confirm_missing_checkout
         && let Some(outcome) = retain_finished_checkout(
             state,
@@ -677,6 +699,7 @@ pub(crate) async fn remove_worktree(
     override_lock: Option<bool>,
     expected_fingerprint: Option<String>,
     confirm_missing_checkout: Option<bool>,
+    permanent_delete: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let force = force.unwrap_or(false);
     let confirm_missing_checkout = confirm_missing_checkout.unwrap_or(false);
@@ -710,6 +733,7 @@ pub(crate) async fn remove_worktree(
             override_lock,
             expected_fingerprint.as_deref(),
             confirm_missing_checkout,
+            permanent_delete.unwrap_or(false),
         )
     })
     .await
@@ -2668,6 +2692,7 @@ mod tests {
             false,
             false,
             None,
+            false,
             false,
         )
         .expect("recycle");

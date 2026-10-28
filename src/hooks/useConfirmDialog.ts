@@ -18,6 +18,7 @@ export interface ConfirmOptions {
 	/** Optional middle button (e.g. "Don't Save"). When set the dialog offers a
 	 *  third outcome ("discard") between confirm and cancel. */
 	discardLabel?: string;
+	discardDanger?: boolean;
 	kind?: "info" | "warning" | "error";
 	/** Which button Enter activates. Defaults to "confirm". */
 	defaultButton?: ConfirmDefaultButton;
@@ -34,6 +35,7 @@ export interface ConfirmDialogState {
 	confirmLabel: string;
 	cancelLabel: string;
 	discardLabel?: string;
+	discardDanger?: boolean;
 	kind: "info" | "warning" | "error";
 	defaultButton: ConfirmDefaultButton;
 	autoCancelMs?: number;
@@ -68,6 +70,7 @@ export function useConfirmDialog() {
 			confirmLabel: head.options.okLabel || "OK",
 			cancelLabel: head.options.cancelLabel || "Cancel",
 			discardLabel: head.options.discardLabel,
+			discardDanger: head.options.discardDanger,
 			kind: head.options.kind || "warning",
 			defaultButton: head.options.defaultButton || "confirm",
 			autoCancelMs: head.options.autoCancelMs,
@@ -119,7 +122,7 @@ export function useConfirmDialog() {
 		branchName: string,
 		status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 		deleteBranch: boolean,
-	): Promise<boolean> {
+	): Promise<boolean | "delete"> {
 		const lost = status.dirtyFiles ?? 0;
 		const missing = status.missingCheckout === true;
 		const dirty = lost > 0 ? `${lost} uncommitted file${lost === 1 ? "" : "s"} will be discarded` : "clean";
@@ -154,12 +157,22 @@ export function useConfirmDialog() {
 		const submoduleCommits = (status.submoduleUnpushedCommits ?? [])
 			.filter((entry) => entry.count > 0)
 			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
-		return await confirm({
+		const canDelete = recycled && !status.liveSessions?.length;
+		const options: ConfirmOptions = {
+			discardLabel: canDelete ? "Delete" : undefined,
+			discardDanger: canDelete || undefined,
 			title: destructive ? "Destroy workspace state?" : recycled ? "Archive workspace?" : "Remove workspace?",
-			message: `${recycled ? "Archive" : "Remove"} "${branchName}"?\n\n${recycled ? "The clean checkout moves to the archive area for reuse; it is not deleted.\n" : ""}${missing ? "The checkout directory is missing; Git still has a worktree registration. Its submodule refs will be preserved before cleanup." : `Working tree: ${dirty}.`}${untracked}${sessions}${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
+			message: `${recycled ? "Archive" : "Remove"} "${branchName}"?\n\n${recycled ? "The clean checkout moves to the archive area for reuse; it is not deleted.\n" : ""}${missing ? "The checkout directory is missing; Git still has a worktree registration. Its submodule refs will be preserved before cleanup." : `Working tree: ${dirty}.`}${untracked}${sessions}${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}${canDelete ? "\nDelete instead permanently removes the checkout and the local branch." : ""}`,
 			okLabel: destructive ? "Delete anyway" : recycled ? "Archive" : "Remove",
 			cancelLabel: "Cancel",
 			kind: destructive ? "error" : "warning",
+		};
+		return new Promise<boolean | "delete">((resolve) => {
+			queue.push({
+				options,
+				resolve: (value) => resolve(value === "discard" && canDelete ? "delete" : value === "confirm"),
+			});
+			if (queue.length === 1) showHead();
 		});
 	}
 

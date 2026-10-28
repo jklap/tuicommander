@@ -2702,6 +2702,7 @@ Query parameters:
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
 - `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `permanentDelete` (optional, default `false`) -- explicitly deletes rather than recycling a clean finished checkout; requires `deleteBranch=true`, clean and integrated state and no live sessions, and rejects force or lock overrides. Safety is checked again at removal.
 - `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.

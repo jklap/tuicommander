@@ -323,6 +323,9 @@ pub(super) struct RemoveWorktreeQuery {
     pub expected_fingerprint: Option<String>,
     #[serde(rename = "confirmMissingCheckout", default)]
     pub confirm_missing_checkout: Option<bool>,
+    /// Explicit safe deletion instead of retaining a reusable checkout.
+    #[serde(rename = "permanentDelete", default)]
+    pub permanent_delete: Option<bool>,
 }
 
 #[derive(Deserialize)]

@@ -128,6 +128,7 @@ export function useRepository() {
 		overrideLock?: boolean,
 		expectedFingerprint?: string,
 		confirmMissingCheckout?: boolean,
+		permanentDelete?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
@@ -137,6 +138,7 @@ export function useRepository() {
 			...(overrideLock ? { overrideLock: true } : {}),
 			...(expectedFingerprint ? { expectedFingerprint } : {}),
 			...(confirmMissingCheckout ? { confirmMissingCheckout: true } : {}),
+			...(permanentDelete ? { permanentDelete: true } : {}),
 		});
 	}
 
