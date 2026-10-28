@@ -87,6 +87,9 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Shared by facade commits and the pre-existing AppConfig owner save seam.
 /// This cursor never fingerprints credentials or changes an owner's CAS revision.
 pub(crate) fn publish_change(state: &AppState, section: &str, applied: bool) -> u64 {
+    if matches!(section, "repositories" | "repo_defaults") {
+        state.git_cache.refresh_worktree_storage_settings();
+    }
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     state.publish_settings_changed(super::changes::SettingsChanged {
         section: section.to_owned(),

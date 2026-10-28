@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Stories across plans",
+		description:
+			"Choose All plans in Plans and Stories to see a combined list or Kanban board. Cards show their plan; select one plan to filter back or create a story.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat across devices",
 		description:
 			"Select an AI Chat conversation on desktop, phone or tablet to show it on the other connected devices. An offline device catches up when it reconnects; session CLI and Chat views stay local.",
