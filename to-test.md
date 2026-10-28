@@ -3229,3 +3229,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   `ingest_closed_story_is_findable_in_real_mdkb_without_a_story_file` (requires
   installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
+
+## Workspace Delete alternative (#2446-2de7)
+
+Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering is not yet verified. Focused component, coordinator and backend tests pass.
+
+- [ ] After the next manual Rust rebuild/restart, remove a clean integrated workspace with no live sessions. Confirm the dialog shows Cancel, red Delete, and Archive; Delete removes its checkout and local branch, while Archive retains its existing behavior. Dirty or live-owned workspaces must not offer Delete, and a safety change while the dialog is open must stop deletion.

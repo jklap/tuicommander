@@ -70,6 +70,29 @@ describe("ConfirmDialog", () => {
 		expect(onDiscard).toHaveBeenCalledTimes(1);
 	});
 
+	// Catches: the destructive third action inheriting neutral styling or becoming the Enter default.
+	it("renders a danger Delete action while Enter still archives", () => {
+		const onConfirm = vi.fn();
+		const onDiscard = vi.fn();
+		const { getByRole } = render(() => (
+			<ConfirmDialog
+				{...baseProps}
+				confirmLabel="Archive"
+				discardLabel="Delete"
+				discardDanger
+				onConfirm={onConfirm}
+				onClose={() => {}}
+				onDiscard={onDiscard}
+			/>
+		));
+		expect(getByRole("button", { name: "Delete" }).className).toContain("danger");
+		fireEvent.keyDown(document, { key: "Enter" });
+		expect(onConfirm).toHaveBeenCalledOnce();
+		expect(onDiscard).not.toHaveBeenCalled();
+		fireEvent.click(getByRole("button", { name: "Delete" }));
+		expect(onDiscard).toHaveBeenCalledOnce();
+	});
+
 	it("omits the discard button when discardLabel is not set", () => {
 		const { queryByText } = render(() => (
 			<ConfirmDialog {...baseProps} confirmLabel="Save" onConfirm={() => {}} onClose={() => {}} />

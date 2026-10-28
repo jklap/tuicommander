@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
+
 ### Fixed
 
 - Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).

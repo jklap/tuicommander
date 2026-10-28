@@ -1155,6 +1155,9 @@ Use a durable per-checkout allocation marker. Creation reserves the checkout bef
 returning it. Explicit archive or safe removal marks it finished. Reuse requires fresh
 clean and integration evidence and no live session. Rename the registered checkout and
 repair Git and submodule paths; preserve ignored artifacts and publish lifecycle events.
+The Archive workspace dialog also offers a red Delete action for clean integrated
+checkouts without live users. Explicit deletion bypasses recycling through the same
+removal path, with fresh safety checks and no force or lock override.
 
 ## Beta update channel (#1813-4bdf)
 

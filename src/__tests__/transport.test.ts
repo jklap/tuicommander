@@ -1606,6 +1606,17 @@ describe("transport", () => {
 			expect(result.path).toBe("/worktrees/feat~a1b2c3d4?repoPath=%2Fr&deleteBranch=true");
 		});
 
+		// Catches: browser Delete dropping its intent and silently archiving instead.
+		it("forwards permanent deletion without enabling force or lock override", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "opaque-id",
+				deleteBranch: true,
+				permanentDelete: true,
+			});
+			expect(result.path).toBe("/worktrees/opaque-id?repoPath=%2Fr&deleteBranch=true&permanentDelete=true");
+		});
+
 		it("forwards an explicit lock override separately from dirty-file force", () => {
 			const result = mapCommandToHttp("remove_worktree", {
 				repoPath: "/r",
