@@ -592,3 +592,12 @@ The additive inventory also returns `worktree_diagnostics` records with `path`, 
 Synchronous and asynchronous inventory cache loaders retain only successful reads. MCP repository listings report `worktree_error` on discovery failure; ACP workspace snapshots report `worktreeError`. Bisect recovers `BISECT_START` only when it resolves to an existing local branch. Rebase recovery uses the shared Git directory resolver, including relative gitdir paths and the main checkout.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+### Archive workspace checklist
+
+The fresh removal preview includes `archive_checklist`: pass/fail labels, the
+Delete verdict and action explanations. It reuses lifecycle dirt, merge proof,
+submodule hazards and live-cwd ownership. A default-integration-ref `rev-list`
+adds the missing commit count. Unknown inspection never passes. Permanent Delete
+recomputes the same verdict before mutation. Explicit Archive uses the existing
+fingerprint-confirmed finalization path and retains dirty files and unmerged refs.

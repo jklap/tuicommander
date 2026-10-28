@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).
+
 - Add default-off incoming PR reviews with durable per-head deduplication, stale-result suppression and host-only COMMENT publication pinned to the GitHub SHA; never retry uncertain review writes (#2327-1ca0).
 
 - Accept write-only task secrets with a TTL, inject them into scoped child environments, and mask terminal output before HTTP, WebSocket, history and capture publication. Expiry revokes new injection; existing session masks remain until teardown (#2319-02f6).

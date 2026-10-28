@@ -9,6 +9,13 @@ import type { RemoveWorktreeResult } from "../useRepository";
 
 interface WorktreeRemovalCoordinatorDeps {
 	repo: {
+		finalizeMergedWorktree?: (
+			repoPath: string,
+			workspaceId: string,
+			action: "archive" | "delete",
+			force?: boolean,
+			expectedFingerprint?: string,
+		) => Promise<{ action: string }>;
 		removeWorktree: (
 			repoPath: string,
 			workspaceId: string,
@@ -26,7 +33,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			branchName: string,
 			status: WorkspaceLifecycleStatus,
 			deleteBranch: boolean,
-		) => Promise<boolean | "delete">;
+		) => Promise<boolean | "delete" | "archive">;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
@@ -99,7 +106,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				);
 				return;
 			}
-			if (deleteBranch && lifecycle.commitStatus === "unmerged") {
+			if (deleteBranch && lifecycle.commitStatus === "unmerged" && !lifecycle.archiveChecklist) {
 				reportActionError(
 					deps.setStatusInfo,
 					`Cannot delete ${branchName}: the branch has unmerged commits. You can remove the worktree while keeping the branch.`,
@@ -148,7 +155,21 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			let shouldRemoveFromStore = false;
 			let shouldClearBranchLabel = true;
 			const permanentDelete = confirmed === "delete";
-			const removeConfirmed = (overrideLock: boolean) => {
+			const removeConfirmed = async (overrideLock: boolean): Promise<RemoveWorktreeResult | undefined> => {
+				if (confirmed === "archive") {
+					if (!deps.repo.finalizeMergedWorktree || !lifecycle.dirtyFingerprint) {
+						throw new Error("Cannot verify the confirmed workspace state before archiving");
+					}
+					const result = await deps.repo.finalizeMergedWorktree(
+						repoPath,
+						workspaceId,
+						"archive",
+						true,
+						lifecycle.dirtyFingerprint,
+					);
+					if (result.action !== "archived") throw new Error("Workspace was not archived");
+					return { branch: branchName, removal_rule: "recyclable", branch_delete_warning: null };
+				}
 				if (permanentDelete) {
 					return deps.repo.removeWorktree(repoPath, workspaceId, true, false, false, undefined, false, true);
 				}

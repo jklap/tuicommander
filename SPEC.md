@@ -1167,6 +1167,10 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 The Archive workspace dialog also offers a red Delete action for clean integrated
 checkouts without live users. Explicit deletion bypasses recycling through the same
 removal path, with fresh safety checks and no force or lock override.
+The dialog renders the backend checklist: dirty files, commits absent from the
+named default integration refs, and open terminals or agents. Failed checks show
+counts and disable Delete. Archive preserves dirty files and unmerged commits
+through the existing fingerprint-confirmed archive path, without merging.
 
 ## Beta update channel (#1813-4bdf)
 

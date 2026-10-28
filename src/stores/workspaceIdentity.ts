@@ -27,8 +27,17 @@ export type WorkspaceKind =
 export type WorkspaceCommitStatus = "unmerged" | "pushed_unmerged" | "in_sync" | "merged" | "unknown";
 export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
 
+/** Backend-authored checklist; the frontend only renders its verdict and text. */
+export interface ArchiveChecklist {
+	checks: Array<{ passed: boolean; label: string }>;
+	can_delete: boolean;
+	archive_explanation: string;
+	delete_explanation: string;
+}
+
 /** Backend-authored Git lifecycle verdict for one exact workspace id. */
 export interface WorkspaceLifecycleStatus {
+	archiveChecklist?: ArchiveChecklist;
 	/** Files a removal would discard — staged, unstaged and untracked. `null`
 	 *  when the inspection failed; never confuse that with 0. */
 	dirtyFiles: number | null;

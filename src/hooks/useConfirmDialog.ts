@@ -19,6 +19,9 @@ export interface ConfirmOptions {
 	 *  third outcome ("discard") between confirm and cancel. */
 	discardLabel?: string;
 	discardDanger?: boolean;
+	discardDisabled?: boolean;
+	archiveChecklist?: import("../stores/workspaceIdentity").ArchiveChecklist;
+	workspaceName?: string;
 	kind?: "info" | "warning" | "error";
 	/** Which button Enter activates. Defaults to "confirm". */
 	defaultButton?: ConfirmDefaultButton;
@@ -36,6 +39,9 @@ export interface ConfirmDialogState {
 	cancelLabel: string;
 	discardLabel?: string;
 	discardDanger?: boolean;
+	discardDisabled?: boolean;
+	archiveChecklist?: import("../stores/workspaceIdentity").ArchiveChecklist;
+	workspaceName?: string;
 	kind: "info" | "warning" | "error";
 	defaultButton: ConfirmDefaultButton;
 	autoCancelMs?: number;
@@ -71,6 +77,13 @@ export function useConfirmDialog() {
 			cancelLabel: head.options.cancelLabel || "Cancel",
 			discardLabel: head.options.discardLabel,
 			discardDanger: head.options.discardDanger,
+			...(head.options.archiveChecklist
+				? {
+						discardDisabled: head.options.discardDisabled,
+						archiveChecklist: head.options.archiveChecklist,
+						workspaceName: head.options.workspaceName,
+					}
+				: {}),
 			kind: head.options.kind || "warning",
 			defaultButton: head.options.defaultButton || "confirm",
 			autoCancelMs: head.options.autoCancelMs,
@@ -114,6 +127,7 @@ export function useConfirmDialog() {
 
 	/** Called when the user picks the middle "discard" action (e.g. Don't Save) */
 	function handleDiscard() {
+		if (dialogState()?.discardDisabled) return;
 		settle("discard");
 	}
 
@@ -122,7 +136,27 @@ export function useConfirmDialog() {
 		branchName: string,
 		status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 		deleteBranch: boolean,
-	): Promise<boolean | "delete"> {
+	): Promise<boolean | "delete" | "archive"> {
+		if (deleteBranch && !status.missingCheckout && status.archiveChecklist) {
+			const checklist = status.archiveChecklist;
+			return new Promise<boolean | "delete" | "archive">((resolve) => {
+				queue.push({
+					options: {
+						title: "Archive workspace?",
+						message: "",
+						workspaceName: branchName,
+						archiveChecklist: checklist,
+						okLabel: "Archive",
+						discardLabel: "Delete",
+						discardDanger: true,
+						discardDisabled: !checklist.can_delete,
+					},
+					resolve: (value) =>
+						resolve(value === "confirm" ? "archive" : value === "discard" && checklist.can_delete ? "delete" : false),
+				});
+				if (queue.length === 1) showHead();
+			});
+		}
 		const lost = status.dirtyFiles ?? 0;
 		const missing = status.missingCheckout === true;
 		const dirty = lost > 0 ? `${lost} uncommitted file${lost === 1 ? "" : "s"} will be discarded` : "clean";

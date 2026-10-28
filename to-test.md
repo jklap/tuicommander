@@ -3251,6 +3251,7 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] After the next manual Rust rebuild/restart, remove a clean integrated workspace with no live sessions. Confirm the dialog shows Cancel, red Delete, and Archive; Delete removes its checkout and local branch, while Archive retains its existing behavior. Dirty or live-owned workspaces must not offer Delete, and a safety change while the dialog is open must stop deletion.
 - [ ] Event outcomes (#2326-98f1): after a manual Rust restart, inspect a permitted event run through `automations` run details; verify the PR URL and decision persist after restart and unknown publication does not create a second PR. No live GitHub write or desktop launch was performed in this implementation.
 
+- [ ] After a backend rebuild, open Archive workspace for a dirty, unmerged checkout and a clean integrated checkout. Confirm counts and disabled/enabled Delete; Archive must keep all changes. Rust changes require a manual restart to load. Automated Git and rendering evidence is recorded in story 2453-2ec7.
 ## Incoming PR review automation (2327-1ca0)
 
 - [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.
