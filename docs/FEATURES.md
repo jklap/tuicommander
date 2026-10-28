@@ -153,7 +153,7 @@ Selecting a New plan source that already belongs to an archived plan shows its t
 
 Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
 
-New story and Edit plan keep the primary action, then Cancel, together at the bottom-left. Story Edit stays in the story header. Disabled Add dependency exposes its reason as a native tooltip and accessible description.
+New story and Edit plan keep the primary action, then Cancel, together at the bottom-left. New story has no permanent manual-prefix hint below acceptance criteria; `[MANUAL]` criteria remain supported. Story Edit stays in the story header. Disabled Add dependency exposes its reason as a native tooltip and accessible description.
 
 Plans and Stories combines open/closed and optional story-type filters, including untyped historical stories, with a session-retained List/Kanban switch that also survives detach and reattach. Rust supplies the shared display projection; the native read-only board follows the Wiz Kanban layout without importing plugin code.
 

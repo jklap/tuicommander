@@ -1325,9 +1325,6 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											onInput={(event) => setCriteriaText(event.currentTarget.value)}
 										/>
 									</label>
-									<p class={s.muted}>
-										{t("stories.manualHint", "Prefix human checks with [MANUAL] to track them in QA.")}
-									</p>
 									<label>
 										{t("stories.scopeInput", "File scope, one relative path per line")}
 										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
