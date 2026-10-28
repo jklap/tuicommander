@@ -8,6 +8,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
+import { isBackendVersionMismatch } from "../../utils/backendMismatch";
 import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
 import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
 import { Button } from "../ui/Button";
@@ -126,7 +127,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			case "starting":
 				return "Connecting conversation…";
 			case "failed":
-				return "The conversation could not be opened. Use Retry to try again.";
+				return isBackendVersionMismatch(chat.error())
+					? "The running backend must be restarted before this conversation can be used."
+					: "The conversation could not be opened. Use Retry to try again.";
 			default:
 				if (chat.phase() === "ready" && chat.sessionId())
 					return "Conversation disconnected. Send a message to reconnect.";
@@ -225,9 +228,11 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				{(message) => (
 					<div class={s.errorBanner}>
 						<span class={s.errorText}>{message()}</span>
-						<Button type="button" variant="danger" class={s.retryBtn} onClick={() => void chat.recover()}>
-							Retry
-						</Button>
+						<Show when={!isBackendVersionMismatch(message())}>
+							<Button type="button" variant="danger" class={s.retryBtn} onClick={() => void chat.recover()}>
+								Retry
+							</Button>
+						</Show>
 					</div>
 				)}
 			</Show>
