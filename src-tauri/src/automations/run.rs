@@ -18,6 +18,12 @@ pub enum RunTrigger {
         pr_number: i64,
         head_sha: String,
     },
+    /// Every eligible issue, once per repository, issue and policy version.
+    Triage {
+        repository: String,
+        issue_number: i64,
+        policy_version: String,
+    },
     /// A labelled GitHub issue admitted by event intake, once per issue and label.
     Event {
         repository: String,
@@ -37,6 +43,15 @@ impl RunTrigger {
             } => Some(format!(
                 "pr:{}#{pr_number}:{head_sha}",
                 repository.to_ascii_lowercase()
+            )),
+            Self::Triage {
+                repository,
+                issue_number,
+                policy_version,
+            } => Some(format!(
+                "triage:{}#{issue_number}:{}",
+                repository.to_ascii_lowercase(),
+                policy_version
             )),
             Self::Event {
                 repository,
@@ -175,6 +190,8 @@ pub struct AutomationRun {
     #[serde(default)]
     pub precheck_context: Option<PrecheckContext>,
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage_decision: Option<super::triage::TriageDecision>,
     #[serde(default)]
     pub outcome: Option<RunOutcome>,
     #[serde(default)]

@@ -174,10 +174,114 @@ For step-by-step policy setup, use the three [event configuration Smart Prompts]
 
 After acquiring executor ownership, the daemon starts the shared GitHub poller for the allowlisted repositories without a UI call. Each entry must resolve to a registered, unambiguous github.com repository on that daemon; otherwise its logs show an **Event intake configuration error** with the repository name. Each failing entry is reported separately; valid entries continue polling. The runtime re-reads configuration on its existing 30-second tick and on repository/settings changes. Intake requests all open issues regardless of a client's issue filter or subscribed paths. If a repository belongs to both subscriptions, one GraphQL request selects unfiltered intake issues and separately filtered client issues. The sidebar and SSE snapshots retain the client filter, including disabled issues; internal intake snapshots never reach clients. Client stop releases only the client subscription while intake remains enabled. Removing the allowlist removes the intake subscription; normal client polling remains unchanged. An open issue that carries the label starts the named, enabled definition once per issue and label; the key is stored in the run ledger and survives restarts. If an open run or the concurrency limit refuses it, a later 30-second tick admits it. The agent receives only the issue URL, never its title or body.
 
-Without a configured workflow, when such a run completes in an isolated workspace (`new_per_run`), TUIC creates a draft pull request for the workspace branch through its GitHub API layer, using the TUIC GitHub login. The agent must push that branch itself. Publication re-checks the allowlist and that the workspace remote is the admitted repository; no other repository is ever written.
+When such a run completes in an isolated workspace (`new_per_run`), TUIC creates a draft pull request for the workspace branch through its GitHub API layer, using the TUIC GitHub login. The agent must push that branch itself. Publication re-checks the allowlist and that the workspace remote is the admitted repository; no other repository is ever written.
 
 Downgrading TUICommander after an event run exists is not supported: an older build cannot read `Event` runs or the `event_intake` block.
 
+
+### Optional triage before labelled intake
+
+Add `triage` entries inside `event_intake` in the owning daemon's
+`automations.json`. An omitted or empty array keeps triage off:
+
+```json
+"event_intake": {
+  "repositories": ["owner/name"],
+  "label": "tuic-run",
+  "definition_id": "implement-issue",
+  "triage": [{
+    "repository": "owner/name",
+    "definition_id": "triage-issue",
+    "policy_version": "1",
+    "read_only_attested": true,
+    "rejection_label": "triage-rejected"
+  }]
+}
+```
+
+Create both definitions first. The triage definition must be separate from the
+implementation definition, use an existing workspace, and have no precheck.
+Its prompt contains your acceptance policy. Its saved `run_config` must name an
+operator-attested read-only profile without push credentials. Its automatic cron
+schedule is suppressed while it is referenced by a triage entry. Keep the
+triage definition enabled to admit issues. Configure the labels in GitHub before
+enabling the policy. The rejection label must differ from the intake label.
+
+**This is operator attestation, not an isolation guarantee.** TUIC does not remove
+or enforce the absence of host git/gh credentials, inherited environment access,
+filesystem writes or MCP write authority for the evaluator. Do not set
+`read_only_attested` unless you accept this trust contract and have configured the
+external profile accordingly. Recheck the attestation when the profile changes.
+Enforced ego isolation is future story 2450-6845.
+
+The daemon fetches all open issues when any triage entry is enabled in the
+configuration. Admission remains per repository. Before any triage or subsequent
+implementation run in that repository, the issue must have GitHub author
+association `OWNER`, `MEMBER` or `COLLABORATOR`. Missing or other associations fail
+closed. Each eligible issue gets one triage run per repository, issue number and
+policy version, even if it already has the intake label. Existing overlap and
+concurrency limits leave capacity-refused issues available for a later poll.
+Change `policy_version` to evaluate previously decided issues again; changing only
+the definition id does not reset the identity.
+
+The managed evaluator receives the issue URL, the policy prompt and its run id.
+It must treat the issue text as data and must not edit files, execute repository
+code, push, comment or label. It reports with the bound MCP tool:
+
+```json
+{"action":"triage_decision","id":"<run id>","decision":{"outcome":"rejected","reason":"Outside the repository policy"}}
+```
+
+Allowed outcomes are `accepted`, `rejected` and `needs_input`. Only the run's bound
+managed PTY can report. A report completes the run; identical retries return the
+same decision, and a conflicting decision is rejected. Terminal output and
+`progress done` are not decision reports. A run that ends or is interrupted before
+reporting records `needs_input` and cannot start implementation. Decisions are in
+`run`/`list_runs` as `triage_decision`, and the existing run reason shows the result.
+Triage records are retained beyond the normal 90-day execution-history retention
+because later admission needs the durable decision.
+
+The host separately rechecks the current policy, allowlist and resolved workspace
+GitHub remote. Acceptance adds the intake label; the existing labelled intake then
+starts implementation and retains its existing draft-PR path. Rejection posts one
+reason comment, then adds the rejection label; it does not close the issue.
+`needs_input` performs no GitHub write. Rejected and undecided issues cannot bypass
+triage by carrying the intake label.
+
+Each comment/label attempt is durably claimed before the request, including across
+restart. Successful attempts are `confirmed`. A crash or ambiguous response is
+`unknown` and is **not automatically retried**: it may already have arrived. An
+unknown comment also stops automatic rejection-label publication. Inspect the run's
+`triage-comment` / `triage-label` GitHub delivery records in the owning daemon's
+`automation_runs.sqlite3` and reconcile the issue on GitHub before any manual
+repair. This prevents duplicate automatic comments, but it does not guarantee
+successful delivery during an outage. Do not change the policy version merely to
+retry an uncertain publication. Removing the policy prevents pending publication.
+#### Durable event outcomes
+
+The `run` and `list_runs` actions return `outcome` independently of execution
+status: `decision`, `pr_url`, `comment_url`, `failure_reason` and
+`publication_intent` (repository, head, base and issue number). Existing records
+without an outcome remain readable. A completed agent is not proof of a
+published PR. No comment publisher is added; `comment_url` remains null.
+
+Before publication, TUIC saves the exact intent and claims it once. It looks up
+all PR states for the same repository/head/base before creation and after a lost
+response. On restart it reconciles saved pending/unknown intents by lookup only,
+even if the worktree was removed. An unavailable, incomplete or empty lookup
+leaves `publication_unknown` with a reason; TUIC never automatically repeats an
+uncertain POST. Inspect the repository and saved intent before operator action.
+Historical runs from older builds are not automatically republished.
+
+Filtered issues with a valid GitHub issue identity, duplicate admissions,
+disabled definitions and capacity refusals retain skipped history rows and
+reasons. Repeated observations of the same event/reason update one row's
+`updated_ms`, not one row per poll. These rows do not consume the admission key;
+a later eligible issue or free slot can still be admitted. Invalid issue URLs
+have no trusted event identity and are ignored. An empty intake allowlist stays
+disabled and performs no evaluations. History retention also applies to these
+rows; summaries count rows, not poll observations. The saved run API exposes
+outcomes; this change does not add outcome controls to the Automations dialog.
 
 ### Opt-in reviewed issue workflows
 
@@ -284,8 +388,8 @@ inline review threads. No code repair, deterministic check execution, check-resu
 publication, branch push, worktree creation, PR creation, approval or merge occurs.
 
 Saved run output and outcome use the existing automation history API on desktop
-and HTTP. A review URL is retained in `outcome.pr_url`. Superseded results are
-retained but not posted. A lost POST response, or restart during a publication
+and HTTP. A review URL is retained in `outcome.pr_url`. Superseded run decisions are
+retained but their results are not posted. A lost POST response, or restart during a publication
 claim, becomes `publication_unknown` and is never retried automatically. Restart
 interrupts unfinished ACP runs without replay. Inspect GitHub before taking any
 manual recovery action. An older application cannot read the new trigger/config;

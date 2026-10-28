@@ -3064,3 +3064,15 @@ host-issued peer identity, and does not retain it. Supplied env on an existing
 live peer is refused with disconnect-first guidance; an omitted env keeps
 normal adoption. Reconnect drops the previous overrides. Request diagnostics
 redact values, and connection snapshots contain no launch environment.
+
+
+### Bound issue triage decision (#2324-424d)
+
+The `automations` MCP action `triage_decision` takes a saved run `id` and
+`decision={outcome:accepted|rejected|needs_input,reason}` (1–4000 UTF-8 bytes).
+The host resolves the MCP caller to its live managed PTY and checks the run's
+persisted binding. An identical retry is idempotent; a conflicting report is
+rejected. The report finalizes the run. GitHub publication is a separate host-owned
+effect, not permission for the evaluator to write. HTTP/IPC share the parser but
+have no managed-agent identity and reject this action. Existing run/list_runs
+responses expose the triage trigger, decision and result reason on all transports.

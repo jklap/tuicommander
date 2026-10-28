@@ -13,6 +13,7 @@ mod mutations;
 mod outcomes;
 #[cfg(test)]
 mod tests;
+mod triage;
 
 /// Initial ledger layout; unknown versions must never be overwritten.
 const SCHEMA_VERSION: i64 = 1;
@@ -218,9 +219,10 @@ fn reserve_in(
 ) -> Result<Option<AutomationRun>, String> {
     let occurrence = match trigger {
         RunTrigger::Scheduled { occurrence_ms } => Some(occurrence_ms),
-        RunTrigger::Manual | RunTrigger::Event { .. } | RunTrigger::PullRequestReview { .. } => {
-            None
-        }
+        RunTrigger::Manual
+        | RunTrigger::Event { .. }
+        | RunTrigger::Triage { .. }
+        | RunTrigger::PullRequestReview { .. } => None,
     };
     let outcome = trigger
         .event_key()
@@ -248,6 +250,7 @@ fn reserve_in(
         precheck_outcome: None,
         precheck_context: None,
         reason: None,
+        triage_decision: None,
         event_workflow: None,
         workflow_binding: None,
         outcome,

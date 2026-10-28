@@ -1133,3 +1133,12 @@ Unavailable detached registrations are excluded from automatic orphan cleanup in
 ### Ego terminal usage
 
 `get_ego_usage({ sessionId })` returns `{ text: string | null, tooltip?: string }` from the live ego terminal's exact pid/lease binding. The backend shares session usage's live-terminal executable resolution and calls that binary with `usage --json --session-dir <bound store> -C <manifest workspace>`, accepts report v3 or v4 and selects only that session. V4 adds observed context capacity and typed remaining limits; current-key balances remain distinct from session observations. The optional tooltip carries limit timestamps, sources, and reported resets. Missing data returns null; command failures return an error. Async: no child work runs on the macOS main thread. HTTP parity: `GET /ego/usage?sessionId=<id>`.
+
+
+### Bound issue triage decisions (#2324-424d)
+
+Issue triage: `automation_action` run/history responses include
+`trigger.kind="triage"` and optional `triage_decision={outcome,reason}`. The
+shared `triage_decision` action is bound-agent-only: HTTP and IPC both reject
+unbound submissions with `Triage decision requires a bound agent caller`.
+See the MCP guide for the managed evaluator's report contract.

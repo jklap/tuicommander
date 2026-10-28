@@ -270,7 +270,7 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
     )
     else {
         if run.status == RunStatus::Completed
-            && run.trigger.event_key().is_some()
+            && matches!(run.trigger, RunTrigger::Event { .. })
             && let Some(store) = state.automation_runtime.notification_store()
         {
             match store.settle_outcome(

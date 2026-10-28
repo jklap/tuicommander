@@ -1483,6 +1483,19 @@ archived stories stay searchable. No story file is written to the project;
 plans and the story mutation API are unchanged. See the native stories guide.
 
 
+## Optional issue triage (#2324-424d)
+
+`event_intake.triage` adds off-by-default per-repository, policy-versioned issue
+evaluation before labelled implementation. OWNER/MEMBER/COLLABORATOR association
+is required. A separate existing-workspace definition has no precheck or automatic
+cron execution. Its profile is operator-attested read-only without push credentials;
+TUIC does not enforce credential isolation (future 2450-6845). Caller-bound
+`automations triage_decision` records accepted/rejected/needs_input immutably. The
+host adds the intake label for acceptance, or posts a rejection reason and adds its
+label, using durable at-most-once delivery claims. Unknown publication requires
+operator reconciliation, not replay. Triage ledger records outlive normal history
+retention. See [Automations](docs/user-guide/automations.md#optional-triage-before-labelled-intake).
+
 #### Reviewed event issue publication
 
 Event intake can opt in through `event_intake.workflow` to an explicit published

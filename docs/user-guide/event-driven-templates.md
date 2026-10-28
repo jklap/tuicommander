@@ -63,13 +63,10 @@ does not run deterministic checks or publish check results. Superseded results
 are discarded and unknown publication is not retried. See
 [Incoming PR reviews](automations.md#incoming-pr-reviews-review-only).
 
-The following capabilities are still unsupported on this baseline. Verify their
-status on the addressed owner before using them:
-
-| Capability | Follow-up story | Boundary today |
-| --- | --- | --- |
-| Automatic triage of unlabelled issues | **2324-424d** | Intake only admits already-labelled open issues; it does not reject issues with a comment and label |
-
+Unlabelled-issue triage is available through `event_intake.triage` with a separate
+operator-attested read-only profile. TUIC does not enforce credential isolation;
+verify that boundary on the owning host. See
+[issue triage](automations.md#optional-triage-before-labelled-intake).
 
 Continue supported configuration drafting, but stop before a mutation that needs
 an unavailable capability. In particular, do not enable or launch the full

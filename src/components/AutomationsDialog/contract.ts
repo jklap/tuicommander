@@ -54,7 +54,9 @@ export interface AutomationRun {
 		| { kind: "manual" }
 		| { kind: "scheduled"; occurrence_ms: number }
 		| { kind: "event"; repository: string; issue_number: number; label: string }
-		| { kind: "pull_request_review"; repository: string; pr_number: number; head_sha: string };
+		| { kind: "pull_request_review"; repository: string; pr_number: number; head_sha: string }
+		| { kind: "triage"; repository: string; issue_number: number; policy_version: string };
+	triage_decision?: { outcome: "accepted" | "rejected" | "needs_input"; reason: string };
 	outcome?: {
 		decision: string;
 		pr_url: string | null;
@@ -128,6 +130,11 @@ export type AutomationAction =
 	| { action: "template"; template_id: string; repository: string; run_config: string; timezone: string | null }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
+	| {
+			action: "triage_decision";
+			id: string;
+			decision: { outcome: "accepted" | "rejected" | "needs_input"; reason: string };
+	  }
 	| { action: "get" | "run" | "worktree_preview" | "cleanup_worktree"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }

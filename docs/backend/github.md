@@ -610,3 +610,21 @@ It never sends the manual review panel's diff hash as a commit. Unknown POST
 outcomes are not retried, including after restart. This path cannot launch a PTY,
 create worktrees, push branches or create another PR. See the
 [automation guide](../user-guide/automations.md#incoming-pr-reviews-review-only).
+
+
+### Host-owned issue triage publication (#2324-424d)
+
+When triage is configured, intake fetches every page of open issues without the
+intake label filter. Each issue's label connection is also paginated to completion,
+including ordinary repositories in a mixed intake batch. Missing pages or invalid
+cursors fail the poll rather than publish incomplete label membership. The normal
+client issue filter remains separate. Issue nodes
+include `authorAssociation`; only OWNER/MEMBER/COLLABORATOR can start triage or
+implementation in an opted-in repository. The host publishes immutable decisions
+through the existing account-bound REST adapter: POST `issues/{number}/comments`
+for a rejection reason, then POST `issues/{number}/labels` for the rejection label;
+acceptance posts only the intake label. The current policy, allowlist and resolved
+workspace remote are checked again before publication. Requests have durable
+at-most-once claims; a missing/ambiguous response is unknown, not permission to
+repeat. No issue is automatically closed or merged. The evaluator's read-only
+profile is operator-attested, not credential-isolated by TUIC.

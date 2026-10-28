@@ -3728,3 +3728,15 @@ route is added. `trigger.kind: "pull_request_review"` carries `repository`,
 `pr_url`. This differs from a manual review result's diff-hash identity. A
 review-only definition has no scheduled next run and rejects Run Now. HTTP and
 Tauri expose the same stored record.
+
+
+### Bound issue triage decisions (#2324-424d)
+
+Issue triage: `run` and `list_runs` can return
+`trigger={kind:"triage",repository,issue_number,policy_version}` and optional
+`triage_decision={outcome:"accepted"|"rejected"|"needs_input",reason}`.
+The shared parser also recognizes `triage_decision` with `id` and `decision`,
+but HTTP/IPC callers have no managed-agent binding and receive
+`Triage decision requires a bound agent caller`; only the bound managed MCP
+evaluator can submit. A decision completes the run; GitHub publication remains
+a separate host effect.

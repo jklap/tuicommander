@@ -18,11 +18,15 @@ pub fn tick(
 ) -> Result<Vec<AutomationRun>, String> {
     config.validate()?;
     let mut candidates = Vec::new();
-    for definition in config
-        .definitions
-        .iter()
-        .filter(|definition| definition.enabled && !config.review_only(&definition.id))
-    {
+    for definition in config.definitions.iter().filter(|definition| {
+        definition.enabled
+            && !config.review_only(&definition.id)
+            && !config
+                .event_intake
+                .triage
+                .iter()
+                .any(|triage| triage.definition_id == definition.id)
+    }) {
         let schedule = definition.schedule()?;
         if let Some(occurrence) = schedule.latest_due(now, None)? {
             candidates.push((

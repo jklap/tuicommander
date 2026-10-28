@@ -40,8 +40,22 @@ pub struct EventIntake {
     pub label: String,
     /// Id of the enabled definition an eligible issue starts.
     pub definition_id: String,
+    /// Opt-in per repository; empty by default. Credentials are operator-attested.
+    /// DEFERRED (2026-10-28) — enforced ego isolation belongs to 2450-6845;
+    /// this attestation does not strip host git/gh credentials.
+    pub triage: Vec<IssueTriage>,
     /// Opt in to a pinned published native story workflow.
     pub workflow: Option<EventWorkflow>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueTriage {
+    pub repository: String,
+    pub definition_id: String,
+    pub policy_version: String,
+    pub read_only_attested: bool,
+    pub rejection_label: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -52,6 +66,15 @@ pub struct EventWorkflow {
 }
 
 impl EventIntake {
+    /// The complete paginated issue selection is needed when triage is opted in.
+    pub fn poll_label(self) -> String {
+        if self.triage.is_empty() {
+            self.label
+        } else {
+            String::new()
+        }
+    }
+
     pub fn enabled(&self) -> bool {
         !self.repositories.is_empty()
     }
@@ -189,14 +212,63 @@ impl AutomationsConfig {
         if self.event_intake.enabled() && self.review_only(&self.event_intake.definition_id) {
             return Err("Issue intake and PR reviews require separate definitions".into());
         }
-        self.event_intake.validate()?;
         EventIntake {
             repositories: self.pull_request_reviews.repositories.clone(),
             definition_id: self.pull_request_reviews.definition_id.clone(),
             label: "review-only".into(),
+            triage: Vec::new(),
             workflow: None,
         }
-        .validate()
+        .validate()?;
+        self.event_intake.validate()?;
+        if !self.event_intake.triage.is_empty()
+            && !self
+                .definitions
+                .iter()
+                .any(|definition| definition.id == self.event_intake.definition_id)
+        {
+            return Err("Triage requires the labelled intake implementation definition".into());
+        }
+        let mut repositories = HashSet::new();
+        for triage in &self.event_intake.triage {
+            if !self.event_intake.allows(&triage.repository)
+                || !repositories.insert(triage.repository.to_ascii_lowercase())
+            {
+                return Err("Triage requires a unique allowlisted repository".into());
+            }
+            if !triage.read_only_attested {
+                return Err("Triage requires operator attestation of a read-only profile without push credentials; TUIC does not enforce credential isolation".into());
+            }
+            if triage.policy_version.trim().is_empty()
+                || triage.rejection_label.trim().is_empty()
+                || triage
+                    .rejection_label
+                    .eq_ignore_ascii_case(&self.event_intake.label)
+            {
+                return Err(
+                    "Triage requires a policy version and a rejection label distinct from intake"
+                        .into(),
+                );
+            }
+            let definition = self
+                .definitions
+                .iter()
+                .find(|d| d.id == triage.definition_id)
+                .ok_or("Triage definition not found")?;
+            if self.review_only(&definition.id) {
+                return Err("Issue triage and PR reviews require separate definitions".into());
+            }
+            if definition.id == self.event_intake.definition_id
+                || definition.workspace != Workspace::Existing
+                || definition.precheck.is_some()
+            {
+                return Err(
+                    "Triage requires a separate existing-workspace definition without a precheck"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
     }
 }
 

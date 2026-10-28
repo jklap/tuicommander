@@ -51,6 +51,10 @@ pub(crate) enum AutomationAction {
     RunNow {
         id: String,
     },
+    TriageDecision {
+        id: String,
+        decision: super::triage::TriageDecision,
+    },
     Run {
         id: String,
     },
@@ -132,6 +136,26 @@ pub(crate) async fn execute_as(
     {
         super::create::assign_retry_id(definition, creator)?;
         *idempotent = true;
+    }
+    if let AutomationAction::TriageDecision { id, decision } = action {
+        let Caller::Agent(Some(peer)) = caller else {
+            return Err("Triage decision requires a bound agent caller".into());
+        };
+        let session = state
+            .live_pty_for_peer(&peer)
+            .ok_or("Triage caller has no live managed PTY")?;
+        let store = state
+            .automation_runtime
+            .notification_store()
+            .ok_or("Automation executor unavailable")?;
+        let run = tokio::task::spawn_blocking(move || {
+            store.record_triage_decision(&id, &session, decision, Utc::now().timestamp_millis())
+        })
+        .await
+        .map_err(|error| format!("Triage decision task: {error}"))??;
+        use super::completion::CompletionEffects;
+        super::completion::NativeCompletion(&state).publish(&run);
+        return value(run);
     }
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
@@ -381,6 +405,9 @@ fn execute_stored_configured(
             Err("Worktree cleanup requires local session state".into())
         }
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
+        AutomationAction::TriageDecision { .. } => {
+            Err("Triage decision requires the bound runtime owner".into())
+        }
     }
 }
 fn create_reply(saved: AutomationDefinition, now: DateTime<Utc>) -> Result<Value, String> {

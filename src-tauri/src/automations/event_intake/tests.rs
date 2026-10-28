@@ -35,7 +35,7 @@ fn config(repositories: &[&str]) -> AutomationsConfig {
             repositories: repositories.iter().map(|r| (*r).into()).collect(),
             label: "tuic-run".into(),
             definition_id: "pilot".into(),
-            workflow: None,
+            ..Default::default()
         },
         ..Default::default()
     }
@@ -203,6 +203,274 @@ fn a_snapshot_emptied_by_lost_updates_admits_nothing_until_refilled() {
             .len(),
         1
     );
+}
+
+fn triage_config() -> AutomationsConfig {
+    let mut value = serde_json::to_value(config(&["sstraus/tuicommander"])).unwrap();
+    let mut definition = value["definitions"][0].clone();
+    definition["id"] = "triage".into();
+    definition["workspace"] = serde_json::json!({"mode":"existing"});
+    value["definitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(definition);
+    value["event_intake"]["triage"] = serde_json::json!([{
+        "repository":"sstraus/tuicommander", "definition_id":"triage",
+        "policy_version":"1", "read_only_attested":true, "rejection_label":"triage-rejected"
+    }]);
+    serde_json::from_value(value).expect("operator-attested triage configuration must load")
+}
+
+fn triage_issue(association: &str) -> GitHubIssue {
+    let mut value: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/triage-issue.json")).unwrap();
+    let node = &mut value["data"]["repository"]["issue"];
+    // Explicit scenario deltas from the recorded GitHub schema, not a claimed live snapshot.
+    node["state"] = "OPEN".into();
+    node["authorAssociation"] = association.into();
+    node["labels"]["nodes"] = serde_json::json!([]);
+    parse_issue_node(node).unwrap()
+}
+
+// Catches: unlabelled issues disappear rather than entering the triage ledger.
+#[test]
+fn triage_unlabelled_issue_is_durably_admitted_once() {
+    let (_dir, owner) = owner();
+    let config = triage_config();
+    let issues = [triage_issue("OWNER")];
+    let runs = admit_issues(owner.store(), &config, &issues, 10).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].definition.id, "triage");
+    assert_eq!(
+        owner.store().get(&runs[0].id).unwrap().trigger,
+        runs[0].trigger
+    );
+    owner
+        .store()
+        .transition(
+            &runs[0].id,
+            crate::automations::run::RunStatus::Completed,
+            Default::default(),
+            20,
+        )
+        .unwrap();
+    assert_eq!(
+        admit_issues(owner.store(), &config, &issues, 30).unwrap(),
+        Vec::new()
+    );
+}
+
+// Catches: untrusted authors consume runs or credential-attestation is optional.
+#[test]
+fn triage_admission_requires_trusted_association_and_operator_attestation() {
+    for association in ["NONE", "CONTRIBUTOR", "FIRST_TIMER", "", "owner"] {
+        let (_dir, owner) = owner();
+        assert!(
+            admit_issues(
+                owner.store(),
+                &triage_config(),
+                &[triage_issue(association)],
+                10
+            )
+            .unwrap()
+            .is_empty(),
+            "{association}"
+        );
+    }
+    let mut value = serde_json::to_value(triage_config()).unwrap();
+    value["event_intake"]["triage"][0]["read_only_attested"] = false.into();
+    let config: AutomationsConfig = serde_json::from_value(value).unwrap();
+    assert!(
+        config.validate().is_err(),
+        "unattested profiles must fail validation"
+    );
+}
+
+// Catches: policy changes never re-triage, or a restart forgets a prior decision.
+#[test]
+fn triage_policy_version_and_restart_preserve_decision_identity() {
+    let (dir, first) = owner();
+    let path = dir.path().join("runs.sqlite3");
+    let config = triage_config();
+    let issues = [triage_issue("MEMBER")];
+    let run = admit_issues(first.store(), &config, &issues, 10)
+        .unwrap()
+        .remove(0);
+    first
+        .store()
+        .transition(
+            &run.id,
+            crate::automations::run::RunStatus::Running,
+            crate::automations::run::RunDetails {
+                session_id: Some("owned-pty".into()),
+                ..Default::default()
+            },
+            20,
+        )
+        .unwrap();
+    let decision = crate::automations::triage::TriageDecision {
+        outcome: crate::automations::triage::TriageOutcome::Rejected,
+        reason: "Outside policy".into(),
+    };
+    assert!(
+        first
+            .store()
+            .record_triage_decision(&run.id, "sibling-pty", decision.clone(), 30)
+            .is_err()
+    );
+    first
+        .store()
+        .record_triage_decision(&run.id, "owned-pty", decision.clone(), 30)
+        .unwrap();
+    drop(first);
+    let restarted = RunOwner::acquire_at(&path, 40).unwrap();
+    assert_eq!(
+        restarted.store().get(&run.id).unwrap().triage_decision,
+        Some(decision)
+    );
+    assert_eq!(
+        admit_issues(restarted.store(), &config, &issues, 50).unwrap(),
+        Vec::new()
+    );
+    let mut value = serde_json::to_value(config).unwrap();
+    value["event_intake"]["triage"][0]["policy_version"] = "2".into();
+    let changed = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        admit_issues(restarted.store(), &changed, &issues, 60)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+// Catches: an existing intake label bypasses triage, or rejection still launches implementation.
+#[test]
+fn triage_must_accept_before_labelled_implementation_starts() {
+    use crate::automations::{
+        run::{RunDetails, RunStatus},
+        triage::{TriageDecision, TriageOutcome},
+    };
+    for outcome in [
+        TriageOutcome::Accepted,
+        TriageOutcome::Rejected,
+        TriageOutcome::NeedsInput,
+    ] {
+        let (_dir, owner) = owner();
+        let mut config = triage_config();
+        config.event_intake.workflow = Some(crate::automations::model::EventWorkflow {
+            definition_id: "reviewed-implementation".into(),
+            definition_revision: 3,
+        });
+        let mut issue = triage_issue("COLLABORATOR");
+        issue.labels = self::issue(1, SANDBOX, &["tuic-run"], "OPEN").labels;
+        let run = admit_issues(owner.store(), &config, &[issue.clone()], 10)
+            .unwrap()
+            .remove(0);
+        assert_eq!(run.definition.id, "triage");
+        assert_eq!(
+            run.event_workflow, None,
+            "triage must not launch an implementation workflow"
+        );
+        owner
+            .store()
+            .transition(
+                &run.id,
+                RunStatus::Running,
+                RunDetails {
+                    session_id: Some("pty".into()),
+                    ..Default::default()
+                },
+                20,
+            )
+            .unwrap();
+        owner
+            .store()
+            .record_triage_decision(
+                &run.id,
+                "pty",
+                TriageDecision {
+                    outcome,
+                    reason: "Policy decision".into(),
+                },
+                30,
+            )
+            .unwrap();
+        let later = admit_issues(owner.store(), &config, &[issue], 40).unwrap();
+        assert_eq!(
+            later.len(),
+            usize::from(outcome == TriageOutcome::Accepted),
+            "{outcome:?}"
+        );
+        if let Some(run) = later.first() {
+            assert_eq!(run.definition.id, "pilot");
+            assert_eq!(
+                run.event_workflow.as_ref().map(|workflow| (
+                    workflow.definition_id.as_str(),
+                    workflow.definition_revision
+                )),
+                Some(("reviewed-implementation", 3)),
+                "accepted implementation must retain its pinned review workflow"
+            );
+        }
+    }
+}
+
+// Catches: filtered/duplicate decisions vanish, flood history on each snapshot,
+// or consume the key needed when a missing label is later added.
+#[test]
+fn event_refusals_are_durable_coalesced_and_do_not_consume_admission() {
+    use crate::automations::run::RunStatus;
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let path = dir.path().join("runs.sqlite3");
+    let owner = RunOwner::acquire_at(&path, 0).unwrap();
+    let config = config(&[SANDBOX]);
+    let filtered = [issue(3, SANDBOX, &["bug"], "OPEN")];
+    for now in [10, 20] {
+        assert_eq!(
+            admit_issues(owner.store(), &config, &filtered, now).unwrap(),
+            Vec::new()
+        );
+    }
+    let history = owner.store().history(None, 100, 0).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, RunStatus::SkippedFiltered);
+    assert_eq!(history[0].updated_ms, 20);
+    assert_eq!(
+        history[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("Issue does not carry the event intake label")
+    );
+    let eligible = [issue(3, SANDBOX, &["tuic-run"], "OPEN")];
+    let admitted = admit_issues(owner.store(), &config, &eligible, 30).unwrap();
+    assert_eq!(admitted.len(), 1);
+    for now in [40, 50] {
+        assert_eq!(
+            admit_issues(owner.store(), &config, &eligible, now).unwrap(),
+            Vec::new()
+        );
+    }
+    drop(owner);
+    let owner = RunOwner::acquire_at(&path, 60).unwrap();
+    let history = owner.store().history(None, 100, 0).unwrap();
+    assert_eq!(history.len(), 3);
+    let duplicate = history
+        .iter()
+        .find(|run| run.status == RunStatus::SkippedDuplicate)
+        .unwrap();
+    assert_eq!(
+        duplicate
+            .outcome
+            .as_ref()
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("Event already admitted")
+    );
+    assert_eq!(duplicate.updated_ms, 50);
 }
 
 // Catches: a later settings edit silently downgrading an admitted workflow event.

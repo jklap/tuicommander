@@ -34,6 +34,11 @@ impl RunStore {
         self.require_owner()?;
         definition.validate()?;
         let key = trigger.event_key().ok_or("Not an event trigger")?;
+        let namespace = match &trigger {
+            RunTrigger::Triage { .. } => "@triage",
+            RunTrigger::PullRequestReview { .. } => "@pr_review",
+            _ => &definition.id,
+        };
         if max_concurrent_runs == 0 {
             return Err("Automation concurrency must be greater than zero".into());
         }
@@ -41,7 +46,7 @@ impl RunStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(error)?;
-        let automation_id = if let RunTrigger::PullRequestReview {
+        if let RunTrigger::PullRequestReview {
             repository,
             pr_number,
             head_sha,
@@ -49,14 +54,11 @@ impl RunStore {
         {
             tx.execute("INSERT INTO automation_review_heads(repository,pr_number,head_sha) VALUES(?1,?2,?3) ON CONFLICT(repository,pr_number) DO UPDATE SET head_sha=excluded.head_sha",
                 params![repository.to_ascii_lowercase(), pr_number, head_sha]).map_err(error)?;
-            "__pull_request_review__"
-        } else {
-            &definition.id
-        };
+        }
         let seen: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM automation_event_keys WHERE automation_id=?1 AND event_key=?2)",
-                params![automation_id, key],
+                params![namespace, key],
                 |r| r.get(0),
             )
             .map_err(error)?;
@@ -88,7 +90,7 @@ impl RunStore {
         write(&tx, &run)?;
         tx.execute(
             "INSERT INTO automation_event_keys(automation_id,event_key,run_id) VALUES(?1,?2,?3)",
-            params![automation_id, key, run.id],
+            params![namespace, key, run.id],
         )
         .map_err(error)?;
         tx.commit().map_err(error)?;

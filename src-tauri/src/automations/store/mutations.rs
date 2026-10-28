@@ -56,6 +56,7 @@ impl RunStore {
         run.updated_ms = now_ms;
         if !next.is_open() {
             run.finished_ms = Some(now_ms);
+            super::triage::missing_triage_decision(&mut run);
         }
         if let Some(value) = details.workflow_binding {
             run.workflow_binding = Some(value);
@@ -136,6 +137,7 @@ impl RunStore {
         };
         for mut run in runs {
             run.status = RunStatus::Interrupted;
+            super::triage::missing_triage_decision(&mut run);
             run.updated_ms = now_ms.max(run.updated_ms);
             run.finished_ms = Some(run.updated_ms);
             run.reason =
