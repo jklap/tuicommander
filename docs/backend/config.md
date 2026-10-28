@@ -404,8 +404,16 @@ of WebView visibility or JavaScript execution. It uses live PTY ownership,
 backend turn/background state, the existing process-tree helper exclusions,
 detached `tuic bg` runner identity and managed `keep_open` holds. ACP active or
 queued turns and live ACP `keep_open` peers also count. Unknown process inventory
-fails closed for a live agent. The assertion is retried after native acquisition
-failure. Display sleep remains allowed; the setting can release the assertion.
+fails closed for a live agent. Idle agents share one process inventory attempt
+per five seconds, including failed attempts and legacy refresh calls. Acquisition
+runs outside the native assertion lock. Backend work is still checked every second
+and again before each native transition. A cached negative applies only to the
+same PTY, managed identity, agent type, foreground root and turn; a new lifecycle,
+in-flight query or observation at least five seconds old retains the hold until
+a fresh inventory resolves it. A slow inventory query can therefore extend a
+hold, not release it from stale evidence. Quiet descendants without a backend
+work signal can take up to five seconds plus OS query time to be observed.
+The assertion is retried after native acquisition failure. Display sleep remains allowed; the setting can release the assertion.
 The remote daemon does not start the desktop host's sleep-prevention owner.
 
 The 2026-10-27 incident was a frontend busy-only policy gap, present since

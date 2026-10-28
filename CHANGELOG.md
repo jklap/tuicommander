@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
+
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 
 - Start the AI Chat connection on Retry after a failed initial connection, without requiring Send (#2407-84f5).

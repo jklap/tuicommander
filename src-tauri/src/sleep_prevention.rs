@@ -1,14 +1,62 @@
 //! Native sleep assertions follow backend work, never WebView activity.
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::state::{AppState, SessionState};
 
-pub struct SleepBlocker(Mutex<Option<keepawake::KeepAwake>>);
+const IDLE_INVENTORY_INTERVAL: Duration = Duration::from_secs(5);
+
+pub struct SleepBlocker {
+    guard: Mutex<Option<keepawake::KeepAwake>>,
+    inventory: Mutex<Option<Arc<IdleInventory>>>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct IdleAgent {
+    id: String,
+    identity: String,
+    agent_type: String,
+    turn_epoch: u64,
+    root_pid: Option<u32>,
+}
+
+struct IdleInventory {
+    started_at: Instant,
+    finished_at: Instant,
+    agents: HashSet<IdleAgent>,
+    processes: Option<Vec<crate::pty::ProcessTreeEntry>>,
+}
+
+impl IdleInventory {
+    fn has_work(&self, state: &AppState, agent: IdleAgent, now: Instant) -> bool {
+        // A negative observation belongs only to the lifecycles seen before
+        // acquisition. A new turn, identity or foreground root must fail closed.
+        if now
+            .checked_duration_since(self.started_at)
+            .is_none_or(|age| age >= IDLE_INVENTORY_INTERVAL)
+            || !self.agents.contains(&agent)
+        {
+            return true;
+        }
+        self.processes.as_ref().is_none_or(|processes| {
+            crate::pty::sleep_work_in_snapshot(
+                state,
+                &agent.id,
+                &agent.identity,
+                &agent.agent_type,
+                processes,
+            )
+        })
+    }
+}
 
 impl SleepBlocker {
     pub(crate) fn new() -> Self {
-        Self(Mutex::new(None))
+        Self {
+            guard: Mutex::new(None),
+            inventory: Mutex::new(None),
+        }
     }
 
     fn reconcile(&self, state: &AppState) -> Result<(), String> {
@@ -35,15 +83,62 @@ impl SleepBlocker {
     fn reconcile_with(
         &self,
         state: &AppState,
-        _now: impl Fn() -> Instant,
+        now: impl Fn() -> Instant,
         enumerate: impl FnOnce() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
         transition: impl FnOnce(&mut Option<keepawake::KeepAwake>, bool) -> Result<(), String>,
     ) -> Result<(), String> {
-        // Serialize the observation and native transition. A late frontend
-        // refresh cannot release an assertion acquired by a newer observation.
-        let mut guard = self.0.lock().map_err(|error| error.to_string())?;
-        let requested = !crate::agent_test::active() && sleep_requested(state, enumerate);
+        let mut agents = HashSet::new();
+        let immediate = crate::agent_test::active()
+            || sleep_requested(state, |agent| {
+                agents.insert(agent);
+                false
+            });
+        let inventory = if !immediate && !agents.is_empty() {
+            self.observe_idle_agents(agents, &now, enumerate)
+        } else {
+            None
+        };
+
+        // Only native transitions and the fresh backend decision are serialized.
+        // Never wait for ps/ToolHelp while holding the assertion mutex. Re-read
+        // work and opt-out here, so a delayed observation cannot undo newer work.
+        let mut guard = self.guard.lock().map_err(|error| error.to_string())?;
+        let requested = !crate::agent_test::active()
+            && sleep_requested(state, |agent| {
+                inventory
+                    .as_ref()
+                    .is_none_or(|inventory| inventory.has_work(state, agent, now()))
+            });
         transition(&mut guard, requested)
+    }
+
+    fn observe_idle_agents(
+        &self,
+        agents: HashSet<IdleAgent>,
+        now: &impl Fn() -> Instant,
+        enumerate: impl FnOnce() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
+    ) -> Option<Arc<IdleInventory>> {
+        // Concurrent refreshes retain power instead of waiting on an OS query.
+        // Failed attempts share the same cadence; an unavailable ps must not
+        // turn legacy refresh calls into an unbounded process-spawn loop.
+        let mut cached = self.inventory.try_lock().ok()?;
+        let started_at = now();
+        if let Some(inventory) = cached.as_ref()
+            && started_at
+                .checked_duration_since(inventory.finished_at)
+                .is_some_and(|age| age < IDLE_INVENTORY_INTERVAL)
+        {
+            return Some(Arc::clone(inventory));
+        }
+        let processes = enumerate();
+        let inventory = Arc::new(IdleInventory {
+            started_at,
+            finished_at: now(),
+            agents,
+            processes,
+        });
+        *cached = Some(Arc::clone(&inventory));
+        Some(inventory)
     }
 }
 
@@ -69,10 +164,7 @@ fn session_has_live_work(session: &SessionState, keep_open: bool) -> bool {
                 || matches!(session.agent_state.as_deref(), Some("working" | "starting"))))
 }
 
-fn sleep_requested(
-    state: &AppState,
-    enumerate: impl FnOnce() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
-) -> bool {
+fn sleep_requested(state: &AppState, mut idle_work: impl FnMut(IdleAgent) -> bool) -> bool {
     if !state.config.read().prevent_sleep_when_busy {
         return false;
     }
@@ -93,8 +185,6 @@ fn sleep_requested(
         .iter()
         .map(|entry| entry.key().clone())
         .collect();
-    let mut inventory = None;
-    let mut enumerate = Some(enumerate);
     for id in sessions {
         let Some(session) = state.session_state_with_shell(&id) else {
             continue;
@@ -107,14 +197,14 @@ fn sleep_requested(
             return true;
         }
         if let Some(agent_type) = session.agent_type.as_deref() {
-            // Idle UI state is not proof of no work. Detached bg runners and
-            // newly-started quiet descendants may not have changed that state.
-            let processes = inventory
-                .get_or_insert_with(|| enumerate.take().expect("one inventory per reconcile")());
-            let Some(processes) = processes else {
-                return true; // Unknown process state must not drop the hold.
-            };
-            if crate::pty::sleep_work_in_snapshot(state, &id, identity, agent_type, processes) {
+            // Backend idle is not proof of no descendants or detached runners.
+            if idle_work(IdleAgent {
+                root_pid: crate::pty::session_foreground_pid(state, &id),
+                id: id.clone(),
+                identity: identity.clone(),
+                agent_type: agent_type.to_string(),
+                turn_epoch: session.turn_epoch,
+            }) {
                 return true;
             }
         }
@@ -257,6 +347,169 @@ mod tests {
         assert_eq!(reads, 2, "retry unknown inventory at the cadence boundary");
     }
 
+    // Catches: slow inventory acquisition blocks native transitions and concurrent refreshes.
+    #[test]
+    fn inventory_acquisition_leaves_native_transitions_available() {
+        let fixture = LiveIdleAgent::new();
+        let blocker = SleepBlocker::new();
+        blocker
+            .reconcile_with(
+                &fixture.0,
+                Instant::now,
+                || {
+                    assert!(
+                        blocker.guard.try_lock().is_ok(),
+                        "OS query must not own the native guard"
+                    );
+                    blocker
+                        .reconcile_with(
+                            &fixture.0,
+                            Instant::now,
+                            || panic!("concurrent refresh must not enumerate again"),
+                            |_, requested| {
+                                assert!(requested, "in-flight inventory is unknown");
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                    fixture.0.config.write().prevent_sleep_when_busy = false;
+                    None
+                },
+                |_, requested| {
+                    assert!(!requested, "fresh opt-out wins over the in-flight read");
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    // Catches: a cached negative hides newly reported work or a replacement turn/identity.
+    #[test]
+    fn cached_idle_inventory_cannot_release_new_backend_work_or_turns() {
+        for change in [
+            "unchanged",
+            "background",
+            "probe",
+            "turn",
+            "identity",
+            "busy",
+            "keep_open",
+        ] {
+            let fixture = LiveIdleAgent::new();
+            let blocker = SleepBlocker::new();
+            let start = Instant::now();
+            blocker
+                .reconcile_with(
+                    &fixture.0,
+                    || start,
+                    crate::pty::process_tree_snapshot,
+                    |_, requested| {
+                        assert!(!requested, "real idle shell has no descendants: {change}");
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            match change {
+                "identity" => {
+                    fixture
+                        .0
+                        .session_maps
+                        .live_pty_by_tuic_session
+                        .insert("replacement".into(), "idle".into());
+                }
+                "busy" => {
+                    fixture
+                        .0
+                        .session_maps
+                        .shell_states
+                        .get("idle")
+                        .unwrap()
+                        .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+                }
+                "keep_open" => {
+                    fixture.0.keep_open_sessions.insert("idle".into());
+                }
+                _ => {
+                    let mut session = fixture
+                        .0
+                        .session_maps
+                        .session_states
+                        .get_mut("idle")
+                        .unwrap();
+                    match change {
+                        "unchanged" => {}
+                        "background" => session.background_work = true,
+                        "probe" => session.background_probe_turn_epoch = Some(session.turn_epoch),
+                        "turn" => session.turn_epoch += 1,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            blocker
+                .reconcile_with(
+                    &fixture.0,
+                    || start + Duration::from_secs(1),
+                    || panic!("new work must not bypass the global inventory cadence"),
+                    |_, requested| {
+                        assert_eq!(
+                            requested,
+                            change != "unchanged",
+                            "cached decision for {change}"
+                        );
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    // Catches: a completed OS query applies a negative from an older turn or stale clock window.
+    #[test]
+    fn delayed_inventory_cannot_release_replaced_turn_or_stale_observation() {
+        for change in ["turn", "age", "background"] {
+            let fixture = LiveIdleAgent::new();
+            let blocker = SleepBlocker::new();
+            let clock = std::cell::Cell::new(Instant::now());
+            blocker
+                .reconcile_with(
+                    &fixture.0,
+                    || clock.get(),
+                    || {
+                        let snapshot =
+                            crate::pty::process_tree_snapshot().expect("live OS process inventory");
+                        match change {
+                            "turn" => {
+                                fixture
+                                    .0
+                                    .session_maps
+                                    .session_states
+                                    .get_mut("idle")
+                                    .unwrap()
+                                    .turn_epoch += 1
+                            }
+                            "age" => clock.set(clock.get() + Duration::from_secs(6)),
+                            "background" => {
+                                fixture
+                                    .0
+                                    .session_maps
+                                    .session_states
+                                    .get_mut("idle")
+                                    .unwrap()
+                                    .background_work = true
+                            }
+                            _ => unreachable!(),
+                        }
+                        Some(snapshot)
+                    },
+                    |_, requested| {
+                        assert!(requested, "delayed idle observation must not hide {change}");
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+    }
+
     #[test]
     fn idle_pty_background_work_retains_sleep_assertion() {
         let session = crate::state::SessionState {
@@ -335,12 +588,16 @@ mod tests {
         state.keep_open_sessions.insert("closed".into());
         state.config.write().prevent_sleep_when_busy = true;
         assert!(
-            !sleep_requested(&state, crate::pty::process_tree_snapshot),
+            !sleep_requested(&state, |_| panic!(
+                "closed or disabled sessions need no inventory"
+            )),
             "removed PTY is not live work"
         );
         state.config.write().prevent_sleep_when_busy = false;
         assert!(
-            !sleep_requested(&state, crate::pty::process_tree_snapshot),
+            !sleep_requested(&state, |_| panic!(
+                "closed or disabled sessions need no inventory"
+            )),
             "user opt-out wins"
         );
     }

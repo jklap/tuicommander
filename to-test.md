@@ -1,3 +1,7 @@
+## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
