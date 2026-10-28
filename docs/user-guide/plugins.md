@@ -207,6 +207,9 @@ See the [Plugin Authoring Guide](../plugins.md) for the full API reference, mani
 
 Repository-aware plugins discard scans started before a repository switch or unload.
 The MDKB status ticker refreshes when you select another repository.
+When MDKB reports that hook telemetry is disabled, its dashboard shows
+**Hook telemetry is off** instead of activity counts or timing metrics.
+Hooks can still run while telemetry is off.
 
 Automatic retry and wakeup decisions are cancelled when the agent resumes work,
 user input or a dialog changes its state, the session closes, or the plugin unloads

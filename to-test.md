@@ -1,3 +1,9 @@
+## MDKB hook telemetry state (2442-61f6)
+
+- [ ] Coordinator critic: run `src/__tests__/plugins/mdkbDashboard.test.ts` against the final plugin submodule commit. Pre-fix RED and `pnpm exec tsc --noEmit` ran locally; no implementation-lane GREEN is claimed.
+- [ ] Capture the telemetry-off dashboard with shared plugin CSS. The isolated Chrome for Testing attempt timed out after 20 seconds without a screenshot; the generated renderer page is at `~/Gits/.tmp/results/tuic-2442-evidence/telemetry-off.html`. No visual pass is claimed.
+- [ ] Verify a live MDKB 3.13 stats report with telemetry disabled. Upstream `HooksSummary` and `collect_hooks` confirm the boolean contract; the installed CLI is 3.12.2 and does not emit the field.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
