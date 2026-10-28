@@ -2018,7 +2018,7 @@ POST   /watchers/dir?path=/path/to/directory
 DELETE /watchers/dir?path=/path/to/directory
 ```
 
-Start/stop watching a directory (non-recursive) for file changes (create/delete/rename). Emits `dir-changed` SSE event. Used by File Browser panel for auto-refresh.
+Acquire/release a shared nonrecursive directory watch for file changes (create/delete/rename). Pair each successful POST with one DELETE. A path shares one native watcher across IPC and HTTP consumers; only the last release stops it. Emits `dir-changed` SSE events. Used by the File Browser panel for auto-refresh.
 
 ### Hot Repos
 

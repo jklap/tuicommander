@@ -188,27 +188,33 @@ describe("FileBrowserPanel external filesystem refresh", () => {
 			execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", nested ? join(root, "work") : root]);
 		}
 		writeFileSync(join(root, parent, "existing.md"), "existing");
-		const watchers = new Map<string, FSWatcher>();
+		const watchers = new Map<string, { watcher: FSWatcher; subscribers: number }>();
 		const observed = new Set<string>();
 		// Real disk and native nonrecursive watches implement the transport boundary.
 		// No test-sent dir-changed event or repository revision can repair the tree.
 		mockInvoke.mockImplementation(async (cmd, args) => {
 			if (cmd === "start_dir_watcher") {
 				const path = String(args?.path);
-				watchers.get(path)?.close();
-				watchers.set(
-					path,
-					watch(path, { recursive: false }, () => {
-						observed.add(path);
-						emitEvent("dir-changed", { dir_path: path });
-					}),
-				);
+				const shared = watchers.get(path);
+				if (shared) shared.subscribers += 1;
+				else {
+					watchers.set(path, {
+						watcher: watch(path, { recursive: false }, () => {
+							observed.add(path);
+							emitEvent("dir-changed", { dir_path: path });
+						}),
+						subscribers: 1,
+					});
+				}
 				return Promise.resolve();
 			}
 			if (cmd === "stop_dir_watcher") {
 				const path = String(args?.path);
-				watchers.get(path)?.close();
-				watchers.delete(path);
+				const shared = watchers.get(path);
+				if (shared && --shared.subscribers === 0) {
+					shared.watcher.close();
+					watchers.delete(path);
+				}
 				return Promise.resolve();
 			}
 			if (cmd === "list_directory") {
@@ -274,7 +280,7 @@ describe("FileBrowserPanel external filesystem refresh", () => {
 			secondView?.unmount();
 			view.unmount();
 			const remainingWatches = watchers.size;
-			for (const watcher of watchers.values()) watcher.close();
+			for (const shared of watchers.values()) shared.watcher.close();
 			rmSync(root, { recursive: true, force: true });
 			expect(remainingWatches).toBe(0);
 		}

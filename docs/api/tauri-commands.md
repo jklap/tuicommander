@@ -695,8 +695,8 @@ empty result.
 | `stop_head_watcher` | `path` | `()` | Stop watching .git/HEAD |
 | `start_repo_watcher` | `path` | `()` | Watch .git/ for repo changes |
 | `stop_repo_watcher` | `path` | `()` | Stop watching .git/ |
-| `start_dir_watcher` | `path` | `()` | Watch directory for file changes (non-recursive) |
-| `stop_dir_watcher` | `path` | `()` | Stop watching directory |
+| `start_dir_watcher` | `path` | `()` | Acquire a shared nonrecursive directory watch; pair each successful start with one stop |
+| `stop_dir_watcher` | `path` | `()` | Release a directory watch; the last release stops the native watcher |
 | `set_hot_repos` | `paths: Vec<String>` | `()` | Set repos with active terminals (cold repos get throttled watchers/polling) |
 
 ## System (`lib.rs`)
