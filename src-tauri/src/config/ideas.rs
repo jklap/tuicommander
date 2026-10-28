@@ -150,6 +150,109 @@ mod tests {
         .unwrap()
     }
 
+    /// Catches: canonical and registered aliases split agent and panel Ideas.
+    #[test]
+    fn agent_and_ui_ideas_share_registered_repo_identity() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = super::super::set_config_dir_override(dir.path().into());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let other = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        #[cfg(unix)]
+        let registered = {
+            let alias = dir.path().join("registered-alias");
+            std::os::unix::fs::symlink(repo.path(), &alias).unwrap();
+            alias.to_string_lossy().into_owned()
+        };
+        #[cfg(not(unix))]
+        let registered =
+            tuic_core::path_spelling::portable_spelling(&repo.path().to_string_lossy());
+        let canonical = repo
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        super::super::replace_repositories_for_test(json!({"repos": {
+            &registered: {"workspaces": {}}
+        }}))
+        .unwrap();
+        // Existing UI and older canonical rows must both reach the exact panel filter.
+        super::super::save_notes(
+            json!({}),
+            json!({"notes": [
+                {"id":"ui", "repoPath":registered, "text":"UI idea", "images":["asset"]},
+                {"id":"legacy", "repoPath":canonical, "text":"Older agent idea"},
+                {"id":"global", "repoPath":null, "text":"Global"},
+                {"id":"other", "repoPath":other.path(), "text":"Other"}
+            ]}),
+        )
+        .unwrap();
+        let StoryReply::Idea(added) =
+            call(&canonical, json!({"action":"add_idea","text":"Agent idea"}))
+        else {
+            panic!("idea")
+        };
+        assert_eq!(
+            added["repoPath"], registered,
+            "agent addition must reach the registered panel"
+        );
+        let loaded = super::super::load_notes().unwrap();
+        let panel_ids: Vec<_> = loaded["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["repoPath"].is_null() || row["repoPath"] == registered)
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            panel_ids,
+            vec![added["id"].as_str().unwrap(), "ui", "legacy", "global"]
+        );
+        for project in [&registered, &canonical] {
+            let StoryReply::Ideas(listed) = call(project, json!({"action":"list_ideas"})) else {
+                panic!("ideas")
+            };
+            assert_eq!(listed.len(), 4);
+            for id in ["ui", "legacy"] {
+                let StoryReply::Idea(updated) = call(
+                    project,
+                    json!({"action":"update_idea","idea_id":id,"text":"Edited"}),
+                ) else {
+                    panic!("idea")
+                };
+                assert_eq!(updated["text"], "Edited");
+                assert_eq!(updated["repoPath"], registered);
+                if id == "ui" {
+                    assert_eq!(updated["images"], json!(["asset"]));
+                }
+            }
+        }
+        for id in ["ui", "legacy", "global"] {
+            assert!(
+                story_action(
+                    other.path().to_str().unwrap(),
+                    StoryAction::UpdateIdea {
+                        idea_id: id.into(),
+                        text: "Wrong project".into()
+                    },
+                    None
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            story_action(
+                &registered,
+                StoryAction::UpdateIdea {
+                    idea_id: "global".into(),
+                    text: "Cannot edit global".into()
+                },
+                None
+            )
+            .is_err()
+        );
+    }
+
     /// Catches: a stale panel's array save erases an agent addition or text update.
     #[test]
     fn planner_ideas_survive_stale_panel_save() {
