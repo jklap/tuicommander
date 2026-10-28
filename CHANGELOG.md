@@ -91,6 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep Windows worktree cleanup on the selected Git installation launcher and avoid empty submodule shell scans during fresh workspace safety listings (#2310-6e76).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 
+- Align New story actions with Edit plan, move story Edit into its header, and explain disabled dependency actions (#2380-23f1).
 - Give Edit plan and New story a full-width editor, let users choose repository plan documents, show the complete source and disabled-Save reason, and group archive actions with plan actions (#2356-5c36).
 
 - Make private secret-form phone links selectable, absolute, clickable and copyable, with a shared QR code and guidance when Remote Access is off (#2378-c2eb).

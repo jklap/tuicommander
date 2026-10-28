@@ -1,3 +1,8 @@
+## Plans and Stories action placement (2380-23f1)
+
+- [ ] Coordinator critic: run the focused StoriesDialog action regressions, existing dialog/edit/metadata/filter consumers, and i18nKeyCollisions.test.ts. Pre-fix RED reproduced all three defects; local TypeScript passes. No implementation-lane GREEN run is claimed.
+- [ ] Capture New story, story detail and Edit plan at 1400, 700 and 390 pixels. Isolated worktree fixture attempts returned no DOM or screenshot with both installed Chrome for Testing builds; the harness reported `Capture not ready`. No screenshot or visual pass is claimed. Logs: `~/Gits/.tmp/tuic-2380-capture-retry.log`.
+
 ## Event-run publication prerequisites (2428-cd8d) — Rust restart required
 
 - [ ] Coordinator critic: run `event_publication_does_not_block_runtime_worker`, `event_publication_prerequisites_preserve_config_and_git_errors`, and existing `automations::publish::tests` on the final commit. Pre-fix RED reproduced a blocked independent async task on Linux rb; no post-fix GREEN is claimed.

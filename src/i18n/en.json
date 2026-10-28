@@ -1241,6 +1241,8 @@
 	"terminal.suspended.title": "Suspended",
 	"stories.abandoned": "abandoned",
 	"stories.addDependency": "Add dependency",
+	"stories.dependencySaving": "Saving changes…",
+	"stories.dependencyRequired": "Select a story to add a dependency.",
 	"stories.allCancelled": "All cancelled",
 	"stories.approve": "Approve",
 	"stories.block": "Block",
