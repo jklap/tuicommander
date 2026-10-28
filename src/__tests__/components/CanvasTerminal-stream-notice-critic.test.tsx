@@ -7,6 +7,9 @@ const { subscribe, streamError, visibility } = vi.hoisted(() => ({
 	streamError: { handler: undefined as ((error: unknown) => void) | undefined },
 }));
 
+// These lifecycle warnings are independent of opt-in frame-burst diagnostics.
+vi.mock("../../utils/perfDebug", () => ({ isPerfDebug: () => false }));
+
 vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../components/Terminal/canvasTerminalTransport")>()),
 	createTransport: () => ({
