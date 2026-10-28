@@ -46,6 +46,8 @@ Both archive and restore refuse claimed stories and plans that contain a claimed
 
 `list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
 
+`project_story_view` takes `archived_plans` (default false) and a camel-case `filter` with the same fields and defaults as `filtered_plan_view`. It returns `{type:"project_story_view",value:{stories,visibleStoryIds,columns}}` across every plan in the envelope project and selected plan archive scope. `archived_plans:true` selects archived plans only; `filter.archived:true` independently selects archived stories. Full records remain available for detail and dependency reads; only display ids and columns are filtered. The reply has no combined plan state. The shared StoryAction service exposes this action through IPC, HTTP, MCP and CLI.
+
 `filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
 
 ## Project Progress

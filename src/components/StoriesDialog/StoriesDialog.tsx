@@ -56,6 +56,8 @@ interface Story extends EditableStory {
 	claimSession: string | null;
 	abandoned: boolean;
 }
+const ALL_PLANS = "all-plans";
+
 type Reply =
 	| { type: "plan"; value: Plan }
 	| { type: "plans"; value: Plan[] }
@@ -72,6 +74,7 @@ type Reply =
 				columns?: StoryColumn[];
 			};
 	  }
+	| { type: "project_story_view"; value: { stories: Story[]; visibleStoryIds: string[]; columns: StoryColumn[] } }
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
 
@@ -318,6 +321,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
+	const storyPlan = () => plans().find((plan) => plan.id === selectedStory()?.planId);
+	const runPlanId = () => selectedPlan()?.id ?? storyPlan()?.id;
+	const planTitleFor = (story: Story) => plans().find((plan) => plan.id === story.planId)?.title ?? story.planId;
 	const pendingInput = () =>
 		run()?.attempts.find(
 			(attempt) => attempt.outcome === "needs_input" && !attempt.inputAnswer && attempt.report?.inputRequest,
@@ -383,7 +389,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	}
 
 	async function openRuns(): Promise<void> {
-		const currentPlan = planId();
+		const currentPlan = runPlanId();
 		if (!currentPlan) return;
 		if (run()?.planId !== currentPlan) {
 			++runRequest;
@@ -398,7 +404,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		try {
 			const reply = await callRun({ action: "list_plan_runs", plan_id: currentPlan, limit: 20 });
 			if (reply.type !== "runs") throw new Error("Invalid run list response");
-			if (currentPlan !== planId() || !showRuns()) return;
+			if (currentPlan !== runPlanId() || !showRuns()) return;
 			setRuns(reply.value);
 			const selected = reply.value.find((item) => item.id === selectedRunId())?.id ?? reply.value[0]?.id ?? null;
 			const unchanged = selected === selectedRunId();
@@ -532,7 +538,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				request_id: startRequestId,
 			});
 			if (reply.type !== "snapshot") throw new Error("Invalid run response");
-			if (selected.planId !== planId()) return;
+			if (selected.id !== storyId()) return;
 			setStartOpen(false);
 			setShowDesigner(false);
 			setShowRuns(true);
@@ -571,14 +577,28 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				if (sources.type !== "plan_sources") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 				available = sources.value;
 			}
-			const nextPlan = list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null;
+			const nextPlan =
+				preferredPlan === ALL_PLANS
+					? ALL_PLANS
+					: (list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null);
 			let nextStories: Story[] = [];
 			let nextState = "draft";
 			let nextWontFixCount = 0;
 			let nextAllCancelled = false;
 			let nextVisibleIds: string[] | undefined;
 			let nextColumns: StoryColumn[] = [];
-			if (nextPlan) {
+			if (nextPlan === ALL_PLANS) {
+				const view = await call({
+					action: "project_story_view",
+					archived_plans: archivedPlans(),
+					filter: untrack(filter),
+				});
+				if (view.type !== "project_story_view")
+					throw new Error(t("stories.error.invalidStory", "Invalid story response"));
+				nextStories = view.value.stories;
+				nextVisibleIds = view.value.visibleStoryIds;
+				nextColumns = view.value.columns;
+			} else if (nextPlan) {
 				const selectedFilter = untrack(filter);
 				const filtering =
 					selectedFilter.visibility !== "all" ||
@@ -887,7 +907,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							type="button"
 							disabled={
 								busy() ||
-								selectedPlan()?.archived ||
+								storyPlan()?.archived ||
 								selectedStory()?.archived ||
 								selectedStory()?.status !== "ready" ||
 								!!selectedStory()?.claimSession
@@ -901,7 +921,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							size="compact"
 							type="button"
 							aria-pressed={showRuns()}
-							disabled={!planId()}
+							disabled={!runPlanId()}
 							onClick={() => {
 								setShowDesigner(false);
 								void openRuns();
@@ -997,7 +1017,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					<div class={s.runContent}>
 						<aside class={s.runList} aria-label="Plan runs">
 							<div class={s.columnHeader}>
-								<h3>Runs · {selectedPlan()?.title}</h3>
+								<h3>
+									Runs ·{" "}
+									{plans().find((plan) => plan.id === run()?.planId)?.title ??
+										storyPlan()?.title ??
+										selectedPlan()?.title}
+								</h3>
 								<Button type="button" onClick={() => void openRuns()}>
 									Refresh
 								</Button>
@@ -1382,7 +1407,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											onChange={(event) => {
 												setArchivedPlans(event.currentTarget.checked);
 												setNewPlan(false);
-												void refresh(null, null);
+												void refresh(planId() === ALL_PLANS ? ALL_PLANS : null, null);
 											}}
 										/>
 										{t("stories.archive.plans", "Archived plans")}
@@ -1498,6 +1523,15 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<p class={s.empty}>{t("stories.emptyPlans", "Create a plan to begin.")}</p>
 								</Show>
 								<nav class={s.items}>
+									<button
+										data-control-layout="row"
+										type="button"
+										class={s.item}
+										aria-current={planId() === ALL_PLANS ? "true" : undefined}
+										onClick={() => void refresh(ALL_PLANS, null)}
+									>
+										{t("stories.allPlans", "All plans")}
+									</button>
 									<For each={plans()}>
 										{(plan) => (
 											<button
@@ -1518,7 +1552,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<h3>{t("stories.stories", "Stories")}</h3>
 									<Button
 										type="button"
-										disabled={!planId() || selectedPlan()?.archived}
+										disabled={!selectedPlan() || selectedPlan()?.archived}
 										onClick={() => setNewStory(!newStory())}
 									>
 										{t("stories.newStory", "New story")}
@@ -1580,7 +1614,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 								<Show when={!loading() && planId() && listedStories().length === 0}>
 									<p class={s.empty}>
-										{stories().length
+										{stories().length || planId() === ALL_PLANS
 											? t("stories.filter.empty", "No stories match these filters.")
 											: t("stories.emptyStories", "This plan has no stories.")}
 									</p>
@@ -1601,6 +1635,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 														onClick={() => setStoryId(story.id)}
 													>
 														<span>{story.title}</span>
+														<small>{planTitleFor(story)}</small>
 														<small>
 															{statusLabel(story.status)} · {storyTypeLabel(story.storyType)}
 														</small>
@@ -1636,6 +1671,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																			>
 																				<small class={s.boardCardId}>{story().id}</small>
 																				<span>{story().title}</span>
+																				<small>{planTitleFor(story())}</small>
 																				<small>
 																					{storyTypeLabel(story().storyType)} · P{story().priority}
 																				</small>
@@ -1689,7 +1725,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													when={
 														!editing() &&
 														!story().archived &&
-														!selectedPlan()?.archived &&
+														!storyPlan()?.archived &&
 														["backlog", "ready"].includes(story().status) &&
 														!story().claimSession
 													}
@@ -1715,7 +1751,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												{(snapshot) => (
 													<StoryEditForm
 														story={snapshot}
-														candidates={stories().filter((candidate) => candidate.id !== snapshot.id)}
+														candidates={stories().filter(
+															(candidate) => candidate.planId === snapshot.planId && candidate.id !== snapshot.id,
+														)}
 														busy={busy()}
 														error={editError()}
 														onSave={saveStory}
@@ -1736,7 +1774,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																			checked={story().checked[index()]}
 																			disabled={
 																				story().archived ||
-																				selectedPlan()?.archived ||
+																				storyPlan()?.archived ||
 																				!["in_progress", "qa"].includes(story().status) ||
 																				busy()
 																			}
@@ -1773,7 +1811,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																			<Show
 																				when={
 																					!story().archived &&
-																					!selectedPlan()?.archived &&
+																					!storyPlan()?.archived &&
 																					story().status === "backlog" &&
 																					dependency?.status === "wont_fix"
 																				}
@@ -1798,7 +1836,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													<Show
 														when={
 															!story().archived &&
-															!selectedPlan()?.archived &&
+															!storyPlan()?.archived &&
 															(story().status === "ready" || story().status === "backlog")
 														}
 													>
@@ -1815,7 +1853,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																<For
 																	each={stories().filter(
 																		(candidate) =>
-																			candidate.id !== story().id && !story().dependencies.includes(candidate.id),
+																			candidate.planId === story().planId &&
+																			candidate.id !== story().id &&
+																			!story().dependencies.includes(candidate.id),
 																	)}
 																>
 																	{(candidate) => <option value={candidate.id}>{candidate.title}</option>}
@@ -1845,7 +1885,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													</Show>
 												</section>
 												<div class={s.actions}>
-													<Show when={!story().archived && !selectedPlan()?.archived}>
+													<Show when={!story().archived && !storyPlan()?.archived}>
 														<Show when={story().status === "ready"}>
 															<Button
 																variant="primary"

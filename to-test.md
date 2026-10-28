@@ -1,3 +1,8 @@
+## Stories across all plans (2358-b0b2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `stories::filter_tests` and `src/__tests__/components/StoriesDialog.filters.test.tsx`, plus `src/__tests__/i18nKeyCollisions.test.ts`. The implementer leaves GREEN to the critic.
+- [ ] Capture an isolated `make agent-test` Kanban with at least two disposable plans. Confirm plan labels, filters, archived-plan scope and a status change from the second plan. No daily app restart is authorized or performed by this change.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, verify All plans uses the new backend action. Rust does not hot-reload.
 ## Shared ego usage acquisition (2431-0847) — Rust rebuild/restart required
 
 - [ ] Coordinator critic: run `ego_badge_shares_cached_bounded_usage_reader`, `terminal_ego_usage_does_not_require_acp_executable`, and the `session_usage::tests` / `ego_cli::usage::tests` consumers. RED reproduced four CLI reads instead of one on Linux rb; implementation-lane GREEN is not run.
