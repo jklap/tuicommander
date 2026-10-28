@@ -1291,9 +1291,11 @@ where
         .get(profile)
         .is_some_and(|until| Instant::now() < *until);
     if !backing_off {
-        let (token, _) = read_credentials(profile.config_dir())?;
+        let (token, plan) = read_credentials(profile.config_dir())?;
         let token = token.ok_or("Claude account unavailable")?;
-        if let Ok(Ok(data)) = tokio::time::timeout(Duration::from_secs(15), fetch(token)).await {
+        if let Ok(Ok(mut data)) = tokio::time::timeout(Duration::from_secs(15), fetch(token)).await
+        {
+            data.plan = plan;
             cache_response(profile, &data);
             return Ok((data, false));
         }

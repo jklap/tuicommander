@@ -1,3 +1,8 @@
+## Claude mobile quota plan cache (2420-f7a6) — Rust restart required
+
+- [ ] Coordinator: run `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` against the final commit. The targeted RED on rb reproduced a missing plan before the fix; no implementation-lane GREEN was run.
+- [ ] After an authorized `make dev` restart or `make build`, refresh Claude quota from mobile and confirm desktop retains the same subscription plan. The daily app was not restarted; Rust changes do not hot-reload.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
