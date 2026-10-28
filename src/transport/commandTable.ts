@@ -213,7 +213,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/acp/chat/open", body: args.request }),
 	},
 	acp_connect: {
-		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
+		map: (args) => ({
+			method: "POST",
+			path: "/acp/connections",
+			body: { root: args.root, ...(args.env !== undefined ? { env: args.env } : {}) },
+		}),
 	},
 	acp_connection_snapshot: {
 		map: (_args, p) => ({ method: "GET", path: `/acp/connections/${p("connectionId")}` }),
@@ -348,6 +352,20 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// to shutdown, so there is no id to put in the path.
 	acp_one_shot_prompt: {
 		map: (args) => ({ method: "POST", path: "/acp/one-shot", body: { root: args.root, prompt: args.prompt } }),
+	},
+
+	acp_one_shot_prepare: {
+		map: () => ({ method: "POST", path: "/acp/one-shot/prepare" }),
+	},
+	acp_one_shot_cancel: {
+		map: (_args, p) => ({ method: "POST", path: `/acp/one-shot/${p("requestId")}/cancel` }),
+	},
+	story_generate_draft: {
+		map: (args) => ({
+			method: "POST",
+			path: "/acp/story-draft",
+			body: { project: args.project, request: args.request, requestId: args.requestId },
+		}),
 	},
 
 	// --- ego's command line (Providers) ---
@@ -1622,10 +1640,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			const overrideLock = args.overrideLock === true ? "&overrideLock=true" : "";
 			const expectedFingerprint = args.expectedFingerprint ? `&expectedFingerprint=${p("expectedFingerprint")}` : "";
 			const confirmMissingCheckout = args.confirmMissingCheckout === true ? "&confirmMissingCheckout=true" : "";
+			const permanentDelete = args.permanentDelete === true ? "&permanentDelete=true" : "";
 			const deleteBranch = args.deleteBranch ?? args.force !== true;
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}${confirmMissingCheckout}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}${confirmMissingCheckout}${permanentDelete}`,
 			};
 		},
 	},

@@ -34,6 +34,7 @@ impl CompletionEffects for Effects {
             exit: o.exit,
             progress: o.progress,
             output: o.output.clone(),
+            reason: o.reason.clone(),
         }
     }
     fn stop(&self, run: &AutomationRun) -> Result<(), String> {
@@ -331,4 +332,138 @@ fn native_recovers_durable_progress_and_snapshots_without_receiving_its_event() 
     let saved = owner.store().get(&run.id).unwrap();
     assert_eq!(saved.status, RunStatus::Completed);
     assert_eq!(saved.stdout.text, "final output");
+}
+
+// Catches synchronous publication git/config work starving a one-worker runtime.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn event_publication_does_not_block_runtime_worker() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let workspace = dir.path().to_str().unwrap().to_owned();
+    let git = |args: &[&str]| super::super::publish::run_git(dir.path(), args).unwrap();
+    git(&["init", "--initial-branch=publication-test"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "test",
+    ]);
+    let fifo = dir.path().join("delayed-git-config");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    git(&["config", "include.path", fifo.to_str().unwrap()]);
+    // Holding both ends lets git open the FIFO but withholds EOF until the
+    // independent async task progresses (or the controlled hold expires).
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    let (progress, observed) = std::sync::mpsc::channel();
+    let release = std::thread::spawn(move || {
+        let progressed = observed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok();
+        std::fs::remove_file(&fifo).unwrap();
+        std::fs::write(&fifo, "").unwrap();
+        drop(held);
+        progressed
+    });
+    let definitions = DefinitionStore::at_path(dir.path().join("automations.json"));
+    let (result, ()) = tokio::join!(
+        event_publication_prerequisites(move || definitions, workspace),
+        async {
+            tokio::task::yield_now().await;
+            let _ = progress.send(());
+        }
+    );
+    let progressed = release.join().unwrap();
+    assert_eq!(result.unwrap().1, "publication-test");
+    assert!(
+        progressed,
+        "publication prerequisites blocked the independent async task"
+    );
+}
+
+// Catches dropping validated intake/head output or swallowing prerequisite errors.
+#[tokio::test]
+async fn event_publication_prerequisites_preserve_config_and_git_errors() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let path = dir.path().join("automations.json");
+    let workspace = dir.path().to_str().unwrap().to_owned();
+    std::fs::write(&path, "not JSON").unwrap();
+    let parse_error =
+        serde_json::from_str::<super::super::model::AutomationsConfig>("not JSON").unwrap_err();
+    let expected = format!("Corrupt {}: {parse_error}", path.display());
+    let config_path = path.clone();
+    let actual = event_publication_prerequisites(
+        move || DefinitionStore::at_path(config_path),
+        workspace.clone(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(actual, expected);
+    std::fs::write(&path, "{}").unwrap();
+    std::fs::write(dir.path().join(".git"), "invalid git directory").unwrap();
+    let error = event_publication_prerequisites(move || DefinitionStore::at_path(path), workspace)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error, "git rev-parse --abbrev-ref HEAD failed");
+}
+
+// Catches: losing the actionable stale-evidence refusal after terminal execution.
+#[test]
+fn publication_refusal_is_durable_without_changing_completed_execution() {
+    let (_dir, owner, run) = setup();
+    // The real owner store supplies the event identity; completion is immutable.
+    let mut definition = run.definition.clone();
+    definition.id = "event".into();
+    let event = owner
+        .store()
+        .admit_event(
+            &definition,
+            RunTrigger::Event {
+                repository: "owner/repo".into(),
+                issue_number: 1,
+                label: "run".into(),
+            },
+            None,
+            2,
+            300,
+        )
+        .unwrap()
+        .unwrap();
+    owner
+        .store()
+        .transition(&event.id, RunStatus::Completed, Default::default(), 400)
+        .unwrap();
+    owner
+        .store()
+        .settle_outcome(
+            &event.id,
+            "publication_refused",
+            None,
+            Some("Review artifact moved".into()),
+            500,
+        )
+        .unwrap();
+    let saved = owner.store().get(&event.id).unwrap();
+    assert_eq!(saved.status, RunStatus::Completed);
+    assert_eq!(
+        saved.outcome.as_ref().unwrap().failure_reason.as_deref(),
+        Some("Review artifact moved")
+    );
 }

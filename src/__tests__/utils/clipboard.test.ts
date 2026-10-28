@@ -28,6 +28,7 @@ describe("native clipboard commands", () => {
 	});
 
 	it("writes through the native command so removing the plugin cannot break copy", async () => {
+		mockInvoke.mockResolvedValueOnce(undefined);
 		await writeClipboard("hello\nworld");
 		expect(mockInvoke).toHaveBeenCalledExactlyOnceWith("write_clipboard_text", { text: "hello\nworld" });
 	});

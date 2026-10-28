@@ -8,10 +8,10 @@ const { createSession, resize, sendCommand, mockRpc, ptyOptions, mockVerifyResum
 	mockRpc: vi.fn(),
 	ptyOptions: new Map<
 		string,
-		{
+		Array<{
 			onStateChange?: (state: Record<string, unknown>) => void;
 			onParsed?: (frame: { type: string; event: unknown }) => void;
-		}
+		}>
 	>(),
 	mockVerifyResume: vi.fn(),
 }));
@@ -32,10 +32,15 @@ vi.mock("../../transport", async (importOriginal) => ({
 		sessionId: string,
 		_onData: unknown,
 		_onExit: unknown,
-		options: typeof ptyOptions extends Map<string, infer V> ? V : never,
+		options: typeof ptyOptions extends Map<string, Array<infer V>> ? V : never,
 	) => {
-		ptyOptions.set(sessionId, options);
-		return Promise.resolve(() => {});
+		const listeners = ptyOptions.get(sessionId) ?? [];
+		listeners.push(options);
+		ptyOptions.set(sessionId, listeners);
+		return Promise.resolve(() => {
+			const index = listeners.indexOf(options);
+			if (index >= 0) listeners.splice(index, 1);
+		});
 	},
 }));
 // The mounted tab reconnects to a live PTY and asks which process runs in the foreground.
@@ -64,6 +69,7 @@ vi.mock("../../components/Terminal/CanvasTerminal", () => ({
 import { Terminal } from "../../components/Terminal/Terminal";
 import { appLogger } from "../../stores/appLogger";
 import { terminalsStore } from "../../stores/terminals";
+import { resumeTerminal, suspendTerminal } from "../../utils/suspendTerminal";
 
 let mounted: { unmount: () => void } | undefined;
 function openIdleAgentTab() {
@@ -101,7 +107,11 @@ function openIdleAgentTab() {
 	return id;
 }
 
-const emit = (event: Record<string, unknown>) => ptyOptions.get("live-session")?.onParsed?.({ type: "parsed", event });
+// Like the real transport, broadcast to every active subscription. A Map that
+// keeps only the newest options hides duplicate listener installation.
+const emit = (event: Record<string, unknown>) => {
+	for (const options of ptyOptions.get("live-session") ?? []) options.onParsed?.({ type: "parsed", event });
+};
 const failed = () =>
 	emit({
 		type: "api-error",
@@ -109,13 +119,15 @@ const failed = () =>
 		matched_text: "Connection lost mid-response.",
 		error_kind: "server",
 	});
-const snapshot = (shell: string, error?: string) =>
-	ptyOptions.get("live-session")?.onStateChange?.({
-		agent_type: "claude",
-		agent_state: shell === "busy" ? "working" : "completed",
-		shell_state: shell,
-		last_error: error,
-	});
+const snapshot = (shell: string, error?: string) => {
+	for (const options of ptyOptions.get("live-session") ?? [])
+		options.onStateChange?.({
+			agent_type: "claude",
+			agent_state: shell === "busy" ? "working" : "completed",
+			shell_state: shell,
+			last_error: error,
+		});
+};
 
 describe("Terminal API failure recovery 2335", () => {
 	let id: string;
@@ -167,6 +179,77 @@ describe("Terminal API failure recovery 2335", () => {
 		}
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
+	});
+
+	// Catches: reconnect resize succeeds but a failed eager handshake leaves parsed events unattached.
+	it("recovers parsed events after an eager subscription handshake fails", async () => {
+		vi.useRealTimers();
+		mounted?.unmount();
+		const transport = await import("../../transport");
+		vi.spyOn(transport, "subscribePty").mockRejectedValueOnce(new Error("WebSocket closed before opening"));
+		const replacement = openIdleAgentTab();
+		try {
+			await waitFor(() =>
+				expect(appLogger.info).toHaveBeenCalledWith(
+					"terminal",
+					`initSession(${replacement}) — reconnected to live-session`,
+				),
+			);
+			expect(appLogger.error).toHaveBeenCalledWith("terminal", "Failed to attach session listeners", expect.any(Error));
+			vi.mocked(appLogger.error).mockClear();
+			failed();
+			expect(appLogger.error).toHaveBeenCalledExactlyOnceWith(
+				"terminal",
+				"claude: server error (claude-transport-error)",
+			);
+		} finally {
+			mounted?.unmount();
+			terminalsStore.remove(replacement);
+		}
+	});
+
+	// Catches: one parsed transport error is logged twice by the terminal consumer.
+	it("logs one entry for one transport error", () => {
+		failed();
+		expect(appLogger.error).toHaveBeenCalledExactlyOnceWith(
+			"terminal",
+			"claude: server error (claude-transport-error)",
+		);
+	});
+
+	// Catches: removing the reconnect attachment also drops the replacement PTY on resume.
+	it("resumes with one replacement listener and retires the old session", async () => {
+		vi.useRealTimers();
+		expect((await suspendTerminal(id)).ok).toBe(true);
+		expect(ptyOptions.get("live-session")).toHaveLength(0);
+		mockRpc.mockResolvedValue({ session_id: "resumed-session" });
+		expect((await resumeTerminal(id)).ok).toBe(true);
+		await waitFor(() =>
+			expect(appLogger.info).toHaveBeenCalledWith("terminal", `initSession(${id}) — reconnected to resumed-session`),
+		);
+		for (const options of ptyOptions.get("resumed-session") ?? [])
+			options.onParsed?.({
+				type: "parsed",
+				event: {
+					type: "api-error",
+					pattern_name: "claude-transport-error",
+					matched_text: "Connection lost mid-response.",
+					error_kind: "server",
+				},
+			});
+		expect(appLogger.error).toHaveBeenCalledExactlyOnceWith(
+			"terminal",
+			"claude: server error (claude-transport-error)",
+		);
+		expect(createSession).not.toHaveBeenCalled();
+	});
+
+	// Catches: an overwritten unsubscribe handle leaves the first listener alive on tab close.
+	it("retires every transport listener when the terminal closes", () => {
+		mounted?.unmount();
+		expect(ptyOptions.get("live-session")).toHaveLength(0);
+		failed();
+		expect(appLogger.error).not.toHaveBeenCalled();
 	});
 
 	// Catches: continue input erases the failure even when the harness never resumes.

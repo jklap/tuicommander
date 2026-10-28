@@ -1,6 +1,7 @@
 #[cfg(any(not(feature = "desktop"), test))]
 struct ParsedArgs {
     instance: Option<String>,
+    credential_file: Option<std::path::PathBuf>,
     set_password: bool,
     build_info: bool,
     relay_pair: Option<tuicommander_lib::RelayPairOptions>,
@@ -14,6 +15,7 @@ where
     S: Into<String>,
 {
     let mut instance = None;
+    let mut credential_file = None;
     let mut set_password = false;
     let mut build_info = false;
     let mut relay_pair: Option<tuicommander_lib::RelayPairOptions> = None;
@@ -38,6 +40,16 @@ where
                     .filter(|value| !value.starts_with("--"))
                     .ok_or_else(|| anyhow::anyhow!("--instance requires an identifier"))?;
                 instance = Some(id);
+            }
+            "--credential-file" => {
+                if credential_file.is_some() {
+                    anyhow::bail!("--credential-file may only be specified once");
+                }
+                let path = args
+                    .next()
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| anyhow::anyhow!("--credential-file requires a file path"))?;
+                credential_file = Some(std::path::PathBuf::from(path));
             }
             "--set-password" => {
                 if set_password {
@@ -135,8 +147,14 @@ where
     if relay_pair.as_ref().is_some_and(|o| o.relay_url.is_empty()) {
         anyhow::bail!("--relay-register and --relay-out need --relay-pair <url>");
     }
+    if credential_file.is_some() && set_password {
+        anyhow::bail!(
+            "--credential-file cannot be used with --set-password (file credentials are process-local)"
+        );
+    }
     Ok(ParsedArgs {
         instance,
+        credential_file,
         set_password,
         build_info,
         relay_pair,
@@ -172,6 +190,10 @@ fn main() -> anyhow::Result<()> {
         None => tuicommander_lib::app_instance::select_app_instance_from_env(),
     }
     .map_err(anyhow::Error::msg)?;
+
+    if let Some(path) = parsed.credential_file.as_deref() {
+        tuicommander_lib::select_remote_credential_file(path).map_err(anyhow::Error::msg)?;
+    }
 
     if parsed.set_password {
         return tuicommander_lib::set_password_interactive();
@@ -209,6 +231,31 @@ fn main() {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+
+    // Catches a production daemon refusing the mounted credential-file selector.
+    #[test]
+    fn headless_credential_file_selector_is_accepted() {
+        assert!(parse_args(["--instance", "worker-a", "--credential-file", "vault.json"]).is_ok());
+    }
+
+    // Catches a discarded path, duplicate selectors, and non-durable password setup.
+    #[test]
+    fn credential_file_path_is_retained_and_invalid_selectors_are_rejected() {
+        let parsed =
+            parse_args(["--instance", "worker-a", "--credential-file", "vault.json"]).unwrap();
+        assert_eq!(
+            parsed.credential_file.as_deref(),
+            Some(std::path::Path::new("vault.json"))
+        );
+        for args in [
+            vec!["--credential-file"],
+            vec!["--credential-file", ""],
+            vec!["--credential-file", "a", "--credential-file", "b"],
+            vec!["--credential-file", "a", "--set-password"],
+        ] {
+            assert!(parse_args(args).is_err());
+        }
+    }
 
     #[test]
     fn remote_options_parse_deploy_flags_with_existing_flags() {

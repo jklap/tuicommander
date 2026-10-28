@@ -861,6 +861,11 @@ export const RemoteMachinesPanel: Component = () => {
 												{remoteStatusLabel(connState.status, connState.deployStep)}
 											</span>
 										</Show>
+										<Show when={connState.build}>
+											<span class={s.hint} style={{ margin: 0 }}>
+												tuic-remote {connState.build?.version}
+											</span>
+										</Show>
 										<Show when={connState.outOfDate}>
 											<span style={{ "font-size": "11px", color: "var(--attention)" }}>Remote out of date</span>
 										</Show>
@@ -920,6 +925,11 @@ export const RemoteMachinesPanel: Component = () => {
 									>
 										<div class={s.hint} role="status">
 											Retry delay: {connState.retryAfterSecs}s
+										</div>
+									</Show>
+									<Show when={connState.outOfDate}>
+										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--attention)" }}>
+											Install the current tuic-remote and restart the service.
 										</div>
 									</Show>
 									<Show when={connState.updateNotice}>

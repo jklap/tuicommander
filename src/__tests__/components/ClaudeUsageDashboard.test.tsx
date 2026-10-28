@@ -159,10 +159,11 @@ describe("ClaudeUsageDashboard", () => {
 		it("calls get_claude_session_stats exactly once more when scope changes", async () => {
 			const { getByRole } = render(() => <ClaudeUsageDashboard />);
 
-			// Wait for initial load to settle
+			// Wait for both sequential reads before measuring the next scope refresh.
 			await vi.waitFor(() => {
-				const calls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "get_claude_session_stats");
-				expect(calls).toHaveLength(1);
+				for (const command of ["get_claude_session_stats", "get_claude_usage_timeline"]) {
+					expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === command)).toHaveLength(1);
+				}
 			});
 
 			const statsCallsBefore = vi
@@ -184,10 +185,12 @@ describe("ClaudeUsageDashboard", () => {
 				expect(statsCallsAfter).toBe(statsCallsBefore + 1);
 			});
 
-			const timelineCallsAfter = vi
-				.mocked(invoke)
-				.mock.calls.filter(([cmd]) => cmd === "get_claude_usage_timeline").length;
-			expect(timelineCallsAfter).toBe(timelineCallsBefore + 1);
+			await vi.waitFor(() => {
+				const timelineCallsAfter = vi
+					.mocked(invoke)
+					.mock.calls.filter(([cmd]) => cmd === "get_claude_usage_timeline").length;
+				expect(timelineCallsAfter).toBe(timelineCallsBefore + 1);
+			});
 		});
 
 		it("does not call get_claude_usage_api again when scope changes", async () => {

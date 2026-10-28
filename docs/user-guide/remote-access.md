@@ -195,7 +195,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
    display. A 404 means no subscription; `stale_removed` after HTTP 410 means
    the phone must re-subscribe. A 503 means push is disabled or the VAPID key is
    unavailable. Confirm the notification actually appears on the phone.
-4. Have a managed agent report `progress type=blocked` with its question.
+4. If the agent was spawned by another agent, turn off **Settings → Notifications → Silence subagent sounds and notifications** on the host for this delivery check. This setting also controls mobile sounds and session Web Push; it defaults on. Have a managed agent report `progress type=blocked` with its question.
    After the desktop is unfocused, or the Mac has had no HID input for two
    minutes, the phone notification contains the question and opens that
    session. Type one answer and tap Send. The PWA waits for the same submission
@@ -724,9 +724,42 @@ The default instance keeps the platform paths listed in
 keyring entry. A named instance instead stores files in the corresponding
 `instances/<id>/` subdirectory and uses keyring service
 `tuicommander-instance-<id>`, user `vault`. It starts empty: it never falls back
-to, imports, changes, or deletes default or legacy files and credentials. In a
-release build the OS keyring is mandatory; if a named instance's vault cannot be
-opened, the daemon exits before binding its network socket.
+to, imports, changes, or deletes default or legacy files and credentials. The OS keyring remains the default in release builds. If a named instance's
+selected vault cannot be opened, the daemon exits before binding its network socket.
+
+#### Mounted credentials without an OS keyring
+
+For an unprivileged Linux daemon without a session bus, select a private JSON
+file explicitly. This option works in release builds and does not enable the
+debug credential store:
+
+```bash
+./tuic-remote --instance build-host --credential-file /run/secrets/tuic-vault.json --no-agent-configs
+```
+
+The file is a JSON object whose keys are vault slots and whose values are strings:
+
+```json
+{"remote/session-token": "replace-with-a-private-random-token"}
+```
+
+Use that session token to authenticate protected HTTP requests. Keep the file
+private and mount it read-only if possible. The daemon reads it once before any
+credential access. A missing, unreadable or malformed file stops boot with a
+content-free diagnostic; there is no keyring or legacy-vault fallback, even for
+missing slots. The option does not put credentials in config JSON or logs.
+
+This is a file-seeded **process-local** source: credential changes made through
+APIs remain in memory, never update the selected file, and are lost on restart.
+Other configuration changes can still be persisted normally. To rotate a token,
+replace the mounted file and restart the daemon; live file changes do not reload
+credentials. Each process reads its own snapshot. An automatic daemon relaunch
+uses the startup executable path after binary replacement, retains the file
+option and rereads the file; a service supervisor must retain it
+in its launch command. Do not share a seed across instances unless they are meant
+to share secrets. `--set-password` cannot be combined with this option; use a
+seeded session token, or the default keyring source for durable password setup.
+The desktop default is unchanged.
 
 Automation that depends on this isolation contract must pin and verify the
 digest of the release artifact it launches. Artifact verification belongs to
@@ -880,7 +913,7 @@ TLS listener rather than the presence of certificate configuration.
 
 **Beta** — the core HTTP/WebSocket API is stable, but the standalone daemon is new and may have rough edges. Report issues on GitHub.
 
-Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. This refusal stops automatic connection retries and removes the retry delay. An outdated daemon is a possible cause: install the current `tuic-remote` and restart its service, then press **Connect**. If the refusal persists, check the daemon’s trusted names. The card shows the last known `tuic-remote` version and warns when its semantic version is older than this client, including while reconnecting or in an error state. Connected daemons also retain the selected-asset SHA-256 update check. Version information comes from a successful `/health.build` response. The recorded older daemon returns only plain `Untrusted Host` on 403, with no version. If `/health` is refused before any successful observation, the version is unknown and the message describes an outdated daemon as a possible cause, not a confirmed diagnosis. No alternative Host or IP probe bypasses the refusal. The last health observation is held only in runtime memory; explicit disconnect, deletion or an app restart discards it. The cause remains visible until that attempt. Unchanged failure states produce no additional warnings. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Retryable failures show the automatic retry delay; active attempts clear the previous failure.
 
 ## Troubleshooting
 

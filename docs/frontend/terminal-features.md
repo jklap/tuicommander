@@ -166,6 +166,10 @@ including user commands and TUIC messages. It hides at zero and follows the
 backend session state without opening the editor. Hover or keyboard focus loads
 the command/message breakdown; the count remains available if details fail.
 
+### Compose editor size
+
+Terminal Compose uses the shared auto-grow control bounds: one control line when empty (36px desktop, 44px touch), intrinsic CodeMirror growth for newlines and wrapping, and the existing 96px editor maximum. Longer drafts scroll inside the editor. Clearing or successfully submitting a draft restores the minimum. The queue list keeps its independent height cap.
+
 ### Compose editor shortcuts
 
 The newline legend shows only Ctrl+Enter. A panel-relative CSS container query hides shortcut hints at widths up to 640px, including split terminals inside a wide window. The footer does not wrap its hints around the action controls.
@@ -175,3 +179,14 @@ In the terminal Compose panel, Enter sends the draft. Ctrl+Enter and Shift+Enter
 ## Mobile stream recovery
 
 Mobile CLI output releases a terminal subscription when the transport reports exit, including retry exhaustion. Visibility resume starts a fresh subscription if none remains and the session poll has not confirmed the session ended. Retired stream callbacks cannot close a newer subscription or change its connection error state. Handshake retries retain their three-second initial delay and 30-second backoff cap; hidden pages do not start a scheduled retry.
+
+### Unsized pane diagnostics
+
+Canvas sizing retries run only for a visible pane connected to the layout. A pane
+that stays unsized for 120 animation frames logs a warning. Hiding or closing the
+pane cancels the retry; showing it starts a new measurement.
+
+Restored PTY sessions attach their event listeners before the first layout pass.
+The reconnect resize waits for that attachment and reuses successful listeners
+instead of adding another API-error consumer. If the initial handshake failed,
+reconnect retries the attachment once. Suspend detaches them; resume attaches the replacement PTY once.

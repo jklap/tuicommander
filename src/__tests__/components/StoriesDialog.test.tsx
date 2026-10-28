@@ -240,6 +240,15 @@ describe("StoriesDialog", () => {
 		expect(screen.queryByText("Invalid plan response")).toBeNull();
 	});
 
+	it("catches the permanent manual-prefix hint returning in New story", async () => {
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "New story" }));
+		expect(screen.getByLabelText("Acceptance criteria, one per line")).toBeVisible();
+		expect(screen.queryByText("Prefix human checks with [MANUAL] to track them in QA.")).toBeNull();
+	});
+
+	// Catches: removing the hint also stripping manual markers or changing ordinary criterion parsing.
 	it("creates a story with criteria and relative file scope", async () => {
 		const created = { ...story, id: "s2", title: "Review API" };
 		let rows = [story];
@@ -262,7 +271,7 @@ describe("StoriesDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "New story" }));
 		fireEvent.input(screen.getByLabelText("Title"), { target: { value: "Review API" } });
 		fireEvent.input(screen.getByLabelText("Acceptance criteria, one per line"), {
-			target: { value: "Review passes\nNo regressions" },
+			target: { value: "  Review passes  \r\n\r\n  [MANUAL] Inspect the layout  \r\nNo regressions" },
 		});
 		fireEvent.input(screen.getByLabelText("File scope, one relative path per line"), {
 			target: { value: "src/api.rs" },
@@ -276,7 +285,7 @@ describe("StoriesDialog", () => {
 					input: {
 						planId: "p1",
 						title: "Review API",
-						criteria: ["Review passes", "No regressions"],
+						criteria: ["Review passes", "[MANUAL] Inspect the layout", "No regressions"],
 						priority: 2,
 						origin: { type: "native" },
 						fileScope: ["src/api.rs"],

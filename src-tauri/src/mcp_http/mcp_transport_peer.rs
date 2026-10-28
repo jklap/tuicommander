@@ -708,7 +708,7 @@ pub(super) fn apply_initialize_identity(
     };
     bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at);
     if let Some(prior_mcp) = prior_mcp {
-        tracing::warn!(
+        tracing::info!(
             source = "mcp_initialize",
             event = "stale_binding_takeover",
             tuic_session = %tuic,
@@ -1403,7 +1403,7 @@ fn handle_messaging_with_message_id(
                 }
             };
             if let Some(prior_mcp) = prior_mcp {
-                tracing::warn!(
+                tracing::info!(
                     source = "agent_msg",
                     event = "stale_binding_takeover",
                     tuic_session = %tuic_session,

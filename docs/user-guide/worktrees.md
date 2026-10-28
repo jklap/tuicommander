@@ -223,6 +223,17 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
 
+For a clean workspace whose branch commits are in the default branch (including a
+branch with no commits of its own), the **Archive workspace?** dialog offers
+**Cancel**, **Delete**, and **Archive** when no live session owns the workspace.
+**Archive** keeps its existing behavior: move the checkout into the archive pool
+and keep its local branch for reuse. The red **Delete** action permanently removes
+the checkout and its local branch instead. It uses the same workspace-id removal
+path and integration proof, without force or a lock override. The backend checks
+safety again, so new dirty files, unpublished submodule commits, or a live session
+stop deletion. Delete is not offered when those checks are unsafe or unknown.
+Enter still selects Archive; Escape cancels.
+
 Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
 
 Removing a worktree:

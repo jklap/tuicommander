@@ -887,7 +887,7 @@ describe("PrDetailPopover", () => {
 				);
 			});
 			// Persists the working method for future merges
-			expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("squash");
+			await waitFor(() => expect(repoSettingsStore.getEffective("/repo")?.prMergeStrategy).toBe("squash"));
 		});
 
 		it("falls back to rebase when both merge and squash are rejected with 405", async () => {

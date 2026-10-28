@@ -120,6 +120,36 @@ describe("promptLibrary pure functions", () => {
 			});
 		});
 
+		it.each([
+			"smart-configure-issue-to-draft-pr",
+			"smart-configure-incoming-pr-review",
+			"smart-configure-authorized-bounded-fix",
+		])("%s does not mistake configured issue intake for an unsupported tool action (#2328-15f2)", async (id) => {
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const guide = store.getPrompt(id)!;
+				const delivered = await store.processContent(guide, {});
+				// The prompt text is the product: this does not assert that a model follows it.
+				expect(delivered).toContain("owning daemon's automations.json");
+				expect(delivered).toContain("event_intake with repositories, label and definition_id");
+				expect(delivered).toContain("empty repositories allowlist means disabled, not unsupported");
+				expect(delivered).toContain("missing block alone is not proof of unsupported intake");
+				expect(delivered).toContain("When event_intake is supported, continue the configuration interview");
+				expect(delivered).toContain("do not stop merely because the tool schema has no intake action");
+				expect(delivered).toContain("unlabelled-issue triage (2324-424d)");
+				expect(delivered).toContain("before draft-PR publication (2325-10c4)");
+				expect(delivered).toContain("incoming PR/head-SHA event triggers (2327-1ca0)");
+				expect(delivered).toContain("never enable or launch a policy requiring the gate until it is verified");
+				expect(delivered).toContain(
+					"event_intake.workflow with an explicit published story definition_id and definition_revision",
+				);
+				expect(delivered).toContain(
+					"Existing configurations without workflow retain legacy completion-only publication",
+				);
+				expect(guide.builtInVersion).toBe(5);
+			});
+		});
+
 		it("keeps issue publication, review-only and authorized repair policies separate", async () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();

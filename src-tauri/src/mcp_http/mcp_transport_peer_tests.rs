@@ -6891,3 +6891,54 @@ fn interrupt_mail_does_not_deliver_payload_to_waiter_and_composer() {
         );
     });
 }
+
+/// Catches: routine reconnect recovery is promoted to an actionable warning.
+#[test]
+fn stale_peer_recovery_logs_at_info() {
+    #[derive(Clone)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    for initialize in [true, false] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "lead", "mcp-old");
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Sink(Arc::clone(&output));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            if initialize {
+                assert!(apply_initialize_identity(
+                    &state,
+                    "mcp-new",
+                    Some(TEST_UUID_A)
+                ));
+            } else {
+                let reply = handle_messaging(
+                    &state,
+                    &serde_json::json!({
+                        "action": "register", "tuic_session": TEST_UUID_A, "name": "lead"
+                    }),
+                    Some("mcp-new"),
+                );
+                assert_eq!(reply["ok"], true, "{reply}");
+            }
+        });
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let recovery = log
+            .lines()
+            .find(|line| line.contains("Reclaimed stale MCP peer binding"))
+            .expect("recovery must remain observable");
+        assert!(recovery.contains("INFO"), "{recovery}");
+        assert!(!recovery.contains("WARN"), "{recovery}");
+    }
+}

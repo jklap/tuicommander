@@ -307,6 +307,15 @@ pub struct PlanView {
     pub all_cancelled: bool,
 }
 
+/// Project-wide presentation, without inventing a combined plan completion state.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStoryView {
+    pub stories: Vec<StoryRead>,
+    pub visible_story_ids: Vec<String>,
+    pub columns: Vec<StoryColumn>,
+}
+
 /// Error prefixes of mistakes the user can fix; the HTTP route answers them 422, not 500.
 pub const PLAN_SOURCE_IN_USE: &str = "plan source is in use by an active plan coordinator: ";
 pub const PLAN_DOCUMENT_NOT_FOUND: &str = "plan document not found: ";

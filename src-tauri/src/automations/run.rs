@@ -56,6 +56,8 @@ pub enum RunStatus {
     SkippedConcurrency,
     SkippedExpired,
     SkippedMissed,
+    SkippedFiltered,
+    SkippedDuplicate,
 }
 
 impl RunStatus {
@@ -101,6 +103,37 @@ pub struct PrecheckContext {
     pub bytes: u64,
 }
 
+/// Publication identity is committed before any GitHub write.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PublicationIntent {
+    pub repository: String,
+    pub head: String,
+    pub base: String,
+    pub issue_number: i64,
+}
+
+/// Separate from execution status: a completed agent can still fail publication.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RunOutcome {
+    pub decision: String,
+    pub pr_url: Option<String>,
+    pub comment_url: Option<String>,
+    pub failure_reason: Option<String>,
+    pub publication_intent: Option<PublicationIntent>,
+}
+
+impl RunOutcome {
+    pub fn decision(decision: &str, reason: Option<String>) -> Self {
+        Self {
+            decision: decision.into(),
+            pr_url: None,
+            comment_url: None,
+            failure_reason: reason,
+            publication_intent: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AutomationRun {
     pub id: String,
@@ -129,11 +162,24 @@ pub struct AutomationRun {
     #[serde(default)]
     pub precheck_context: Option<PrecheckContext>,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<RunOutcome>,
+    #[serde(default)]
+    pub event_workflow: Option<super::model::EventWorkflow>,
+    #[serde(default)]
+    pub workflow_binding: Option<EventWorkflowBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EventWorkflowBinding {
+    pub run_id: String,
+    pub story_id: String,
 }
 
 /// Fields learned after reservation; terminal records reject later mutations.
 #[derive(Clone, Debug, Default)]
 pub struct RunDetails {
+    pub workflow_binding: Option<EventWorkflowBinding>,
     pub task_id: Option<String>,
     pub session_id: Option<String>,
     pub workspace: Option<String>,

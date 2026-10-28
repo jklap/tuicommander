@@ -2487,7 +2487,7 @@ fn hydrate_one_secret(
 /// Hydrate every vault-backed secret. Returns `true` when plaintext was migrated out of
 /// config.json and the file must be rewritten.
 #[must_use]
-fn hydrate_app_config_secrets(config: &mut AppConfig) -> bool {
+pub(crate) fn hydrate_app_config_secrets(config: &mut AppConfig) -> bool {
     let session = hydrate_one_secret(
         crate::credentials::Credential::RemoteSessionToken,
         &mut config.services.auth.session_token,
@@ -3484,7 +3484,12 @@ where
 // Notification config
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_notification_config() -> NotificationConfig {
-    load_json_config(NOTIFICATION_CONFIG_FILE)
+    load_notification_config_in(&config_dir())
+}
+
+/// Read the notification owner document in this AppState's config directory.
+pub(crate) fn load_notification_config_in(dir: &std::path::Path) -> NotificationConfig {
+    load_json_config_from_path(&dir.join(NOTIFICATION_CONFIG_FILE))
 }
 
 pub(crate) fn save_notification_config(

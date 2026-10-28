@@ -16,6 +16,8 @@ Development builds show a dismissible restart warning when Cargo dep-info inputs
 
 The Plans column groups Edit plan with Archive plan and keeps the archived toggle with list filters. Edit plan and New story use the main dialog area. The plan editor offers repository-document selection, wrapping title/source fields, an openable full source, a disabled-Save explanation, and conflict-safe draft retention. Native plan title/source corrections use atomic `update_plan` patches with a stored expected revision across MCP, HTTP, IPC, and CLI. Workflow planning and verification subjects include current plan metadata. Source changes wait until any running plan coordinator/planner finishes or is cancelled; title-only corrections stay available (#2170-d828).
 
+Plans and Stories offers an explicit All plans choice for a combined List/Kanban view. Rust supplies the project-scoped stories, visible ids and columns. Rows and cards label their plan; existing filters and archive scopes still apply. Story actions and dependency candidates retain plan ownership. Select one plan for plan actions or story creation (#2358-b0b2).
+
 Native story API and CLI lists support combined state, priority and type filters, with optional cursor pages of 1–100 records; existing full-list reads and dispatch order are unchanged (#2174-6b3f).
 
 - Desktop frame receipts no longer keep silent terminals redrawing; missed-frame recovery avoids offering the same desktop snapshot twice without recreating its own delivery debt (#2040-16b2).
@@ -150,6 +152,8 @@ The component is available for Tasks shell integration; it does not add a tab by
 Selecting a New plan source that already belongs to an archived plan shows its title and ID with instructions to enable **Archived plans**, select it, and choose **Restore plan**. This does not create a duplicate or restore the plan implicitly; an active source match still selects its existing plan.
 
 Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
+
+New story and Edit plan keep the primary action, then Cancel, together at the bottom-left. New story has no permanent manual-prefix hint below acceptance criteria; `[MANUAL]` criteria remain supported. Story Edit stays in the story header. Disabled Add dependency exposes its reason as a native tooltip and accessible description.
 
 Plans and Stories combines open/closed and optional story-type filters, including untyped historical stories, with a session-retained List/Kanban switch that also survives detach and reattach. Rust supplies the shared display projection; the native read-only board follows the Wiz Kanban layout without importing plugin code.
 
@@ -1015,6 +1019,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
+- Claude friendly auth/transport detection excludes tool receipts and their indented diagnostic continuations
 - Covers Claude Code, Codex CLI, Gemini CLI, Copilot, and raw API error JSON from providers (OpenAI, Anthropic, Google, OpenRouter, MiniMax)
 - Retains final failures in the red Error state through idle and unsuccessful auto-retry; supports Claude connection-loss prose, Codex native final-error rows and ego native provider-failure notifications. Native recovery countdowns do not set Error.
 - Triggers error notification sound and logs to the Error Log Panel
@@ -1223,6 +1228,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
   - Parent tracked and untracked changes are not carried into the new checkout
   - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal. Branch-name status diagnostics appear once; main-checkout tooltips do not describe removal
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
+  - The Archive workspace dialog offers a red Delete alternative for a clean, integrated checkout without live sessions. Delete removes the checkout and local branch through the existing safety checks instead of recycling it; Archive remains the default.
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
   - Merged-PR proof uses paginated HTTP GraphQL with the repository-bound account and host; incomplete reads remain unknown and retryable
@@ -1896,6 +1902,8 @@ Buffer eviction is reported; it does not create another output store.
 
 ## 15. Keyboard Shortcut Reference
 
+Terminal Compose starts at one control line, grows with newlines and wrapping up to 96px, and scrolls longer drafts internally. Clearing or sending restores one line.
+
 Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new line, and `Shift+Ctrl+Enter` to queue. These editor-local shortcuts use the Control key on every platform and are not global keybindings.
 
 ### Terminal
@@ -2363,6 +2371,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - ACP interaction pushes link to `/mobile?repo=…&session=…`, selecting the correct Chat conversation; answered requests and ordinary ACP activity do not push
 - Visible notifications use one tag per session, so a new question replaces only that session's earlier notification; generic alerts keep a separate shared tag
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
+- **Silence subagent sounds and notifications** also suppresses question and completion pushes from parented sessions. Exit events retain their spawn parentage until the state accumulator applies them; parent and user-started sessions are unaffected.
 - Question and completion pushes share one 30-second limit per session
 - ACP interaction pushes use the same 30-second limit for each conversation
 - A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path. For Codex `request_user_input`, the session header opens the queued question; its title and options appear in the transient choice overlay, and numbered answers use one PTY key. The `Other` choice opens Codex notes for a typed answer. The control uses the existing header, preserving all terminal rows
@@ -2372,7 +2381,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
 
 ### 18.9 Notification Sounds
-- Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility before playback.
+- Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility and the host subagent-silence setting before playback. Parented sessions follow **Silence subagent sounds and notifications** without replaying muted transitions. Mobile startup loads the host notification snapshot before subscribing to settings refresh, so a fresh PWA respects the saved host preference.
 - Audio playback via Rust `rodio` crate (Tauri command `play_notification_sound`), replacing the previous Web Audio API approach
 - Eliminates AudioContext suspend issues on WebKit and works in headless/remote modes
 - Native tones end on an exact zero-amplitude sample and keep the output stream alive for a 100 ms silent tail, avoiding end-of-chime clicks when CoreAudio releases a short-lived stream
@@ -2652,6 +2661,13 @@ partial work, and their child processes may continue.
 - Named instances start empty and never fall back to or migrate default/legacy
   files or credentials. A release daemon exits before binding if its named OS
   keyring vault cannot be opened
+- `--credential-file <path>` explicitly seeds a process-local vault from a private
+  JSON string map in release or debug builds, without an OS keyring or session
+  bus. Missing or malformed input fails boot without exposing contents. Runtime
+  credential edits stay in memory; rotation requires a file replacement and
+  daemon restart. Automatic updates relaunch the installed startup executable
+  path, including on Linux after the running inode is replaced, and reread the
+  selected file. Desktop keyring defaults remain unchanged
 - Default port: 9877 (overridable via `TUIC_PORT` env var)
 - `--set-password` performs interactive password setup (bcrypt hashed) inside
   the instance selected earlier on the same command line
@@ -2782,6 +2798,8 @@ partial work, and their child processes may continue.
   connection at a time: manual and automatic updates both show in-progress,
   and overlapping requests over IPC, HTTP, or MCP receive an error.
 
+- **Daemon version guidance** — Show the last `/health.build` version in every retained runtime state. A semantic version older than the client warns before authentication succeeds. Host refusals explain that an outdated daemon may be responsible and recommend installing the current `tuic-remote` and restarting the service. A bare 403 carries no version; without a prior health observation, the version stays unknown. Explicit disconnect clears the observation.
+
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
@@ -2840,7 +2858,7 @@ partial work, and their child processes may continue.
 
 ---
 
-Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name and stops automatic connection retries until an explicit Connect attempt. The cause remains visible without a retry delay. Repeated identical failure states do not add warnings. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Retryable failures show the automatic retry delay; active attempts clear the previous failure.
 
 ## 25. Generators
 
@@ -3005,7 +3023,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Transition history uses readable command labels and 1-based criterion numbers, with the current criterion text when available. Actors show a live session name or an eight-character session ID; hover the actor to see the complete session ID. The current history API does not return timestamps. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -3095,6 +3113,13 @@ retains bounded final output, and expires active runs at their persisted deadlin
 If stopping one run fails, it stays active while other runs still enforce their
 deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
+
+Event-run details retain durable publication outcomes and exact pre-POST intent.
+Restart and lost-response reconciliation use a repository/head/base PR lookup;
+uncertain writes are never automatically repeated. Filtered, duplicate and
+capacity decisions retain coalesced skipped history without consuming admission.
+The outcome includes PR/comment URL slots, decision and failure/refusal reason;
+comment publication and machine-enforced review/check gating are not added.
 
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
 The Automations editor exposes **Include precheck stdout in the agent prompt**,
@@ -3469,3 +3494,35 @@ bare unknown names remain command attempts (#2421-6e0a).
 ### Ego terminal usage (#2386-6f7c)
 
 Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4. The shared badge shows observed context tokens, the observed context capacity when present, complete monetary spend, and complete subscription API-price equivalents. Spend and equivalents remain separate. Version 4 also shows explicitly reported remaining requests, tokens, input tokens, output tokens, or USD. Session observations must match the exact provider/model; a current OpenRouter credential balance is labelled `openrouter key`, not session spend. The hover text includes each limit's observation time, source, and reported reset. Unknown fields stay hidden; TUIC does not calculate remaining balances from limit minus usage or borrow another provider account. The executable comes from the live terminal, not the AI Chat setting.
+
+### Story drafts from requests
+
+New story accepts a plain request and fills an editable draft through the existing
+unattended ego turn. Fill never saves; explicit Create story persists reviewed
+fields and the optional problem atomically. Busy, cancel and error states preserve
+the request. Cancel stops only the owned one-shot connection. See the
+[native stories guide](user-guide/native-stories.md#draft-a-story-from-a-request).
+
+ACP controllers can supply a launch-only environment map to one fresh connection.
+Overrides are not persisted or exposed in connection reads; reconnect drops them,
+and an env-bearing connect to a live peer requires an explicit disconnect first.
+
+### Native story search projection
+
+Native story commits feed an optional read-only mdkb daemon projection under
+`tuic-stories`. Persisted ingest revisions include notes without advancing the
+subject revision. Desktop and headless hosts compare ID/revision inventories on
+connection, retry unavailable daemons every 30 seconds, and retain deletion
+tombstones. Story mutations do not depend on daemon availability. Closed and
+archived stories stay searchable. No story file is written to the project;
+plans and the story mutation API are unchanged. See the native stories guide.
+
+
+#### Reviewed event issue publication
+
+Event intake can opt in through `event_intake.workflow` to an explicit published
+native story workflow revision. Dispatch creates the native story and reuses its
+isolated artifact, independent review and configured check receipts. Draft
+publication requires current evidence matching the pushed SHA and includes review
+findings. Configurations without a workflow retain legacy behavior. See the
+[guide](user-guide/automations.md#opt-in-reviewed-issue-workflows).

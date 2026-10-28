@@ -89,13 +89,13 @@ pub(crate) async fn acp_workspace_root(
 
 pub(crate) async fn connect(
     state: &Arc<AppState>,
-    root: PathBuf,
+    request: AcpConnectRequest,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
     let config = ego_config(state)?;
-    let peer_id = peer_id_for_root(state, &root).await?;
+    let peer_id = peer_id_for_root(state, &request.root).await?;
     let snapshot = state
         .acp
-        .connect_with_peer(&config, AcpConnectRequest { root }, peer_id.clone())
+        .connect_with_peer(&config, request, peer_id.clone())
         .await?;
     label_peer(state, &peer_id);
     Ok(snapshot)
@@ -236,8 +236,9 @@ fn forward_detached(
 pub(crate) async fn acp_connect(
     state: State<'_, Arc<AppState>>,
     root: PathBuf,
+    env: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
-    connect(&state, root).await
+    connect(&state, AcpConnectRequest { root, env }).await
 }
 
 #[cfg(feature = "desktop")]
@@ -561,6 +562,20 @@ pub(crate) async fn acp_one_shot_prompt(
     crate::acp::oneshot::run_prompt(&state, root, prompt).await
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn acp_one_shot_prepare(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AcpClientError> {
+    Ok(crate::acp::oneshot::prepare(state.inner()))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn acp_one_shot_cancel(state: State<'_, Arc<AppState>>, request_id: String) -> bool {
+    crate::acp::oneshot::cancel(&state, &request_id)
+}
+
 #[cfg(all(test, feature = "desktop"))]
 mod tests {
     use std::sync::mpsc;
@@ -666,6 +681,46 @@ mod tests {
         let repaired = peer_id_for_root(&restarted, root.path()).await.unwrap();
         assert_eq!(repaired.len(), 36, "bridge headers require canonical UUIDs");
         assert_ne!(repaired, first);
+    }
+
+    /// Catches: native Fill panics when reservation expiry spawns on the IPC
+    /// thread without an entered Tokio runtime. Exercise generated dispatch,
+    /// not the helper inside a Tokio test or an HTTP handler.
+    #[cfg(feature = "settings-ipc-test")]
+    #[test]
+    fn one_shot_prepare_dispatches_without_a_caller_tokio_runtime() {
+        assert!(tokio::runtime::Handle::try_current().is_err());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![super::acp_one_shot_prepare])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "prepare-test", Default::default())
+            .build()
+            .unwrap();
+        let response = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "acp_one_shot_prepare".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: tauri::ipc::InvokeBody::Json(serde_json::json!({})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        )
+        .expect("native preparation returns a handle rather than panicking");
+        let id: String = response.deserialize().unwrap();
+        assert!(crate::acp::oneshot::cancel(&state, &id));
+        assert!(!crate::acp::oneshot::cancel(&state, &id));
     }
 
     /// `acp_subscribe` is a sync command, so Tauri runs it on the main thread,

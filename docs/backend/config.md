@@ -122,8 +122,15 @@ uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
 scan, import, modify, or delete default or legacy credential entries, including
 the dynamic legacy MCP credential locations. Release `tuic-remote` probes a
 named vault before binding its socket and exits on failure; it does not interpret
-a keyring error as an empty vault or fall back to a file. Debug builds retain the
-file-backed credential adapter, scoped below the selected instance directory.
+a keyring error as an empty vault or silently fall back to a file.
+`tuic-remote --credential-file <path>` explicitly selects a read-once JSON vault
+map instead: no OS keyring or legacy migration is used, including for missing
+slots. Credential writes are process-local; the seed file is never modified.
+Unreadable or malformed input stops startup before listeners bind, with no input
+contents in the diagnostic. Rotate by replacing the file and restarting; API
+credential edits do not survive restart. This selector is not a config JSON field
+and does not change desktop defaults. See the remote-access guide for setup.
+Debug builds retain the file-backed credential adapter, scoped below the selected instance directory.
 Instance selection precedes `--set-password`, so password setup writes only to
 the selected namespace.
 
@@ -1882,3 +1889,28 @@ persistence/apply flags, never credentials or credential-derived hashes.
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+### Native story ingest ledger
+
+Schema v6 of `stories.sqlite3` adds `story_ingest`, beside the app configuration,
+not in a project. SQLite triggers update an independent revision, update time
+and deletion tombstone in the same transaction as each story write or appended
+note. Migration seeds existing stories and notes without changing their subject
+revisions or documents. Post-commit wakes and a 30-second reconnect sweep feed
+mdkb's `external.list`, `external.upsert` and `external.delete` methods through
+`mdkb_client.rs`. Only IDs in this instance's ledger are owned. The projection
+is optional and read-only; neither RPC failures nor daemon absence roll back
+story mutations. No story mirror or new user configuration is created.
+
+
+### Event workflow selection
+
+`automations.json` can opt in with `event_intake.workflow` containing
+`definition_id` and positive `definition_revision`. Omission or null preserves
+legacy event behavior. Event admission pins this selection in `AutomationRun.event_workflow`;
+`workflow_binding` records the native `run_id` and `story_id`. Both fields default
+to null for earlier snapshots. The native workflow uses the prepared isolated
+workspace and its own role profiles. Publication reloads its authoritative
+review/check receipts and verifies GitHub's pushed branch SHA. Publication success
+or refusal updates the completed event's durable `outcome`, not its execution status.
+See [reviewed issue workflows](../user-guide/automations.md#opt-in-reviewed-issue-workflows).

@@ -2701,6 +2701,13 @@ fn choose_event(
                 fingerprint: fingerprint(&snapshot.plan_id, &stories, true)?,
             })
         }
+        RunCommand::CompleteReviewedStory { story_id } => {
+            if snapshot.root_target != Some(RunTarget::Story(story_id.clone())) {
+                return Err("reviewed completion requires the standalone story root".into());
+            }
+            super::publication_review(snapshot, &story_id)?;
+            Ok(RunEventKind::Completed)
+        }
         RunCommand::Complete => {
             if !snapshot.graph_executions.is_empty()
                 && (!matches!(snapshot.root_target, Some(RunTarget::Plan(_)))

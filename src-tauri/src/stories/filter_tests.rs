@@ -265,3 +265,123 @@ fn story_filters_keep_review_blocked_and_backlog_open_and_group_done_as_closed()
             .is_err()
     );
 }
+
+#[test]
+fn project_story_view_includes_every_plan_but_not_other_projects_or_archive_scopes() {
+    // Catches accidentally retaining the selected-plan constraint or mixing archive/project scopes.
+    let dir = tempfile::tempdir_in(tuic_test_support::test_temp_root()).expect("scratch");
+    let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+    let mut plans = Vec::new();
+    for (project, title) in [
+        ("/project", "Alpha"),
+        ("/project", "Beta"),
+        ("/other", "Other"),
+        ("/project", "Archived"),
+    ] {
+        plans.push(
+            store
+                .create_plan(NewPlan {
+                    project: project.into(),
+                    title: title.into(),
+                    source: format!("{title}.md"),
+                })
+                .expect("plan"),
+        );
+    }
+    let alpha = create(
+        &store,
+        &plans[0].id,
+        "Alpha feature",
+        Some(StoryType::Feature),
+    );
+    let beta = create(&store, &plans[1].id, "Beta task", Some(StoryType::Task));
+    create(&store, &plans[2].id, "Other project", None);
+    let archived_plan_story = create(&store, &plans[3].id, "Archived plan story", None);
+    store
+        .set_plan_archived(&plans[3].id, 1, true, StoryTransitionActor::Human)
+        .expect("archive plan");
+    let archived_story = create(&store, &plans[1].id, "Archived story", None);
+    store
+        .set_story_archived(&archived_story.id, 1, true, StoryTransitionActor::Human)
+        .expect("archive story");
+    store
+        .transition(&beta.id, 1, StoryCommand::WontFix)
+        .expect("cancel beta");
+
+    let view = store
+        .project_story_view("/project", false, &StoryFilter::default())
+        .expect("all plans");
+    assert_eq!(view.stories.len(), 2);
+    for id in [&alpha.id, &beta.id] {
+        assert!(view.visible_story_ids.contains(id), "missing story {id}");
+    }
+    assert_eq!(view.columns.len(), 8);
+    assert_eq!(
+        view.columns
+            .iter()
+            .flat_map(|column| &column.story_ids)
+            .count(),
+        2
+    );
+    let filtered = store
+        .project_story_view(
+            "/project",
+            false,
+            &StoryFilter {
+                visibility: StoryVisibility::Closed,
+                story_type: Some(StoryType::Task),
+                ..Default::default()
+            },
+        )
+        .expect("filtered");
+    assert_eq!(filtered.visible_story_ids, vec![beta.id]);
+    assert_eq!(
+        filtered.stories.len(),
+        2,
+        "detail records are not filtered away"
+    );
+    let archived = store
+        .project_story_view("/project", true, &StoryFilter::default())
+        .expect("archived plans");
+    assert_eq!(archived.visible_story_ids, vec![archived_plan_story.id]);
+    let archived = store
+        .project_story_view(
+            "/project",
+            false,
+            &StoryFilter {
+                archived: true,
+                ..Default::default()
+            },
+        )
+        .expect("archived stories");
+    assert_eq!(archived.visible_story_ids, vec![archived_story.id]);
+    let empty = store
+        .project_story_view("/empty", false, &StoryFilter::default())
+        .expect("empty project");
+    assert_eq!(empty.stories, Vec::<StoryRead>::new());
+    assert_eq!(empty.columns.len(), 8);
+    assert!(
+        store
+            .project_story_view(
+                "/empty",
+                false,
+                &StoryFilter {
+                    untyped_only: true,
+                    story_type: Some(StoryType::Fix),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+    );
+    let action: StoryAction = serde_json::from_value(
+        serde_json::json!({"action":"project_story_view","filter":{},"archived_plans":false}),
+    )
+    .expect("shared transport action");
+    assert!(matches!(action, StoryAction::ProjectStoryView { .. }));
+    let wire = serde_json::to_value(StoryReply::ProjectStoryView(view)).expect("wire");
+    assert_eq!(wire["type"], "project_story_view");
+    assert_eq!(
+        wire["value"]["stories"].as_array().expect("stories").len(),
+        2
+    );
+}

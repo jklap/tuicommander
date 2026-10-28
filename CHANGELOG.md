@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
+- Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
+- Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).
+
+### Fixed
+
+- Start terminal Compose at one line, grow with the draft up to its existing 96px editor height, and scroll longer drafts inside (#2447-9d28).
+
+- Keep known remote daemon versions visible after connection failures and explain updating and restarting an outdated daemon as a possible remedy for HTTP 403 Untrusted Host (#2445-fc5d).
+- Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).
+
+## [2.0.0-beta.4] - 2026-10-28
+
+- Index native stories and notes through the mdkb daemon without project files; preserve mutations while the daemon is down and reconcile durable revisions on reconnect (#2333-b498).
+
 ### Changed
 
 - Show an explicit telemetry-off state in the MDKB dashboard instead of treating disabled hook metrics as zero activity (#2442-61f6).
@@ -18,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Allow headless release daemons to use `--credential-file` with a read-once mounted JSON vault and process-local credential changes, without an OS keyring or session bus (#2343-5358).
+- Draft a New story from a plain request with **Fill with AI**, review every field before saving, and cancel the owned model turn without discarding the request (#2357-a8f2).
+- Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
+- Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
+
 - Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
 
@@ -29,6 +51,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Relaunch updated Linux headless daemons from their startup executable path instead of the deleted running inode (#2343-5358).
+
+- Stop automatic remote connection retries after HTTP 403 Untrusted Host, retain the cause and manual reconnect, and log unchanged failures only once (#2438-4c2f).
+- Apply the existing subagent-silence setting to mobile/PWA sounds and session Web Push, preserving parentage across asynchronous exit teardown (#2342-4a1c).
+
+- Keep hidden terminal panes out of unsized warnings, avoid duplicate API-error handlers after reconnect, and log successful MCP peer rebinds at info instead of warn (#2439-027f).
+- Remove the permanent manual-prefix hint from New story without changing `[MANUAL]` criteria (#2444-9461).
+
+- Share bounded, cached ego usage reads between the status-bar badge and session details to avoid repeated or overlapping CLI processes (#2431-0847).
+- Keep event-run draft PR configuration and git reads off async runtime workers, so slow publication prerequisites do not block unrelated async work (#2428-cd8d).
+- Do not turn successful Claude tool-result auth or transport diagnostics into sticky agent API-error badges (#2429-a18d).
+- Tell agents to use TUIC managed peers for delegation or parallel work through the launch playbook, with an MCP fallback and the existing Claude Code isolated-task exception (#2441-bbcf).
+- Refuse archival of unresolved story prerequisites with open dependents, and require restoring archived unresolved work before adding a dependency to it (#2426-821e).
 - Explain how to restore an archived plan when New plan selects its existing source, instead of silently hiding the result; preserve the plan and avoid duplicates (#2425-5cfa).
 - Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
 - Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
@@ -52,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
 - Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
 - Recover live but unresponsive stdio MCP upstreams after two consecutive failed health probes, without changing ordinary tool-call reply timeout behavior or respawn throttling (#2417-793a).
+- Preserve Jira description and custom-field editor values, literal ADF text, registered Data Center account mode, and required-description create validation (#1694-161f).
 
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 
@@ -64,8 +100,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
+- Forward cancellation through all Jira Tasks requests and reject assignee lookup without a configured project instead of sending `project=undefined` (#2387-4c05).
 
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
+- Preserve unsent drafts when At-Capacity Retry and Claude Wakeup submit idle prompts by using the atomic empty-composer check. Rejected attempts do not consume retry or wake budgets; busy-time error-loop nudges remain a separate deferred path (#2389-258c).
+
 - Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
 - Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
 - Automatically compact an exhausted ego AI Chat conversation and retry the submitted prompt once in its continuation; stop with an error if recovery fails. Keep composer drafts during compaction and allow sends in other conversations (#2392-b2e3).
@@ -83,6 +122,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep Windows worktree cleanup on the selected Git installation launcher and avoid empty submodule shell scans during fresh workspace safety listings (#2310-6e76).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 
+- Align New story actions with Edit plan, move story Edit into its header, and explain disabled dependency actions (#2380-23f1).
 - Give Edit plan and New story a full-width editor, let users choose repository plan documents, show the complete source and disabled-Save reason, and group archive actions with plan actions (#2356-5c36).
 
 - Make private secret-form phone links selectable, absolute, clickable and copyable, with a shared QR code and guidance when Remote Access is off (#2378-c2eb).
