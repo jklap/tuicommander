@@ -233,15 +233,15 @@ fn event_workflow_selection_is_pinned_in_the_admission_record() {
             .definition_revision,
         3
     );
-    assert!(
+    assert_eq!(
         admit_issues(
             owner.store(),
             &config,
             &[issue(3, SANDBOX, &["tuic-run"], "OPEN")],
             20
         )
-        .unwrap()
-        .is_empty()
+        .unwrap(),
+        Vec::new()
     );
 }
 
