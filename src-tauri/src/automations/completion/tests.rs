@@ -402,7 +402,9 @@ async fn event_publication_prerequisites_preserve_config_and_git_errors() {
     let path = dir.path().join("automations.json");
     let workspace = dir.path().to_str().unwrap().to_owned();
     std::fs::write(&path, "not JSON").unwrap();
-    let expected = DefinitionStore::at_path(path.clone()).load().err().unwrap();
+    let parse_error = serde_json::from_str::<super::super::model::AutomationsConfig>("not JSON")
+        .unwrap_err();
+    let expected = format!("Corrupt {}: {parse_error}", path.display());
     let config_path = path.clone();
     let actual = event_publication_prerequisites(
         move || DefinitionStore::at_path(config_path),
@@ -412,7 +414,7 @@ async fn event_publication_prerequisites_preserve_config_and_git_errors() {
     .err()
     .unwrap();
     assert_eq!(actual, expected);
-    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, "{}").unwrap();
     std::fs::write(dir.path().join(".git"), "invalid git directory").unwrap();
     let error = event_publication_prerequisites(move || DefinitionStore::at_path(path), workspace)
         .await
