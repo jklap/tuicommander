@@ -225,7 +225,8 @@ export const Composer: Component<{
 			const typed = text.match(/^\/(\S+)(?:\s([\s\S]*))?$/);
 			const name = typed?.[1] === "q" ? "quit" : typed?.[1];
 			const command = commands().find((candidate) => candidate.name === name);
-			if (!command) {
+			// A second slash identifies path text; advertised command names still take precedence.
+			if (!command && !typed?.[1].includes("/")) {
 				setCommandNotice(
 					`${typed ? `/${typed[1]}` : "This command"} is not available in AI Chat. Available commands: ${commands()
 						.map((candidate) => `/${candidate.name}`)
@@ -233,7 +234,7 @@ export const Composer: Component<{
 				);
 				return;
 			}
-			if (command.run) {
+			if (command?.run) {
 				if (command.unavailable || typed?.[2]?.trim() || ((images.length || files.length) && name !== "clear")) {
 					setCommandNotice(command.unavailable ?? `/${name} does not accept arguments or attachments.`);
 					return;

@@ -301,6 +301,8 @@ pub(crate) struct StdioMcpClient {
     stdin_tx: Option<std::sync::mpsc::SyncSender<WriteJob>>,
     /// When was the last spawn attempted (for rate limiting).
     last_spawn: Option<Instant>,
+    /// Consecutive failed health RPCs, never ordinary tool-call failures.
+    failed_health_probes: u8,
     /// JSON-RPC request counter.
     request_id: u64,
 }
@@ -314,6 +316,7 @@ impl StdioMcpClient {
             stdout_rx: None,
             stdin_tx: None,
             last_spawn: None,
+            failed_health_probes: 0,
             request_id: 0,
         }
     }
@@ -568,7 +571,27 @@ impl StdioMcpClient {
             // Keep respawns under the same mutex and rate limit as initial setup.
             return self.spawn_and_initialize();
         }
-        let tools_resp = self.rpc("tools/list", serde_json::json!({}))?;
+        let tools_resp = match self.rpc("tools/list", serde_json::json!({})) {
+            Ok(response) => {
+                self.failed_health_probes = 0;
+                response
+            }
+            Err(error) => {
+                self.failed_health_probes += 1;
+                if self.failed_health_probes >= 2 {
+                    // A slow tool's reply timeout must not kill its process.
+                    // Repeated failed health probes, however, must not keep
+                    // reusing a live but unresponsive child forever. The next
+                    // probe reinitializes through the existing spawn throttle.
+                    tracing::warn!(
+                        upstream = %self.config.name,
+                        "two consecutive health probes failed; retiring stdio upstream"
+                    );
+                    self.shutdown_internal();
+                }
+                return Err(error);
+            }
+        };
         let tools_arr = tools_resp["result"]["tools"]
             .as_array()
             .cloned()
@@ -615,6 +638,7 @@ impl StdioMcpClient {
     }
 
     fn shutdown_internal(&mut self) {
+        self.failed_health_probes = 0;
         // Close stdin first — signals EOF to the child
         drop(self.stdin_tx.take());
         if let Some(queue) = self.stdout_rx.take() {
@@ -876,6 +900,64 @@ mod tests {
         client.shutdown();
         // After shutdown the process should be dead
         assert!(!client.is_alive());
+    }
+
+    #[test]
+    fn health_probe_recovers_live_unresponsive_stdio_child() {
+        // Catches repeatedly probing the same alive but permanently mute child.
+        let mut client = StdioMcpClient::new(make_config_for_scenario("mute-health-probes"));
+        client.spawn_and_initialize().expect("handshake");
+        let old_pid = client
+            .call_tool("probe", serde_json::json!({"mute_probes": u64::MAX}))
+            .unwrap();
+        client.config.timeout = Duration::from_millis(100);
+        assert!(client.health_check().unwrap_err().contains("timed out"));
+        assert!(
+            client.is_alive(),
+            "one failed probe must not retire the child"
+        );
+        assert!(client.health_check().unwrap_err().contains("timed out"));
+        assert!(
+            !client.is_alive(),
+            "two failed probes must retire the stuck child"
+        );
+
+        // Recovery still goes through the existing spawn throttle. Wait out its
+        // real interval before asking for a replacement, without forging state.
+        std::thread::sleep(Duration::from_secs(5));
+        client.config.timeout = Duration::from_secs(30);
+        let tools = client
+            .health_check()
+            .expect("fresh handshake restores tools");
+        assert_eq!(tools[0].original_name, "probe");
+        let new_pid = client.call_tool("probe", serde_json::json!({})).unwrap();
+        assert_ne!(old_pid, new_pid, "recovery must replace the stuck process");
+    }
+
+    #[test]
+    fn successful_health_probe_resets_failure_streak() {
+        // Catches cumulative rather than consecutive failures killing a healthy child.
+        let mut client = StdioMcpClient::new(make_config_for_scenario("mute-health-probes"));
+        client.spawn_and_initialize().expect("handshake");
+        let original = client.call_tool("probe", serde_json::json!({})).unwrap();
+        for _ in 0..3 {
+            client.config.timeout = Duration::from_secs(30);
+            client
+                .call_tool("probe", serde_json::json!({"mute_probes": 1}))
+                .unwrap();
+            client.config.timeout = Duration::from_millis(100);
+            assert!(client.health_check().unwrap_err().contains("timed out"));
+            assert!(
+                client.is_alive(),
+                "isolated probe failure must preserve child"
+            );
+            client.config.timeout = Duration::from_secs(30);
+            assert_eq!(client.health_check().unwrap()[0].original_name, "probe");
+            assert_eq!(
+                client.call_tool("probe", serde_json::json!({})).unwrap(),
+                original
+            );
+        }
     }
 
     #[test]
