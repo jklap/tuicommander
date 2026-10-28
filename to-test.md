@@ -1,3 +1,8 @@
+## Mobile subagent notification policy (2342-4a1c) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `subagent_push_does_not_lose_parentage_during_exit_teardown`, existing question/completion push-window tests, and `src/mobile/__tests__/useMobileNotifications.test.ts` against the final commit. Pre-fix RED reproduced the child push-budget reservation after teardown and both mobile sound bypasses; implementation-lane GREEN is not claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), check real-phone audio/Web Push with subagent silence on and off. Parented sessions follow the host setting, user-started sessions remain audible, and muted transitions do not replay. Real hardware delivery remains unverified; the daily app was not restarted.
+
 ## MDKB hook telemetry state (2442-61f6)
 
 - [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.

@@ -795,13 +795,19 @@ impl SessionState {
     }
 }
 
+struct SessionStateEvent {
+    event: AppEvent,
+    /// Spawn parentage captured before asynchronous exit teardown drops it.
+    parented: bool,
+}
+
 /// Lossless lane for events that mutate the authoritative per-session state.
 /// The public broadcast bus may drop messages for a lagging receiver; state
 /// transitions cannot, because losing either SET or CLEAR strands clients in a
 /// state that never existed or never ended.
 pub(crate) struct SessionStateEventQueue {
-    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<AppEvent>>>,
+    tx: tokio::sync::mpsc::UnboundedSender<SessionStateEvent>,
+    rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<SessionStateEvent>>>,
     /// Events sent and not yet applied, counted on both ends. See [`Self::depth`].
     depth: AtomicUsize,
 }
@@ -823,14 +829,14 @@ impl SessionStateEventQueue {
     }
 
     /// Queue `event`, counting it as outstanding until the accumulator applies it.
-    fn send(&self, event: AppEvent) {
+    fn send(&self, event: AppEvent, parented: bool) {
         // Counted BEFORE the send, never after: the accumulator runs on another task and
         // can receive and decrement before `send` even returns here. An increment after
         // that would leave the depth permanently one too high, and a `fetch_sub` reaching
         // zero first would wrap a `usize` to `usize::MAX`.
         self.depth
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if self.tx.send(event).is_err() {
+        if self.tx.send(SessionStateEvent { event, parented }).is_err() {
             // The receiver is gone, so nothing will ever apply this one.
             self.depth
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -2493,7 +2499,10 @@ impl AppState {
         // Titles are presentation only; do not grow the lossless state lane
         // for an agent that animates its OSC title.
         if !matches!(&event, AppEvent::PtyTitle { .. }) {
-            self.session_maps.session_state_events.send(event.clone());
+            let parented = self.event_is_parented(&event);
+            self.session_maps
+                .session_state_events
+                .send(event.clone(), parented);
         }
         if let Some(sid) = event.pty_session_id()
             && let Some(tx) = self.session_maps.pty_event_channels.get(sid)
@@ -4912,9 +4921,9 @@ impl AppState {
             loop {
                 tokio::select! {
                     event = state_rx.recv() => match event {
-                        Some(event) => {
-                            Self::apply_event_to_session_state(&state, &event);
-                            Self::publish_session_state_change(&state, &event, &mut published);
+                        Some(queued) => {
+                            Self::apply_session_state_event(&state, &queued.event, queued.parented);
+                            Self::publish_session_state_change(&state, &queued.event, &mut published);
                             // After the apply, not before: the depth counts events the
                             // authoritative state has not absorbed yet, and an event
                             // being applied right now is still one of them.
@@ -4989,6 +4998,31 @@ impl AppState {
         });
     }
 
+    fn event_is_parented(&self, event: &AppEvent) -> bool {
+        event.pty_session_id().is_some_and(|id| {
+            self.session_maps
+                .session_parent
+                .get(id)
+                .is_some_and(|parent| {
+                    !crate::mcp_http::mcp_transport::is_pending_parent(parent.value())
+                })
+        })
+    }
+
+    /// Use the host preference at consumption time, but the event's spawn ancestry.
+    fn session_push_ready(state: &AppState, parented: bool) -> bool {
+        let push_enabled = {
+            let config = state.config.read();
+            config.services.push.enabled
+                && !config.services.push.vapid_private_key.is_empty()
+                && !state.push_store.is_empty()
+        };
+        push_enabled
+            && (!parented
+                || !crate::config::load_notification_config_in(&state.data_dir)
+                    .silence_remote_completions)
+    }
+
     /// Send a push with a readable label while retaining the PTY navigation id.
     fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
         let identity = state.session_maps.sessions.get(session_id).map(|session| {
@@ -5042,6 +5076,11 @@ impl AppState {
 
     /// Apply a single event to the session state accumulator.
     fn apply_event_to_session_state(state: &Arc<AppState>, event: &AppEvent) {
+        let parented = state.event_is_parented(event);
+        Self::apply_session_state_event(state, event, parented);
+    }
+
+    fn apply_session_state_event(state: &Arc<AppState>, event: &AppEvent, parented: bool) {
         // #744-138c: awaiting-evidence side effect on the session's
         // SilenceState, applied outside the session_states entry lock (see
         // the PtyParsed arm below) to preserve the SilenceState → SessionState
@@ -5177,12 +5216,7 @@ impl AppState {
                         })
                         .unwrap_or(true)
                 });
-                let push_ready = matches!(event_type, "question" | "choice-prompt") && {
-                    let config = state.config.read();
-                    config.services.push.enabled
-                        && !config.services.push.vapid_private_key.is_empty()
-                        && !state.push_store.is_empty()
-                };
+                let push_ready = matches!(event_type, "question" | "choice-prompt") && Self::session_push_ready(state, parented);
                 let window_focused = state
                     .desktop_window_focused
                     .load(std::sync::atomic::Ordering::Relaxed);
@@ -5524,12 +5558,7 @@ impl AppState {
                     session.provider_recovery = None;
                 }
                 crate::codex_binding::revoke(state, session_id);
-                let push_ready = {
-                    let config = state.config.read();
-                    config.services.push.enabled
-                        && !config.services.push.vapid_private_key.is_empty()
-                        && !state.push_store.is_empty()
-                };
+                let push_ready = Self::session_push_ready(state, parented);
                 let window_focused = state
                     .desktop_window_focused
                     .load(std::sync::atomic::Ordering::Relaxed);
@@ -10152,6 +10181,124 @@ mod tests {
             eligible.last_push_ms.unwrap() > old,
             "an older question alert must not block a new one"
         );
+    }
+
+    #[tokio::test]
+    async fn subagent_push_does_not_lose_parentage_during_exit_teardown() {
+        use base64ct::Encoding;
+
+        for (parent, silence, question, muted) in [
+            (Some("parent"), true, false, true),
+            (Some("parent"), true, true, true),
+            (Some("parent"), false, false, false),
+            (Some("parent"), false, true, false),
+            (None, true, false, false),
+            (None, true, true, false),
+            (Some("pending-mcp:unbound"), true, false, false),
+            (Some("pending-mcp:unbound"), true, true, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+            let (sent, mut accepted) = tokio::sync::mpsc::unbounded_channel();
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    axum::Router::new().route(
+                        "/push",
+                        axum::routing::post(move || {
+                            let sent = sent.clone();
+                            async move {
+                                let _ = sent.send(());
+                                axum::http::StatusCode::CREATED
+                            }
+                        }),
+                    ),
+                )
+                .await
+                .unwrap();
+            });
+            let state = fresh_state();
+            let (private, public) = crate::push::generate_vapid_keys().unwrap();
+            {
+                let mut config = state.config.write();
+                config.services.push.enabled = true;
+                config.services.push.vapid_private_key = private;
+                config.services.push.vapid_public_key = public;
+            }
+            std::fs::write(
+                state.data_dir.join("notifications.json"),
+                serde_json::to_vec(&serde_json::json!({"silence_remote_completions": silence}))
+                    .unwrap(),
+            )
+            .unwrap();
+            state
+                .desktop_window_focused
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            let key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+            state.push_store.upsert(crate::push::PushSubscription {
+                endpoint,
+                keys: crate::push::PushSubscriptionKeys {
+                    p256dh: base64ct::Base64UrlUnpadded::encode_string(
+                        key.verifying_key().to_encoded_point(false).as_bytes(),
+                    ),
+                    auth: base64ct::Base64UrlUnpadded::encode_string(&[7u8; 16]),
+                },
+                created_at: chrono::Utc::now(),
+            });
+            if let Some(parent) = parent {
+                state
+                    .session_maps
+                    .session_parent
+                    .insert("s1".into(), parent.into());
+            }
+            // Queue first, then perform the real teardown before starting the consumer.
+            // A live-map lookup in the consumer would now misclassify the child.
+            state.emit_pty_event(if question {
+                make_parsed(
+                    "question",
+                    serde_json::json!({"prompt_text": "Continue?", "confident": true}),
+                )
+            } else {
+                AppEvent::PtyExit {
+                    session_id: "s1".into(),
+                }
+            });
+            crate::pty::mark_session_exited("s1", &state);
+            assert!(!state.session_maps.session_parent.contains_key("s1"));
+            let mut events = state.event_bus.subscribe();
+            AppState::spawn_session_state_accumulator(state.clone());
+            tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                loop {
+                    if matches!(events.recv().await.unwrap(), AppEvent::SessionStateChanged { session_id, .. } if session_id == "s1") {
+                        break;
+                    }
+                }
+            }).await.expect("queued event was not applied");
+            if muted {
+                assert!(
+                    state
+                        .session_maps
+                        .session_states
+                        .get("s1")
+                        .unwrap()
+                        .last_push_ms
+                        .is_none(),
+                    "silenced child spent push budget after teardown (question={question})"
+                );
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+                        .await
+                        .is_err(),
+                    "silenced child sent a push after teardown (question={question})"
+                );
+            } else {
+                tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+                    .await
+                    .expect("eligible session lost its push")
+                    .expect("push sink closed");
+            }
+            server.abort();
+        }
     }
 
     #[tokio::test]

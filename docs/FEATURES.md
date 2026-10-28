@@ -2363,6 +2363,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - ACP interaction pushes link to `/mobile?repo=…&session=…`, selecting the correct Chat conversation; answered requests and ordinary ACP activity do not push
 - Visible notifications use one tag per session, so a new question replaces only that session's earlier notification; generic alerts keep a separate shared tag
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
+- **Silence subagent sounds and notifications** also suppresses question and completion pushes from parented sessions. Exit events retain their spawn parentage until the state accumulator applies them; parent and user-started sessions are unaffected.
 - Question and completion pushes share one 30-second limit per session
 - ACP interaction pushes use the same 30-second limit for each conversation
 - A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path. For Codex `request_user_input`, the session header opens the queued question; its title and options appear in the transient choice overlay, and numbered answers use one PTY key. The `Other` choice opens Codex notes for a typed answer. The control uses the existing header, preserving all terminal rows
@@ -2372,7 +2373,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
 
 ### 18.9 Notification Sounds
-- Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility before playback.
+- Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility and the host subagent-silence setting before playback. Parented sessions follow **Silence subagent sounds and notifications** without replaying muted transitions.
 - Audio playback via Rust `rodio` crate (Tauri command `play_notification_sound`), replacing the previous Web Audio API approach
 - Eliminates AudioContext suspend issues on WebKit and works in headless/remote modes
 - Native tones end on an exact zero-amplitude sample and keep the output stream alive for a 100 ms silent tail, avoiding end-of-chime clicks when CoreAudio releases a short-lived stream

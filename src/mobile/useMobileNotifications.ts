@@ -1,5 +1,6 @@
 import { type Accessor, createEffect, on, onCleanup } from "solid-js";
 import { notificationManager } from "../notifications";
+import { notificationsStore } from "../stores/notifications";
 import type { SessionInfo } from "./useSessions";
 import { getMobileCompletionAction } from "./utils/mobileCompletionDecision";
 
@@ -23,6 +24,10 @@ interface PrevState {
 export function useMobileNotifications(sessions: Accessor<SessionInfo[]>, isSessionsListVisible: Accessor<boolean>) {
 	const canPlaySound = () =>
 		isSessionsListVisible() && document.visibilityState === "visible" && localStorage.getItem(SOUND_KEY) !== "false";
+	// Read the host preference on mount and after settings changes/reconnect.
+	onCleanup(notificationsStore.startRemoteSync());
+	const isSilenced = (session: SessionInfo) =>
+		!!session.parent_session && notificationsStore.state.config.silence_remote_completions;
 	const prevStates = new Map<string, PrevState>();
 	const deferredTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -50,7 +55,7 @@ export function useMobileNotifications(sessions: Accessor<SessionInfo[]>, isSess
 					busySince: nowBusy ? (prev?.busySince ?? Date.now()) : null,
 				};
 
-				if (prev && audible) {
+				if (prev && audible && !isSilenced(s)) {
 					// Question: wasn't awaiting, now is
 					if (!prev.awaiting && now.awaiting) {
 						notificationManager.playQuestion();
@@ -89,7 +94,9 @@ export function useMobileNotifications(sessions: Accessor<SessionInfo[]>, isSess
 								s.session_id,
 								setTimeout(() => {
 									deferredTimers.delete(s.session_id);
-									if (canPlaySound()) notificationManager.playCompletion();
+									const currentSession = sessions().find((session) => session.session_id === s.session_id);
+									if (canPlaySound() && currentSession && !isSilenced(currentSession))
+										notificationManager.playCompletion();
 								}, decision.delayMs),
 							);
 						}
