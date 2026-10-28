@@ -13,6 +13,7 @@ vi.mock("../../notifications", () => ({ notificationManager: sounds }));
 
 const policy = vi.hoisted(() => ({
 	state: { config: { silence_remote_completions: true } },
+	hydrate: vi.fn().mockResolvedValue(undefined),
 	startRemoteSync: vi.fn(() => vi.fn()),
 }));
 vi.mock("../../stores/notifications", () => ({ notificationsStore: policy }));
@@ -286,5 +287,46 @@ describe("useMobileNotifications", () => {
 		vi.advanceTimersByTime(5_000);
 		expect(playCompletion).toHaveBeenCalledOnce();
 		dispose();
+	});
+});
+
+describe("mobile notification host hydration", () => {
+	it("does not mistake cold PWA defaults for local intent when the host allows subagent sounds", async () => {
+		vi.resetModules();
+		vi.doUnmock("../../stores/notifications");
+		vi.doMock("../../notifications", async (importOriginal) => ({
+			...(await importOriginal<typeof import("../../notifications")>()),
+			notificationManager: { ...sounds, updateConfig: vi.fn(), isAvailable: () => true },
+		}));
+		vi.doMock("../../invoke", () => ({
+			invoke: vi.fn().mockResolvedValue({ silence_remote_completions: false }),
+		}));
+		vi.doMock("../../transport", () => ({
+			isTauri: () => false,
+			subscribeEvents: vi.fn().mockResolvedValue(() => {}),
+		}));
+		localStorage.clear();
+		playQuestion.mockClear();
+		const { useMobileNotifications: useHostNotifications } = await import("../useMobileNotifications");
+		let set!: (next: SessionInfo[]) => void;
+		const child = (awaiting: boolean) => ({ ...session({ awaiting_input: awaiting }), parent_session: "parent" });
+		const dispose = createRoot((d) => {
+			const [sessions, setSessions] = createSignal([child(false)]);
+			set = setSessions;
+			useHostNotifications(sessions, () => true);
+			return d;
+		});
+		try {
+			// Let the host read and refresh adoption settle, without hydrating the store in the test.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			set([child(true)]);
+			expect(playQuestion).toHaveBeenCalledOnce();
+		} finally {
+			dispose();
+			vi.doUnmock("../../notifications");
+			vi.doUnmock("../../invoke");
+			vi.doUnmock("../../transport");
+			vi.resetModules();
+		}
 	});
 });
