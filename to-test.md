@@ -1,3 +1,8 @@
+## MDKB hook telemetry state (2442-61f6)
+
+- [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.
+- [ ] Capture the telemetry-off dashboard with shared plugin CSS. The isolated Chrome for Testing attempt timed out after 20 seconds without a screenshot; the generated renderer page is at `~/Gits/.tmp/results/tuic-2442-evidence/telemetry-off.html`. No visual pass is claimed.
+- [ ] Verify a live MDKB 3.13 stats report with telemetry disabled. Upstream `HooksSummary` and `collect_hooks` confirm the boolean contract; the installed CLI is 3.12.2 and does not emit the field.
 ## Archived New plan source (2425-5cfa) — Rust rebuild/restart required
 
 - [ ] Coordinator: run `new_plan_archived_source_has_visible_result` and `adding_a_plan_source_derives_its_title_and_reuses_its_record` against the final commit. The regression failed on pre-fix Linux rb; GREEN belongs to the critic.
