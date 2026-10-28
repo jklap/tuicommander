@@ -93,7 +93,8 @@ export function useTasksCreate(props: TasksCreateOptions) {
 	}
 	createEffect(on(() => props.provider, loadTypes));
 
-	const collected = createMemo(() => collectFields(schema(), draft()));
+	const description = () => schema().find((field) => field.id === "description");
+	const collected = createMemo(() => collectFields(schema(), { ...draft(), description: body() }));
 	const blocker = () => {
 		if (!title().trim()) return "Required: Title";
 		if (!itemType() || loaded().type !== itemType()) return "Required: Type";
@@ -128,7 +129,9 @@ export function useTasksCreate(props: TasksCreateOptions) {
 		types,
 		itemType,
 		chooseType,
-		schema,
+		schema: () => schema().filter((field) => field.id !== "description"),
+		description,
+		bodyError: () => (description()?.required && !body().trim() ? `Required: ${description()?.name}` : undefined),
 		draft,
 		setValue: (id: string, value: DraftValue) => setDraft((previous) => ({ ...previous, [id]: value })),
 		title,
