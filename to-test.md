@@ -1,3 +1,8 @@
+## Shared ego usage acquisition (2431-0847) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `ego_badge_shares_cached_bounded_usage_reader`, `terminal_ego_usage_does_not_require_acp_executable`, and the `session_usage::tests` / `ego_cli::usage::tests` consumers. RED reproduced four CLI reads instead of one on Linux rb; implementation-lane GREEN is not run.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm ego badge text and session details stay correct while switching tabs and polling. Rust does not hot-reload; the daily app was not restarted.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.

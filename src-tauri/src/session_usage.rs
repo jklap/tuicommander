@@ -84,18 +84,33 @@ impl SessionUsage {
     }
 }
 
-type Cached = Arc<tokio::sync::Mutex<Option<(SessionUsage, Instant)>>>;
+#[derive(Clone)]
+enum UsageRead {
+    Session(SessionUsage),
+    Ego { report: Arc<Value>, stale: bool },
+}
+
+impl UsageRead {
+    fn mark_stale(&mut self) {
+        match self {
+            Self::Session(snapshot) => snapshot.stale = true,
+            Self::Ego { stale, .. } => *stale = true,
+        }
+    }
+}
+
+type Cached = Arc<tokio::sync::Mutex<Option<(UsageRead, Instant)>>>;
 static CACHE: LazyLock<parking_lot::Mutex<HashMap<String, Cached>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 static READ_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 /// At most 32 retained snapshots, one fetch per identity, and two CLI readers at once.
 /// The public request deadline also bounds time spent queued behind another reader.
-async fn cached(
+async fn cached_read(
     key: String,
     ttl: Duration,
-    fetch: impl std::future::Future<Output = Result<SessionUsage, String>>,
-) -> Result<SessionUsage, String> {
+    fetch: impl std::future::Future<Output = Result<UsageRead, String>>,
+) -> Result<UsageRead, String> {
     let entry = {
         let mut cache = CACHE.lock();
         if !cache.contains_key(&key) && cache.len() >= 32 {
@@ -131,11 +146,22 @@ async fn cached(
                 && at.elapsed() < Duration::from_secs(1800)
             {
                 let mut snapshot = snapshot.clone();
-                snapshot.stale = true;
+                snapshot.mark_stale();
                 return Ok(snapshot);
             }
             Err(error)
         }
+    }
+}
+
+async fn cached(
+    key: String,
+    ttl: Duration,
+    fetch: impl std::future::Future<Output = Result<SessionUsage, String>>,
+) -> Result<SessionUsage, String> {
+    match cached_read(key, ttl, async { fetch.await.map(UsageRead::Session) }).await? {
+        UsageRead::Session(snapshot) => Ok(snapshot),
+        UsageRead::Ego { .. } => Err("usage cache identity mismatch".into()),
     }
 }
 
@@ -224,18 +250,9 @@ async fn local_usage(state: &AppState, session_id: &str) -> Result<SessionUsage,
             let Some(source) = ego_terminal_source(state, session_id).await? else {
                 return Ok(SessionUsage::unavailable("ego binding unavailable"));
             };
-            let key = format!(
-                "ego:{:?}:{:?}:{:?}:{}",
-                source.program, source.home, source.workspace, source.ego_session
-            );
-            let snapshot = cached(key, Duration::from_secs(30), async {
-                let report = source.read(state, session_id).await?;
-                ego_snapshot(&report, &source.ego_session)
-            })
-            .await?;
-            if ego_terminal_source(state, session_id).await?.as_ref() != Some(&source) {
-                return Ok(SessionUsage::unavailable("ego binding unavailable"));
-            }
+            let (report, stale) = source.read(state, session_id).await?;
+            let mut snapshot = ego_snapshot(&report, &source.ego_session)?;
+            snapshot.stale = stale;
             Ok(snapshot)
         }
         _ => Ok(SessionUsage::unavailable("unsupported agent")),
@@ -452,12 +469,38 @@ pub(crate) async fn ego_terminal_source(
 }
 
 impl EgoTerminalSource {
-    pub(crate) async fn read(&self, state: &AppState, terminal: &str) -> Result<Value, String> {
-        let report = ego_report(&self.program, &self.home, &self.workspace).await?;
-        if ego_terminal_source(state, terminal).await?.as_ref() != Some(self) {
-            return Err("ego binding changed".into());
-        }
-        Ok(report)
+    pub(crate) async fn read(
+        &self,
+        state: &AppState,
+        terminal: &str,
+    ) -> Result<(Arc<Value>, bool), String> {
+        // Both consumers share the report, not either consumer's projection.
+        // The deadline includes the identity lock and the global reader queue.
+        let read = async {
+            let key = format!(
+                "ego:{:?}:{:?}:{:?}:{}",
+                self.program, self.home, self.workspace, self.ego_session
+            );
+            let snapshot = cached_read(key, Duration::from_secs(30), async {
+                let report = ego_report(&self.program, &self.home, &self.workspace).await?;
+                Ok(UsageRead::Ego {
+                    report: Arc::new(report),
+                    stale: false,
+                })
+            })
+            .await?;
+            // Even a cache hit or stale fallback must still belong to this live terminal.
+            if ego_terminal_source(state, terminal).await?.as_ref() != Some(self) {
+                return Err("ego binding changed".into());
+            }
+            match snapshot {
+                UsageRead::Ego { report, stale } => Ok((report, stale)),
+                UsageRead::Session(_) => Err("usage cache identity mismatch".into()),
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(30), read)
+            .await
+            .map_err(|_| "ego usage timed out")?
     }
 }
 
@@ -607,6 +650,18 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn terminal_ego_usage_does_not_require_acp_executable() {
+        Box::pin(terminal_ego_usage_probe(false)).await;
+    }
+
+    /// Catches: badge polls bypassing the shared cache and reader limit.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ego_badge_shares_cached_bounded_usage_reader() {
+        Box::pin(terminal_ego_usage_probe(true)).await;
+    }
+
+    #[cfg(unix)]
+    async fn terminal_ego_usage_probe(check_cache: bool) {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         use std::sync::atomic::AtomicBool;
 
@@ -623,6 +678,7 @@ mod tests {
         let script = crate::test_support::fake_ssh_script(
             "2150-terminal-ego-usage",
             r#"[ "$1" = usage ] || exit 2
+printf "read\n" >> "$EGO_HOME/reads"
 cat "$EGO_HOME/report.json""#,
             "exit /b 2",
         );
@@ -719,11 +775,27 @@ cat "$EGO_HOME/report.json""#,
                 ..Default::default()
             },
         );
-        let snapshot = get_session_usage_impl(&state, "terminal-ego").await;
+        let reader_limit_held = if check_cache {
+            let permits = READ_SLOTS.acquire_many(2).await.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                crate::ego_cli::usage::read(&state, "terminal-ego"),
+            )
+            .await;
+            drop(permits);
+            result.is_err() && !dir.path().join("reads").exists()
+        } else {
+            true
+        };
+        let (concurrent_badge, snapshot) = tokio::join!(
+            crate::ego_cli::usage::read(&state, "terminal-ego"),
+            get_session_usage_impl(&state, "terminal-ego"),
+        );
         let badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
         state.config.write().ego_executable = "/unrelated/acp/ego".into();
         let with_other_acp = get_session_usage_impl(&state, "terminal-ego").await;
         let badge_with_other_acp = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+        let reads = std::fs::read_to_string(dir.path().join("reads")).unwrap();
         // Exercise the badge consumer with the recorded mixed accounting row,
         // not just the private projection: spend and equivalents must coexist.
         let recorded: Value =
@@ -733,14 +805,47 @@ cat "$EGO_HOME/report.json""#,
         mixed["context"] = Value::Null;
         let mixed_report = serde_json::json!({"v": 3, "sessions": [mixed]});
         std::fs::write(dir.path().join("report.json"), mixed_report.to_string()).unwrap();
+        expire_terminal_ego_cache(&state).await;
         let mixed_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
         // Catches: provider limits in v4 JSON ignored, so the badge has no remaining limit.
         let mut v4: Value =
             serde_json::from_str(include_str!("fixtures/ego-usage-v4.json")).unwrap();
         v4["sessions"][0]["session"] = serde_json::json!(id);
         std::fs::write(dir.path().join("report.json"), v4.to_string()).unwrap();
+        expire_terminal_ego_cache(&state).await;
         let v4_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
         let v4_snapshot = ego_snapshot(&v4, id);
+        let reads_after_expiration = std::fs::read_to_string(dir.path().join("reads")).unwrap();
+        let mut failure_checks = None;
+        if check_cache {
+            // Catches: transient failure discarding the last good report, or
+            // malformed reports silently reusing a previously priced result.
+            expire_terminal_ego_cache(&state).await;
+            std::fs::remove_file(dir.path().join("report.json")).unwrap();
+            let stale = get_session_usage_impl(&state, "terminal-ego").await;
+            let stale_badge = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+            std::fs::write(dir.path().join("report.json"), "not json").unwrap();
+            let malformed = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+            // Catches: distinct source workspaces sharing a cached report.
+            let other_workspace = dir.path().join("other");
+            std::fs::create_dir(&other_workspace).unwrap();
+            std::fs::write(
+                session_dir.join("manifest.json"),
+                serde_json::json!({"workspace_root": other_workspace}).to_string(),
+            )
+            .unwrap();
+            std::fs::write(dir.path().join("report.json"), mixed_report.to_string()).unwrap();
+            let other = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+            // Catches: cached usage surviving withdrawal of the live ego identity.
+            state
+                .session_maps
+                .session_states
+                .get_mut("terminal-ego")
+                .unwrap()
+                .agent_type = None;
+            let withdrawn = crate::ego_cli::usage::read(&state, "terminal-ego").await;
+            failure_checks = Some((stale, stale_badge, malformed, other, withdrawn));
+        }
         let source_error = if snapshot.availability != "available" {
             Some(format!(
                 "local={:?}; pid={:?}/{pid}; argv={:?}; home={:?}; binding={:?}",
@@ -762,6 +867,36 @@ cat "$EGO_HOME/report.json""#,
         drop(session);
         let output = output.join().unwrap();
         assert!(output.contains("test result: ok"), "{output}");
+        if check_cache {
+            assert_eq!(
+                reads.lines().count(),
+                1,
+                "badge and details must share one CLI read"
+            );
+            assert!(reader_limit_held, "badge spawned a CLI outside READ_SLOTS");
+            assert_eq!(
+                reads_after_expiration.lines().count(),
+                3,
+                "expired reports must refresh once"
+            );
+            let (stale, stale_badge, malformed, other, withdrawn) = failure_checks.unwrap();
+            assert!(stale.stale);
+            assert_eq!(stale.availability, "available");
+            assert_eq!(stale_badge.unwrap().text, v4_badge.as_ref().unwrap().text);
+            assert!(
+                malformed.is_err(),
+                "contract failures must not serve cached prices"
+            );
+            assert_eq!(
+                other.unwrap().text.as_deref(),
+                Some("USD 0 · API eq: USD 3.1727124")
+            );
+            assert!(withdrawn.unwrap().text.is_none());
+            assert_eq!(
+                concurrent_badge.unwrap().text.as_deref(),
+                Some("USD 0.00156247")
+            );
+        }
         // Catches: the badge taking its executable from unrelated ACP settings.
         for badge in [badge, badge_with_other_acp] {
             assert_eq!(badge.unwrap().text.as_deref(), Some("USD 0.00156247"));
@@ -804,6 +939,25 @@ cat "$EGO_HOME/report.json""#,
                     .any(|line| line.value.contains("24 output"))
             );
             assert!(!snapshot.lines.iter().any(|line| line.value.contains("999")));
+        }
+    }
+
+    #[cfg(unix)]
+    async fn expire_terminal_ego_cache(state: &AppState) {
+        let source = ego_terminal_source(state, "terminal-ego")
+            .await
+            .unwrap()
+            .unwrap();
+        let key = format!(
+            "ego:{:?}:{:?}:{:?}:{}",
+            source.program, source.home, source.workspace, source.ego_session
+        );
+        let entry = CACHE.lock().get(&key).cloned();
+        if let Some(entry) = entry {
+            let mut guard = entry.lock().await;
+            if let Some((_, at)) = &mut *guard {
+                *at -= Duration::from_secs(31);
+            }
         }
     }
 
