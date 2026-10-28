@@ -1,5 +1,6 @@
 //! Native sleep assertions follow backend work, never WebView activity.
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::state::{AppState, SessionState};
 
@@ -11,21 +12,38 @@ impl SleepBlocker {
     }
 
     fn reconcile(&self, state: &AppState) -> Result<(), String> {
+        self.reconcile_with(
+            state,
+            Instant::now,
+            crate::pty::process_tree_snapshot,
+            |guard, requested| {
+                reconcile_guard(guard, requested, || {
+                    keepawake::Builder::default()
+                        .display(false)
+                        .idle(true)
+                        .sleep(true)
+                        .reason("Agent session active")
+                        .app_name("TUICommander")
+                        .app_reverse_domain("com.tuicommander.app")
+                        .create()
+                        .map_err(|error| format!("Failed to block sleep: {error}"))
+                })
+            },
+        )
+    }
+
+    fn reconcile_with(
+        &self,
+        state: &AppState,
+        _now: impl Fn() -> Instant,
+        enumerate: impl FnOnce() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
+        transition: impl FnOnce(&mut Option<keepawake::KeepAwake>, bool) -> Result<(), String>,
+    ) -> Result<(), String> {
         // Serialize the observation and native transition. A late frontend
         // refresh cannot release an assertion acquired by a newer observation.
         let mut guard = self.0.lock().map_err(|error| error.to_string())?;
-        let requested = !crate::agent_test::active() && sleep_requested(state);
-        reconcile_guard(&mut guard, requested, || {
-            keepawake::Builder::default()
-                .display(false)
-                .idle(true)
-                .sleep(true)
-                .reason("Agent session active")
-                .app_name("TUICommander")
-                .app_reverse_domain("com.tuicommander.app")
-                .create()
-                .map_err(|error| format!("Failed to block sleep: {error}"))
-        })
+        let requested = !crate::agent_test::active() && sleep_requested(state, enumerate);
+        transition(&mut guard, requested)
     }
 }
 
@@ -51,7 +69,10 @@ fn session_has_live_work(session: &SessionState, keep_open: bool) -> bool {
                 || matches!(session.agent_state.as_deref(), Some("working" | "starting"))))
 }
 
-fn sleep_requested(state: &AppState) -> bool {
+fn sleep_requested(
+    state: &AppState,
+    enumerate: impl FnOnce() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
+) -> bool {
     if !state.config.read().prevent_sleep_when_busy {
         return false;
     }
@@ -73,6 +94,7 @@ fn sleep_requested(state: &AppState) -> bool {
         .map(|entry| entry.key().clone())
         .collect();
     let mut inventory = None;
+    let mut enumerate = Some(enumerate);
     for id in sessions {
         let Some(session) = state.session_state_with_shell(&id) else {
             continue;
@@ -87,7 +109,8 @@ fn sleep_requested(state: &AppState) -> bool {
         if let Some(agent_type) = session.agent_type.as_deref() {
             // Idle UI state is not proof of no work. Detached bg runners and
             // newly-started quiet descendants may not have changed that state.
-            let processes = inventory.get_or_insert_with(crate::pty::process_tree_snapshot);
+            let processes = inventory
+                .get_or_insert_with(|| enumerate.take().expect("one inventory per reconcile")());
             let Some(processes) = processes else {
                 return true; // Unknown process state must not drop the hold.
             };
@@ -156,6 +179,79 @@ pub(crate) async fn unblock_sleep(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct LiveIdleAgent(AppState);
+
+    impl LiveIdleAgent {
+        fn new() -> Self {
+            let state = crate::state::tests_support::make_test_app_state();
+            crate::state::tests_support::insert_dummy_session(&state, "idle");
+            state.session_maps.session_states.insert(
+                "idle".into(),
+                SessionState {
+                    agent_type: Some("ego".into()),
+                    agent_state: Some("idle".into()),
+                    ..Default::default()
+                },
+            );
+            state.config.write().prevent_sleep_when_busy = true;
+            Self(state)
+        }
+    }
+
+    impl Drop for LiveIdleAgent {
+        fn drop(&mut self) {
+            if let Some((_, session)) = self.0.session_maps.sessions.remove("idle") {
+                let mut session = session.lock();
+                let _ = session._child.kill();
+                let _ = session._child.wait();
+            }
+        }
+    }
+
+    // Catches: idle ticks and legacy refreshes each enumerate the full process table.
+    #[test]
+    fn idle_sleep_reconcile_bounds_process_inventory_reads() {
+        let fixture = LiveIdleAgent::new();
+        let blocker = SleepBlocker::new();
+        let start = Instant::now();
+        let mut reads = 0;
+        for second in [0, 0, 1, 2, 3, 4] {
+            blocker
+                .reconcile_with(
+                    &fixture.0,
+                    || start + std::time::Duration::from_secs(second),
+                    || {
+                        reads += 1;
+                        None
+                    },
+                    |_, requested| {
+                        assert!(requested, "unknown inventory must retain power");
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            reads, 1,
+            "idle reconciliation must share one five-second inventory attempt"
+        );
+        blocker
+            .reconcile_with(
+                &fixture.0,
+                || start + std::time::Duration::from_secs(5),
+                || {
+                    reads += 1;
+                    None
+                },
+                |_, requested| {
+                    assert!(requested);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(reads, 2, "retry unknown inventory at the cadence boundary");
+    }
 
     #[test]
     fn idle_pty_background_work_retains_sleep_assertion() {
@@ -234,9 +330,15 @@ mod tests {
         );
         state.keep_open_sessions.insert("closed".into());
         state.config.write().prevent_sleep_when_busy = true;
-        assert!(!sleep_requested(&state), "removed PTY is not live work");
+        assert!(
+            !sleep_requested(&state, crate::pty::process_tree_snapshot),
+            "removed PTY is not live work"
+        );
         state.config.write().prevent_sleep_when_busy = false;
-        assert!(!sleep_requested(&state), "user opt-out wins");
+        assert!(
+            !sleep_requested(&state, crate::pty::process_tree_snapshot),
+            "user opt-out wins"
+        );
     }
 
     #[test]
