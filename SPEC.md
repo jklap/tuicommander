@@ -1505,3 +1505,16 @@ isolated artifact, independent review and configured check receipts. Draft
 publication requires current evidence matching the pushed SHA and includes review
 findings. Configurations without a workflow retain legacy behavior. See the
 [guide](docs/user-guide/automations.md#opt-in-reviewed-issue-workflows).
+
+#### Review-only incoming PR automation
+
+A separate default-off `pull_request_reviews` repository allowlist binds an enabled
+automation definition to no-host-tool ACP reviews. The shared GitHub poller feeds
+durable `PullRequestReview` triggers keyed by repository, PR and immutable GitHub
+head SHA; definition changes do not reset deduplication. A newer observed head
+revokes the older result's publication claim even under capacity pressure. The
+host compares immutable base/head SHAs, rechecks eligibility, then claims and posts
+one pinned COMMENT review. No generic agent, worktree, push, PR creation, approval
+or merge is available through this path. Unknown publication is non-retriable.
+The existing run history API carries output, publication intent and review URL.
+Deterministic checks and check-result publication are not part of this executor.

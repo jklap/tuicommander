@@ -3540,3 +3540,13 @@ isolated artifact, independent review and configured check receipts. Draft
 publication requires current evidence matching the pushed SHA and includes review
 findings. Configurations without a workflow retain legacy behavior. See the
 [guide](user-guide/automations.md#opt-in-reviewed-issue-workflows).
+
+#### Review-only incoming PR automation
+
+Opt in through `automations.json` → `pull_request_reviews` with an explicit
+repository allowlist and enabled definition. The host reviews open, non-draft PRs
+with the existing no-host-tool ACP adapter and posts one COMMENT review pinned to
+the GitHub head SHA. New heads supersede older in-flight results. Permanent head
+deduplication and publication claims survive restart; uncertain writes are not
+retried. This executor never repairs code, runs checks, pushes, creates PRs,
+approves or merges. See [Incoming PR reviews](user-guide/automations.md#incoming-pr-reviews-review-only).

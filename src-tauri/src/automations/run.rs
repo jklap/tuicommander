@@ -13,6 +13,11 @@ pub enum RunTrigger {
         occurrence_ms: i64,
     },
     Manual,
+    PullRequestReview {
+        repository: String,
+        pr_number: i64,
+        head_sha: String,
+    },
     /// Every eligible issue, once per repository, issue and policy version.
     Triage {
         repository: String,
@@ -31,6 +36,14 @@ impl RunTrigger {
     /// Durable deduplication identity; GitHub names compare case-insensitively.
     pub fn event_key(&self) -> Option<String> {
         match self {
+            Self::PullRequestReview {
+                repository,
+                pr_number,
+                head_sha,
+            } => Some(format!(
+                "pr:{}#{pr_number}:{head_sha}",
+                repository.to_ascii_lowercase()
+            )),
             Self::Triage {
                 repository,
                 issue_number,

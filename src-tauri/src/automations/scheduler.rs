@@ -20,6 +20,7 @@ pub fn tick(
     let mut candidates = Vec::new();
     for definition in config.definitions.iter().filter(|definition| {
         definition.enabled
+            && !config.review_only(&definition.id)
             && !config
                 .event_intake
                 .triage
@@ -52,6 +53,9 @@ pub fn run_now(
     now: DateTime<Utc>,
 ) -> Result<AutomationRun, String> {
     config.validate()?;
+    if config.review_only(automation_id) {
+        return Err("PR review-only definitions cannot launch a manual agent".into());
+    }
     let definition = config
         .definitions
         .iter()

@@ -54,6 +54,7 @@ export interface AutomationRun {
 		| { kind: "manual" }
 		| { kind: "scheduled"; occurrence_ms: number }
 		| { kind: "event"; repository: string; issue_number: number; label: string }
+		| { kind: "pull_request_review"; repository: string; pr_number: number; head_sha: string }
 		| { kind: "triage"; repository: string; issue_number: number; policy_version: string };
 	triage_decision?: { outcome: "accepted" | "rejected" | "needs_input"; reason: string };
 	outcome?: {
