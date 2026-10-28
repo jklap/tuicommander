@@ -1,3 +1,7 @@
+## Workflow resume after manual QA (2416-52e8) — Rust restart required
+
+- [ ] Coordinator critic: run the focused workflow runtime regressions for approved QA, pending QA, blocked/cancelled stories, Ready/Review starts and restart recovery. The implementation lane ran only the pre-fix RED test on rb; no GREEN result is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, resume an all-manual story after QA approval. Confirm the run records native approval and does not create an implementer or worktree. Later graph checks retain their existing requirements. The running daily app was not restarted; Rust does not hot-reload.
 ## Bare repository inventory (2413-19e4) — Rust restart required
 
 - [ ] Coordinator: run `bare_main_entry_has_no_missing_checkout_diagnostic`, `sidebar_removal_identity_2334_candidate_states`, `orphan_validation_refuses_a_bare_repository_entry`, and `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` on the final commit. The pre-fix CLI regression reproduced on native macOS after build-slot automatically fell back from an unavailable rb status probe; no post-fix GREEN run was made.

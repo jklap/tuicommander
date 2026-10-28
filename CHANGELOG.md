@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
 - Do not show bare repository metadata as a missing checkout, including when refreshing from a linked worktree (#2413-19e4).
 
 - Keep TUIC-archived external worktrees and former-storage checkouts out of live sidebar and MCP inventory without hiding unrelated `__archived` folders (#2412-11f3).

@@ -2546,6 +2546,58 @@ fn choose_event(
             }
             Ok(RunEventKind::LoopAdvanced)
         }
+        RunCommand::AcceptUnspawnedStory { attempt_id } => {
+            let attempt = snapshot
+                .attempts
+                .iter()
+                .find(|attempt| attempt.id == attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.agent.is_some()
+                || attempt.report.is_some()
+                || !matches!(
+                    attempt.state,
+                    AttemptState::Running | AttemptState::Interrupted
+                )
+                || snapshot
+                    .effects
+                    .iter()
+                    .any(|effect| effect.key == format!("spawn:{attempt_id}"))
+                || !snapshot.graph_executions.iter().any(|graph| {
+                    graph.target_id == attempt.story_id
+                        && graph.activations.iter().any(|activation| {
+                            activation.state == super::graph::ActivationState::Running
+                                && super::runtime::effects::activation_attempt(
+                                    snapshot, graph, activation,
+                                )
+                                .is_some_and(|current| current.id == attempt_id)
+                                && graph.definition.graph.nodes.iter().any(|node| {
+                                    node.id == activation.node_id
+                                        && matches!(
+                                            node.kind,
+                                            crate::workflows::NodeKind::Agent {
+                                                role: crate::workflows::AgentRole::Implementer,
+                                                ..
+                                            }
+                                        )
+                                })
+                        })
+                })
+            {
+                return Err("native approval requires an unspawned implementer attempt".into());
+            }
+            let story = stories
+                .iter()
+                .find(|story| story.id == attempt.story_id)
+                .ok_or("story is not in plan")?;
+            if story.status != StoryStatus::Done {
+                return Err("story has not been approved".into());
+            }
+            Ok(RunEventKind::UnspawnedStoryAccepted {
+                story_id: story.id.clone(),
+                attempt_id,
+                revision: story.revision,
+            })
+        }
         RunCommand::AcceptStory { story_id } => {
             let story = stories
                 .iter()
