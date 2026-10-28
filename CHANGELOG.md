@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve Jira description and custom-field editor values, literal ADF text, registered Data Center account mode, and required-description create validation (#1694-161f).
+
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 
 - Start the AI Chat connection on Retry after a failed initial connection, without requiring Send (#2407-84f5).
