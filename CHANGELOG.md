@@ -87,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
+- Forward cancellation through all Jira Tasks requests and reject assignee lookup without a configured project instead of sending `project=undefined` (#2387-4c05).
 
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
 - Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
