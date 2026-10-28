@@ -2,6 +2,37 @@
 
 - [ ] Coordinator: run `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` against the final commit. The targeted RED on rb reproduced a missing plan before the fix; no implementation-lane GREEN was run.
 - [ ] After an authorized `make dev` restart or `make build`, refresh Claude quota from mobile and confirm desktop retains the same subscription plan. The daily app was not restarted; Rust changes do not hot-reload.
+## Ideas repository identity (2414-9805) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `config::ideas::tests` on the final commit, plus the existing Ideas store/panel consumers. RED reproduced the canonical-versus-registered split on Linux rb; no post-fix GREEN run was made by the implementer. Run the same regression on Windows to verify native extended/portable path handling.
+- [ ] After an authorized `make dev` restart or `make build`, create/list/update Ideas through an agent bound to a registered symlink repository and check the same collection in the panel. The daily app was not restarted; Rust does not hot-reload.
+
+## Workflow resume after manual QA (2416-52e8) — Rust restart required
+
+- [ ] Coordinator critic: run the focused workflow runtime regressions for approved QA, pending QA, blocked/cancelled stories, Ready/Review starts and restart recovery. The implementation lane ran only the pre-fix RED test on rb; no GREEN result is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, resume an all-manual story after QA approval. Confirm the run records native approval and does not create an implementer or worktree. Later graph checks retain their existing requirements. The running daily app was not restarted; Rust does not hot-reload.
+## Bare repository inventory (2413-19e4) — Rust restart required
+
+- [ ] Coordinator: run `bare_main_entry_has_no_missing_checkout_diagnostic`, `sidebar_removal_identity_2334_candidate_states`, `orphan_validation_refuses_a_bare_repository_entry`, and `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` on the final commit. The pre-fix CLI regression reproduced on native macOS after build-slot automatically fell back from an unavailable rb status probe; no post-fix GREEN run was made.
+- [ ] After an authorized `make dev` restart or `make build`, refresh a bare repository and one of its linked checkouts. Bare metadata must not show repair guidance; real missing linked registrations must still do so. The daily app was not restarted; Rust does not hot-reload.
+
+## Archived external worktrees (2412-11f3) — Rust restart required
+
+- [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.
+- [ ] Coordinator: run `archived_external_checkout_stays_out_of_live_inventory`, `discovery_2156_unowned_archive_name_keeps_checkout` and pooled-removal regressions against the final commit. GREEN belongs to the critic/integration lane.
+- [ ] After an authorized `make dev` restart or `make build`, confirm an archived external checkout stays absent from the sidebar and MCP worktree list after a storage-setting change. The daily app was not restarted; Rust does not hot-reload.
+## Orchestrator mail wake budget (2418-fd33) — Rust restart required
+
+- [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
+- [ ] Coordinator: run `stable_ready_ticks_do_not_rearm_not_started_mail_wake`, `a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle`, `rearming_never_disturbs_a_wake_in_flight`, and `queued_codex_command_submits_when_ready_confirms_after_shell_idle` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] Load the Rust change with an authorized `make dev` restart or `make build` when ready to end live sessions. The daily app was not restarted; Rust does not hot-reload.
+## Mobile terminal stream restart (2422-a267)
+
+- [ ] Coordinator: run `outputViewConnection.test.tsx` and `outputViewVisibility.test.tsx` against the final commit. The pre-fix hidden-exhaustion regression failed because visibility return kept the disposed subscription; GREEN belongs to the critic. No physical iOS or live-server outage check is claimed.
+## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
+
+- [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.
+- [ ] After an authorized `make dev` restart or `make build`, confirm a stuck stdio upstream recovers its tools through scheduled health probes. Ordinary tool-call reply timeouts must still leave the child alive and report an uncertain outcome. The daily app was not restarted; Rust does not hot-reload.
 
 ## Compact Compose shortcut hints (2411-c7c9)
 
@@ -3083,3 +3114,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual backend restart, select AI Chat conversations on desktop and iPad in both directions, then reconnect the iPad and confirm it catches up. Confirm the session CLI | Chat choice does not follow. Rust selection changes require `make dev` restart or a rebuilt release (#2403-e711).
 - [ ] Sleep prevention after backend rebuild (#2402-12a0): enable Prevent sleep when busy, run a managed agent background job or `keep_open` peer, let its composer become idle, then lock/hide the app. Check `pmset -g assertions` retains TUIC's Agent session active assertions; finish/close the work and confirm release. Disable the setting and confirm release while work remains. The Rust change needs a manual `make dev` restart or `make build`; it does not hot-reload.
+
+## 2423-902c — Preferred phone secret-entry address
+
+- [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.

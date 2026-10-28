@@ -76,15 +76,11 @@ export const RemoteAccessPanel: Component = () => {
 	const [relayToken, setRelayToken] = createSignal("");
 	const [relaySessionId, setRelaySessionId] = createSignal("");
 
-	// Auto-select best IP when list loads (prefer Tailscale, then LAN/Wi-Fi)
+	// The backend ranks candidates using live TLS state, shared with phone entry.
 	createEffect(() => {
 		const ips = availableIps();
 		if (!ips?.length || selectedIp()) return;
-		const preferred =
-			ips.find((e) => e.label.includes("Tailscale")) ??
-			ips.find((e) => e.label.includes("Wi-Fi") || e.label.includes("LAN")) ??
-			ips[0];
-		setSelectedIp(preferred.ip);
+		setSelectedIp(ips[0].ip);
 	});
 
 	const activeIp = () => (localIps.error ? undefined : selectedIp() || availableIps()?.[0]?.ip);
