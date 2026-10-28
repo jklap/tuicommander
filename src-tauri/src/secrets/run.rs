@@ -24,6 +24,29 @@ pub(crate) async fn handle_secret(
 ) -> serde_json::Value {
     tracing::info!(source = "secrets", "Secret tool dispatched");
     let result = match args["action"].as_str() {
+        Some("put") => {
+            let mut input = args.clone();
+            input.as_object_mut().map(|o| o.remove("action"));
+            match serde_json::from_value::<task::Put>(input) {
+                Ok(put) => {
+                    let scope = put.scope.clone();
+                    state
+                        .secrets
+                        .put(put)
+                        .map(|(status, generation, deadline)| {
+                            let state = Arc::downgrade(state);
+                            tokio::spawn(async move {
+                                tokio::time::sleep_until(deadline).await;
+                                if let Some(state) = state.upgrade() {
+                                    state.secrets.expire_scope(&scope, generation);
+                                }
+                            });
+                            serde_json::json!(status)
+                        })
+                }
+                Err(_) => Err("Invalid task secret schema".into()),
+            }
+        }
         Some("request") => {
             let mut input = args.clone();
             input.as_object_mut().map(|o| o.remove("action"));
@@ -52,7 +75,7 @@ pub(crate) async fn handle_secret(
             }
             Err(_) => Err("Invalid secret names".into()),
         },
-        _ => Err("Secret actions: request, run, remove".into()),
+        _ => Err("Secret actions: request, run, remove, put".into()),
     };
     match &result {
         Ok(_) => tracing::info!(source = "secrets", "Secret tool completed"),
