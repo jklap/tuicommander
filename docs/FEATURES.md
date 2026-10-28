@@ -3457,7 +3457,9 @@ input hints, prefix filtering and keyboard/mouse completion. Agent invocations k
 `/<name> <arguments>` prompt text. Supported host actions (`/new`, `/clear`, `/quit`
 with `/q`, `/usage`, and advertised `/compact`, `/fork`, `/pause`, `/resume`) use the
 existing controls, not model prompts. Unknown or unsupported commands retain the
-draft and show an inline list of available commands (#2393-19fc).
+draft and show an inline list of available commands (#2393-19fc). A leading path
+token with another `/` is prompt text unless it is an advertised command name;
+bare unknown names remain command attempts (#2421-6e0a).
 
 ### Ego terminal usage (#2386-6f7c)
 
