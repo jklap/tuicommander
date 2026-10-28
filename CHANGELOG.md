@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Show an explicit telemetry-off state in the MDKB dashboard instead of treating disabled hook metrics as zero activity (#2442-61f6).
+
 - Shorten the terminal Compose newline hint to Ctrl+Enter and hide shortcut hints in compact panels instead of wrapping (#2411-c7c9).
 
 - Keep the open AI Chat conversation in sync across desktop, phone and tablet, including reconnect. Session CLI | Chat remains per device (#2403-e711).
@@ -28,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
+
+- Explain how to restore an archived plan when New plan selects its existing source, instead of silently hiding the result; preserve the plan and avoid duplicates (#2425-5cfa).
+- Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
+- Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
+- Keep the Remote Access QR code stable across unchanged status polls, while refreshing it for listener, address and token changes (#2432-edf6).
+
+- Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
 
 - Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
 - Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
