@@ -3105,3 +3105,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a manual backend restart, select AI Chat conversations on desktop and iPad in both directions, then reconnect the iPad and confirm it catches up. Confirm the session CLI | Chat choice does not follow. Rust selection changes require `make dev` restart or a rebuilt release (#2403-e711).
 - [ ] Sleep prevention after backend rebuild (#2402-12a0): enable Prevent sleep when busy, run a managed agent background job or `keep_open` peer, let its composer become idle, then lock/hide the app. Check `pmset -g assertions` retains TUIC's Agent session active assertions; finish/close the work and confirm release. Disable the setting and confirm release while work remains. The Rust change needs a manual `make dev` restart or `make build`; it does not hot-reload.
+
+## 2423-902c — Preferred phone secret-entry address
+
+- [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.

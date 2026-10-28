@@ -712,7 +712,7 @@ empty result.
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
 | `clear_caches` | -- | `()` | Clear in-memory caches |
 | `get_local_ip` | -- | `Option<String>` | Get primary local IP |
-| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local network interfaces |
+| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local addresses in shared pairing/phone-entry preference order: active Tailscale HTTPS, LAN, HTTP-only Tailscale, then other networks |
 | `regenerate_session_token` | -- | `()` | Regenerate MCP session token (invalidates all remote sessions) |
 | `fetch_update_manifest` | `url` | `JSON` | Fetch update manifest via Rust HTTP (bypasses WebView CSP) |
 | `read_external_file` | `path` | `String` | Read file outside repo (standalone file open) |

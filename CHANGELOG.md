@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).
+
 - Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
 - Do not show bare repository metadata as a missing checkout, including when refreshing from a linked worktree (#2413-19e4).
 
