@@ -3229,3 +3229,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   `ingest_closed_story_is_findable_in_real_mdkb_without_a_story_file` (requires
   installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
+
+
+- [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.

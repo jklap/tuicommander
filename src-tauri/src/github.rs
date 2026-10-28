@@ -961,7 +961,7 @@ pub(crate) async fn get_all_batch_with_intake_impl(
             .await
             .map_err(|e| format!("intake config load task panicked: {e}"))??
             .event_intake
-            .label,
+            .poll_label(),
         )
     } else {
         None

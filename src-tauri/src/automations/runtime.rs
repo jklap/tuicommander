@@ -70,7 +70,8 @@ impl AutomationRuntime {
                             }
                             Ok(crate::state::AppEvent::RepositoriesChanged
                                 | crate::state::AppEvent::SettingsChanged(_)) => (false, true),
-                            Ok(crate::state::AppEvent::ProgressRecorded { .. }
+                            Ok(crate::state::AppEvent::AutomationRunChanged { .. }
+                                | crate::state::AppEvent::ProgressRecorded { .. }
                                 | crate::state::AppEvent::PtyExit { .. }
                                 | crate::state::AppEvent::SessionClosed { .. }
                                 | crate::state::AppEvent::SessionStateChanged { .. }) => (false, false),
@@ -99,6 +100,9 @@ impl AutomationRuntime {
                     chrono::Utc::now().timestamp_millis(),
                 ) {
                     tracing::warn!(source="automations", %error, "Automation reconciliation failed");
+                }
+                if let Err(error) = super::triage::publish_pending(&state, owner.store()).await {
+                    tracing::warn!(source="automations", %error, "Triage publication queue failed");
                 }
                 if !scheduled_wake && !intake_wake {
                     continue;
@@ -328,6 +332,7 @@ mod tests {
                 repositories,
                 label: "tuic-run".into(),
                 definition_id: "not-dispatched".into(),
+                ..Default::default()
             },
             ..Default::default()
         };

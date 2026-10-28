@@ -136,11 +136,13 @@ describe("promptLibrary pure functions", () => {
 				expect(delivered).toContain("missing block alone is not proof of unsupported intake");
 				expect(delivered).toContain("When event_intake is supported, continue the configuration interview");
 				expect(delivered).toContain("do not stop merely because the tool schema has no intake action");
-				expect(delivered).toContain("unlabelled-issue triage (2324-424d)");
+				expect(delivered).toContain("event_intake.triage");
+				expect(delivered).toContain("operator-attested read-only profile without push credentials");
+				expect(delivered).toContain("TUIC does not enforce credential isolation");
 				expect(delivered).toContain("before draft-PR publication (2325-10c4)");
 				expect(delivered).toContain("incoming PR/head-SHA event triggers (2327-1ca0)");
 				expect(delivered).toContain("never enable or launch a policy requiring the gate until it is verified");
-				expect(guide.builtInVersion).toBe(4);
+				expect(guide.builtInVersion).toBe(5);
 			});
 		});
 

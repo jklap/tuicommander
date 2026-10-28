@@ -12,6 +12,7 @@ mod history;
 mod mutations;
 #[cfg(test)]
 mod tests;
+mod triage;
 
 /// Initial ledger layout; unknown versions must never be overwritten.
 const SCHEMA_VERSION: i64 = 1;
@@ -210,7 +211,7 @@ fn reserve_in(
 ) -> Result<Option<AutomationRun>, String> {
     let occurrence = match trigger {
         RunTrigger::Scheduled { occurrence_ms } => Some(occurrence_ms),
-        RunTrigger::Manual | RunTrigger::Event { .. } => None,
+        RunTrigger::Manual | RunTrigger::Event { .. } | RunTrigger::Triage { .. } => None,
     };
     let run = AutomationRun {
         id: uuid::Uuid::now_v7().to_string(),
@@ -234,6 +235,7 @@ fn reserve_in(
         precheck_outcome: None,
         precheck_context: None,
         reason: None,
+        triage_decision: None,
     };
     let inserted = conn.execute("INSERT INTO automation_runs(id,automation_id,occurrence_ms,status,created_ms,snapshot_json,finished_ms) VALUES(?1,?2,?3,?6,?4,?5,?7) ON CONFLICT(automation_id,occurrence_ms) WHERE occurrence_ms IS NOT NULL DO NOTHING", params![run.id, definition.id, occurrence, now_ms, encode(&run)?, status(initial_status)?, run.finished_ms]).map_err(error)?;
     Ok((inserted == 1).then_some(run))

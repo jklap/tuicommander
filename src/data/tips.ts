@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Optional issue triage",
+		description:
+			"Configure event_intake.triage on the owning daemon to evaluate trusted authors' open issues before labelled implementation. The read-only profile is operator-attested; TUIC does not enforce credential isolation.",
+		shortcut: null,
+	},
+	{
 		feature: "Story drafts from requests",
 		description:
 			"In New story, describe what you need and choose Fill with AI. Review and edit the generated fields before Create story saves them. Cancel fill stops the owned model turn and keeps your request.",

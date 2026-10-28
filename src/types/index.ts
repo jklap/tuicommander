@@ -216,6 +216,7 @@ export interface SavedTerminal {
 
 /** GitHub Issue from GraphQL API */
 export interface GitHubIssue {
+	author_association?: string;
 	number: number;
 	title: string;
 	state: string; // OPEN, CLOSED

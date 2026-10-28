@@ -47,7 +47,12 @@ export interface AutomationRun {
 	id: string;
 	definition: AutomationDefinition;
 	status: RunStatus;
-	trigger: { kind: "manual" } | { kind: "scheduled"; occurrence_ms: number };
+	trigger:
+		| { kind: "manual" }
+		| { kind: "scheduled"; occurrence_ms: number }
+		| { kind: "event"; repository: string; issue_number: number; label: string }
+		| { kind: "triage"; repository: string; issue_number: number; policy_version: string };
+	triage_decision?: { outcome: "accepted" | "rejected" | "needs_input"; reason: string };
 	created_ms: number;
 	updated_ms: number;
 	finished_ms: number | null;
@@ -114,6 +119,11 @@ export type AutomationAction =
 	| { action: "template"; template_id: string; repository: string; run_config: string; timezone: string | null }
 	| { action: "create" | "update"; definition: AutomationDefinition }
 	| { action: "update"; id: string; enabled: boolean }
+	| {
+			action: "triage_decision";
+			id: string;
+			decision: { outcome: "accepted" | "rejected" | "needs_input"; reason: string };
+	  }
 	| { action: "get" | "run" | "worktree_preview" | "cleanup_worktree"; id: string }
 	| { action: "summary"; window: "24h" | "7d" }
 	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
