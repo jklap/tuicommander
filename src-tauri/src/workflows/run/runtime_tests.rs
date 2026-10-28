@@ -258,7 +258,7 @@ async fn manual_only_workflow_pauses_before_implementer_spawn() {
     );
     let paused_again = store.snapshot(&run.id).unwrap();
     assert_eq!(paused_again.status, RunStatus::Paused);
-    assert!(paused_again.effects.is_empty());
+    assert_eq!(paused_again.effects.len(), 0);
     assert_eq!(paused_again.attempts, paused.attempts);
     assert_eq!(store.replay(&run.id).unwrap(), paused_again);
 }
@@ -371,7 +371,7 @@ async fn resume_after_manual_qa_approval_does_not_respawn_done_story() {
         assert_eq!(settled.attempts.len(), 1);
         assert_ne!(settled.attempts[0].state, AttemptState::Running);
         assert!(settled.attempts[0].agent.is_none());
-        assert!(settled.effects.is_empty());
+        assert_eq!(settled.effects.len(), 0);
         assert_eq!(settled.spawns, 0);
         assert!(settled.stories[0].accepted);
         assert_eq!(
@@ -431,7 +431,7 @@ async fn nonstartable_story_pauses_before_implementer_spawn() {
                 .unwrap()
                 .contains(&format!("{:?}", stopped.status))
         );
-        assert!(paused.effects.is_empty());
+        assert_eq!(paused.effects.len(), 0);
         assert!(paused.attempts[0].agent.is_none());
         assert!(!paused.stories[0].accepted);
         assert_eq!(stories.get_story(&story_id).unwrap(), stopped);
