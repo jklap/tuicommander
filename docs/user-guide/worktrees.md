@@ -175,7 +175,9 @@ subjects. MCP exposes the reason with `repo branch_integration` or
 `repo branch_integrations`. A branch that only follows its base is `in_sync`,
 not integrated: its query returns `integrated: false` and no merge proof. A content-based result still needs a recovery ref
 at `refs/archive/<branch>` pointing to the current tip before safe branch
-deletion; incomplete or uncertain changes remain protected.
+deletion; incomplete or uncertain changes remain protected. If a branch reflog
+is empty or absent, its origin is unknown. The repository still loads, but that
+branch has no merge proof and safe branch deletion is refused.
 
 The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 

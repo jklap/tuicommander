@@ -1,3 +1,9 @@
+## Empty branch reflog recovery (2437-b45b) — Rust restart required
+
+- [x] The pre-fix `empty_branch_reflog_does_not_abort_repository_merge_listing` regression fails on Linux rb with `branch creation is absent from reflog`. Log: `~/Gits/.tmp/results/tuic-2437-red.log`.
+- [ ] Coordinator critic: run the empty/missing reflog regressions and existing populated-history classification tests on the final commit. No implementation-lane GREEN run was performed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm the affected repository structure loads without repeated empty-reflog warnings. Rust does not hot-reload; the daily app was not restarted.
+
 ## Claude mobile quota plan cache (2420-f7a6) — Rust restart required
 
 - [ ] Coordinator: run `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` against the final commit. The targeted RED on rb reproduced a missing plan before the fix; no implementation-lane GREEN was run.
