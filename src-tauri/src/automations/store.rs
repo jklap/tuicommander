@@ -10,6 +10,7 @@ use std::time::Duration;
 mod admission;
 mod history;
 mod mutations;
+mod outcomes;
 #[cfg(test)]
 mod tests;
 
@@ -123,6 +124,10 @@ impl RunStore {
             CREATE TABLE IF NOT EXISTS automation_event_keys (
                 automation_id TEXT NOT NULL, event_key TEXT NOT NULL, run_id TEXT NOT NULL,
                 PRIMARY KEY(automation_id,event_key));
+            CREATE TABLE IF NOT EXISTS automation_event_decisions (
+                automation_id TEXT NOT NULL, event_key TEXT NOT NULL, reason TEXT NOT NULL,
+                run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+                PRIMARY KEY(automation_id,event_key,reason));
             CREATE TABLE IF NOT EXISTS automation_deliveries (
                 run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
                 transition TEXT NOT NULL, channel TEXT NOT NULL, document_json TEXT NOT NULL,
@@ -212,6 +217,8 @@ fn reserve_in(
         RunTrigger::Scheduled { occurrence_ms } => Some(occurrence_ms),
         RunTrigger::Manual | RunTrigger::Event { .. } => None,
     };
+    let outcome =
+        matches!(trigger, RunTrigger::Event { .. }).then(|| RunOutcome::decision("admitted", None));
     let run = AutomationRun {
         id: uuid::Uuid::now_v7().to_string(),
         definition: definition.clone(),
@@ -234,6 +241,7 @@ fn reserve_in(
         precheck_outcome: None,
         precheck_context: None,
         reason: None,
+        outcome,
     };
     let inserted = conn.execute("INSERT INTO automation_runs(id,automation_id,occurrence_ms,status,created_ms,snapshot_json,finished_ms) VALUES(?1,?2,?3,?6,?4,?5,?7) ON CONFLICT(automation_id,occurrence_ms) WHERE occurrence_ms IS NOT NULL DO NOTHING", params![run.id, definition.id, occurrence, now_ms, encode(&run)?, status(initial_status)?, run.finished_ms]).map_err(error)?;
     Ok((inserted == 1).then_some(run))

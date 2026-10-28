@@ -1026,6 +1026,13 @@ and saves precheck pass/refusal/manual-bypass/no-check outcomes and launch ids.
 Cron dispatch stays disabled in phase 1. Public execution transports and
 completion/maximum-duration handling remain pending; idle is not success.
 
+Event-run details retain durable publication outcomes and exact pre-POST intent.
+Restart and lost-response reconciliation use a repository/head/base PR lookup;
+uncertain writes are never automatically repeated. Filtered, duplicate and
+capacity decisions retain coalesced skipped history without consuming admission.
+The outcome includes PR/comment URL slots, decision and failure/refusal reason;
+comment publication and machine-enforced review/check gating are not added.
+
 ### Automation HTTP and IPC parity
 
 Saved run configurations use one case-insensitive named-profile lookup across

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).
+
 ### Fixed
 
 - Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).

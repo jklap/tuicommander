@@ -52,6 +52,16 @@ impl AutomationRuntime {
                 return;
             }
             let Some(state) = weak.upgrade() else { return };
+            match owner.store().unsettled_publications() {
+                Ok(runs) => {
+                    for run in runs {
+                        super::completion::publish_event_draft_pr(&state, &run);
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(source="automations", %error, "Publication recovery failed")
+                }
+            }
             let mut events = state.event_bus.subscribe();
             drop(state);
             // An issue refused for capacity is retried on the scheduler tick.
