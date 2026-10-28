@@ -1,3 +1,8 @@
+## Event-run publication prerequisites (2428-cd8d) — Rust restart required
+
+- [ ] Coordinator critic: run `event_publication_does_not_block_runtime_worker`, `event_publication_prerequisites_preserve_config_and_git_errors`, and existing `automations::publish::tests` on the final commit. Pre-fix RED reproduced a blocked independent async task on Linux rb; no post-fix GREEN is claimed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm completed allowlisted event runs still open draft PRs and report prerequisite failures. Rust does not hot-reload; this peer did not restart the daily app or write to GitHub.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.

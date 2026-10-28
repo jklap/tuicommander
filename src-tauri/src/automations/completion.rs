@@ -297,12 +297,16 @@ async fn event_publication_prerequisites(
     definitions: DefinitionStore,
     workspace: String,
 ) -> Result<(super::model::EventIntake, String), String> {
-    let intake = definitions.load()?.event_intake;
-    let head = super::publish::run_git(
-        std::path::Path::new(&workspace),
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-    )?;
-    Ok((intake, head))
+    tokio::task::spawn_blocking(move || {
+        let intake = definitions.load()?.event_intake;
+        let head = super::publish::run_git(
+            std::path::Path::new(&workspace),
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )?;
+        Ok((intake, head))
+    })
+    .await
+    .map_err(|error| format!("Event publication prerequisites task failed: {error}"))?
 }
 
 #[cfg(test)]
