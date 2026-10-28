@@ -1,3 +1,12 @@
+## Archived New plan source (2425-5cfa) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `new_plan_archived_source_has_visible_result` and `adding_a_plan_source_derives_its_title_and_reuses_its_record` against the final commit. The regression failed on pre-fix Linux rb; GREEN belongs to the critic.
+- [ ] After an authorized `make dev` restart or `make build`, select a source owned by an archived plan. Confirm the visible error identifies the plan and points to Archived plans and Restore plan. The daily app was not restarted; Rust does not hot-reload.
+## Nested MCP parent denial (2433-2f3f)
+
+- [ ] Coordinator critic: run `src/__tests__/components/SettingsPanel/LocalMcpPanel.test.tsx` and existing native-catalog consumers. The pre-fix regression reproduced a checked child under a denied parent. No implementation-lane GREEN run is claimed; TypeScript passes.
+- [ ] Visual check: confirm blocked member switches show off and disabled, with a readable enable-parent hint. The isolated real-component browser fixture did not produce a screenshot or DOM before the 45-second bound. Its Chrome process and Vite server were stopped. Log: `~/Gits/.tmp/tuic-2433-visual.log`. No visual pass is claimed.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
@@ -3137,3 +3146,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## 2423-902c — Preferred phone secret-entry address
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
+
+- [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
