@@ -169,6 +169,15 @@ describe("Terminal API failure recovery 2335", () => {
 		vi.unstubAllGlobals();
 	});
 
+	// Catches: one parsed transport error is logged twice by the terminal consumer.
+	it("logs one entry for one transport error", () => {
+		failed();
+		expect(appLogger.error).toHaveBeenCalledExactlyOnceWith(
+			"terminal",
+			"claude: server error (claude-transport-error)",
+		);
+	});
+
 	// Catches: continue input erases the failure even when the harness never resumes.
 	it("keeps Error when injected continue leaves the harness idle", async () => {
 		failed();

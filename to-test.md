@@ -3137,3 +3137,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## 2423-902c — Preferred phone secret-entry address
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
+
+- [ ] After the next Rust rebuild/restart, check that normal MCP reconnects log stale peer-binding recovery at info, while rejected live takeovers remain warnings (#2439-027f). The running backend does not hot-reload.
