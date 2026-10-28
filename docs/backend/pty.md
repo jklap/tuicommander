@@ -1258,3 +1258,19 @@ bounded to 32, with per-identity single flight and two concurrent CLI reads.
 Cached fallback after a transient failure is limited to 30 minutes; session details
 mark it stale. The compact ego badge retains its existing text format.
 Claude cache fallback retains its existing age policy and is explicitly stale.
+
+### Secret output ingestion
+
+`ChunkProcessor` masks known values and spawn-bound task secrets before feeding
+bytes to the grid, output ring, WS broadcast or tcap recorder. The reader uses
+the same sanitized chunk for output watchers and scoped diagnostic byte rings;
+ordinary sessions keep their pre-transform flight recorder. A zeroizing stream
+carry withholds possible split-value prefixes. Teardown removes the session's
+mask material, while retained terminal output is already sanitized. Task TTL
+revokes new environment injection, not an active session's masks.
+
+EOF escape-buffer residue goes through the same `ChunkProcessor` sanitizer before
+ring, WS, history, capture and watcher publication. Embedded base64 credentials
+use bounded aligned representations, including shared boundary-character bits,
+so arbitrary read splits do not lose decoding context. Retained overlap bytes
+keep their existing redaction marks while remaining available for future matches.

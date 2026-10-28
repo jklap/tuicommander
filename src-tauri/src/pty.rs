@@ -1305,6 +1305,8 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
+    secret_mask: crate::secrets::StreamMask,
+    masked_data: Option<String>,
     /// An explicit idle marker asks the reader to flush after publishing this chunk.
     queued_idle_flush: bool,
     parser: OutputParser,
@@ -1469,6 +1471,8 @@ impl ChunkProcessor {
     fn new(session_cwd: Option<String>, tuic_session: Option<String>) -> Self {
         Self {
             queued_idle_flush: false,
+            secret_mask: crate::secrets::StreamMask::default(),
+            masked_data: None,
             parser: OutputParser::new(),
             intent_break_parser: vte::Parser::new(),
             last_status_task: None,
@@ -1692,6 +1696,29 @@ impl ChunkProcessor {
     /// for a value the caller already held.
     /// `app` is Some for desktop mode (emits Tauri IPC), None for headless.
     fn process_chunk(
+        &mut self,
+        data: &str,
+        silence: &Arc<Mutex<SilenceState>>,
+        session_id: &str,
+        state: &AppState,
+    ) -> bool {
+        self.masked_data = self
+            .secret_mask
+            .push(data, state.secrets.pty_needles(session_id));
+        // Own the sanitized bytes locally while mutating the parser. Restore
+        // them for watcher/diagnostic consumers after processing.
+        let masked = self.masked_data.take();
+        let processed = self.process_safe_chunk(
+            masked.as_deref().unwrap_or(data),
+            silence,
+            session_id,
+            state,
+        );
+        self.masked_data = masked;
+        processed
+    }
+
+    fn process_safe_chunk(
         &mut self,
         data: &str,
         silence: &Arc<Mutex<SilenceState>>,
@@ -3590,11 +3617,13 @@ fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kin
     }
 }
 
-/// Flush remaining bytes at EOF and write to ring buffer + WebSocket.
+/// Flush remaining bytes at EOF through the normal publication sanitizer.
 /// Returns the flushed data (may be empty).
 fn flush_eof(
     utf8_buf: &mut Utf8ReadBuffer,
     esc_buf: &mut EscapeAwareBuffer,
+    processor: &mut ChunkProcessor,
+    silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
     state: &AppState,
 ) -> String {
@@ -3606,15 +3635,8 @@ fn flush_eof(
         flushed.push_str(&esc_buf.flush());
         flushed
     };
-    if !esc_remaining.is_empty()
-        && let Some(ring) = state.session_maps.output_buffers.get(session_id)
-    {
-        let mut ring_guard = ring.lock();
-        ring_guard.write(esc_remaining.as_bytes());
-        crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, &esc_remaining);
-        drop(ring_guard);
-    }
-    esc_remaining
+    processor.process_chunk(&esc_remaining, silence, session_id, state);
+    processor.masked_data.take().unwrap_or(esc_remaining)
 }
 
 type VtProcessResult = (
@@ -4156,10 +4178,12 @@ pub(crate) fn spawn_reader_thread(
                         // consume the new input's wake hint.
                         let input_generation = input_priority.generation();
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
+                        let has_secret_mask = processor.secret_mask.active()
+                            || state.secrets.has_pty_secrets(&session_id);
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
                         // dumped and replayed offline (story 056-7545).
-                        {
+                        if !has_secret_mask {
                             let ring = state
                                 .grid
                                 .pty_raw_rings
@@ -4180,7 +4204,8 @@ pub(crate) fn spawn_reader_thread(
                         // seen since; behind the Diagnostics toggle it costs one
                         // relaxed atomic load instead of two passes over 64 KB.
                         // Enable with POST /diagnostics {"enabled":true} to get it back.
-                        if crate::cpu_watchdog::diagnostic_mode()
+                        if !has_secret_mask
+                            && crate::cpu_watchdog::diagnostic_mode()
                             && kitty_clean.contains("1049l")
                             && !kitty_clean.contains("\x1b[?1049l")
                         {
@@ -4196,7 +4221,24 @@ pub(crate) fn spawn_reader_thread(
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
                         if processor.process_chunk(&data, &silence, &session_id, &state) {
-                            processor.observe_alt_buffer(&data);
+                            // The diagnostic ring and watchers must consume the same
+                            // sanitized bytes as the terminal and network streams.
+                            let safe_data = processor.masked_data.take();
+                            let data = safe_data.as_deref().unwrap_or(&data);
+                            if has_secret_mask {
+                                let ring = state
+                                    .grid
+                                    .pty_raw_rings
+                                    .entry(session_id.clone())
+                                    .or_default();
+                                let mut ring = ring.lock();
+                                ring.extend(data.as_bytes());
+                                if ring.len() > PTY_RAW_RING_CAP {
+                                    let excess = ring.len() - PTY_RAW_RING_CAP;
+                                    ring.drain(..excess);
+                                }
+                            }
+                            processor.observe_alt_buffer(data);
 
                             // Plugin OutputWatcher matching. The canvas renders
                             // from grid frames and never read this text; the only
@@ -4212,7 +4254,7 @@ pub(crate) fn spawn_reader_thread(
                             assemble_watcher_lines(
                                 &state,
                                 &session_id,
-                                &data,
+                                data,
                                 &mut watcher_lines,
                                 &watcher_batcher,
                                 false,
@@ -4265,7 +4307,14 @@ pub(crate) fn spawn_reader_thread(
                 }
             }
 
-            let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
+            let remaining = flush_eof(
+                &mut utf8_buf,
+                &mut esc_buf,
+                &mut processor,
+                &silence,
+                &session_id,
+                &state,
+            );
             // The remainder goes through the assembler, not straight out: it may
             // close a line the last read left partial. Then drain unconditionally
             // — teardown has no later tick to flush the batch.

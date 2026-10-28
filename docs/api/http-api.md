@@ -3729,6 +3729,20 @@ route is added. `trigger.kind: "pull_request_review"` carries `repository`,
 review-only definition has no scheduled next run and rejects Run Now. HTTP and
 Tauri expose the same stored record.
 
+### Task-scoped secret injection
+
+The MCP `secret` tool accepts `action: "put"`, `names: string[]`,
+`values: string[]` (same order), `scope: string` (task ID), and a positive integer
+`ttl` in seconds. It returns `{names,status:"stored"}` without values. Use the
+existing authenticated `/mcp` transport; there is no public value-read endpoint.
+
+`POST /sessions/agent` accepts optional `scope`, with the same meaning as MCP
+`agent action=spawn scope=...`. Values are injected only into the child env.
+Expiry stops new injection; already-bound session masks survive until teardown.
+Output is sanitized before raw/text/log HTTP, raw/log/grid WS, terminal history
+and tcap output captures. Potential split-secret prefixes are withheld until
+resolved, and incomplete trailing prefixes are discarded at teardown. See
+[Private secret forms](../user-guide/secrets.md#task-scoped-controller-entry).
 
 ### Bound issue triage decisions (#2324-424d)
 
