@@ -33,7 +33,7 @@
 
 .editor {
   flex-shrink: 0;
-  height: 96px;
+  --auto-grow-max-height: 96px;
   overflow: hidden;
 }
 

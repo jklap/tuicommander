@@ -217,7 +217,6 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn publish(&self, run: &AutomationRun) {
-        publish_event_draft_pr(self.0, run);
         let store = self.0.automation_runtime.notification_store();
         let notice = store.as_ref().is_some_and(|store| {
             super::notifications::publish(
@@ -227,25 +226,29 @@ impl CompletionEffects for NativeCompletion<'_> {
                 run,
             )
         });
-        let payload = serde_json::json!({"run": run, "notice": notice});
-        #[cfg(feature = "desktop")]
-        if let Some(app) = self.0.app_handle.read().as_ref() {
-            use tauri::Emitter;
-            let _ = app.emit("automation-run-changed", &payload);
-        }
-        let _ = self
-            .0
-            .event_bus
-            .send(AppEvent::AutomationRunChanged { payload });
+        emit_run_changed(self.0, run, notice);
         if notice && let Some(store) = store {
             super::notifications::settle(&store, run, "bell", false);
         }
+        publish_event_draft_pr(self.0, run);
     }
+}
+
+fn emit_run_changed(state: &AppState, run: &AutomationRun, notice: bool) {
+    let payload = serde_json::json!({"run": run, "notice": notice});
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        use tauri::Emitter;
+        let _ = app.emit("automation-run-changed", &payload);
+    }
+    let _ = state
+        .event_bus
+        .send(AppEvent::AutomationRunChanged { payload });
 }
 
 /// A completed event run opens its draft PR; the agent pushed the branch itself.
 /// Allowlist and branch checks live in `publish`, which this only feeds.
-fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun) {
+pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun) {
     let (
         RunStatus::Completed,
         RunTrigger::Event {
@@ -262,6 +265,23 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
         &run.workspace,
     )
     else {
+        if run.status == RunStatus::Completed
+            && run.trigger.event_key().is_some()
+            && let Some(store) = state.automation_runtime.notification_store()
+        {
+            match store.settle_outcome(
+                &run.id,
+                "publication_refused",
+                None,
+                Some("Draft publication requires a recorded per-run workspace".into()),
+                chrono::Utc::now().timestamp_millis(),
+            ) {
+                Ok(saved) => emit_run_changed(state, &saved, false),
+                Err(error) => {
+                    tracing::error!(source="automations", %error, "Publication refusal persistence failed")
+                }
+            }
+        }
         return;
     };
     let (state, repository, issue_number, base_branch, workspace, run_id) = (
@@ -273,63 +293,104 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
         run.id.clone(),
     );
     let run = run.clone();
+    let Some(store) = state.automation_runtime.notification_store() else {
+        return;
+    };
+    let saved_intent = run
+        .outcome
+        .as_ref()
+        .and_then(|o| o.publication_intent.clone());
+    let repository_path = run.definition.repository.clone();
     tokio::spawn(async move {
         let outcome = async {
-            let review_run = run.clone();
-            let review = tokio::task::spawn_blocking(move || {
-                if review_run.event_workflow.is_some() {
-                    super::event_workflow::review(&review_run).map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
-            .map_err(|e| format!("Event publication review task: {e}"))??;
+            let recovering = saved_intent.is_some();
+            let review = if !recovering && run.event_workflow.is_some() {
+                let review_run = run.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || super::event_workflow::review(&review_run))
+                        .await
+                        .map_err(|e| format!("Event publication review task: {e}"))??,
+                )
+            } else {
+                None
+            };
             let workspace = review
                 .as_ref()
                 .map(|r| r.workspace.clone())
                 .unwrap_or(workspace);
-            let (mut intake, head) =
-                event_publication_prerequisites(DefinitionStore::new, workspace.clone()).await?;
-            if run.event_workflow.is_some() {
-                intake.workflow = run.event_workflow.clone();
-            }
-            let api = crate::github_pr_api::RepoApi::resolve(&state, &workspace).await?;
+            let (mut intake, repository, head, base, issue_number, api_path) = match saved_intent {
+                Some(intent) => {
+                    // Recovery uses the durable identity, even if the worktree was removed.
+                    let intake = tokio::task::spawn_blocking(|| {
+                        DefinitionStore::new()
+                            .load()
+                            .map(|config| config.event_intake)
+                    })
+                    .await
+                    .map_err(|error| format!("Publication recovery task failed: {error}"))??;
+                    (
+                        intake,
+                        intent.repository,
+                        intent.head,
+                        intent.base,
+                        intent.issue_number,
+                        repository_path,
+                    )
+                }
+                None => {
+                    let (intake, head) =
+                        event_publication_prerequisites(DefinitionStore::new, workspace.clone())
+                            .await?;
+                    (
+                        intake,
+                        repository,
+                        head,
+                        base_branch,
+                        issue_number,
+                        workspace,
+                    )
+                }
+            };
+            // Admission pins whether this run requires review; later settings cannot
+            // upgrade a legacy run or downgrade an already reviewed workflow run.
+            intake.workflow = run.event_workflow.clone();
+            let api = crate::github_pr_api::RepoApi::resolve(&state, &api_path).await?;
             let bound = format!("{}/{}", api.owner, api.repo);
-            super::publish::publish_reviewed_draft_pr(
+            super::publish::publish_run(
+                &store,
+                &run_id,
                 &intake,
                 &api,
                 &bound,
                 &super::publish::DraftPr {
                     repository: &repository,
                     head: &head,
-                    base: &base_branch,
+                    base: &base,
                     issue_number,
+                    review: review.as_ref(),
                 },
-                review.as_ref(),
+                recovering,
             )
             .await
         }
         .await;
-        let persisted = state.automation_runtime.notification_store();
-        let durable_outcome = outcome.clone();
-        let durable_id = run_id.clone();
-        if let Some(store) = persisted {
-            match tokio::task::spawn_blocking(move || {
-                store.record_publication(&durable_id, &durable_outcome)
-            })
-            .await
-            {
-                Ok(Ok(())) => {}
-                error => {
-                    tracing::warn!(source="automations", %run_id, ?error, "Publication outcome persistence failed")
-                }
-            }
-        }
         match outcome {
-            Ok(url) => tracing::info!(source = "automations", %run_id, %url, "Draft PR opened"),
+            Ok(saved) => emit_run_changed(&state, &saved, false),
             Err(error) => {
-                tracing::warn!(source = "automations", %run_id, %error, "Draft PR not opened")
+                tracing::warn!(source = "automations", %run_id, %error, "Draft PR not opened");
+                // Keep prerequisite and persistence failures inspectable, not log-only.
+                match store.settle_outcome(
+                    &run_id,
+                    "publication_failed",
+                    None,
+                    Some(error),
+                    chrono::Utc::now().timestamp_millis(),
+                ) {
+                    Ok(saved) => emit_run_changed(&state, &saved, false),
+                    Err(error) => {
+                        tracing::error!(source = "automations", %run_id, %error, "Publication outcome persistence failed")
+                    }
+                }
             }
         }
     });

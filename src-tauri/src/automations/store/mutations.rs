@@ -108,32 +108,12 @@ impl RunStore {
             }
             run.precheck_outcome = Some(value);
         }
+        if !next.is_open() && next != RunStatus::Completed && run.trigger.event_key().is_some() {
+            run.outcome = Some(RunOutcome::decision(&status(next)?, run.reason.clone()));
+        }
         write(&tx, &run)?;
         tx.commit().map_err(error)?;
         Ok(run)
-    }
-
-    /// Publication diagnostics do not change the immutable execution outcome.
-    pub(crate) fn record_publication(
-        &self,
-        id: &str,
-        outcome: &Result<String, String>,
-    ) -> Result<(), String> {
-        self.require_owner()?;
-        let mut conn = self.connect()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(error)?;
-        let mut run = read(&tx, id)?;
-        if run.status != RunStatus::Completed || run.trigger.event_key().is_none() {
-            return Err("publication requires a completed event run".into());
-        }
-        run.reason = Some(match outcome {
-            Ok(url) => format!("Draft PR opened: {url}"),
-            Err(reason) => format!("Draft PR not opened: {reason}"),
-        });
-        write(&tx, &run)?;
-        tx.commit().map_err(error)
     }
 
     /// Interrupt all open runs in one commit. Recovery never returns work to dispatch.
@@ -160,6 +140,9 @@ impl RunStore {
             run.finished_ms = Some(run.updated_ms);
             run.reason =
                 Some("Application restarted before execution finished; not retried".into());
+            if run.trigger.event_key().is_some() {
+                run.outcome = Some(RunOutcome::decision("interrupted", run.reason.clone()));
+            }
             write(&tx, &run)?;
         }
         // An attempted send may already have arrived. Mark it unknown, never claim again.

@@ -49,6 +49,13 @@ and select an explicit published story workflow revision with deterministic chec
 and independent implementer/reviewer profiles. Without this opt-in, existing intake
 keeps completion-only publication. See [reviewed issue workflows](automations.md#opt-in-reviewed-issue-workflows).
 
+Event runs now retain an `outcome` in owner-side run details: the decision,
+PR URL, comment URL slot and failure/refusal reason. Publication saves its intent
+before the GitHub write and looks up an uncertain result instead of repeating
+creation. Filtered and duplicate intake decisions are retained in history.
+This does not add triage comments. See
+[durable event outcomes](automations.md#durable-event-outcomes).
+
 The following capabilities are still unsupported on this baseline. Verify their
 status on the addressed owner before using them:
 

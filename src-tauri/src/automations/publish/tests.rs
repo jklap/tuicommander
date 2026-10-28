@@ -49,6 +49,7 @@ fn request<'a>(repository: &'a str, head: &'a str) -> DraftPr<'a> {
         head,
         base: "main",
         issue_number: 3,
+        review: None,
     }
 }
 

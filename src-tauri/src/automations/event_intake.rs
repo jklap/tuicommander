@@ -2,7 +2,7 @@
 //! Only repositories in the explicit allowlist are considered; the default is none.
 use super::{
     model::AutomationsConfig,
-    run::{AutomationRun, RunTrigger},
+    run::{AutomationRun, RunStatus, RunTrigger},
     store::RunStore,
 };
 use tuic_git::github::GitHubIssue;
@@ -40,22 +40,38 @@ pub(crate) fn admit_issues(
     };
     let mut admitted = Vec::new();
     for issue in issues {
-        let Some(repository) = issue_repository(issue).filter(|repo| intake.allows(repo)) else {
+        let Some(repository) = issue_repository(issue) else {
+            // No trusted repository identity exists for malformed or non-GitHub URLs.
             continue;
         };
-        if !issue.state.eq_ignore_ascii_case("OPEN")
-            || !issue
-                .labels
-                .iter()
-                .any(|label| label.name.eq_ignore_ascii_case(&intake.label))
-        {
-            continue;
-        }
         let trigger = RunTrigger::Event {
-            repository,
+            repository: repository.clone(),
             issue_number: i64::from(issue.number),
             label: intake.label.clone(),
         };
+        let refusal = if !intake.allows(&repository) {
+            Some("Repository is not in the event intake allowlist")
+        } else if !issue.state.eq_ignore_ascii_case("OPEN") {
+            Some("Issue is not open")
+        } else if !issue
+            .labels
+            .iter()
+            .any(|label| label.name.eq_ignore_ascii_case(&intake.label))
+        {
+            Some("Issue does not carry the event intake label")
+        } else {
+            None
+        };
+        if let Some(reason) = refusal {
+            store.record_event_refusal(
+                definition,
+                trigger,
+                RunStatus::SkippedFiltered,
+                reason,
+                now_ms,
+            )?;
+            continue;
+        }
         if let Some(run) = store.admit_event(
             definition,
             trigger,

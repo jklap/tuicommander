@@ -1912,5 +1912,5 @@ legacy event behavior. Event admission pins this selection in `AutomationRun.eve
 to null for earlier snapshots. The native workflow uses the prepared isolated
 workspace and its own role profiles. Publication reloads its authoritative
 review/check receipts and verifies GitHub's pushed branch SHA. Publication success
-or refusal updates the completed event's history reason, not its execution status.
+or refusal updates the completed event's durable `outcome`, not its execution status.
 See [reviewed issue workflows](../user-guide/automations.md#opt-in-reviewed-issue-workflows).

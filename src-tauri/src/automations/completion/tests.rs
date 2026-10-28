@@ -452,12 +452,18 @@ fn publication_refusal_is_durable_without_changing_completed_execution() {
         .unwrap();
     owner
         .store()
-        .record_publication(&event.id, &Err("Review artifact moved".into()))
+        .settle_outcome(
+            &event.id,
+            "publication_refused",
+            None,
+            Some("Review artifact moved".into()),
+            500,
+        )
         .unwrap();
     let saved = owner.store().get(&event.id).unwrap();
     assert_eq!(saved.status, RunStatus::Completed);
     assert_eq!(
-        saved.reason.as_deref(),
-        Some("Draft PR not opened: Review artifact moved")
+        saved.outcome.as_ref().unwrap().failure_reason.as_deref(),
+        Some("Review artifact moved")
     );
 }
