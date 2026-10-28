@@ -40,6 +40,9 @@ tar = "0.4"
 # DEFERRED (2026-10-09) — share the root's ZIP codecs; retain extraction compatibility.
 zip = "9"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
 objc2 = "0.6"

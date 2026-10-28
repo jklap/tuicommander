@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop external speech command descendants on timeout or cancellation, so shell-wrapped engines and test sleepers do not remain running (#2455-f617).
+
 - Refresh expanded Files tree folders after external file or folder changes, including non-Git roots and nested repositories; reload collapsed folders when reopened (#2452-8076).
 - Mask split Basic-auth credentials, unfinished escape sequences at process exit, and overlapping secret tails before terminal output publication (#2319-02f6).
 

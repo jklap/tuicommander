@@ -9596,6 +9596,7 @@ dependencies = [
  "block2",
  "cpal",
  "flate2",
+ "libc",
  "objc2",
  "objc2-foundation",
  "ort",
