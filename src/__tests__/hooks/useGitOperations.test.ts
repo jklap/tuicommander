@@ -1773,96 +1773,103 @@ describe("useGitOperations", () => {
 
 		// Catches: a retained A ref or A-named directory defeating current-branch reconciliation,
 		// including a refresh that was already reading A when Git switched the checkout to B.
-		it.each([false, true])("2351 real Git replaces retained A with B (active=%s)", async (active) => {
-			const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sidebar-2351-")));
-			onTestFinished(() => rmSync(scratch, { recursive: true, force: true }));
-			const { repo: root, checkout, git, topology } = build2351Topology(scratch);
-			const old = topology.old_branch;
-			const current = topology.switched_branch;
-			// The backend path is tested separately. This adapter feeds the full real
-			// topology through the production coordinator, including detached/repair rows.
-			const readStructure = () => {
-				const records = git(root, "worktree", "list", "--porcelain")
-					.trim()
-					.split("\n\n")
-					.map((record) => {
-						const lines = record.split("\n");
-						return {
-							path: normalize(lines.find((line) => line.startsWith("worktree "))!.slice(9)),
-							branch: lines.find((line) => line.startsWith("branch refs/heads/"))?.slice(18) ?? null,
-							head: lines.find((line) => line.startsWith("HEAD "))!.slice(5),
-							missing: lines.some((line) => line.startsWith("prunable ")),
-						};
-					});
-				return {
-					worktree_paths: Object.fromEntries(
-						records
-							.filter((r) => r.branch && !r.missing)
-							.map((r) => [r.branch!, { branch: r.branch!, path: r.path, kind: "worktree" as const }]),
-					),
-					detached_worktrees: records
-						.filter((r) => !r.branch && !r.missing)
-						.map((r) => ({
-							path: r.path,
-							head: r.head,
-							short_head: r.head.slice(0, 7),
-							directory_name: basename(r.path),
-							state: "detached" as const,
-						})),
-					worktree_diagnostics: records
-						.filter((r) => r.missing)
-						.map((r) => ({
-							path: r.path,
-							branch: r.branch,
-							state: "missing" as const,
-							guidance: "Git registration points to a missing checkout",
-						})),
-					merged_branches: [],
+		// Each case runs 52 real Git processes: 1.7–2.1 s in Git alone, and up to 17.5 s
+		// per case in the loaded batch (#2451-6a59). This is not a latency assertion:
+		// give the hang watchdog 3x that observed cost, rounded up to a minute.
+		it.each([false, true])(
+			"2351 real Git replaces retained A with B (active=%s)",
+			async (active) => {
+				const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sidebar-2351-")));
+				onTestFinished(() => rmSync(scratch, { recursive: true, force: true }));
+				const { repo: root, checkout, git, topology } = build2351Topology(scratch);
+				const old = topology.old_branch;
+				const current = topology.switched_branch;
+				// The backend path is tested separately. This adapter feeds the full real
+				// topology through the production coordinator, including detached/repair rows.
+				const readStructure = () => {
+					const records = git(root, "worktree", "list", "--porcelain")
+						.trim()
+						.split("\n\n")
+						.map((record) => {
+							const lines = record.split("\n");
+							return {
+								path: normalize(lines.find((line) => line.startsWith("worktree "))!.slice(9)),
+								branch: lines.find((line) => line.startsWith("branch refs/heads/"))?.slice(18) ?? null,
+								head: lines.find((line) => line.startsWith("HEAD "))!.slice(5),
+								missing: lines.some((line) => line.startsWith("prunable ")),
+							};
+						});
+					return {
+						worktree_paths: Object.fromEntries(
+							records
+								.filter((r) => r.branch && !r.missing)
+								.map((r) => [r.branch!, { branch: r.branch!, path: r.path, kind: "worktree" as const }]),
+						),
+						detached_worktrees: records
+							.filter((r) => !r.branch && !r.missing)
+							.map((r) => ({
+								path: r.path,
+								head: r.head,
+								short_head: r.head.slice(0, 7),
+								directory_name: basename(r.path),
+								state: "detached" as const,
+							})),
+						worktree_diagnostics: records
+							.filter((r) => r.missing)
+							.map((r) => ({
+								path: r.path,
+								branch: r.branch,
+								state: "missing" as const,
+								guidance: "Git registration points to a missing checkout",
+							})),
+						merged_branches: [],
+					};
 				};
-			};
-			repositoriesStore.add({ path: root, displayName: "2351" });
-			mockRepo.getRepoStructure.mockImplementation(async () => readStructure());
-			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
-			mockRepo.detectOrphanWorktrees.mockResolvedValue([]);
-			await gitOps.refreshAllBranchStats(root, { immediate: true });
-			const tid = terminalsStore.add(makeTerminal({ name: "Agent", sessionId: "2351", cwd: checkout }));
-			repositoriesStore.addTerminalToWorkspace(root, old, tid);
-			repositoriesStore.setActiveWorkspace(root, active ? old : "main");
+				repositoriesStore.add({ path: root, displayName: "2351" });
+				mockRepo.getRepoStructure.mockImplementation(async () => readStructure());
+				mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+				mockRepo.detectOrphanWorktrees.mockResolvedValue([]);
+				await gitOps.refreshAllBranchStats(root, { immediate: true });
+				const tid = terminalsStore.add(makeTerminal({ name: "Agent", sessionId: "2351", cwd: checkout }));
+				repositoriesStore.addTerminalToWorkspace(root, old, tid);
+				repositoriesStore.setActiveWorkspace(root, active ? old : "main");
 
-			const stale = readStructure();
-			let release!: (value: typeof stale) => void;
-			mockRepo.getRepoStructure.mockReturnValueOnce(
-				new Promise((resolve) => {
-					release = resolve;
-				}),
-			);
-			const first = gitOps.refreshAllBranchStats(root, { immediate: true });
-			git(checkout, "switch", current);
-			expect(git(root, "show-ref", "--verify", `refs/heads/${old}`)).toContain(`refs/heads/${old}`);
-			const queued = gitOps.refreshAllBranchStats(root, { immediate: true });
-			release(stale);
-			await Promise.all([first, queued]);
+				const stale = readStructure();
+				let release!: (value: typeof stale) => void;
+				mockRepo.getRepoStructure.mockReturnValueOnce(
+					new Promise((resolve) => {
+						release = resolve;
+					}),
+				);
+				const first = gitOps.refreshAllBranchStats(root, { immediate: true });
+				git(checkout, "switch", current);
+				expect(git(root, "show-ref", "--verify", `refs/heads/${old}`)).toContain(`refs/heads/${old}`);
+				const queued = gitOps.refreshAllBranchStats(root, { immediate: true });
+				release(stale);
+				await Promise.all([first, queued]);
 
-			const repo = repositoriesStore.get(root)!;
-			expect(repo.workspaces[old]).toBeUndefined();
-			expect(repo.workspaces[current].branchName).toBe(current);
-			expect(repo.workspaces[current].worktreePath).toBe(checkout);
-			expect(repo.workspaces[current].terminals).toContain(tid);
-			expect(repo.activeWorkspaceId).toBe(active ? current : "main");
-			expect(terminalsStore.get(tid)?.cwd).toBe(checkout);
-			expect(mockCloseTerminal).not.toHaveBeenCalled();
-			expect(Object.keys(repo.workspaces).sort()).toEqual(
-				topology.entries
-					.filter((entry) => entry.branch)
-					.map((entry) => entry.branch)
-					.sort(),
-			);
-			expect(repo.detachedWorktrees).toHaveLength(7);
-			expect(repo.worktreeDiagnostics).toHaveLength(4);
-			for (const entry of topology.entries.filter((entry) => entry.branch)) {
-				expect(repo.workspaces[entry.branch!].worktreePath).toBe(join(scratch, entry.path));
-			}
-		});
+				const repo = repositoriesStore.get(root)!;
+				expect(repo.workspaces[old]).toBeUndefined();
+				expect(repo.workspaces[current].branchName).toBe(current);
+				expect(repo.workspaces[current].worktreePath).toBe(checkout);
+				expect(repo.workspaces[current].terminals).toContain(tid);
+				expect(repo.activeWorkspaceId).toBe(active ? current : "main");
+				expect(terminalsStore.get(tid)?.cwd).toBe(checkout);
+				expect(mockCloseTerminal).not.toHaveBeenCalled();
+				expect(Object.keys(repo.workspaces).sort()).toEqual(
+					topology.entries
+						.filter((entry) => entry.branch)
+						.map((entry) => entry.branch)
+						.sort(),
+				);
+				expect(repo.detachedWorktrees).toHaveLength(7);
+				expect(repo.worktreeDiagnostics).toHaveLength(4);
+				for (const entry of topology.entries.filter((entry) => entry.branch)) {
+					expect(repo.workspaces[entry.branch!].worktreePath).toBe(join(scratch, entry.path));
+				}
+			},
+			60_000,
+		);
 
 		// Catches the structure-to-store boundary dropping detached rows or minting fake workspaces.
 		it("refreshes detached inventory separately from branch workspaces and retracts it", async () => {
