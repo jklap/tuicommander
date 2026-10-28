@@ -76,12 +76,14 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
 
 The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Any trusted caller may remove a direct WontFix prerequisite from a Backlog story with its current revision. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
+
+`add_plan_source` reuses an active plan with the same source. If only an archived plan matches, it returns an error that identifies the plan and gives explicit restore instructions; it does not create another record or change archive state.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
 
@@ -3039,3 +3041,12 @@ expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
 ### Shared AI Chat selection
 
 `GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
+
+### ACP connection launch environment
+
+`POST /acp/connections` and `acp_connect` accept the same optional string-map
+`env`. The manager passes it directly to the child configuration, before the
+host-issued peer identity, and does not retain it. Supplied env on an existing
+live peer is refused with disconnect-first guidance; an omitted env keeps
+normal adoption. Reconnect drops the previous overrides. Request diagnostics
+redact values, and connection snapshots contain no launch environment.

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Show an explicit telemetry-off state in the MDKB dashboard instead of treating disabled hook metrics as zero activity (#2442-61f6).
+
 - Shorten the terminal Compose newline hint to Ctrl+Enter and hide shortcut hints in compact panels instead of wrapping (#2411-c7c9).
 
 - Keep the open AI Chat conversation in sync across desktop, phone and tablet, including reconnect. Session CLI | Chat remains per device (#2403-e711).
@@ -15,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Send terminal Compose drafts with Enter; use Ctrl+Enter or Shift+Enter for a new line. Shift+Ctrl+Enter still queues for the next idle moment, and IME candidate confirmation does not send (#2395-ed27).
 
 ### Added
+
+- Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
 
 - Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
@@ -28,6 +32,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Tell agents to use TUIC managed peers for delegation or parallel work through the launch playbook, with an MCP fallback and the existing Claude Code isolated-task exception (#2441-bbcf).
+- Refuse archival of unresolved story prerequisites with open dependents, and require restoring archived unresolved work before adding a dependency to it (#2426-821e).
+- Explain how to restore an archived plan when New plan selects its existing source, instead of silently hiding the result; preserve the plan and avoid duplicates (#2425-5cfa).
+- Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
+- Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
+- Keep the Remote Access QR code stable across unchanged status polls, while refreshing it for listener, address and token changes (#2432-edf6).
+
 - Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
 
 - Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).

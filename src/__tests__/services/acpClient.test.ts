@@ -129,6 +129,15 @@ beforeEach(() => {
 });
 
 describe("acpClient: opening a connection", () => {
+	// Catches a desktop client dropping launch-only credential overrides.
+	it("passes a supplied environment only on the requested connect", async () => {
+		await client.connect(ROOT, { FOO: "bar" });
+		expect(mockInvoke).toHaveBeenCalledWith("acp_connect", { root: ROOT, env: { FOO: "bar" } });
+		mockInvoke.mockClear();
+		await client.connect(ROOT);
+		expect(mockInvoke).toHaveBeenCalledWith("acp_connect", { root: ROOT });
+	});
+
 	it("holds the snapshot and starts reading the journal from its beginning", async () => {
 		await client.connect(ROOT);
 
