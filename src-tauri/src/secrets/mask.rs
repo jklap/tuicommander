@@ -37,6 +37,32 @@ pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
     ] {
         result.push(Zeroizing::new(engine.encode(value)));
     }
+    // A secret embedded in Basic auth can begin/end inside a base64 unit.
+    // Enumerate only the neighbouring bits sharing those two encoded chars
+    // (16 combinations per alignment), reusing ordinary streaming matching.
+    for prefix in 0..3usize {
+        let leading = (prefix * 8) % 6;
+        let trailing = (6 - ((prefix + value.len()) * 8) % 6) % 6;
+        for left in 0..(1u8 << leading) {
+            for right in 0..(1u8 << trailing) {
+                let mut bytes = Zeroizing::new(vec![0; prefix]);
+                if let Some(last) = bytes.last_mut() {
+                    *last = left;
+                }
+                bytes.extend_from_slice(value.as_bytes());
+                if trailing > 0 {
+                    bytes.push(right << (8 - trailing));
+                }
+                for engine in [
+                    &base64::engine::general_purpose::STANDARD_NO_PAD,
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                ] {
+                    let encoded = Zeroizing::new(engine.encode(&bytes));
+                    result.push(Zeroizing::new(encoded[prefix * 8 / 6..((prefix + value.len()) * 8).div_ceil(6)].to_owned()));
+                }
+            }
+        }
+    }
     let mut hex = Zeroizing::new(String::with_capacity(value.len() * 2));
     for b in value.bytes() {
         let _ = write!(hex, "{b:02x}");
@@ -274,34 +300,6 @@ fn digit(b: u8) -> Option<u8> {
     }
 }
 
-// Decode the trailing token without requiring padding or complete groups. Keep
-// source groups so a read boundary cannot discard Basic-auth decoder context.
-fn base64_stream_tail(flat: &[u8]) -> (Vec<u8>, Vec<usize>, u8, usize, usize) {
-    let start = flat.iter().rposition(|b| !(b.is_ascii_alphanumeric() || b"+/-_".contains(b)))
-        .map_or(0, |i| i + 1);
-    let mut decoded = Vec::new();
-    let mut groups = Vec::new();
-    let mut bits = 0u32;
-    let mut count = 0;
-    for (i, byte) in flat[start..].iter().enumerate() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' | b'-' => 62,
-            _ => 63,
-        };
-        bits = (bits << 6) | u32::from(value);
-        count += 6;
-        if count >= 8 {
-            count -= 8;
-            decoded.push((bits >> count) as u8);
-            groups.push(start + (i / 4) * 4);
-        }
-    }
-    (decoded, groups, (bits & ((1 << count) - 1)) as u8, count, start)
-}
-
 /// Hold only a possible secret prefix until the next chunk disambiguates it.
 /// Nothing withheld here may reach the terminal grid, streams or captures.
 #[derive(Default)]
@@ -328,7 +326,6 @@ impl StreamMask {
         let bytes = self.pending.as_bytes();
         let (flat, starts, ends) = flatten(bytes);
         let (decoded, decoded_starts, _) = url_decode(&flat, &starts, &ends);
-        let (base64, groups, partial, bits, token_start) = base64_stream_tail(&flat);
         let mut cutoff = bytes.len();
         for needle in &self.needles {
             let (needle, _, _) = flatten(needle.as_bytes());
@@ -340,15 +337,7 @@ impl StreamMask {
             if length > 0 {
                 cutoff = cutoff.min(decoded_starts[decoded.len() - length]);
             }
-            let length = suffix_prefix_len(&base64, &needle);
-            if length > 0 {
-                cutoff = cutoff.min(starts[groups[base64.len() - length]]);
-            }
-            // An incomplete decoded byte can itself begin a secret.
-            if bits > 0 && needle.first().is_some_and(|b| b >> (8 - bits) == partial) {
-                let group = token_start + ((flat.len() - token_start - 1) / 4) * 4;
-                cutoff = cutoff.min(starts[group]);
-            }
+
         }
         // Percent escapes may straddle reads before they decode to a prefix.
         if let Some(i) = flat.iter().rposition(|b| *b == b'%')
