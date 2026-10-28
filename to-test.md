@@ -2,6 +2,11 @@
 
 - [ ] Coordinator: run `new_plan_archived_source_has_visible_result` and `adding_a_plan_source_derives_its_title_and_reuses_its_record` against the final commit. The regression failed on pre-fix Linux rb; GREEN belongs to the critic.
 - [ ] After an authorized `make dev` restart or `make build`, select a source owned by an archived plan. Confirm the visible error identifies the plan and points to Archived plans and Restore plan. The daily app was not restarted; Rust does not hot-reload.
+## Development backend command mismatch (2409-aa48)
+
+- [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
+
+- [ ] Coordinator critic: run `dev_missing_command_explains_backend_frontend_mismatch_without_retry`, `src/__tests__/invoke.test.ts`, and the existing backend-skew startup/HMR tests. The implementation lane reproduced the pre-fix raw command error and Retry; post-fix GREEN belongs to integration. TypeScript passes locally. No Rust changes or daily-app restart.
 
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
@@ -3136,3 +3141,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## 2423-902c — Preferred phone secret-entry address
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
+
+- [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_

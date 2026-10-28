@@ -46,6 +46,8 @@ temporary directory; this avoids `operation not permitted` on certificate writes
 ### QR Code
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
+It refreshes when the selected address, listener TLS state or port changes, or after
+you regenerate the access token. Unchanged status polls keep the current QR code.
 
 The Remote Mobile Connection dialog shows the complete connection URL as selectable
 text. Use **Copy URL** to copy it; the action shows **Copied** after success.

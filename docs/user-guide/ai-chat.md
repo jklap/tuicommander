@@ -408,3 +408,11 @@ The Settings owner can read and edit the configured Ego model/perimeter and base
 With a conversation open in AI Chat, select text in a Markdown file and choose **Send to AI Chat** beside the comment action. TUIC appends the file path, original source line range and quoted selected text to that conversation’s draft, then focuses the composer. It preserves your existing draft and attachments and does not send a message. This action is also available in the mobile Files Markdown view after you open a chat conversation.
 
 Selections can include inline links and adjacent punctuation. Link destinations and reference identifiers do not count as visible occurrences when locating the source lines.
+
+### Development backend mismatch
+
+When a development frontend calls a command missing from the running backend,
+AI Chat explains the **Backend/frontend version mismatch** instead of offering
+Retry. Restart `make dev` (or `pnpm tauri dev`) when you are ready to end the
+current backend session. Reloading the frontend does not rebuild the backend.
+Release and remote-owner errors keep their existing recovery controls.
