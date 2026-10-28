@@ -9667,6 +9667,7 @@ mod tests {
                 },
                 crate::acp::AcpConnectRequest {
                     root: root.path().to_path_buf(),
+                    env: None,
                 },
             )
             .await

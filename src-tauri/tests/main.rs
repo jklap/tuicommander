@@ -40,3 +40,6 @@ mod story1548_acp_steer;
 mod story785_event_wire_shapes;
 #[path = "cases/story796_ego_mcp_over_the_bridge.rs"]
 mod story796_ego_mcp_over_the_bridge;
+
+#[path = "cases/story2320_connection_env.rs"]
+mod story2320_connection_env;

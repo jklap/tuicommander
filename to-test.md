@@ -1,3 +1,8 @@
+## ACP launch environment (2320-f493) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `story2320_connection_env` plus ACP launch/reuse consumers and the focused client/transport tests. The implementer recorded pre-implementation RED; no post-implementation Rust GREEN is claimed.
+- [ ] After an authorized rebuild and restart, connect with disposable environment overrides, confirm only that child receives them, and confirm env-bearing live-peer reuse asks for disconnect first. Reconnect must drop overrides. Rust does not hot-reload; the daily app was not restarted.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.

@@ -3030,3 +3030,12 @@ expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
 ### Shared AI Chat selection
 
 `GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
+
+### ACP connection launch environment
+
+`POST /acp/connections` and `acp_connect` accept the same optional string-map
+`env`. The manager passes it directly to the child configuration, before the
+host-issued peer identity, and does not retain it. Supplied env on an existing
+live peer is refused with disconnect-first guidance; an omitted env keeps
+normal adoption. Reconnect drops the previous overrides. Request diagnostics
+redact values, and connection snapshots contain no launch environment.

@@ -2794,7 +2794,7 @@ opinion about it:
 | `protocol_violation` | 502 — the agent denied a method it advertised; the connection is now failed |
 
 ```
-POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot
+POST   /acp/connections                                          {root, env?}                    -> AcpConnectionSnapshot
 GET    /acp/connections/{connection_id}                                                    -> AcpConnectionSnapshot
 DELETE /acp/connections/{connection_id}                                                    -> AcpConnectionSettlement
 POST   /acp/connections/{connection_id}/kill                                               -> AcpConnectionSettlement
@@ -2827,6 +2827,16 @@ text. Other JSON routes retain the 2 MiB default body limit.
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+Connect accepts an optional `env` object of string names and values. Overrides
+apply only to the new child, never the host or another launch. Host-issued
+`TUIC_SESSION` takes precedence. A supplied map, including an empty map, is
+rejected with disconnect-first guidance if the root already has a live peer;
+omitting `env` adopts that peer as before. Reconnect starts without the previous
+overrides. Values are not stored in connection state, returned by read endpoints,
+or included in request diagnostics. The host does not censor agent-generated
+content if an agent itself prints a value.
+
 
 `prompt` returns an ID immediately. When the session already has a turn, the
 host queues the prompt and sends it only after the current ACP response leaves

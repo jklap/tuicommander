@@ -2403,6 +2403,14 @@ describe("transport", () => {
 				{ profile: "coordinator", workspace: "/repo", executable: "/bin/ego" },
 			],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
+			// Catches the HTTP mapper dropping per-connection process overrides.
+			[
+				"acp_connect",
+				{ root: "/repo", env: { FOO: "bar" } },
+				"POST",
+				"/acp/connections",
+				{ root: "/repo", env: { FOO: "bar" } },
+			],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_kill", { connectionId: CONNECTION }, "POST", `/acp/connections/${CONNECTION}/kill`, undefined],
