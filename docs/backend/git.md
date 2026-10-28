@@ -577,7 +577,7 @@ outside the removed checkout are rehomed after successful removal.
 
 ### Checkout discovery inventory
 
-CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool; an unrelated directory with that name does not hide a checkout. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
+CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool. Live discovery also hides checkouts directly under another `__archived` directory when their Git administration directory contains TUIC’s `finished` allocation marker. This keeps externally created and former-storage archives hidden after a storage change without hiding unrelated directories with that name. Unfiltered inventory still includes archives for removal. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
 
 ### Worktree discovery diagnostics
 

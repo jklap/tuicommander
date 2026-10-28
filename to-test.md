@@ -1,3 +1,9 @@
+## Archived external worktrees (2412-11f3) — Rust restart required
+
+- [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.
+- [ ] Coordinator: run `archived_external_checkout_stays_out_of_live_inventory`, `discovery_2156_unowned_archive_name_keeps_checkout` and pooled-removal regressions against the final commit. GREEN belongs to the critic/integration lane.
+- [ ] After an authorized `make dev` restart or `make build`, confirm an archived external checkout stays absent from the sidebar and MCP worktree list after a storage-setting change. The daily app was not restarted; Rust does not hot-reload.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
