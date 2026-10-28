@@ -121,6 +121,32 @@ describe("RemoteAccessPanel", () => {
 		},
 	);
 
+	it.each(["settings", "dialog"] as const)(
+		"keeps backend-ranked LAN ahead of HTTP-only Tailscale in the %s surface",
+		async (surface) => {
+			// Catches: frontend label ranking overriding the backend's live-listener policy.
+			const base = vi.mocked(rpc).getMockImplementation()!;
+			vi.mocked(rpc).mockImplementation(async (command, args) => {
+				if (command === "get_local_ips") {
+					return [
+						{ ip: "192.168.1.42", label: "LAN (en0)" },
+						{ ip: "100.64.1.2", label: "Tailscale (utun0)" },
+					];
+				}
+				if (command === "get_connect_url") return "http://192.168.1.42:9876/connect";
+				return base(command, args);
+			});
+			const view = render(() =>
+				surface === "settings" ? <RemoteAccessPanel /> : <RemoteQrDialog onClose={() => {}} />,
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			const urlCalls = vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_connect_url");
+			expect(urlCalls.length).toBeGreaterThan(0);
+			for (const call of urlCalls) expect(call).toEqual(["get_connect_url", { ip: "192.168.1.42" }]);
+			view.unmount();
+		},
+	);
+
 	it("does not advertise HTTPS after certificate provisioning failed", async () => {
 		const base = vi.mocked(rpc).getMockImplementation()!;
 		vi.mocked(rpc).mockImplementation(async (command, args) => {

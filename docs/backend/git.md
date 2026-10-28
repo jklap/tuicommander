@@ -315,6 +315,10 @@ that differs from its branch ref bypasses the proof cache; destructive lifecycle
 preflights always bypass it.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
+An empty or absent branch reflog is normal after expiry or when reflogs are disabled.
+The classifier returns `unknown` without an error or merge proof for that branch;
+repository structure and sibling branch classifications still load on repeated
+refreshes. This verdict does not authorize branch deletion.
 The integration query does not treat `in_sync` as merged and supplies no proof
 for it. Explicitly finished empty checkouts can still be recycled; that marker
 is allocation consent, not merge evidence. Orphan discovery excludes detached
@@ -577,11 +581,11 @@ outside the removed checkout are rehomed after successful removal.
 
 ### Checkout discovery inventory
 
-CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool; an unrelated directory with that name does not hide a checkout. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
+CLI and Gix return branch-addressed `worktree_paths` plus a separate `detached_worktrees` list. Detached records contain the path, full HEAD SHA, seven-character `short_head`, directory name and `state: "detached"`. They do not create workspace IDs. The root adapter supplies the effective configured worktree base’s `__archived` pool. Live discovery also hides checkouts directly under another `__archived` directory when their Git administration directory contains TUIC’s `finished` allocation marker. This keeps externally created and former-storage archives hidden after a storage change without hiding unrelated directories with that name. Unfiltered inventory still includes archives for removal. Gix resolves the common Git directory before finding the main checkout. CLI discovery reads NUL-delimited `git worktree list --porcelain -z`, so newline paths remain intact.
 
 ### Worktree discovery diagnostics
 
-The additive inventory also returns `worktree_diagnostics` records with `path`, nullable `branch`, `state` (`missing` or `duplicate_branch`), and `guidance`. Missing or broken checkouts never enter the selectable map. Discovery does not prune registrations. A forced duplicate branch keeps one deterministic primary checkout (lexicographically smallest path); additional paths become read-only diagnostics. Legacy lifecycle resolution uses the same primary ordering so an action does not target a different duplicate. Workspace IDs do not change.
+The additive inventory also returns `worktree_diagnostics` records with `path`, nullable `branch`, `state` (`missing` or `duplicate_branch`), and `guidance`. Bare repository metadata is not a checkout and does not produce a missing-checkout diagnostic, including when inventory starts from a linked checkout backed by a bare common directory. Missing or broken checkouts never enter the selectable map. Discovery does not prune registrations. A forced duplicate branch keeps one deterministic primary checkout (lexicographically smallest path); additional paths become read-only diagnostics. Legacy lifecycle resolution uses the same primary ordering so an action does not target a different duplicate. Workspace IDs do not change.
 
 Synchronous and asynchronous inventory cache loaders retain only successful reads. MCP repository listings report `worktree_error` on discovery failure; ACP workspace snapshots report `worktreeError`. Bisect recovers `BISECT_START` only when it resolves to an existing local branch. Rebase recovery uses the shared Git directory resolver, including relative gitdir paths and the main checkout.
 

@@ -344,10 +344,52 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                             )?;
                             continue 'turn;
                         };
+                        let native_approval = if matches!(
+                            node.kind,
+                            NodeKind::Agent {
+                                role: crate::workflows::AgentRole::Implementer,
+                                ..
+                            }
+                        ) && attempt.agent.is_none()
+                            && attempt.report.is_none()
+                            && !snapshot
+                                .effects
+                                .iter()
+                                .any(|effect| effect.key == format!("spawn:{}", attempt.id))
+                        {
+                            let story =
+                                crate::stories::StoryStore::open()?.get_story(&graph.target_id)?;
+                            (story.status == crate::stories::StoryStatus::Done)
+                                .then_some(story.revision)
+                        } else {
+                            None
+                        };
+                        if let Some(revision) = native_approval {
+                            if attempt.state != super::AttemptState::Reported {
+                                store.command_expected(
+                                    run_id,
+                                    &format!("daemon:native-approval:{}:{revision}", attempt.id),
+                                    snapshot.sequence,
+                                    RunCommand::AcceptUnspawnedStory {
+                                        attempt_id: attempt.id.clone(),
+                                    },
+                                )?;
+                                continue 'turn;
+                            }
+                            if !snapshot.stories.iter().any(|story| {
+                                story.story_id == graph.target_id
+                                    && story.accepted
+                                    && story.accepted_revision == Some(revision)
+                            }) {
+                                return Err(
+                                    "unspawned completion lacks native approval receipt".into()
+                                );
+                            }
+                        }
                         if attempt.state == super::AttemptState::Running {
                             continue 'graphs;
                         }
-                        if attempt.report.is_none()
+                        if (attempt.report.is_none() && native_approval.is_none())
                             || attempt.outcome != Some(super::AttemptOutcome::Completed)
                         {
                             return Ok(store

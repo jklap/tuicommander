@@ -4650,7 +4650,7 @@ pub(crate) use ideas::{add_idea, list_ideas, update_idea};
 // replaced by an empty array on the next mutation (GH #107).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
-    load_json_config_strict(NOTES_FILE)
+    ideas::load_notes()
 }
 
 pub(crate) fn save_notes(base: serde_json::Value, config: serde_json::Value) -> Result<(), String> {
