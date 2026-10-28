@@ -1,3 +1,6 @@
+## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
 ## Complete labelled issue intake (2415-dccf) — Rust restart required
 
 - [ ] Coordinator: run the focused intake regressions, overlapping client delivery tests, and existing capacity-retry/event-deduplication tests on the final commit. The implementer ran only pre-fix RED; no post-fix GREEN run is claimed.
