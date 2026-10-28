@@ -1,3 +1,7 @@
+## Claude mobile 429 backoff (2430-4049) — Rust restart required
+
+- [ ] Coordinator critic: run `mobile_quota_429_sets_shared_profile_backoff`, `mobile_quota_non_429_and_timeout_do_not_set_backoff`, `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` on the final commit. Native macOS and Linux rb RED reproduced repeated credential IO after 429; post-fix GREEN belongs to integration.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm mobile quota refresh during a Claude 429 retains stale quota or reports unavailable without repeated GETs for the same profile. Other account profiles remain usable. Rust does not hot-reload; the daily app was not restarted.
 ## Archived prerequisite retention (2426-821e) — Rust restart required
 
 - [ ] Coordinator critic: run `archiving_unresolved_prerequisite_does_not_hide_blocker`, the `archive_prerequisite_` regressions, and existing archive/dependency consumers on the final commit. The implementation lane reproduced RED on Linux rb; no post-fix GREEN is claimed.
