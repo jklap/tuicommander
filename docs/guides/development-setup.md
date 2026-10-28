@@ -490,8 +490,13 @@ dependencies with `pnpm install --offline --frozen-lockfile` when its local
 `node_modules/.bin/stryker` is missing; linked worktrees do not share the main
 checkout's executables. The checked-in Stryker config copies frontend inputs,
 Rust `.rs` files under `src-tauri/src/`, the terminal-grid source, and the generated
-`command_table_paths.txt` into its sandbox. Add any new files read directly by a
-Vitest test to that copy policy. It leaves the worktree source untouched and runs
+`command_table_paths.txt` into its sandbox. It also copies JSON assets under
+`src-tauri/{src,crates,fixtures,tests}/` by extension, including shared settings,
+intent markers, themes, and test fixtures imported by frontend modules. Recorded
+ACP JSONL fixtures under `src-tauri/tests/fixtures/acp/` are also included for
+frontend consumers. These rules exclude unrelated generated files and vendored
+terminal reference grids. Add any
+new asset types or files read directly by a Vitest test to that copy policy. It leaves the worktree source untouched and runs
 Vitest as a separate command for each mutant. Stryker 10's
 Vitest runner reports false survivors with this repo's Vitest 5, so it is not
 used. Stryker's TypeScript preprocessor is pointed at an absent file because
