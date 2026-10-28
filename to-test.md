@@ -1,3 +1,8 @@
+## Archived prerequisite retention (2426-821e) — Rust restart required
+
+- [ ] Coordinator critic: run `archiving_unresolved_prerequisite_does_not_hide_blocker`, the `archive_prerequisite_` regressions, and existing archive/dependency consumers on the final commit. The implementation lane reproduced RED on Linux rb; no post-fix GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm Archive story refuses an unresolved prerequisite with open dependents and shows their IDs. Confirm Done prerequisites can still be archived, and adding an archived unresolved dependency asks for restoration. Rust does not hot-reload; the daily app was not restarted.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
