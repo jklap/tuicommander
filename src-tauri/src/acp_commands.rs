@@ -89,13 +89,13 @@ pub(crate) async fn acp_workspace_root(
 
 pub(crate) async fn connect(
     state: &Arc<AppState>,
-    root: PathBuf,
+    request: AcpConnectRequest,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
     let config = ego_config(state)?;
-    let peer_id = peer_id_for_root(state, &root).await?;
+    let peer_id = peer_id_for_root(state, &request.root).await?;
     let snapshot = state
         .acp
-        .connect_with_peer(&config, AcpConnectRequest { root }, peer_id.clone())
+        .connect_with_peer(&config, request, peer_id.clone())
         .await?;
     label_peer(state, &peer_id);
     Ok(snapshot)
@@ -236,8 +236,9 @@ fn forward_detached(
 pub(crate) async fn acp_connect(
     state: State<'_, Arc<AppState>>,
     root: PathBuf,
+    env: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
-    connect(&state, root).await
+    connect(&state, AcpConnectRequest { root, env }).await
 }
 
 #[cfg(feature = "desktop")]

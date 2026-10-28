@@ -1,5 +1,9 @@
 # Native plans and stories
 
+Choose **All plans** in the Plans column to show stories from every non-archived plan together in List or Kanban. Each story row and card shows its plan title. Status, type and archived-story filters apply to the combined view. **Archived plans** switches the combined view to archived plans only, as it does for a single-plan view. Select a specific plan to filter back and enable plan editing or story creation. Story detail, status actions, workflow starts and run history use the selected story’s own plan; dependency choices stay inside that plan.
+
+New story and Edit plan keep the primary action, then Cancel, together at the bottom-left. Story Edit stays in the story header. Disabled Add dependency exposes its reason as a native tooltip and accessible description.
+
 The selected plan has **Edit plan** and **Archive plan** actions together in the Plans column. **Archived plans** stays with the plan-list filters. Edit plan and New story each use the main dialog area instead of a narrow list column. In Edit plan, choose a **Repository plan document**, or choose **Other link…** to enter a document path or URL in **Plan document or link**. A repository source path appears once below the picker. **Open** opens a local document in a file tab and leaves the dialog, or opens a URL in the browser. When Save is disabled, its reason is available on hover as a native tooltip and to assistive technology, without an extra line in the form. Save sends only changed fields using the revision captured when editing started. A conflict keeps the draft and requires Cancel and reopening Edit plan to load the latest version; an active-coordinator refusal keeps the source draft and displays the backend remedy. Successful saves refresh the plan list. Plan state appears in the detail pane. Header tabs stay on one scrollable row at narrow widths.
 
 Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_revision`, and `patch` with optional `title` and `source`. At least one field is required. The shared service validates both fields and commits them with one revision increment in one transaction; stale revisions leave the plan unchanged. Existing records start at revision 1. A metadata change changes the workflow planning and verification fingerprints, including plans with no stories. Source prose stays in the external document; the update does not move or rewrite that file. Source-changing edits are refused with a user error while a plan coordinator/planner attempt is running, including an unbound attempt or a paused run. Finish the coordinator or cancel its run first. Title-only and unchanged-source edits remain allowed. The same action is available through MCP, HTTP, desktop IPC, and `tuic story`.
@@ -41,6 +45,8 @@ The result is JSON with a `type` and `value`. Supply the returned plan ID when c
 tuic story '{"action":"create_story","input":{"planId":"PLAN_ID","title":"Implement","criteria":["Behavior verified"],"priority":1,"origin":{"type":"native"},"fileScope":[]}}' --project /absolute/project
 ```
 
+Selecting a New plan source that already belongs to an archived plan shows its title and ID with instructions to enable **Archived plans**, select it, and choose **Restore plan**. This does not create a duplicate or restore the plan implicitly; an active source match still selects its existing plan.
+
 ## Amend a story
 
 `update_story` takes `story_id`, `expected_revision`, and a camel-case `patch`. Omitted fields stay unchanged. The patch accepts `title`, `priority` (1–3), `fileScope`, `origin` (including a plan step), nullable `storyType` (`feature`, `fix`, `refactor`, `chore`, `task`), optional `problem` and `risk` (`low`, `medium`, `high`), ordered `criteria`, and the final `dependencies` set. Null clears `storyType`, `problem` or `risk`; old story records default both to absent. Unknown fields, invalid values, cross-plan dependencies, duplicates, cycles and stale revisions are rejected without partial story writes. Only unclaimed Backlog/Ready stories without active or paused workflow ownership can be amended. QA, like In progress, is not editable: manual verification must stay bound to its requirements. Unique byte-identical criteria retain their checks after reorder; changed, new or ambiguous duplicate criteria become unchecked. A priority-only patch preserves all checks. Amendments do not rewrite append-only story notes: a note keeps the subject revision recorded when it was added, even after a later amendment. Dependency changes recompute readiness. Planning and execution fingerprints include the amended requirements/revision, so existing evidence cannot certify changed work.
@@ -49,7 +55,7 @@ tuic story '{"action":"create_story","input":{"planId":"PLAN_ID","title":"Implem
 tuic story '{"action":"update_story","story_id":"STORY_ID","expected_revision":1,"patch":{"priority":3}}' --project /absolute/project
 ```
 
-In StoriesDialog, select an eligible story and choose **Edit**. One form edits the title, priority, type, origin/plan step, problem, risk, ordered criteria, file scope and dependencies. Each criterion has its own textarea, with Add, Remove, Up and Down controls. Editing or moving one entry preserves every other entry exactly, including embedded newlines and indentation. File scope uses one path per line. **Save** sends only changed fields with the revision captured when Edit opened; **Cancel** discards the draft. The form hides lifecycle controls while editing. A revision conflict keeps the draft visible and never retries against a newer revision. Cancel and reopen Edit to load the latest record before preparing a new amendment. Workflow ownership is checked by the backend on Save, even when Edit was available when the form opened.
+In StoriesDialog, select an eligible story and choose **Edit**. Edited titles must contain 1 to 200 Unicode characters after trimming. Invalid titles disable Save without truncating the draft. One form edits the title, priority, type, origin/plan step, problem, risk, ordered criteria, file scope and dependencies. Each criterion has its own textarea, with Add, Remove, Up and Down controls. Editing or moving one entry preserves every other entry exactly, including embedded newlines and indentation. File scope uses one path per line. **Save** sends only changed fields with the revision captured when Edit opened; **Cancel** discards the draft. The form hides lifecycle controls while editing. A revision conflict keeps the draft visible and never retries against a newer revision. Cancel and reopen Edit to load the latest record before preparing a new amendment. Workflow ownership is checked by the backend on Save, even when Edit was available when the form opened.
 
 Read `get_story` first and use its current revision. After a revision conflict, reload the story before preparing another amendment. `criteria` and `dependencies` are final lists, not incremental commands. The existing `remove_dependency` action keeps its narrower cancelled-prerequisite rules; use `update_story` for a full requirement amendment before work starts. Plan ownership cannot be moved by this patch.
 
@@ -59,7 +65,7 @@ To remove a cancelled prerequisite, any trusted caller, including a session-boun
 
 Caller identity does not restrict dependency removal. Managed MCP calls, the Plans and Stories dialog, and CLI or HTTP calls use the same state and revision rules within their project scope. A managed caller does not need to omit its session identity to remove a dependency.
 
-The same records are available through desktop IPC, guarded HTTP, and the `workflow action=story` MCP entry. `Done` records an approval with actor provenance. In a manual plan with no workflow run, approval immediately releases dependents whose other prerequisites are Done. Once a workflow run owns the plan, a dependent remains held until its accepted prerequisite has a current integration receipt: the checked source commit must be merged into the canonical branch and TUIC must pass the published checks on the merge result. A later unrecorded ref or tree change invalidates that proof. Import, export, and external sync are not part of this feature.
+The same records are available through desktop IPC, guarded HTTP, and the `workflow action=story` MCP entry. `Done` records an approval with actor provenance. In a manual plan with no workflow run, approval immediately releases dependents whose other prerequisites are Done. Once a workflow run owns the plan, a dependent remains held until its accepted prerequisite has a current integration receipt: the checked source commit must be merged into the canonical branch and TUIC must pass the published checks on the merge result. A later unrecorded ref or tree change invalidates that proof. Import, export, and bidirectional external sync are not supported. The optional mdkb search projection below is read-only.
 
 API and CLI callers can filter `list_stories` by native `state` (including `qa`), `priority`, and `story_type`. Add `limit` (1–100) to page the results, then send the returned `next_cursor` as `cursor` with the same plan and filters. The `value` field stays an array; no cursor means the final page. Omitting `limit` preserves a complete filtered list. For example: `tuic story '{"action":"list_stories","plan_id":"<id>","state":"ready","priority":1,"story_type":"fix","limit":25}' --project /absolute/project`. Dispatch order is not affected.
 
@@ -152,7 +158,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -193,3 +199,32 @@ The reviewed problem is saved atomically with creation through the optional
 For a remote repository, Fill with AI reserves, generates and cancels on the
 repository's owning daemon. Changing the viewed project or closing the dialog
 does not move cancellation to a different machine.
+
+## Search native stories with mdkb
+
+When an mdkb daemon with external-ingest support is running on the owning host,
+TUICommander pushes native stories into its project index under source
+`tuic-stories`. Search by a title, acceptance-criterion phrase or note with
+`mdkb search "phrase" --root /absolute/project`. Closed and archived stories
+remain searchable. The result is read-only: use the native story tools to change
+it, not mdkb. Plans remain their existing source documents.
+
+The story database remains authoritative. No story Markdown file is written to
+the project, and there is no `.tuic/stories` directory to commit or ignore.
+Committed story changes and notes wake a background sync on both desktop and
+headless hosts. Network calls never run inside a story mutation. An unavailable
+daemon does not prevent creating, editing, checking or closing a story.
+TUICommander retries every 30 seconds and compares story IDs and ingest revisions
+on each connection, sending only missing or newer records. It does not start or
+restart the daemon for this integration. The project must be admitted by mdkb's
+root whitelist.
+
+The persisted ingest revision also advances for notes, without changing the
+story revision used by workflow proof. A deletion retains an ingest tombstone;
+archiving is not deletion. Another isolated TUICommander instance can index the
+same project, so unknown IDs in mdkb are not deleted. Push failures are logged and
+retried. A document exceeding mdkb's 4 MiB request limit remains unsynchronized;
+its story mutation still succeeds. Restoring an older story database can leave
+mdkb with a newer revision: this conflict is logged, not silently overwritten.
+The indexed update time begins at migration for existing stories; it does not
+claim to reconstruct historical transition times.

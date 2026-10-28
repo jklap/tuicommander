@@ -7,6 +7,9 @@ import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import s from "./StoriesDialog.module.css";
 
+// Matches validate_new_story in stories/store.rs; Rust counts Unicode scalar values.
+const STORY_TITLE_LIMIT = 200;
+
 type StoryOrigin = { type: "native" } | { type: "plan_step"; step: string } | { type: "git_hub_issue"; number: number };
 
 export interface EditableStory {
@@ -41,6 +44,16 @@ export function StoryEditForm(props: {
 }) {
 	const baseline = props.story;
 	const [title, setTitle] = createSignal(baseline.title);
+	const validTitle = () => {
+		const length = Array.from(title().trim()).length;
+		return length > 0 && length <= STORY_TITLE_LIMIT;
+	};
+	const titleHint = () =>
+		validTitle()
+			? undefined
+			: t("stories.edit.titleLimit", "Enter a title of 1 to {limit} characters.", {
+					limit: String(STORY_TITLE_LIMIT),
+				});
 	const [priority, setPriority] = createSignal(baseline.priority);
 	const [storyType, setStoryType] = createSignal<StoryType | "">(baseline.storyType ?? "");
 	const [originType, setOriginType] = createSignal(baseline.origin.type);
@@ -96,14 +109,16 @@ export function StoryEditForm(props: {
 			aria-label={t("stories.edit.form", "Edit story")}
 			onSubmit={(event) => {
 				event.preventDefault();
-				props.onSave(patch());
+				if (validTitle()) props.onSave(patch());
 			}}
 		>
 			<label>
 				{t("stories.edit.title", "Title")}
 				<Input
 					required
-					maxlength={500}
+					// Native maxlength counts UTF-16 units and truncates valid non-BMP titles.
+					aria-invalid={!validTitle()}
+					title={titleHint()}
 					value={title()}
 					disabled={props.busy}
 					onInput={(event) => setTitle(event.currentTarget.value)}
@@ -284,7 +299,12 @@ export function StoryEditForm(props: {
 				</p>
 			</Show>
 			<div class={s.inline}>
-				<Button variant="primary" type="submit" disabled={props.busy || !Object.keys(patch()).length}>
+				<Button
+					variant="primary"
+					type="submit"
+					title={titleHint()}
+					disabled={props.busy || !validTitle() || !Object.keys(patch()).length}
+				>
 					{t("stories.edit.save", "Save")}
 				</Button>
 				<Button type="button" disabled={props.busy} onClick={props.onCancel}>

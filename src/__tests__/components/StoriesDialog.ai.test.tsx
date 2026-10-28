@@ -101,7 +101,7 @@ describe("AI story draft review boundary", () => {
 			expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { project: "/repo", requestId: "fill-1" }),
 		);
 		finish(draft);
-		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		await screen.findByText("Fill cancelled.");
 		expect((screen.getByLabelText("Request") as HTMLTextAreaElement).value).toBe("Let me search saved work");
 		expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
 		expect(actions().some((action) => action.action === "create_story")).toBe(false);
@@ -117,7 +117,7 @@ describe("AI story draft review boundary", () => {
 		await openForm();
 		fireEvent.click(screen.getByRole("button", { name: "Fill with AI" }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
-		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		await screen.findByText("Fill cancelled.");
 		reserve("late-handle");
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { project: "/repo", requestId: "late-handle" }),
@@ -188,7 +188,7 @@ describe("remote story fill ownership", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
 		finish(Response.json(draft));
-		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		await screen.findByText("Fill cancelled.");
 		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
 			"http://story-daemon.test/acp/one-shot/prepare",
 			"http://story-daemon.test/acp/story-draft",
@@ -212,7 +212,7 @@ describe("remote story fill ownership", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Fill with AI" }));
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
-		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		await screen.findByText("Fill cancelled.");
 		reserve(Response.json("late-remote"));
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([

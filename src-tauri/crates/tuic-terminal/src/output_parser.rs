@@ -843,15 +843,17 @@ fn build_api_error_patterns() -> Vec<ApiErrorPattern> {
             "server",
         ),
         // Native failure prefixes fit narrow panes; the remaining prose can wrap.
-        // Claude 2.1.308 renders either a tool-result marker or an assistant bullet.
+        // Native failures use an assistant bullet or an unadorned row. Tool
+        // receipts (⎿) and their indented continuation rows quote another
+        // process: they are not evidence that the agent provider failed.
         ae(
             "claude-transport-error",
-            r"(?m)^\s*(?:[⎿⏺]\s*)?API Error: (?:Connection (?:lost|to the|dropped|refused)\b|Request timed out\b|The response (?:stopped|stalled|stream)\b|Server error\b|Part of the\b|Unable to connect\b)",
+            r"(?m)^ {0,2}(?:⏺[ \t]*)?API Error: (?:Connection (?:lost|to the|dropped|refused)\b|Request timed out\b|The response (?:stopped|stalled|stream)\b|Server error\b|Part of the\b|Unable to connect\b)",
             "server",
         ),
         ae(
             "claude-auth-friendly",
-            r"(?m)^\s*(?:[⎿⏺]\s*)?(?:Invalid API key\b|Invalid auth token\b|Authentication required\b)",
+            r"(?m)^ {0,2}(?:⏺[ \t]*)?(?:Invalid API key\b|Invalid auth token\b|Authentication required\b)",
             "auth",
         ),
         // Codex 0.163.0 only commits non-retrying errors as a native ■ row.
@@ -4439,6 +4441,34 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             }
         }
         assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
+    /// Catches: tool receipt/continuation diagnostics masquerading as native failures.
+    #[test]
+    fn claude_friendly_failures_reject_tool_result_rows() {
+        let mut failures = Vec::new();
+        for message in [
+            "Invalid API key · Fix external API key",
+            "Invalid auth token · Fix external auth token",
+            "Authentication required · Sign in again to continue",
+            "API Error: Connection refused — a firewall may be blocking it",
+        ] {
+            for (prefix, expected) in [
+                ("", true),
+                ("⏺ ", true),
+                ("  ", true),
+                ("  ⎿  ", false),
+                ("    ", false),
+                ("\t", false),
+            ] {
+                let line = format!("{prefix}{message}");
+                let events = OutputParser::new().parse_clean_lines(&[row(0, &line)], true);
+                if has_api_error(&events) != expected {
+                    failures.push(format!("expected native failure={expected}: {line:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// Catches: native provider retry or unrelated OSC notifications promoted to final failure.

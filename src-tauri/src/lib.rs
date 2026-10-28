@@ -2848,6 +2848,7 @@ fn build_remote_base_url(scheme: &str, host: &str, port: u16) -> String {
 
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
+    stories::ingest::spawn();
     workflows::WorkflowRuntime::spawn(state);
     automations::runtime::AutomationRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
@@ -2923,6 +2924,7 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
 /// (#793-23a5).
 #[cfg(not(feature = "desktop"))]
 fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
+    stories::ingest::spawn();
     workflows::WorkflowRuntime::spawn(state);
     automations::runtime::AutomationRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());

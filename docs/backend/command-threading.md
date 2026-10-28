@@ -394,3 +394,12 @@ so it must run on Tauri's executor, not the synchronous IPC thread.
 `acp_one_shot_cancel` only signals an in-memory watch handle. Neither command
 performs filesystem, model or subprocess work on the caller.
 The driver keeps connection teardown on its detached task when a caller disappears.
+
+## Event-run draft PR publication
+
+Completed event runs load validated automation definitions and read the workspace
+branch with `git rev-parse` through `spawn_blocking`. Filesystem locks and git
+process waits do not occupy a Tokio worker. The async continuation resolves the
+repository API and publishes the draft with the existing allowlist and branch
+checks. Prerequisite errors and blocking-task failures reach the existing
+publication warning; this boundary does not add retries or durable outcomes.
