@@ -1228,6 +1228,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
   - Parent tracked and untracked changes are not carried into the new checkout
   - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal. Branch-name status diagnostics appear once; main-checkout tooltips do not describe removal
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
+  - The Archive workspace dialog shows backend-owned file, commit and open-session checks with counts. Failed or unknown checks disable Delete; Archive keeps dirty and unmerged work.
   - The Archive workspace dialog offers a red Delete alternative for a clean, integrated checkout without live sessions. Delete removes the checkout and local branch through the existing safety checks instead of recycling it; Archive remains the default.
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
@@ -2956,6 +2957,11 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 ## Private secret forms
 
+Controllers can also put write-only task-scoped values with a TTL and select the
+scope at agent spawn. Values enter only the child environment. TTL stops new
+injection; existing session masks remain until teardown. PTY output is sanitized
+before HTTP, WS, history, watchers and diagnostic captures (#2319-02f6).
+
 The private window offers a selectable full phone-entry URL, Copy URL, a browser
 link and QR code using the Remote Mobile address policy. Disabled remote access
 shows setup guidance. SSO HTTP(S) display URLs share the selectable link, copy
@@ -3518,6 +3524,15 @@ archived stories stay searchable. No story file is written to the project;
 plans and the story mutation API are unchanged. See the native stories guide.
 
 
+### Optional issue triage (#2324-424d)
+
+Per-repository `event_intake.triage` evaluates open issues once per policy version
+before labelled implementation, with trusted-author admission and durable
+accepted/rejected/needs-input decisions. The host adds the intake label or a
+rejection reason comment and label. The read-only profile is operator-attested;
+TUIC does not enforce absence of git/gh credentials. Uncertain writes are not
+replayed automatically. See [Automations](user-guide/automations.md#optional-triage-before-labelled-intake).
+
 #### Reviewed event issue publication
 
 Event intake can opt in through `event_intake.workflow` to an explicit published
@@ -3526,3 +3541,13 @@ isolated artifact, independent review and configured check receipts. Draft
 publication requires current evidence matching the pushed SHA and includes review
 findings. Configurations without a workflow retain legacy behavior. See the
 [guide](user-guide/automations.md#opt-in-reviewed-issue-workflows).
+
+#### Review-only incoming PR automation
+
+Opt in through `automations.json` → `pull_request_reviews` with an explicit
+repository allowlist and enabled definition. The host reviews open, non-draft PRs
+with the existing no-host-tool ACP adapter and posts one COMMENT review pinned to
+the GitHub head SHA. New heads supersede older in-flight results. Permanent head
+deduplication and publication claims survive restart; uncertain writes are not
+retried. This executor never repairs code, runs checks, pushes, creates PRs,
+approves or merges. See [Incoming PR reviews](user-guide/automations.md#incoming-pr-reviews-review-only).

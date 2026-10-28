@@ -954,15 +954,15 @@ pub(crate) async fn get_all_batch_with_intake_impl(
     };
 
     let intake_label = if intake {
-        Some(
-            tokio::task::spawn_blocking(|| {
-                crate::automations::definitions::DefinitionStore::new().load()
-            })
-            .await
-            .map_err(|e| format!("intake config load task panicked: {e}"))??
+        let config = tokio::task::spawn_blocking(|| {
+            crate::automations::definitions::DefinitionStore::new().load()
+        })
+        .await
+        .map_err(|e| format!("intake config load task panicked: {e}"))??;
+        config
             .event_intake
-            .label,
-        )
+            .enabled()
+            .then(|| config.event_intake.poll_label())
     } else {
         None
     };
@@ -1196,14 +1196,73 @@ async fn poll_one_account(
                 let nodes = connection["nodes"]
                     .as_array()
                     .ok_or("GitHub intake issues page is missing nodes")?;
-                issues.extend(nodes.iter().filter_map(|node| {
-                    let mut issue = parse_issue_node(node)?;
+                for node in nodes {
+                    let mut node = node.clone();
+                    if label.is_empty() {
+                        let mut labels = node["labels"].clone();
+                        let mut label_nodes = labels["nodes"]
+                            .as_array()
+                            .ok_or("GitHub intake labels page is missing nodes")?
+                            .clone();
+                        let mut label_cursors = std::collections::HashSet::new();
+                        loop {
+                            match labels["pageInfo"]["hasNextPage"].as_bool() {
+                                Some(false) => break,
+                                Some(true) => {}
+                                None => {
+                                    return Err(
+                                        "GitHub intake labels page is missing pageInfo".into()
+                                    );
+                                }
+                            }
+                            let cursor = labels["pageInfo"]["endCursor"]
+                                .as_str()
+                                .filter(|c| !c.is_empty())
+                                .ok_or("GitHub intake labels page is missing its next cursor")?;
+                            if !label_cursors.insert(cursor.to_string()) {
+                                return Err("GitHub intake labels cursor did not advance".into());
+                            }
+                            let (_, owner, name) = &repos[i];
+                            let number = node["number"]
+                                .as_i64()
+                                .ok_or("GitHub intake issue is missing number")?;
+                            let after =
+                                serde_json::to_string(cursor).expect("a cursor is a JSON string");
+                            let query = format!(
+                                "query IntakeIssueLabels {{ repository(owner: \"{owner}\", name: \"{name}\") {{ issue(number: {number}) {{ labels(first: 100, after: {after}) {{ nodes {{ name color }} pageInfo {{ hasNextPage endCursor }} }} }} }} rateLimit {{ cost remaining resetAt }} }}"
+                            );
+                            let page = graphql_with_retry(
+                                state,
+                                account,
+                                &query,
+                                serde_json::Value::Null,
+                                prefetched_token,
+                            )
+                            .await?;
+                            if !page["data"]["rateLimit"].is_null() {
+                                response["data"]["rateLimit"] = page["data"]["rateLimit"].clone();
+                            }
+                            labels = page["data"]["repository"]["issue"]["labels"].clone();
+                            label_nodes.extend(
+                                labels["nodes"]
+                                    .as_array()
+                                    .ok_or("GitHub intake labels page is missing nodes")?
+                                    .iter()
+                                    .cloned(),
+                            );
+                        }
+                        node["labels"]["nodes"] = serde_json::Value::Array(label_nodes);
+                    }
+                    let Some(mut issue) = parse_issue_node(&node) else {
+                        continue;
+                    };
                     // The server predicate proves membership even when the matching
                     // label is outside the node's first ten display labels.
-                    if !issue
-                        .labels
-                        .iter()
-                        .any(|l| l.name.eq_ignore_ascii_case(label))
+                    if !label.is_empty()
+                        && !issue
+                            .labels
+                            .iter()
+                            .any(|l| l.name.eq_ignore_ascii_case(label))
                     {
                         issue.labels.push(tuic_git::github::PrLabel {
                             name: label.to_string(),
@@ -1212,8 +1271,8 @@ async fn poll_one_account(
                             background_color: String::new(),
                         });
                     }
-                    Some(issue)
-                }));
+                    issues.push(issue);
+                }
                 match connection["pageInfo"]["hasNextPage"].as_bool() {
                     Some(false) => break,
                     Some(true) => {}

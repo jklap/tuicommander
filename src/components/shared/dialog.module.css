@@ -99,3 +99,49 @@
 .actions button { flex: 1; }
 
 .body input[data-form-control] { width: 100%; }
+
+.checklistPopover {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.workspaceName {
+  margin: 0 0 16px;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+.checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checklist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.checklist svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--success);
+}
+
+.checklist li[data-passed="false"] svg {
+  color: var(--error);
+}
+
+.checklistExplanation {
+  margin-top: 18px;
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+
+.checklistFailure {
+  color: var(--error);
+}

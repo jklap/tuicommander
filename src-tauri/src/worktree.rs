@@ -151,6 +151,21 @@ pub(crate) struct WorktreeRemovalPreview {
     pub untracked_files: Option<usize>,
     pub live_sessions: Vec<WorktreeLiveSession>,
     pub warnings: Vec<String>,
+    pub archive_checklist: ArchiveChecklist,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ArchiveChecklist {
+    pub checks: Vec<ArchiveCheck>,
+    pub can_delete: bool,
+    pub archive_explanation: String,
+    pub delete_explanation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ArchiveCheck {
+    pub passed: bool,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -307,11 +322,112 @@ pub(crate) fn inspect_worktree_removal(
             .iter()
             .map(|session| format!("Live session: {}", session.name)),
     );
+    let commits = workspace_commits_outside_default(repo_path, workspace_id);
+    let dirty = lifecycle.dirty_files;
+    let integrated = matches!(
+        lifecycle.commit_status,
+        WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+    );
+    let commits_passed = integrated && commits.as_ref().is_ok_and(|(_, count)| *count == 0);
+    let sessions_unknown = live_sessions
+        .iter()
+        .any(|session| session.session_id == "suspended-storage-unavailable");
+    let mut checks = vec![
+        ArchiveCheck {
+            passed: dirty == Some(0),
+            label: match dirty {
+                Some(0) => "No uncommitted changes".into(),
+                Some(count) => format!("{count} files changed and not committed"),
+                None => "Uncommitted changes could not be checked".into(),
+            },
+        },
+        ArchiveCheck {
+            passed: commits_passed,
+            label: match &commits {
+                Ok((base, 0)) if integrated => format!("All commits are in {base}"),
+                Ok((base, count)) if *count > 0 => format!("{count} commits not in {base}"),
+                _ => "Branch integration could not be verified".into(),
+            },
+        },
+        ArchiveCheck {
+            passed: live_sessions.is_empty(),
+            label: if sessions_unknown {
+                "Open terminals or agents could not be checked".into()
+            } else if live_sessions.is_empty() {
+                "No terminal or agent open here".into()
+            } else {
+                format!("{} terminals or agents open here", live_sessions.len())
+            },
+        },
+    ];
+    // Submodule-only commits and unknown inspections must never disappear behind
+    // the three primary checks, even when the parent checkout looks clean.
+    for entry in &lifecycle.submodule_unpushed_commits {
+        checks.push(ArchiveCheck {
+            passed: false,
+            label: format!(
+                "{}: {} commits not on a remote-tracking branch",
+                entry.path, entry.count
+            ),
+        });
+    }
+    let can_delete = checks.iter().all(|check| check.passed)
+        && lifecycle.removal_safety == WorkspaceRemovalSafety::Safe
+        && !lifecycle.missing_checkout;
+    let mut losses = Vec::new();
+    if let Some(count) = dirty.filter(|count| *count > 0) {
+        losses.push(format!("{count} changes"));
+    }
+    if let Ok((_, count)) = &commits
+        && *count > 0
+    {
+        losses.push(format!("{count} commits"));
+    }
+    let delete_explanation = if can_delete {
+        "removes the folder and the local branch. Nothing is lost.".into()
+    } else if !losses.is_empty() {
+        format!(
+            "you would lose {}.{}",
+            losses.join(" and "),
+            if sessions_unknown {
+                " Open terminals or agents could not be checked.".into()
+            } else if live_sessions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " {} open terminals or agents would also be interrupted.",
+                    live_sessions.len()
+                )
+            }
+        )
+    } else if sessions_unknown {
+        "open terminals or agents could not be checked. Review workspace safety before deleting."
+            .into()
+    } else if !live_sessions.is_empty() {
+        format!(
+            "{} open terminals or agents would be interrupted.",
+            live_sessions.len()
+        )
+    } else {
+        "workspace safety could not be verified. Review the failed checks.".into()
+    };
+    let archive_checklist = ArchiveChecklist {
+        checks,
+        can_delete,
+        archive_explanation: if can_delete {
+            "the folder is kept for reuse, the branch stays."
+        } else {
+            "keeps everything, branch and changes included."
+        }
+        .into(),
+        delete_explanation,
+    };
     WorktreeRemovalPreview {
         lifecycle,
         untracked_files,
         live_sessions,
         warnings,
+        archive_checklist,
     }
 }
 
@@ -421,14 +537,7 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
             || force
             || override_lock
             || confirm_missing_checkout
-            || preview.lifecycle.dirty_files != Some(0)
-            || preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
-            || !preview.lifecycle.submodule_unpushed_commits.is_empty()
-            || !preview.live_sessions.is_empty()
-            || !matches!(
-                preview.lifecycle.commit_status,
-                WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
-            )
+            || !preview.archive_checklist.can_delete
         {
             return Err("Cannot delete workspace: it must be clean, integrated and have no live sessions; review its current state".into());
         }
@@ -1996,6 +2105,86 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("2 untracked"))
+        );
+    }
+
+    // Catches: the archive checklist hides dirty files/unmerged commits or allows stale Delete.
+    #[test]
+    fn archive_checklist_counts_real_git_work_and_delete_rechecks_it() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "checklist-work", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let safe = inspect_worktree_removal(&state, repo.path(), "checklist-work");
+        assert!(safe.archive_checklist.can_delete, "{safe:?}");
+        assert!(
+            safe.archive_checklist
+                .checks
+                .iter()
+                .all(|check| check.passed)
+        );
+        for name in ["one.txt", "two.txt"] {
+            fs::write(worktree.join(name), name).unwrap();
+            git_cmd(&worktree).args(["add", name]).run().unwrap();
+            git_cmd(&worktree)
+                .args(["commit", "-m", name])
+                .run()
+                .unwrap();
+        }
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            fs::write(worktree.join(name), "keep this change").unwrap();
+        }
+        let unsafe_state = inspect_worktree_removal(&state, repo.path(), "checklist-work");
+        let checklist = &unsafe_state.archive_checklist;
+        assert!(!checklist.can_delete);
+        assert!(!checklist.checks[0].passed);
+        assert_eq!(
+            checklist.checks[0].label,
+            "3 files changed and not committed"
+        );
+        assert!(!checklist.checks[1].passed);
+        assert!(checklist.checks[1].label.starts_with("2 commits not in "));
+        assert!(checklist.checks[2].passed);
+        assert_eq!(
+            checklist.delete_explanation,
+            "you would lose 3 changes and 2 commits."
+        );
+        let deleted = remove_worktree_with_presence_confirmation(
+            &state,
+            &repo.path().to_string_lossy(),
+            "checklist-work",
+            true,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+        );
+        assert!(deleted.is_err(), "stale safe dialog authorized deletion");
+        let archived = finalize_merged_worktree_impl_with_confirmation(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "checklist-work".into(),
+            "archive".into(),
+            true,
+            unsafe_state.lifecycle.dirty_fingerprint.as_deref(),
+        )
+        .unwrap();
+        let archived_path = PathBuf::from(archived.archive_path.unwrap());
+        assert_eq!(archived.action, "archived");
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            assert_eq!(
+                fs::read_to_string(archived_path.join(name)).unwrap(),
+                "keep this change"
+            );
+        }
+        assert!(
+            git_cmd(repo.path())
+                .args(["show-ref", "--verify", "refs/heads/checklist-work"])
+                .run()
+                .is_ok()
         );
     }
 

@@ -863,6 +863,7 @@ Some frontend-only stores persist to localStorage:
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
 - [~] Session knowledge store — removed in #2115-1333 after its last reader was removed; no command-outcome recording or periodic flush remains. Existing history files stay untouched.
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
+- [x] Task-scoped secret put (#2319-02f6) — write-only in-memory scope/TTL entry, child-env-only agent spawn, pre-publication PTY masking across HTTP/WS/grid/history/captures. TTL revokes new injection; session masking material is wiped at teardown.
 - [~] Private secret forms (#1435-6e1d) — in-memory zeroizing store, separate field-schema form, exact argv consent, pipe output masking, HTTP nonce entry with a full remote URL, selection/copy/open actions, QR code and remote-off guidance (#2378-c2eb), shared HTTP(S) link/copy/browser controls for SSO display values (#2381-1c72), and inspection gating; security review pending. Headless initiation is not part of this slice. Browser entry uses the existing app origin/auth/transport; origin isolation, enforced TLS and in-flight inspection withholding are accepted omissions.
 - [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
 - [x] ChoicePrompt parser variant — numbered confirmation menu detection with destructive-label flagging, PWA overlay, `sendPtyKey()` helper
@@ -1166,6 +1167,10 @@ repair Git and submodule paths; preserve ignored artifacts and publish lifecycle
 The Archive workspace dialog also offers a red Delete action for clean integrated
 checkouts without live users. Explicit deletion bypasses recycling through the same
 removal path, with fresh safety checks and no force or lock override.
+The dialog renders the backend checklist: dirty files, commits absent from the
+named default integration refs, and open terminals or agents. Failed checks show
+counts and disable Delete. Archive preserves dirty files and unmerged commits
+through the existing fingerprint-confirmed archive path, without merging.
 
 ## Beta update channel (#1813-4bdf)
 
@@ -1483,6 +1488,19 @@ archived stories stay searchable. No story file is written to the project;
 plans and the story mutation API are unchanged. See the native stories guide.
 
 
+## Optional issue triage (#2324-424d)
+
+`event_intake.triage` adds off-by-default per-repository, policy-versioned issue
+evaluation before labelled implementation. OWNER/MEMBER/COLLABORATOR association
+is required. A separate existing-workspace definition has no precheck or automatic
+cron execution. Its profile is operator-attested read-only without push credentials;
+TUIC does not enforce credential isolation (future 2450-6845). Caller-bound
+`automations triage_decision` records accepted/rejected/needs_input immutably. The
+host adds the intake label for acceptance, or posts a rejection reason and adds its
+label, using durable at-most-once delivery claims. Unknown publication requires
+operator reconciliation, not replay. Triage ledger records outlive normal history
+retention. See [Automations](docs/user-guide/automations.md#optional-triage-before-labelled-intake).
+
 #### Reviewed event issue publication
 
 Event intake can opt in through `event_intake.workflow` to an explicit published
@@ -1491,3 +1509,16 @@ isolated artifact, independent review and configured check receipts. Draft
 publication requires current evidence matching the pushed SHA and includes review
 findings. Configurations without a workflow retain legacy behavior. See the
 [guide](docs/user-guide/automations.md#opt-in-reviewed-issue-workflows).
+
+#### Review-only incoming PR automation
+
+A separate default-off `pull_request_reviews` repository allowlist binds an enabled
+automation definition to no-host-tool ACP reviews. The shared GitHub poller feeds
+durable `PullRequestReview` triggers keyed by repository, PR and immutable GitHub
+head SHA; definition changes do not reset deduplication. A newer observed head
+revokes the older result's publication claim even under capacity pressure. The
+host compares immutable base/head SHAs, rechecks eligibility, then claims and posts
+one pinned COMMENT review. No generic agent, worktree, push, PR creation, approval
+or merge is available through this path. Unknown publication is non-retriable.
+The existing run history API carries output, publication intent and review URL.
+Deterministic checks and check-result publication are not part of this executor.

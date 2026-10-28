@@ -37,6 +37,10 @@ pub(crate) fn reconcile(
 ) -> Result<(), String> {
     let mut stop_errors = Vec::new();
     for run in runs.open_runs()? {
+        // ACP review execution owns its timeout and completion, not the PTY monitor.
+        if matches!(run.trigger, RunTrigger::PullRequestReview { .. }) {
+            continue;
+        }
         let observed = effects.observe(&run);
         let expired = now >= run.deadline_ms.unwrap_or_else(|| deadline(&run));
         let next = if expired {
@@ -266,7 +270,7 @@ pub(crate) fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &Aut
     )
     else {
         if run.status == RunStatus::Completed
-            && run.trigger.event_key().is_some()
+            && matches!(run.trigger, RunTrigger::Event { .. })
             && let Some(store) = state.automation_runtime.notification_store()
         {
             match store.settle_outcome(

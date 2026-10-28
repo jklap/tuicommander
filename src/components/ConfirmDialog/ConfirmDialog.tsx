@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
 import { Button } from "../ui/Button";
@@ -12,6 +12,9 @@ export interface ConfirmDialogProps {
 	/** Optional middle button (e.g. "Don't Save"). Rendered only when set. */
 	discardLabel?: string;
 	discardDanger?: boolean;
+	discardDisabled?: boolean;
+	archiveChecklist?: import("../../stores/workspaceIdentity").ArchiveChecklist;
+	workspaceName?: string;
 	kind?: "warning" | "info" | "error";
 	/** Which button Enter activates. Defaults to "confirm". */
 	defaultButton?: "confirm" | "cancel";
@@ -94,22 +97,69 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 	return (
 		<Show when={props.visible}>
 			<div class={d.overlay} onClick={close}>
-				<div class={d.popover} onClick={(e) => e.stopPropagation()}>
+				<div
+					class={d.popover}
+					classList={{ [d.checklistPopover]: !!props.archiveChecklist }}
+					role="dialog"
+					aria-label={props.title}
+					onClick={(e) => e.stopPropagation()}
+				>
 					<div class={d.header}>
 						<h4>{props.title}</h4>
 					</div>
 					<div class={d.body}>
-						<p
-							style={{
-								margin: 0,
-								"white-space": "pre-line",
-								"overflow-wrap": "anywhere",
-								color: "var(--fg-secondary)",
-								"font-size": "var(--font-md)",
-							}}
-						>
-							{props.message}
-						</p>
+						<Show when={props.archiveChecklist}>
+							{(checklist) => (
+								<>
+									<p class={d.workspaceName}>{props.workspaceName}</p>
+									<ul class={d.checklist}>
+										<For each={checklist().checks}>
+											{(check) => (
+												<li data-passed={check.passed}>
+													<svg
+														viewBox="0 0 16 16"
+														aria-label={check.passed ? "Pass" : "Fail"}
+														role="img"
+														fill="currentColor"
+													>
+														<path
+															d={
+																check.passed
+																	? "M6 12 2 8l1.5-1.5L6 9l6.5-6.5L14 4z"
+																	: "m4 2 4 4 4-4 2 2-4 4 4 4-2 2-4-4-4 4-2-2 4-4-4-4z"
+															}
+														/>
+													</svg>
+													<span>{check.label}</span>
+												</li>
+											)}
+										</For>
+									</ul>
+									<div class={d.checklistExplanation}>
+										<div>
+											<strong>Archive</strong>: {checklist().archive_explanation}
+										</div>
+										<div classList={{ [d.checklistFailure]: !checklist().can_delete }}>
+											<strong>{checklist().can_delete ? "Delete" : "Delete is off"}</strong>:{" "}
+											{checklist().delete_explanation}
+										</div>
+									</div>
+								</>
+							)}
+						</Show>
+						<Show when={!props.archiveChecklist}>
+							<p
+								style={{
+									margin: 0,
+									"white-space": "pre-line",
+									"overflow-wrap": "anywhere",
+									color: "var(--fg-secondary)",
+									"font-size": "var(--font-md)",
+								}}
+							>
+								{props.message}
+							</p>
+						</Show>
 					</div>
 					<div class={d.actions}>
 						<Button class={d.cancelBtn} onClick={close}>
@@ -117,7 +167,13 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 							{props.autoCancelMs && remaining() !== null ? ` (${remaining()})` : ""}
 						</Button>
 						<Show when={props.discardLabel}>
-							<Button variant={props.discardDanger ? "danger" : "secondary"} onClick={() => props.onDiscard?.()}>
+							<Button
+								variant={props.discardDanger ? "danger" : "secondary"}
+								disabled={props.discardDisabled}
+								onClick={() => {
+									if (!props.discardDisabled) props.onDiscard?.();
+								}}
+							>
 								{props.discardLabel}
 							</Button>
 						</Show>

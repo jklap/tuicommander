@@ -10,9 +10,21 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Review-only PR automation",
+		description:
+			"Opt in with pull_request_reviews in the host automations.json. The host reviews the latest GitHub head and posts a COMMENT review without pushing branches or creating another PR. Unknown publication is not retried.",
+		shortcut: null,
+	},
+	{
+		feature: "Optional issue triage",
+		description:
+			"Configure event_intake.triage on the owning daemon to evaluate trusted authors' open issues before labelled implementation. The read-only profile is operator-attested; TUIC does not enforce credential isolation.",
+		shortcut: null,
+	},
+	{
 		feature: "Delete instead of archive",
 		description:
-			"The Archive workspace dialog offers Delete for a clean, integrated workspace with no live sessions. Delete removes its checkout and local branch; Archive keeps them for reuse.",
+			"The Archive workspace checklist shows changed files, commits outside the base branch and open sessions. Delete is disabled when a check fails; Archive keeps the branch and changes.",
 		shortcut: null,
 	},
 	{

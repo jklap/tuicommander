@@ -2325,6 +2325,17 @@ pub(super) fn spawn_with_identity(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
+            let scoped_environment = match args.get("scope") {
+                None => None,
+                Some(scope) => match scope
+                    .as_str()
+                    .ok_or_else(|| "scope must be a task id".to_string())
+                    .and_then(|scope| state.secrets.scope_environment(scope))
+                {
+                    Ok(environment) => Some(environment),
+                    Err(error) => return serde_json::json!({"error": error}),
+                },
+            };
             // The argv assembly above can bail out with an error response, so it
             // cannot live inside the retry closure; the built command is cloned
             // per attempt instead (`spawn_command` consumes it).
@@ -2335,7 +2346,13 @@ pub(super) fn spawn_with_identity(
                     pixel_width: 0,
                     pixel_height: 0,
                 },
-                || cmd.clone(),
+                || {
+                    let mut command = cmd.clone();
+                    if let Some(environment) = &scoped_environment {
+                        environment.apply_to(&mut command);
+                    }
+                    command
+                },
             ) {
                 Ok(pair_and_child) => pair_and_child,
                 Err(e) => {
@@ -2358,6 +2375,9 @@ pub(super) fn spawn_with_identity(
                 }
             };
 
+            if let Some(environment) = &scoped_environment {
+                state.secrets.bind_scope(&session_id, environment);
+            }
             let paused = Arc::new(AtomicBool::new(false));
             // Pre-set the session's agent type so agent_active_for_parse is true
             // from the first output chunk and intent/suggest tokens are parsed
