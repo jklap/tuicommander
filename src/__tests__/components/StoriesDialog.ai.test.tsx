@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
 import { invoke } from "../../invoke";
 
@@ -43,12 +44,15 @@ beforeEach(() => {
 	});
 });
 
-async function openForm() {
-	render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+async function openForm(project: string | (() => string) = "/repo") {
+	const view = render(() => (
+		<StoriesDialog project={typeof project === "string" ? project : project()} onClose={() => {}} />
+	));
 	const open = await screen.findByRole("button", { name: "New story" });
 	await waitFor(() => expect((open as HTMLButtonElement).disabled).toBe(false));
 	fireEvent.click(open);
 	fireEvent.input(screen.getByLabelText("Request"), { target: { value: "Let me search saved work" } });
+	return view;
 }
 
 describe("AI story draft review boundary", () => {
@@ -93,7 +97,9 @@ describe("AI story draft review boundary", () => {
 		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_generate_draft", expect.anything()));
 		expect(screen.getByRole("status").textContent).toContain("Filling");
 		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { requestId: "fill-1" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { project: "/repo", requestId: "fill-1" }),
+		);
 		finish(draft);
 		await screen.findByText("Fill cancelled. Your request and form are kept.");
 		expect((screen.getByLabelText("Request") as HTMLTextAreaElement).value).toBe("Let me search saved work");
@@ -113,7 +119,9 @@ describe("AI story draft review boundary", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
 		await screen.findByText("Fill cancelled. Your request and form are kept.");
 		reserve("late-handle");
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { requestId: "late-handle" }));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("acp_one_shot_cancel", { project: "/repo", requestId: "late-handle" }),
+		);
 		expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "story_generate_draft")).toBe(false);
 	});
 
@@ -129,5 +137,109 @@ describe("AI story draft review boundary", () => {
 		expect((screen.getByLabelText("Request") as HTMLTextAreaElement).value).toBe("Let me search saved work");
 		expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("My title");
 		expect((screen.getByRole("button", { name: "Fill with AI" }) as HTMLButtonElement).disabled).toBe(false);
+	});
+});
+
+// Exercise the real invoke/router for owned work, keeping unrelated story-list
+// setup local to this component fixture. Assert outgoing destinations, not mocks'
+// return values or a hand-copied routing argument shape.
+async function routeOwnedCalls() {
+	const { invoke: realInvoke } = await vi.importActual<typeof import("../../invoke")>("../../invoke");
+	const runtime = await import("../../transportRuntime");
+	runtime.setRepoConnectionLookup((path) => (path === "/remote/repo" ? "story-daemon" : undefined));
+	runtime.setRemoteBaseUrlLookup((id) => (id === "story-daemon" ? "http://story-daemon.test" : undefined));
+	runtime.setRemoteTokenLookup(() => undefined);
+	const setupInvoke = vi.mocked(invoke).getMockImplementation()!;
+	vi.mocked(invoke).mockImplementation((command, args) =>
+		command === "acp_one_shot_prepare" || command === "acp_one_shot_cancel" || command === "story_generate_draft"
+			? realInvoke(command, args)
+			: setupInvoke(command, args),
+	);
+	const fetch = vi.fn<typeof globalThis.fetch>();
+	vi.stubGlobal("fetch", fetch);
+	return fetch;
+}
+
+afterEach(async () => {
+	vi.unstubAllGlobals();
+	const runtime = await import("../../transportRuntime");
+	runtime.setRepoConnectionLookup(() => undefined);
+	runtime.setRemoteBaseUrlLookup(() => undefined);
+	runtime.setRemoteTokenLookup(() => undefined);
+});
+
+describe("remote story fill ownership", () => {
+	it("prepares, generates and cancels on the same daemon even after the viewed project changes", async () => {
+		// Catches: a remote fill reserves locally, or cancellation follows the new project.
+		const fetch = await routeOwnedCalls();
+		let finish!: (response: Response) => void;
+		fetch.mockImplementation(async (url) => {
+			if (String(url).endsWith("/prepare")) return Response.json("remote-fill");
+			if (String(url).endsWith("/cancel")) return Response.json(true);
+			return new Promise((resolve) => {
+				finish = resolve;
+			});
+		});
+		const [project, setProject] = createSignal("/remote/repo");
+		await openForm(project);
+		fireEvent.click(screen.getByRole("button", { name: "Fill with AI" }));
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		setProject("/other/repo");
+		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+		finish(Response.json(draft));
+		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+			"http://story-daemon.test/acp/one-shot/prepare",
+			"http://story-daemon.test/stories/draft",
+			"http://story-daemon.test/acp/one-shot/cancel",
+		]);
+		expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+	});
+
+	it("revokes a late remote reservation on its original daemon after cancellation", async () => {
+		// Catches: the cancel-before-prepare cleanup drops the remote owner.
+		const fetch = await routeOwnedCalls();
+		let reserve!: (response: Response) => void;
+		fetch.mockImplementation(async (url) =>
+			String(url).endsWith("/prepare")
+				? new Promise((resolve) => {
+						reserve = resolve;
+					})
+				: Response.json(true),
+		);
+		await openForm("/remote/repo");
+		fireEvent.click(screen.getByRole("button", { name: "Fill with AI" }));
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel fill" }));
+		await screen.findByText("Fill cancelled. Your request and form are kept.");
+		reserve(Response.json("late-remote"));
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+			"http://story-daemon.test/acp/one-shot/prepare",
+			"http://story-daemon.test/acp/one-shot/cancel",
+		]);
+	});
+
+	it("unmount cleanup cancels the original daemon rather than the currently viewed project", async () => {
+		// Catches: closing the dialog leaves owned model work running on a remote daemon.
+		const fetch = await routeOwnedCalls();
+		let finish!: (response: Response) => void;
+		fetch.mockImplementation(async (url) => {
+			if (String(url).endsWith("/prepare")) return Response.json("remote-fill");
+			if (String(url).endsWith("/cancel")) return Response.json(true);
+			return new Promise((resolve) => {
+				finish = resolve;
+			});
+		});
+		const [project, setProject] = createSignal("/remote/repo");
+		const view = await openForm(project);
+		fireEvent.click(screen.getByRole("button", { name: "Fill with AI" }));
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		setProject("/other/repo");
+		view.unmount();
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+		expect(String(fetch.mock.calls[2][0])).toBe("http://story-daemon.test/acp/one-shot/cancel");
+		finish(Response.json(draft));
 	});
 });

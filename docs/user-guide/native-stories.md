@@ -189,3 +189,7 @@ and existing form fields. Late cancelled replies never replace the draft.
 Generated criteria are one requirement per line; `[MANUAL]` stays a native QA marker.
 The reviewed problem is saved atomically with creation through the optional
 `problem` field beside `input` in the `create_story` action.
+
+For a remote repository, Fill with AI reserves, generates and cancels on the
+repository's owning daemon. Changing the viewed project or closing the dialog
+does not move cancellation to a different machine.

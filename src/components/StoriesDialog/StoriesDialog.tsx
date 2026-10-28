@@ -267,7 +267,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [fillError, setFillError] = createSignal("");
 	const [fillNotice, setFillNotice] = createSignal("");
 	let fillEpoch = 0;
-	let fillHandle: string | undefined;
+	let fillHandle: { id: string; project: string } | undefined;
 	let pendingFill: Promise<StoryDraft> | undefined;
 
 	async function fillStory(): Promise<void> {
@@ -279,12 +279,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setFillError("");
 		setFillNotice("");
 		try {
-			const handle = await invoke<string>("acp_one_shot_prepare");
+			const handle = await invoke<string>("acp_one_shot_prepare", { project });
 			if (epoch !== fillEpoch || project !== props.project) {
-				await invoke("acp_one_shot_cancel", { requestId: handle });
+				await invoke("acp_one_shot_cancel", { project, requestId: handle });
 				return;
 			}
-			fillHandle = handle;
+			fillHandle = { id: handle, project };
 			pendingFill = invoke<StoryDraft>("story_generate_draft", { project, request, requestId: handle });
 			const draft = await pendingFill;
 			if (epoch !== fillEpoch || project !== props.project) return;
@@ -319,7 +319,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		const pending = pendingFill;
 		setCancellingFill(true);
 		try {
-			if (handle) await invoke("acp_one_shot_cancel", { requestId: handle });
+			if (handle) await invoke("acp_one_shot_cancel", { project: handle.project, requestId: handle.id });
 			// The generation call settles only after its owned connection is shut down.
 			await pending?.catch(() => {});
 			setFillNotice(t("stories.ai.cancelled", "Fill cancelled. Your request and form are kept."));
@@ -336,7 +336,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	onCleanup(() => {
 		++fillEpoch;
 		if (fillHandle)
-			void invoke("acp_one_shot_cancel", { requestId: fillHandle }).catch((cause) => {
+			void invoke("acp_one_shot_cancel", { project: fillHandle.project, requestId: fillHandle.id }).catch((cause) => {
 				appLogger.warn("store", "Stories: cancel fill failed", { error: String(cause) });
 			});
 	});
