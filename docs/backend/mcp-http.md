@@ -1677,6 +1677,8 @@ socket discovery, keeping child MCP calls on the spawning server.
 
 **RPC id-matching.** The `rpc()` method matches responses by JSON-RPC `id`, skipping any server notifications (messages without an `id` field) that arrive between request and response. This prevents silent "0 tools" when a server emits `notifications/tools/list_changed` or log messages during the handshake.
 
+**Health recovery.** Two consecutive failed `tools/list` health RPCs retire a live but unresponsive child. A successful health RPC resets this failure streak. The next scheduled health probe spawns and initializes a replacement under the existing five-second minimum respawn interval. An ordinary `tools/call` reply timeout does not count toward this policy, kill the child, cancel the action or retry it: its external outcome remains unknown. Monotonically increasing request IDs keep late replies isolated. A write timeout still tears down the child because the request frame may be partial.
+
 **Tilde expansion.** All user-supplied paths (`command`, `args`, `cwd`) are expanded via `crate::cli::expand_tilde()` before being passed to `std::process::Command`. This applies globally across the codebase — PTY, agent spawn, headless prompts, worktree scripts, plugin exec, and file validation all expand `~` to `$HOME`.
 
 ### HTTP transport
