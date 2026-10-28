@@ -76,12 +76,14 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
 
 The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Any trusted caller may remove a direct WontFix prerequisite from a Backlog story with its current revision. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
+
+`add_plan_source` reuses an active plan with the same source. If only an archived plan matches, it returns an error that identifies the plan and gives explicit restore instructions; it does not create another record or change archive state.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
 
@@ -100,6 +102,8 @@ For `workflow action=report`, a `needs_input` outcome requires `inputRequest {qu
 `workflow action=proposal_create` takes `{input:{runId,proposalKey,story}}` from the active bound plan coordinator. The story belongs to the run's plan and uses a `plan_step` origin. A proposal key is durable across retries: the same payload returns the same story, while a changed payload is rejected. The run records a bounded CreateStory effect before the story transaction and its outcome afterward.
 
 `list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
+
+`project_story_view` takes `archived_plans` (default false) and a camel-case `filter` with the same fields and defaults as `filtered_plan_view`. It returns `{type:"project_story_view",value:{stories,visibleStoryIds,columns}}` across every plan in the envelope project and selected plan archive scope. `archived_plans:true` selects archived plans only; `filter.archived:true` independently selects archived stories. Full records remain available for detail and dependency reads; only display ids and columns are filtered. The reply has no combined plan state. The shared StoryAction service exposes this action through IPC, HTTP, MCP and CLI.
 
 `filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
 
@@ -612,6 +616,9 @@ during initialize` — fires only when a prior peer binding still exists, which 
 reaped session no longer has. Claims about the connection dropping were therefore
 confirmable but never refutable.
 
+Successful stale peer-binding recovery during initialize or explicit registration logs at
+info. A rejected takeover of a live peer identity remains a warning.
+
 The identity-scoped actions (`agent action=register|send|inbox|wait`) still refuse
 without a protocol session — but each refuses on its own, with the concrete next step
 (`initialize`, or `agent action=register`) that the previous blanket `-32600` never
@@ -833,8 +840,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-Initialize instruction prose stays within the existing 1,600-byte classic and
-1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
+Initialize instruction prose stays within 1,728-byte classic and
+1,792-byte collapsed empty-state budgets. The cross-client delegation rule adds
+one short fallback line for clients without a launch channel; other sections do not grow. Compact wording preserves the answer
 marker, urgent mail and progress reporting rules. The answer marker can start a
 row or the text of a Markdown list item; status, tool and hook/task notices stay
 excluded.
@@ -1516,6 +1524,14 @@ When the MCP client identifies as Claude Code (detected via `clientInfo.name` at
 This works around Claude Code's inability to change its working directory mid-session. The hint tells CC to spawn a subagent that uses absolute paths for all file operations (Read, Edit, Glob, Grep) and `cd <path> && ...` for shell commands.
 
 Non-Claude Code MCP clients do not receive this field.
+
+The Git and worktrees launch module tells launch-capable agents to delegate or
+parallelize through TUIC `agent action=spawn`/`launch`, never client-native
+subagents such as Claude Code Agent/Task. The Claude Code `cc_agent_hint` path
+above remains the CC-only exception for a single isolated worktree task. Clients
+without a launch instruction channel receive the consistent delegation rule in
+the cached MCP initialize prefix instead; launch-capable clients do not receive
+a second copy through MCP.
 
 ### MCP Tool: `repo` — Worktree List
 
@@ -3030,3 +3046,21 @@ expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
 ### Shared AI Chat selection
 
 `GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
+
+### Story request drafts
+
+The guarded ACP sub-router exposes `POST /acp/one-shot/prepare`,
+`POST /acp/one-shot/{request_id}/cancel` and `POST /acp/story-draft`.
+These match the desktop prepare, cancel and generation commands. Rust validates
+model output before returning an editable draft. Generation has no store access.
+The existing story action accepts an optional reviewed `problem` beside `input`
+and persists it atomically with creation; MCP and CLI use that same service.
+
+### ACP connection launch environment
+
+`POST /acp/connections` and `acp_connect` accept the same optional string-map
+`env`. The manager passes it directly to the child configuration, before the
+host-issued peer identity, and does not retain it. Supplied env on an existing
+live peer is refused with disconnect-first guidance; an omitted env keeps
+normal adoption. Reconnect drops the previous overrides. Request diagnostics
+redact values, and connection snapshots contain no launch environment.

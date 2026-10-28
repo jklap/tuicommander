@@ -71,7 +71,13 @@ impl Fixture {
 
     pub async fn connect(&self) -> AcpConnectionSnapshot {
         self.manager
-            .connect(&Self::config(), AcpConnectRequest { root: self.root() })
+            .connect(
+                &Self::config(),
+                AcpConnectRequest {
+                    root: self.root(),
+                    env: None,
+                },
+            )
             .await
             .expect("connect")
     }

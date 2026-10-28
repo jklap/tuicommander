@@ -32,7 +32,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -42,7 +42,11 @@ Both archive and restore refuse claimed stories and plans that contain a claimed
 | `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, amends, claims, transitions, or removes a cancelled dependency from native stories. `update_story` takes a revision-checked typed patch for unclaimed Backlog/Ready stories without run ownership; metadata, criteria and dependencies commit atomically. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
 
+`add_plan_source` reuses an active plan with the same source. If only an archived plan matches, it returns an error that identifies the plan and gives explicit restore instructions; it does not create another record or change archive state.
+
 `list_stories` shares optional top-level `state`, `priority`, `story_type`, `limit` (1–100), and `cursor` across all transports. Without a limit it returns every matching story; limited responses retain the `value` array and add `next_cursor` only when more matches remain. Cursors require a limit and the same plan/filters. See the HTTP API for bounds and live-read semantics.
+
+`project_story_view` takes `archived_plans` (default false) and a camel-case `filter` with the same fields and defaults as `filtered_plan_view`. It returns `{type:"project_story_view",value:{stories,visibleStoryIds,columns}}` across every plan in the envelope project and selected plan archive scope. `archived_plans:true` selects archived plans only; `filter.archived:true` independently selects archived stories. Full records remain available for detail and dependency reads; only display ids and columns are filtered. The reply has no combined plan state. The shared StoryAction service exposes this action through IPC, HTTP, MCP and CLI.
 
 `filtered_plan_view` uses the same service on IPC, HTTP, MCP, and CLI. It takes `plan_id` and `filter` (camel-case `visibility`, `storyType`, `untypedOnly`), and returns the full plan with filtered list ids and per-status board ids. Optional `storyType` on create input and persisted stories is feature, fix, refactor, chore, or task; omitted types stay untyped. See the HTTP API for defaults and combined-filter rules.
 
@@ -712,7 +716,7 @@ empty result.
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
 | `clear_caches` | -- | `()` | Clear in-memory caches |
 | `get_local_ip` | -- | `Option<String>` | Get primary local IP |
-| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local network interfaces |
+| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local addresses in shared pairing/phone-entry preference order: active Tailscale HTTPS, LAN, HTTP-only Tailscale, then other networks |
 | `regenerate_session_token` | -- | `()` | Regenerate MCP session token (invalidates all remote sessions) |
 | `fetch_update_manifest` | `url` | `JSON` | Fetch update manifest via Rust HTTP (bypasses WebView CSP) |
 | `read_external_file` | `path` | `String` | Read file outside repo (standalone file open) |
@@ -759,7 +763,7 @@ can choose what the host runs.
 | `ai_chat_selection` | — | `{ workspace, sessionId: string \| null }` | Read the backend-owned active conversation for the configured workspace; HTTP `GET /acp/chat/selection` |
 | `select_ai_chat_conversation` | `session_id: Option<String>` | `()` | Persist last-writer-wins selection (null clears); HTTP `PUT /acp/chat/selection` with `{ sessionId }`. Changed snapshots invalidate desktop and SSE clients |
 | `acp_workspace_root` | — | `String` | The directory AI Chat runs in, from `ai_chat_workspace` (empty = home directory of this host). A missing folder is created; an unusable one is refused with a message naming the setting |
-| `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
+| `acp_connect` | `root`, optional `env: Record<string, string>` | `AcpConnectionSnapshot` | Launch ego with process-local env overrides; supplied env requires a fresh connection (disconnect first when already live). Omitted env adopts the live peer |
 | `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
 | `acp_disconnect` | `connectionId` | `AcpConnectionSettlement` | Ask the child to exit; the snapshot is retained |
 | `acp_kill` | `connectionId` | `AcpConnectionSettlement` | Kill the child without asking |
@@ -782,6 +786,9 @@ can choose what the host runs.
 | `acp_pending_interactions` | `connectionId` | `Vec<AcpPendingInteraction>` | Questions the agent is waiting on, for a client that was not listening when they were asked |
 | `acp_respond_permission` | `connectionId, requestId, outcome` | `AcpInteractionSettlement` | Answer a `session/request_permission` |
 | `acp_respond_elicitation` | `connectionId, requestId, action` | `AcpInteractionSettlement` | Answer a `session/create_elicitation` |
+| `acp_one_shot_prepare` | — | `String` | Reserve a single-use owned cancellation handle; unused handles expire after 301s |
+| `acp_one_shot_cancel` | `requestId` | `bool` | Cancel only the reserved/active one-shot handle; false means it already settled, expired or was cancelled |
+| `story_generate_draft` | `project, request, requestId` | `StoryDraft` | Consume a prepared handle, run the existing isolated one-shot and validate an unsaved draft; never persists |
 | `acp_one_shot_prompt` | `root, prompt` | `EgoTurn` | One unattended turn: launch, prompt, shut down. No connection id — it owns the whole lifetime |
 
 Errors are an `AcpClientError` — `code`, `message`, `connectionId`,

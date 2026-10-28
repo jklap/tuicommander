@@ -390,7 +390,7 @@ fn merged_paths(client: &[String], intake: &[String]) -> Vec<String> {
     paths
 }
 
-/// Intake needs every open issue, independent of the client's sidebar filter.
+/// Intake needs every labelled open issue, independent of the client's sidebar filter.
 async fn poll_batch(
     state: &AppState,
     paths: &[String],
@@ -932,6 +932,10 @@ mod tests {
     async fn assert_overlap_delivery(filter: &str, clause: Option<&str>, expected: usize) {
         let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        std::fs::create_dir_all(scratch.path().join("config")).unwrap();
+        std::fs::write(scratch.path().join("config/automations.json"), serde_json::to_vec(&serde_json::json!({
+            "event_intake": {"repositories": ["sstraus/tuicommander"], "label": "tuic-run", "definition_id": "pilot"}
+        })).unwrap()).unwrap();
         let repo = scratch.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         for args in [
@@ -999,7 +1003,7 @@ mod tests {
                 _ => {}
             }
         };
-        assert_eq!(intake_count, Some(1), "intake lost its unfiltered snapshot");
+        assert_eq!(intake_count, Some(1), "intake lost its labelled snapshot");
         assert_eq!(
             delivered.len(),
             expected,

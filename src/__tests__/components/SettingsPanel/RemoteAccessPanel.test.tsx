@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import QRCode from "qrcode";
 import { ErrorBoundary } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,6 +121,128 @@ describe("RemoteAccessPanel", () => {
 			view.unmount();
 		},
 	);
+
+	it.each(["settings", "dialog"] as const)(
+		"keeps backend-ranked LAN ahead of HTTP-only Tailscale in the %s surface",
+		async (surface) => {
+			// Catches: frontend label ranking overriding the backend's live-listener policy.
+			const base = vi.mocked(rpc).getMockImplementation()!;
+			vi.mocked(rpc).mockImplementation(async (command, args) => {
+				if (command === "get_local_ips") {
+					return [
+						{ ip: "192.168.1.42", label: "LAN (en0)" },
+						{ ip: "100.64.1.2", label: "Tailscale (utun0)" },
+					];
+				}
+				if (command === "get_connect_url") return "http://192.168.1.42:9876/connect";
+				return base(command, args);
+			});
+			const view = render(() =>
+				surface === "settings" ? <RemoteAccessPanel /> : <RemoteQrDialog onClose={() => {}} />,
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			const urlCalls = vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_connect_url");
+			expect(urlCalls.length).toBeGreaterThan(0);
+			for (const call of urlCalls) expect(call).toEqual(["get_connect_url", { ip: "192.168.1.42" }]);
+			view.unmount();
+		},
+	);
+
+	function mockPairing() {
+		const base = vi.mocked(rpc).getMockImplementation()!;
+		const live = { tls_active: false, remote_port: 9876, active_sessions: 0, token: "first" };
+		vi.mocked(rpc).mockImplementation(async (command, args) => {
+			if (command === "get_local_ips")
+				return [
+					{ ip: "192.168.1.42", label: "LAN" },
+					{ ip: "100.64.1.2", label: "Tailscale" },
+				];
+			if (command === "get_connect_url")
+				return `${live.tls_active ? "https" : "http"}://${args?.ip}:${live.remote_port}/connect?token=${live.token}`;
+			if (command === "regenerate_session_token") {
+				live.token = "second";
+				return;
+			}
+			const result = await base(command, args);
+			if (command === "get_mcp_status") return { ...(result as object), ...live };
+			if (command === "load_config")
+				(result as { services: { server: { enabled: boolean } } }).services.server.enabled = true;
+			return result;
+		});
+		return live;
+	}
+
+	it("unchanged_status_poll_does_not_regenerate_remote_qr", async () => {
+		// Catches: subscribing to the full status object repeats URL requests and QR encoding every poll.
+		const live = mockPairing();
+		const view = render(() => <RemoteAccessPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		const requests = () => vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_connect_url").length;
+		expect(requests()).toBeGreaterThan(0);
+		const initialRequests = requests();
+		const initialEncodes = vi.mocked(QRCode.toDataURL).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(6000);
+		live.active_sessions = 3;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(requests()).toBe(initialRequests);
+		expect(QRCode.toDataURL).toHaveBeenCalledTimes(initialEncodes);
+		expect(view.getByAltText("QR code")).toBeDefined();
+		view.unmount();
+	});
+
+	it("refreshes pairing for TLS, listener port, selected address and successful token rotation", async () => {
+		// Catches: deduplicating all polls also suppresses real URL input changes.
+		const live = mockPairing();
+		const view = render(() => <RemoteAccessPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		live.tls_active = true;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(view.getByText("https://192.168.1.42:9876/connect?token=first")).toBeDefined();
+		live.remote_port = 9988;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(view.getByText("https://192.168.1.42:9988/connect?token=first")).toBeDefined();
+		fireEvent.change(view.getByLabelText("Network Interface"), { target: { value: "100.64.1.2" } });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByText("https://100.64.1.2:9988/connect?token=first")).toBeDefined();
+		fireEvent.click(view.getByRole("button", { name: "Regenerate Token" }));
+		fireEvent.click(view.getByRole("button", { name: "Regenerate token" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByText("https://100.64.1.2:9988/connect?token=second")).toBeDefined();
+		expect(QRCode.toDataURL).toHaveBeenLastCalledWith(
+			"https://100.64.1.2:9988/connect?token=second",
+			expect.any(Object),
+		);
+		view.unmount();
+	});
+
+	it.each(["url", "qr"] as const)("ignores obsolete in-flight %s results after address selection", async (stage) => {
+		// Catches: an old asynchronous URL or encoder completion overwrites the current address's QR.
+		mockPairing();
+		const base = vi.mocked(rpc).getMockImplementation()!;
+		let finishOld!: (value: string) => void;
+		const old = new Promise<string>((resolve) => {
+			finishOld = resolve;
+		});
+		vi.mocked(rpc).mockImplementation((command, args) => {
+			if (stage === "url" && command === "get_connect_url" && args?.ip === "192.168.1.42") return old;
+			return base(command, args);
+		});
+		vi.mocked(QRCode.toDataURL).mockImplementation((url) => {
+			if (stage === "qr" && String(url).includes("192.168.1.42")) return old;
+			return Promise.resolve("data:image/png;base64,CURRENT");
+		});
+		const view = render(() => <RemoteAccessPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		fireEvent.change(view.getByLabelText("Network Interface"), { target: { value: "100.64.1.2" } });
+		await vi.advanceTimersByTimeAsync(0);
+		finishOld(stage === "url" ? "http://old.invalid/connect" : "data:image/png;base64,OBSOLETE");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByText("http://100.64.1.2:9876/connect?token=first")).toBeDefined();
+		expect(view.getByAltText("QR code").getAttribute("src")).toBe("data:image/png;base64,CURRENT");
+		expect(view.queryByText("http://old.invalid/connect")).toBeNull();
+		view.unmount();
+		vi.mocked(QRCode.toDataURL).mockImplementation(() => Promise.resolve("data:image/png;base64,AA=="));
+	});
 
 	it("does not advertise HTTPS after certificate provisioning failed", async () => {
 		const base = vi.mocked(rpc).getMockImplementation()!;

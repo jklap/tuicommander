@@ -1,5 +1,15 @@
 import QRCode from "qrcode";
-import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { t } from "../../../../i18n";
 import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
@@ -76,15 +86,11 @@ export const RemoteAccessPanel: Component = () => {
 	const [relayToken, setRelayToken] = createSignal("");
 	const [relaySessionId, setRelaySessionId] = createSignal("");
 
-	// Auto-select best IP when list loads (prefer Tailscale, then LAN/Wi-Fi)
+	// The backend ranks candidates using live TLS state, shared with phone entry.
 	createEffect(() => {
 		const ips = availableIps();
 		if (!ips?.length || selectedIp()) return;
-		const preferred =
-			ips.find((e) => e.label.includes("Tailscale")) ??
-			ips.find((e) => e.label.includes("Wi-Fi") || e.label.includes("LAN")) ??
-			ips[0];
-		setSelectedIp(preferred.ip);
+		setSelectedIp(ips[0].ip);
 	});
 
 	const activeIp = () => (localIps.error ? undefined : selectedIp() || availableIps()?.[0]?.ip);
@@ -94,11 +100,16 @@ export const RemoteAccessPanel: Component = () => {
 	// Bumped after token regeneration to re-fetch the URL
 	const [qrVersion, setQrVersion] = createSignal(0);
 
+	// Polls replace the status object; only URL-relevant primitive changes invalidate the QR.
+	const tlsActive = createMemo(() => status()?.tls_active ?? false);
+	const remotePort = createMemo(() => status()?.remote_port ?? null);
+
 	/** Fetch connect URL from backend so the raw token stays server-side. */
 	createEffect(() => {
 		const ip = activeIp();
 		void qrVersion(); // subscribe — re-run after token regeneration
-		void status()?.tls_active; // A listener restart can change the URL scheme.
+		void tlsActive(); // A listener restart can change the URL scheme.
+		void remotePort();
 		if (!ip) {
 			setConnectUrl(null);
 			setQrDataUrl(null);

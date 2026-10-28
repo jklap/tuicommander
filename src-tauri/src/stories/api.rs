@@ -40,7 +40,7 @@ pub enum StoryAction {
     },
     /// List the plan files found in the project that can become plans.
     ListPlanSources,
-    /// Create the plan for a plan file, deriving its title; returns the existing plan if there is one.
+    /// Create a plan from a file or reuse its active record; archived matches require explicit restore.
     AddPlanSource {
         /// Repo-relative path from list_plan_sources.
         source: String,
@@ -61,8 +61,17 @@ pub enum StoryAction {
         plan_id: String,
         filter: super::StoryFilter,
     },
+    /// Read stories across the project's active (or archived-only) plans, with shared filters.
+    ProjectStoryView {
+        #[serde(default)]
+        archived_plans: bool,
+        filter: super::StoryFilter,
+    },
     CreateStory {
         input: NewStory,
+        /// Optional reviewed problem statement, persisted atomically with the story.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<String>,
     },
     /// Amend an unclaimed backlog/ready story atomically at its current revision.
     UpdateStory {
@@ -165,6 +174,7 @@ pub enum StoryReply {
     PlanSources(Vec<PlanSource>),
     PlanState(PlanState),
     PlanView(PlanView),
+    ProjectStoryView(super::ProjectStoryView),
     Summary(StorySummary),
     Story(Story),
     Transitions(Vec<StoryTransition>),
@@ -267,6 +277,12 @@ fn story_action_with_source(
                 .chain(store.list_plans_archived(&project, true)?)
                 .find(|plan| plan.source == source)
             {
+                if plan.archived {
+                    return Err(format!(
+                        "Plan \"{}\" ({}) is archived. Enable Archived plans, select this plan, and choose Restore plan.",
+                        plan.title, plan.id
+                    ));
+                }
                 return Ok(StoryReply::Plan(plan));
             }
             let title = super::sources::title_for_source(std::path::Path::new(&project), &source)?;
@@ -287,6 +303,14 @@ fn story_action_with_source(
                 store.filtered_plan_view(&plan_id, &filter)?,
             ))
         }
+        StoryAction::ProjectStoryView {
+            archived_plans,
+            filter,
+        } => Ok(StoryReply::ProjectStoryView(store.project_story_view(
+            &project,
+            archived_plans,
+            &filter,
+        )?)),
         StoryAction::PlanView { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanView(store.plan_view(&plan_id)?))
@@ -315,9 +339,11 @@ fn story_action_with_source(
             }
             Ok(StoryReply::Summary(summary))
         }
-        StoryAction::CreateStory { input } => {
+        StoryAction::CreateStory { input, problem } => {
             plan_in_project(&input.plan_id)?;
-            Ok(StoryReply::Story(store.create_story(input)?))
+            Ok(StoryReply::Story(
+                store.create_story_with_problem(input, problem)?,
+            ))
         }
         StoryAction::UpdateStory {
             story_id,
@@ -944,6 +970,70 @@ mod tests {
         assert_eq!(first.id, second.id);
     }
 
+    /// Catches: returning an archived source match that the dialog silently filters out.
+    #[test]
+    fn new_plan_archived_source_has_visible_result() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("project");
+        std::fs::create_dir(repo.path().join("plans")).expect("plans dir");
+        std::fs::write(repo.path().join("plans/feature.md"), "# Document title\n").expect("plan");
+        let project = repo.path().to_str().expect("project path");
+        let add = || StoryAction::AddPlanSource {
+            source: "plans/feature.md".into(),
+        };
+        let StoryReply::Plan(plan) = story_action(project, add(), None).expect("create") else {
+            panic!("expected plan");
+        };
+        let StoryReply::Plan(archived) = story_action(
+            project,
+            StoryAction::ArchivePlan {
+                plan_id: plan.id.clone(),
+                expected_revision: plan.revision,
+            },
+            None,
+        )
+        .expect("archive") else {
+            panic!("expected archived plan");
+        };
+        let error = story_action(project, add(), None).expect_err("must explain archived match");
+        assert!(error.contains(&plan.id), "{error}");
+        assert!(
+            error.contains("Archived plans") && error.contains("Restore plan"),
+            "{error}"
+        );
+        let store = StoryStore::open().expect("store");
+        assert_eq!(
+            store.list_plans(project).expect("active plans"),
+            Vec::<Plan>::new()
+        );
+        assert_eq!(
+            store.list_plans_archived(project, true).expect("archive"),
+            vec![archived.clone()]
+        );
+        assert_eq!(store.archive_history(&plan.id).expect("history").len(), 1);
+        let StoryReply::Plan(restored) = story_action(
+            project,
+            StoryAction::UnarchivePlan {
+                plan_id: plan.id,
+                expected_revision: archived.revision,
+            },
+            None,
+        )
+        .expect("restore") else {
+            panic!("expected restored plan");
+        };
+        let StoryReply::Plan(reused) = story_action(project, add(), None).expect("reuse restored")
+        else {
+            panic!("expected reused plan");
+        };
+        assert_eq!(reused, restored);
+        assert_eq!(
+            store.list_plans(project).expect("active plans"),
+            vec![restored]
+        );
+    }
+
     #[test]
     fn story_actions_reject_unknown_fields() {
         assert!(
@@ -1001,6 +1091,7 @@ mod tests {
         let StoryReply::Story(story) = story_action(
             first_path,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),
@@ -1051,6 +1142,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plan.id.clone(),
@@ -1495,6 +1587,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plans[0].id.clone(),
@@ -1543,6 +1636,7 @@ mod tests {
             story_action(
                 project,
                 StoryAction::CreateStory {
+                    problem: None,
                     input: NewStory {
                         story_type: None,
                         plan_id: done_plan.id,
@@ -1795,6 +1889,7 @@ mod tests {
         let StoryReply::Story(mut story) = story_action(
             project,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),

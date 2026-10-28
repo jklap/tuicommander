@@ -48,9 +48,7 @@ impl StoryStore {
             story.origin = origin;
         }
         if let Some(problem) = patch.problem {
-            if let Some(text) = &problem {
-                validate_text("problem", text, 20_000)?;
-            }
+            validate_problem(problem.as_deref())?;
             story.problem = problem;
         }
         if let Some(risk) = patch.risk {
@@ -99,6 +97,9 @@ impl StoryStore {
                 let dependency = read_story(&tx, id)?;
                 if dependency.plan_id != story.plan_id {
                     return Err("dependencies must belong to one plan".into());
+                }
+                if !story.dependencies.contains(id) {
+                    require_actionable_dependency(&dependency)?;
                 }
                 let mut stack = vec![id.clone()];
                 while let Some(next) = stack.pop() {

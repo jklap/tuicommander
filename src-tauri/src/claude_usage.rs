@@ -1266,24 +1266,56 @@ pub(crate) async fn session_quota(
     session_id: &str,
 ) -> Result<(UsageApiResponse, bool), String> {
     let profile = profile_for_session(state, Some(session_id))?;
-    if let Some(data) = try_get_fresh_cache(&profile) {
+    session_quota_for_profile(&profile, read_claude_credentials, |token| async move {
+        fetch_usage_from_api(&token).await
+    })
+    .await
+}
+
+// Keep credential and HTTP IO at the boundary so cache transitions can be tested
+// without touching a real account or issuing a generating request.
+async fn session_quota_for_profile<F, Fut>(
+    profile: &CredentialProfile,
+    read_credentials: impl FnOnce(Option<&str>) -> Result<(Option<String>, Option<PlanInfo>), String>,
+    fetch: F,
+) -> Result<(UsageApiResponse, bool), String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<UsageApiResponse, FetchError>>,
+{
+    if let Some(data) = try_get_fresh_cache(profile) {
         return Ok((data, false));
     }
     let backing_off = RATE_LIMITED_UNTIL
         .lock()
-        .get(&profile)
+        .get(profile)
         .is_some_and(|until| Instant::now() < *until);
     if !backing_off {
-        let (token, _) = read_claude_credentials(profile.config_dir())?;
+        let (token, plan) = read_credentials(profile.config_dir())?;
         let token = token.ok_or("Claude account unavailable")?;
-        if let Ok(Ok(data)) =
-            tokio::time::timeout(Duration::from_secs(15), fetch_usage_from_api(&token)).await
-        {
-            cache_response(&profile, &data);
-            return Ok((data, false));
+        match tokio::time::timeout(Duration::from_secs(15), fetch(token)).await {
+            Ok(Ok(mut data)) => {
+                RATE_LIMITED_UNTIL.lock().remove(profile);
+                data.plan = plan;
+                cache_response(profile, &data);
+                return Ok((data, false));
+            }
+            Ok(Err(error)) if error.status == 429 => {
+                // Share desktop's minimum backoff, but cap untrusted Retry-After
+                // at five minutes so a malformed hint cannot strand the profile.
+                let delay_secs = error
+                    .retry_after_secs
+                    .unwrap_or(RATE_LIMIT_BACKOFF.as_secs())
+                    .clamp(RATE_LIMIT_BACKOFF.as_secs(), 300);
+                RATE_LIMITED_UNTIL.lock().insert(
+                    profile.clone(),
+                    Instant::now() + Duration::from_secs(delay_secs),
+                );
+            }
+            _ => {}
         }
     }
-    get_stale_cache(&profile)
+    get_stale_cache(profile)
         .map(|data| (data, true))
         .ok_or_else(|| "Claude quota unavailable".into())
 }
@@ -2369,6 +2401,221 @@ mod tests {
         // Empty slug should not resolve to a meaningful path
         let result = resolve_slug_to_path("");
         assert!(result.is_none() || result.as_deref() == Some("/"));
+    }
+
+    /// Catches mobile refresh dropping the credential plan before publishing to
+    /// the cache shared with desktop reads. Also protects cache-only paths from IO.
+    #[tokio::test]
+    async fn session_quota_refresh_preserves_plan_in_shared_cache() {
+        let profile = CredentialProfile::ConfigDir("/fixture/quota-plan-2420".into());
+        let other = CredentialProfile::ConfigDir("/fixture/quota-plan-other-2420".into());
+        let expected = serde_json::json!({
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_5x",
+            "scopes": ["user:inference", "user:profile"]
+        });
+        let plan: PlanInfo = serde_json::from_value(expected.clone()).unwrap();
+        let (data, stale) = session_quota_for_profile(
+            &profile,
+            |dir| {
+                assert_eq!(dir, Some("/fixture/quota-plan-2420"));
+                Ok((Some("test-token".into()), Some(plan)))
+            },
+            |token| async move {
+                assert_eq!(token, "test-token");
+                Ok(UsageApiResponse {
+                    five_hour: Some(RateBucket {
+                        utilization: 42.0,
+                        resets_at: None,
+                    }),
+                    ..Default::default()
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert_eq!(serde_json::to_value(&data.plan).unwrap(), expected);
+        assert_eq!(data.five_hour.unwrap().utilization, 42.0);
+        // This is the exact fresh-cache read used by the desktop API path.
+        assert_eq!(
+            serde_json::to_value(try_get_fresh_cache(&profile).unwrap().plan).unwrap(),
+            expected
+        );
+        assert!(get_stale_cache(&other).is_none());
+
+        let (fresh, stale) = session_quota_for_profile(
+            &profile,
+            |_| panic!("fresh cache must not read credentials"),
+            |_| async { panic!("fresh cache must not fetch") },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert_eq!(serde_json::to_value(fresh.plan).unwrap(), expected);
+
+        API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+            Instant::now() - API_CACHE_TTL - Duration::from_secs(1);
+        RATE_LIMITED_UNTIL
+            .lock()
+            .insert(profile.clone(), Instant::now() + Duration::from_secs(60));
+        let (old, stale) = session_quota_for_profile(
+            &profile,
+            |_| panic!("backoff must not read credentials"),
+            |_| async { panic!("backoff must not fetch") },
+        )
+        .await
+        .unwrap();
+        assert!(stale);
+        assert!(try_get_fresh_cache(&profile).is_none());
+        assert_eq!(serde_json::to_value(old.plan).unwrap(), expected);
+
+        // Catches leaking a different account's plan into a plan-less profile.
+        let (without_plan, stale) = session_quota_for_profile(
+            &other,
+            |_| Ok((Some("other-token".into()), None)),
+            |_| async { Ok(UsageApiResponse::default()) },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert!(without_plan.plan.is_none());
+        assert!(try_get_fresh_cache(&other).unwrap().plan.is_none());
+        assert_eq!(
+            serde_json::to_value(get_stale_cache(&profile).unwrap().plan).unwrap(),
+            expected
+        );
+        API_CACHE.lock().remove(&profile);
+        API_CACHE.lock().remove(&other);
+        RATE_LIMITED_UNTIL.lock().remove(&profile);
+    }
+
+    /// Catches mobile 429 errors being discarded instead of suppressing subsequent
+    /// profile reads, including stale-cache and Retry-After boundary cases.
+    #[tokio::test]
+    async fn mobile_quota_429_sets_shared_profile_backoff() {
+        for (index, (retry_after_secs, expected_secs)) in [
+            (None, 120),
+            (Some(0), 120),
+            (Some(1), 120),
+            (Some(180), 180),
+            (Some(u64::MAX), 300),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let profile = CredentialProfile::ConfigDir(format!("/fixture/mobile-429-2430-{index}"));
+            let other =
+                CredentialProfile::ConfigDir(format!("/fixture/mobile-429-other-2430-{index}"));
+            let has_cache = index % 2 == 0;
+            if has_cache {
+                cache_response(&profile, &UsageApiResponse::default());
+                API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+                    Instant::now() - Duration::from_secs(301);
+            }
+            let before = Instant::now();
+            let result = session_quota_for_profile(
+                &profile,
+                |_| Ok((Some("test-token".into()), None)),
+                |_| async move {
+                    Err(FetchError {
+                        status: 429,
+                        message: "rate limited".into(),
+                        retry_after_secs,
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), has_cache);
+            if let Ok((_, stale)) = result {
+                assert!(stale);
+            }
+
+            for _ in 0..3 {
+                let repeated = session_quota_for_profile(
+                    &profile,
+                    |_| panic!("429 backoff must suppress credential reads"),
+                    |_| async { panic!("429 backoff must suppress repeated GET requests") },
+                )
+                .await;
+                assert_eq!(repeated.is_ok(), has_cache);
+                if let Ok((_, stale)) = repeated {
+                    assert!(stale);
+                }
+            }
+            // Desktop consults this same profile-keyed map before its primary or fallback IO.
+            let until = *RATE_LIMITED_UNTIL.lock().get(&profile).unwrap();
+            assert!(until >= before + Duration::from_secs(expected_secs));
+            assert!(until <= Instant::now() + Duration::from_secs(expected_secs));
+            let (_, stale) = session_quota_for_profile(
+                &other,
+                |_| Ok((Some("other-token".into()), None)),
+                |_| async { Ok(UsageApiResponse::default()) },
+            )
+            .await
+            .unwrap();
+            assert!(!stale, "one profile must not rate-limit another");
+
+            RATE_LIMITED_UNTIL
+                .lock()
+                .insert(profile.clone(), Instant::now() - Duration::from_secs(1));
+            let (_, stale) = session_quota_for_profile(
+                &profile,
+                |_| Ok((Some("test-token".into()), None)),
+                |_| async { Ok(UsageApiResponse::default()) },
+            )
+            .await
+            .unwrap();
+            assert!(!stale);
+            assert!(
+                !RATE_LIMITED_UNTIL.lock().contains_key(&profile),
+                "success must clear expired backoff"
+            );
+            API_CACHE.lock().remove(&profile);
+            API_CACHE.lock().remove(&other);
+        }
+    }
+
+    /// Catches ordinary failures accidentally poisoning shared profile backoff.
+    #[tokio::test(start_paused = true)]
+    async fn mobile_quota_non_429_and_timeout_do_not_set_backoff() {
+        for status in [0, 401, 500] {
+            let profile =
+                CredentialProfile::ConfigDir(format!("/fixture/mobile-error-2430-{status}"));
+            for _ in 0..2 {
+                assert!(
+                    session_quota_for_profile(
+                        &profile,
+                        |_| Ok((Some("test-token".into()), None)),
+                        |_| async move {
+                            Err(FetchError {
+                                status,
+                                message: "failed".into(),
+                                retry_after_secs: Some(180),
+                            })
+                        },
+                    )
+                    .await
+                    .is_err()
+                );
+                assert!(!RATE_LIMITED_UNTIL.lock().contains_key(&profile));
+            }
+        }
+        let profile = CredentialProfile::ConfigDir("/fixture/mobile-timeout-2430".into());
+        cache_response(&profile, &UsageApiResponse::default());
+        API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+            Instant::now() - Duration::from_secs(301);
+        let (_, stale) = session_quota_for_profile(
+            &profile,
+            |_| Ok((Some("test-token".into()), None)),
+            |_| std::future::pending(),
+        )
+        .await
+        .unwrap();
+        assert!(stale);
+        assert!(!RATE_LIMITED_UNTIL.lock().contains_key(&profile));
+        assert!(try_get_fresh_cache(&profile).is_none());
+        API_CACHE.lock().remove(&profile);
     }
 
     #[test]

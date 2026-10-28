@@ -153,6 +153,104 @@ describe("LocalMcpPanel", () => {
 		view.unmount();
 	});
 
+	// Catches: parent denial looks enabled on a child or overwrites its saved preference.
+	it("nested_mcp_switch_reflects_denied_parent", async () => {
+		let saved = {
+			mcp_capabilities: { denied: ["workflow", "workflow.reports"], migration_unknown_tools: ["legacy"] },
+			settings_mcp_enabled: false,
+		};
+		const capabilities = ["workflow", "workflow.story", "workflow.reports"].map((name) => ({
+			name,
+			title: name,
+			description: name + " help",
+			domain: "workflow",
+			parent: name === "workflow" ? null : "workflow",
+			section: "always",
+		}));
+		vi.mocked(rpc).mockImplementation(async (command) =>
+			command === "load_config"
+				? structuredClone(saved)
+				: command === "get_mcp_status"
+					? { native_capabilities: capabilities }
+					: undefined,
+		);
+		mockInvoke.mockImplementation(async (command, args) => {
+			if (command === "load_config") return structuredClone(saved);
+			if (command === "save_config") saved = structuredClone(args?.config as typeof saved);
+		});
+		let view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		const toggle = (name: string) => view.getByRole("checkbox", { name }) as HTMLInputElement;
+		expect(toggle("workflow.story").checked).toBe(false);
+		expect(toggle("workflow.story").disabled).toBe(true);
+		expect(view.getAllByText(/Enable workflow to change this capability/)).toHaveLength(2);
+		expect(mockInvoke.mock.calls.filter(([command]) => command === "save_config")).toHaveLength(0);
+
+		fireEvent.click(toggle("workflow"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(toggle("workflow.story").checked).toBe(true);
+		expect(toggle("workflow.story").disabled).toBe(false);
+		expect(toggle("workflow.reports").checked).toBe(false);
+		expect(toggle("workflow.reports").disabled).toBe(false);
+		expect(saved.mcp_capabilities.denied).toEqual(["workflow.reports"]);
+
+		fireEvent.click(toggle("workflow.reports"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(saved.mcp_capabilities.denied).toEqual([]);
+		fireEvent.click(toggle("workflow"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(toggle("workflow.story").checked).toBe(false);
+		expect(saved.mcp_capabilities).toEqual({ denied: ["workflow"], migration_unknown_tools: ["legacy"] });
+		view.unmount();
+		view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(toggle("workflow.story").checked).toBe(false);
+		fireEvent.click(toggle("workflow"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(toggle("workflow.story").checked).toBe(true);
+		expect(toggle("workflow.reports").checked).toBe(true);
+		view.unmount();
+	});
+
+	// Catches: Settings opt-in is ignored for children, or conditional availability locks saved preferences.
+	it.each([
+		{ domain: "settings", optedIn: false, available: true, blocked: true },
+		{ domain: "settings", optedIn: true, available: true, blocked: false },
+		{ domain: "voice", optedIn: false, available: false, blocked: false },
+	])(
+		"keeps parent policy separate from availability: $domain $optedIn",
+		async ({ domain, optedIn, available, blocked }) => {
+			const base = vi.mocked(rpc).getMockImplementation();
+			const capabilities = [domain, `${domain}.member`].map((name) => ({
+				name,
+				title: name,
+				description: name + " help",
+				domain,
+				parent: name === domain ? null : domain,
+				section: "conditional",
+				available,
+				availability: available ? undefined : "Not configured",
+			}));
+			vi.mocked(rpc).mockImplementation((command, args) =>
+				command === "get_mcp_status"
+					? Promise.resolve({ native_capabilities: capabilities })
+					: command === "load_config"
+						? Promise.resolve({
+								mcp_capabilities: { denied: [], migration_unknown_tools: [] },
+								settings_mcp_enabled: optedIn,
+							})
+						: base!(command, args),
+			);
+			const view = render(() => <LocalMcpPanel />);
+			await vi.advanceTimersByTimeAsync(0);
+			const child = view.getByRole("checkbox", { name: `${domain}.member` }) as HTMLInputElement;
+			expect(child.checked).toBe(!blocked);
+			expect(child.disabled).toBe(blocked);
+			expect((view.getByRole("checkbox", { name: domain }) as HTMLInputElement).disabled).toBe(false);
+			view.unmount();
+		},
+	);
+
 	// Catches: sibling edits drop migrated action denials or unresolved migration diagnostics.
 	it("preserves migrated restrictions and unknown names across edits and reload", async () => {
 		let saved = {

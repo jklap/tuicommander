@@ -490,6 +490,10 @@ mod tests {
     async fn intake_filter_does_not_replace_client_filter() {
         let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+        std::fs::create_dir_all(scratch.path().join("config")).unwrap();
+        std::fs::write(scratch.path().join("config/automations.json"), serde_json::to_vec(&serde_json::json!({
+            "event_intake": {"repositories": ["sstraus/intake"], "label": "tuic-run", "definition_id": "pilot"}
+        })).unwrap()).unwrap();
         let mut paths = Vec::new();
         for name in ["intake", "client"] {
             let repo = scratch.path().join(name);
@@ -535,7 +539,7 @@ mod tests {
                     let intake_selection = query
                         .split("intakeIssues:")
                         .nth(1)
-                        .expect("unfiltered intake selection")
+                        .expect("labelled intake selection")
                         .split("viewerPrs:")
                         .next()
                         .unwrap();

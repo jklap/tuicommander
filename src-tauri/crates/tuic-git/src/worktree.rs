@@ -1003,9 +1003,11 @@ fn classify_branch_merge(
         .map_err(|error| format!("could not inspect branch history: {error}"))?
         .stdout;
     let mut entries = reflog.lines().collect::<Vec<_>>();
-    let creation = entries
-        .pop()
-        .ok_or("branch creation is absent from reflog")?;
+    // Reflogs can expire or be disabled. Without origin history, neither an
+    // untouched branch nor completed work can be inferred from ancestry alone.
+    let Some(creation) = entries.pop() else {
+        return Ok((WorkspaceCommitStatus::Unknown, None));
+    };
     let (_, creation_message) = creation
         .split_once('\t')
         .ok_or("branch creation has no reflog message")?;
@@ -3777,6 +3779,8 @@ pub(crate) struct WorktreeEntry {
     /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
     pub(crate) branch: Option<String>,
     pub(crate) detached: bool,
+    /// Bare main metadata must remain in registration order, but is not a checkout.
+    pub(crate) bare: bool,
 }
 
 fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
@@ -3792,6 +3796,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut detached = false;
+        let mut bare = false;
         let mut head = String::new();
 
         for line in block.split(if nul { '\0' } else { '\n' }) {
@@ -3803,6 +3808,8 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 head = oid.to_string();
             } else if line == "detached" {
                 detached = true;
+            } else if line == "bare" {
+                bare = true;
             }
         }
 
@@ -3812,6 +3819,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 head,
                 branch,
                 detached,
+                bare,
             });
         }
     }
@@ -3957,11 +3965,27 @@ pub(crate) fn checkout_inventory(
     });
     let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     for entry in entries {
+        // Bare metadata is a registration anchor, not an unavailable checkout.
+        if entry.bare {
+            continue;
+        }
         let path = Path::new(&entry.path);
         let parent = path
             .parent()
             .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
-        if pool.is_some() && parent == pool {
+        // Archive writes beside the checkout, which may be external or belong
+        // to an earlier storage setting. Its durable completion marker proves
+        // ownership; the __archived basename alone does not.
+        if pool.is_some()
+            && (parent == pool
+                || (is_archived_checkout(path)
+                    && crate::git::resolve_git_dir(path)
+                        .and_then(|admin| {
+                            std::fs::read_to_string(admin.join("tuic-allocation")).ok()
+                        })
+                        .as_deref()
+                        == Some("finished")))
+        {
             continue;
         }
         if !path.is_dir() || crate::git::resolve_git_dir(path).is_none() {
@@ -5096,6 +5120,71 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: bare metadata becomes a missing checkout, including through a linked base.
+    #[test]
+    fn bare_main_entry_has_no_missing_checkout_diagnostic() {
+        use crate::git_reads::{CliGitReads, GitReads, GixGitReads};
+        let mut failures = Vec::new();
+        for bare in [true, false] {
+            let root = TempDir::new_in(tuic_test_support::test_temp_root()).unwrap();
+            let seed = setup_test_repo();
+            let base = if bare {
+                let path = root.path().join("metadata.git");
+                git_cmd(seed.path())
+                    .args([
+                        "clone",
+                        "--bare",
+                        &seed.path().to_string_lossy(),
+                        &path.to_string_lossy(),
+                    ])
+                    .run()
+                    .unwrap();
+                path
+            } else {
+                seed.path().to_path_buf()
+            };
+            let live = root.path().join("live");
+            let missing = root.path().join("missing");
+            for (branch, path) in [("live", &live), ("missing", &missing)] {
+                git_cmd(&base)
+                    .args(["worktree", "add", "-b", branch, &path.to_string_lossy()])
+                    .run()
+                    .unwrap();
+            }
+            fs::remove_dir_all(&missing).unwrap();
+            let missing_spelling =
+                tuic_core::path_spelling::portable_spelling(&missing.to_string_lossy());
+            let live_spelling = tuic_core::path_spelling::portable_spelling(
+                &live.canonicalize().unwrap().to_string_lossy(),
+            );
+            for from in [&base, &live] {
+                for (backend, reader) in [
+                    ("cli", &CliGitReads as &dyn GitReads),
+                    ("gix", &GixGitReads::new() as &dyn GitReads),
+                ] {
+                    let inventory = reader.worktree_inventory(from, None).unwrap();
+                    let valid = inventory.worktree_diagnostics.len() == 1
+                        && inventory.worktree_diagnostics[0].path == missing_spelling
+                        && inventory.worktree_diagnostics[0].state
+                            == WorktreeDiagnosticState::Missing
+                        && inventory.worktree_paths.len() == if bare { 1 } else { 2 }
+                        && inventory
+                            .worktree_paths
+                            .get("live")
+                            .is_some_and(|row| row.path == live_spelling)
+                        && inventory.detached_worktrees.is_empty();
+                    if !valid {
+                        failures.push(format!(
+                            "bare={bare}, from={}, {backend}: {inventory:?}",
+                            from.display()
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     // Catches: sidebar discovery and removal disagree about a Git-created checkout identity.
     #[test]
@@ -11515,6 +11604,74 @@ branch refs/heads/feat
         let after = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(after.commit_status, WorkspaceCommitStatus::Merged);
         assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
+    }
+
+    // Catches: one expired branch reflog aborts the repository's merged-branch
+    // listing, hiding unrelated branches on every structure refresh.
+    #[test]
+    fn empty_branch_reflog_does_not_abort_repository_merge_listing() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_worktree(&repo, "expired");
+        let completed = add_worktree(&repo, "completed");
+        commit_file(&completed, "completed.txt", "integrated work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "completed"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "later.txt", "advance default\n");
+        git_cmd(&repo)
+            .args(["reflog", "expire", "--expire=all", "refs/heads/expired"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            git_cmd(&repo)
+                .args(["reflog", "show", "refs/heads/expired"])
+                .run()
+                .unwrap()
+                .stdout,
+            ""
+        );
+
+        for _ in 0..2 {
+            let merged = crate::git::get_merged_branches_impl(&repo)
+                .expect("an expired branch history must not fail repository structure");
+            assert_eq!(merged, vec!["completed"]);
+            let integration = branch_integration_with_pr(&repo, "expired", |_, _, _| false)
+                .expect("branch still exists");
+            assert_eq!(integration.commit_status, WorkspaceCommitStatus::Unknown);
+            assert!(!integration.integrated);
+            assert!(integration.proof.is_none());
+            assert!(integration.error.is_none());
+        }
+    }
+
+    // Catches: treating absent origin history as an untouched or merged branch
+    // authorizes deletion, including a branch at exactly the default tip.
+    #[test]
+    fn missing_branch_reflog_never_proves_safe_deletion() {
+        for advance_default in [false, true] {
+            let (_temp, repo, _) = workspace_fixture();
+            git_cmd(&repo).args(["branch", "no-history"]).run().unwrap();
+            git_cmd(&repo)
+                .args(["reflog", "expire", "--expire=all", "refs/heads/no-history"])
+                .run()
+                .unwrap();
+            fs::remove_file(repo.join(".git/logs/refs/heads/no-history")).unwrap();
+            if advance_default {
+                commit_file(&repo, "later.txt", "advance default\n");
+            }
+
+            let integration =
+                branch_integration_with_pr(&repo, "no-history", |_, _, _| false).unwrap();
+            assert_eq!(integration.commit_status, WorkspaceCommitStatus::Unknown);
+            assert!(integration.error.is_none());
+            assert!(!integration.integrated);
+            assert!(integration.proof.is_none());
+            let error =
+                delete_integrated_local_branch(&repo.to_string_lossy(), "no-history").unwrap_err();
+            assert!(error.contains("Cannot verify merged commits"), "{error}");
+            assert!(rev_at(&repo, "refs/heads/no-history").is_ok());
+        }
     }
 
     /// A branch sitting exactly on the default branch's tip never merged

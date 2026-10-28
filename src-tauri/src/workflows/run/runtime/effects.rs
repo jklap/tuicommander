@@ -105,14 +105,26 @@ pub(in crate::workflows::run) async fn drive_effect(
                         &graph.target_id,
                         &format!("workflow:{}", attempt.id),
                     )?;
-                    if status == crate::stories::StoryStatus::Qa {
+                    if status == crate::stories::StoryStatus::Done {
+                        // Approval can win after the deterministic turn but before this effect.
+                        let settled = super::drive_turn(store, &run.id)?;
+                        emit_run_changed(state, &run.project, &run.id, settled.sequence);
+                        return Ok(settled.sequence != run.sequence);
+                    }
+                    if status != crate::stories::StoryStatus::InProgress {
+                        let cause = if status == crate::stories::StoryStatus::Qa {
+                            format!("Story {} awaits manual QA", graph.target_id)
+                        } else {
+                            format!(
+                                "Story {} cannot start implementation in {status:?}",
+                                graph.target_id
+                            )
+                        };
                         let receipt = store.command_expected(
                             &run.id,
-                            &format!("manual-qa:{}:{}", attempt.id, run.sequence),
+                            &format!("story-not-startable:{}:{}", attempt.id, run.sequence),
                             run.sequence,
-                            RunCommand::PauseFor {
-                                cause: format!("Story {} awaits manual QA", graph.target_id),
-                            },
+                            RunCommand::PauseFor { cause },
                         )?;
                         emit_run_changed(state, &run.project, &run.id, receipt.sequence);
                         return Ok(true);

@@ -609,6 +609,17 @@ async fn story_action_command_for_state(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+async fn story_generate_draft(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    request: String,
+    request_id: String,
+) -> Result<stories::draft::StoryDraft, acp::AcpClientError> {
+    stories::draft::generate(state.inner(), project, request, request_id).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 async fn automation_action(
     state: State<'_, Arc<AppState>>,
     input: serde_json::Value,
@@ -682,7 +693,32 @@ struct LocalIpEntry {
 /// Implementation shared between Tauri command and HTTP handler.
 pub(crate) fn get_local_ips_impl(state: &AppState) -> Vec<LocalIpEntry> {
     let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
-    get_local_ips_with_config(ipv6_enabled)
+    order_remote_access_ips(state, get_local_ips_with_config(ipv6_enabled))
+}
+
+/// Pairing and phone entry use the first candidate. Keep all addresses available
+/// for an explicit user selection, preserving interface order within each rank.
+fn order_remote_access_ips(state: &AppState, mut ips: Vec<LocalIpEntry>) -> Vec<LocalIpEntry> {
+    let tailscale_https = matches!(
+        &*state.tailscale_state.read(),
+        tailscale::TailscaleState::Running {
+            https_enabled: true,
+            ..
+        }
+    ) && state.tls_listener.read().strong_count() > 0;
+    ips.sort_by_key(|entry| {
+        let tailscale = crate::mcp_http::auth::is_tailscale_ip(&entry.ip);
+        if tailscale && tailscale_https {
+            0
+        } else if entry.label.contains("Wi-Fi") || entry.label.contains("LAN") {
+            1
+        } else if tailscale {
+            2
+        } else {
+            3
+        }
+    });
+    ips
 }
 
 #[cfg(feature = "desktop")]
@@ -842,13 +878,8 @@ fn classify_ipv6_addr(ip: &std::net::IpAddr) -> String {
     }
 }
 
-/// Pick preferred IP from a list (Tailscale > Wi-Fi/LAN > any)
+/// Pick the first address from the backend-ranked remote access candidates.
 pub(crate) fn pick_preferred_ip(ips: Vec<LocalIpEntry>) -> Option<String> {
-    for label_prefix in &["Tailscale", "Wi-Fi", "LAN"] {
-        if let Some(e) = ips.iter().find(|e| e.label.contains(label_prefix)) {
-            return Some(e.ip.clone());
-        }
-    }
     ips.into_iter().next().map(|e| e.ip)
 }
 
@@ -1134,9 +1165,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
     // TCP reachability self-test for remote access
     let remote_port = state.config.read().services.server.port;
     let reachable = if remote_enabled {
-        let preferred_ip = pick_preferred_ip(get_local_ips_with_config(
-            state.config.read().services.server.ipv6_enabled,
-        ));
+        let preferred_ip = pick_preferred_ip(get_local_ips_impl(&state));
         if let Some(ip) = preferred_ip {
             let port = remote_port;
             let addr = if ip.contains(':') {
@@ -2694,6 +2723,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             acp_commands::acp_respond_permission,
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
+            acp_commands::acp_one_shot_prepare,
+            acp_commands::acp_one_shot_cancel,
+            story_generate_draft,
             ego_cli::ego_providers,
             ego_cli::usage::get_ego_usage,
             ego_cli::perimeter::ego_perimeter,
@@ -2816,6 +2848,7 @@ fn build_remote_base_url(scheme: &str, host: &str, port: u16) -> String {
 
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
+    stories::ingest::spawn();
     workflows::WorkflowRuntime::spawn(state);
     automations::runtime::AutomationRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
@@ -2891,6 +2924,7 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
 /// (#793-23a5).
 #[cfg(not(feature = "desktop"))]
 fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
+    stories::ingest::spawn();
     workflows::WorkflowRuntime::spawn(state);
     automations::runtime::AutomationRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
@@ -4025,6 +4059,135 @@ mod tests {
             "the runtime owner must remain parked after start_server returns"
         );
         owner.abort();
+    }
+
+    // Catches: an enumerated bridge winning over a later usable Tailscale HTTPS address.
+    #[test]
+    fn phone_entry_prefers_tailscale_https_over_first_bridge_ip() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().services.server.port = 9876;
+        *state.tailscale_state.write() = tailscale::TailscaleState::Running {
+            fqdn: "host.tail.example".into(),
+            https_enabled: true,
+        };
+        let tls = Arc::new(());
+        *state.tls_listener.write() = Arc::downgrade(&tls);
+        for candidates in [
+            [
+                ("172.18.0.1", "Network (bridge0)"),
+                ("192.168.1.42", "Wi-Fi / LAN (en0)"),
+                ("100.64.1.2", "Tailscale (utun0)"),
+            ],
+            [
+                ("100.64.1.2", "Tailscale (utun0)"),
+                ("172.18.0.1", "Network (bridge0)"),
+                ("192.168.1.42", "Wi-Fi / LAN (en0)"),
+            ],
+        ] {
+            let ips = order_remote_access_ips(&state, local_ip_candidates(&candidates));
+            // Both phone entry and the pairing UI consume the first backend candidate.
+            assert_eq!(
+                remote_access_base_url(&state, &ips[0].ip),
+                "https://host.tail.example:9876/"
+            );
+            assert_eq!(pick_preferred_ip(ips).as_deref(), Some("100.64.1.2"));
+        }
+    }
+
+    fn local_ip_candidates(entries: &[(&str, &str)]) -> Vec<LocalIpEntry> {
+        entries
+            .iter()
+            .map(|(ip, label)| LocalIpEntry {
+                ip: (*ip).into(),
+                label: (*label).into(),
+            })
+            .collect()
+    }
+
+    // Catches: daemon HTTPS eligibility outranking LAN when no TLS listener is usable.
+    #[test]
+    fn remote_address_prefers_lan_without_usable_tailscale_https() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let tls = Arc::new(());
+        for (https_enabled, listener_active) in [(true, false), (false, true)] {
+            *state.tailscale_state.write() = tailscale::TailscaleState::Running {
+                fqdn: "host.tail.example".into(),
+                https_enabled,
+            };
+            *state.tls_listener.write() = if listener_active {
+                Arc::downgrade(&tls)
+            } else {
+                Default::default()
+            };
+            let ips = order_remote_access_ips(
+                &state,
+                local_ip_candidates(&[
+                    ("172.18.0.1", "Network (bridge0)"),
+                    ("100.64.1.2", "Tailscale (utun0)"),
+                    ("192.168.1.42", "LAN (en0)"),
+                ]),
+            );
+            assert_eq!(
+                remote_access_base_url(&state, &ips[0].ip),
+                "http://192.168.1.42:9876/"
+            );
+            assert_eq!(pick_preferred_ip(ips).as_deref(), Some("192.168.1.42"));
+        }
+    }
+
+    // Catches: IPv6 Tailscale not receiving the HTTPS preference, or a LAN literal lacking brackets.
+    #[test]
+    fn remote_address_ipv6_uses_the_same_preference_and_url_policy() {
+        let state = crate::state::tests_support::make_test_app_state();
+        *state.tailscale_state.write() = tailscale::TailscaleState::Running {
+            fqdn: "host.tail.example".into(),
+            https_enabled: true,
+        };
+        let tls = Arc::new(());
+        *state.tls_listener.write() = Arc::downgrade(&tls);
+        let candidates = [
+            ("fd00::1", "LAN (en0)"),
+            ("fd7a:115c:a1e0::1", "Tailscale (utun0)"),
+        ];
+        let ips = order_remote_access_ips(&state, local_ip_candidates(&candidates));
+        assert_eq!(
+            remote_access_base_url(&state, &ips[0].ip),
+            "https://host.tail.example:9876/"
+        );
+        drop(tls);
+        let ips = order_remote_access_ips(&state, local_ip_candidates(&candidates));
+        assert_eq!(
+            remote_access_base_url(&state, &ips[0].ip),
+            "http://[fd00::1]:9876/"
+        );
+    }
+
+    // Catches: losing the HTTP-only tailnet/other-network fallback or inventing an empty-list address.
+    #[test]
+    fn remote_address_fallback_preserves_candidates_and_empty_result() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let ips = order_remote_access_ips(
+            &state,
+            local_ip_candidates(&[
+                ("172.18.0.1", "Network (bridge0)"),
+                ("100.64.1.2", "Tailscale (utun0)"),
+            ]),
+        );
+        assert_eq!(ips.len(), 2);
+        assert_eq!(
+            remote_access_base_url(&state, &ips[0].ip),
+            "http://100.64.1.2:9876/"
+        );
+        let ips = order_remote_access_ips(
+            &state,
+            local_ip_candidates(&[
+                ("192.0.2.1", "Network (en0)"),
+                ("192.0.2.2", "Network (en1)"),
+            ]),
+        );
+        assert_eq!(ips[0].ip, "192.0.2.1");
+        assert_eq!(ips[1].ip, "192.0.2.2");
+        assert!(pick_preferred_ip(order_remote_access_ips(&state, vec![])).is_none());
     }
 
     // Catches: secret-entry links choosing a different scheme/host from pairing,

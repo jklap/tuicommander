@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Index native stories and notes through the mdkb daemon without project files; preserve mutations while the daemon is down and reconcile durable revisions on reconnect (#2333-b498).
+
 ### Changed
+
+- Show an explicit telemetry-off state in the MDKB dashboard instead of treating disabled hook metrics as zero activity (#2442-61f6).
 
 - Shorten the terminal Compose newline hint to Ctrl+Enter and hide shortcut hints in compact panels instead of wrapping (#2411-c7c9).
 
@@ -15,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Send terminal Compose drafts with Enter; use Ctrl+Enter or Shift+Enter for a new line. Shift+Ctrl+Enter still queues for the next idle moment, and IME candidate confirmation does not send (#2395-ed27).
 
 ### Added
+
+- Draft a New story from a plain request with **Fill with AI**, review every field before saving, and cancel the owned model turn without discarding the request (#2357-a8f2).
+- Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
+- Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
 
 - Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
@@ -28,6 +36,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Stop automatic remote connection retries after HTTP 403 Untrusted Host, retain the cause and manual reconnect, and log unchanged failures only once (#2438-4c2f).
+- Apply the existing subagent-silence setting to mobile/PWA sounds and session Web Push, preserving parentage across asynchronous exit teardown (#2342-4a1c).
+
+- Keep hidden terminal panes out of unsized warnings, avoid duplicate API-error handlers after reconnect, and log successful MCP peer rebinds at info instead of warn (#2439-027f).
+- Remove the permanent manual-prefix hint from New story without changing `[MANUAL]` criteria (#2444-9461).
+
+- Share bounded, cached ego usage reads between the status-bar badge and session details to avoid repeated or overlapping CLI processes (#2431-0847).
+- Keep event-run draft PR configuration and git reads off async runtime workers, so slow publication prerequisites do not block unrelated async work (#2428-cd8d).
+- Do not turn successful Claude tool-result auth or transport diagnostics into sticky agent API-error badges (#2429-a18d).
+- Tell agents to use TUIC managed peers for delegation or parallel work through the launch playbook, with an MCP fallback and the existing Claude Code isolated-task exception (#2441-bbcf).
+- Refuse archival of unresolved story prerequisites with open dependents, and require restoring archived unresolved work before adding a dependency to it (#2426-821e).
+- Explain how to restore an archived plan when New plan selects its existing source, instead of silently hiding the result; preserve the plan and avoid duplicates (#2425-5cfa).
+- Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
+- Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
+- Keep the Remote Access QR code stable across unchanged status polls, while refreshing it for listener, address and token changes (#2432-edf6).
+
+- Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
+
+- Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
+- Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
+- Keep repository structure available when a branch reflog is empty or absent; classify that branch as unknown without repeated refresh errors (#2437-b45b).
+- Preserve Claude subscription metadata when mobile quota refreshes the account cache shared with desktop (#2420-f7a6).
+- Keep agent and panel Ideas in the same registered repository collection across Windows canonical paths and symlink aliases, including existing Ideas (#2414-9805).
+
+- Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).
+
+- Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
+- Do not show bare repository metadata as a missing checkout, including when refreshing from a linked worktree (#2413-19e4).
+
+- Keep TUIC-archived external worktrees and former-storage checkouts out of live sidebar and MCP inventory without hiding unrelated `__archived` folders (#2412-11f3).
 - Stop stable idle timer ticks from repeatedly retrying orchestrator mail wakes blocked by a user draft; retry on new Ready confirmation without changing queued-command flushing (#2418-fd33).
 - Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
 - Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
@@ -63,6 +100,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep Windows worktree cleanup on the selected Git installation launcher and avoid empty submodule shell scans during fresh workspace safety listings (#2310-6e76).
 - Request Projects write consent at GitHub login and explain read-only boards without disabling repository actions (#2338-0cfd).
 
+- Align New story actions with Edit plan, move story Edit into its header, and explain disabled dependency actions (#2380-23f1).
 - Give Edit plan and New story a full-width editor, let users choose repository plan documents, show the complete source and disabled-Save reason, and group archive actions with plan actions (#2356-5c36).
 
 - Make private secret-form phone links selectable, absolute, clickable and copyable, with a shared QR code and guidance when Remote Access is off (#2378-c2eb).

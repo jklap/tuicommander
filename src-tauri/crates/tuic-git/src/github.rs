@@ -661,14 +661,24 @@ fn issues_filter_clause(filter_mode: &str, viewer: &str) -> String {
 /// The issues sub-selection for embedding inside a repository alias.
 fn issues_repo_section(filter_mode: &str, viewer: &str) -> String {
     let filter = issues_filter_clause(filter_mode, viewer);
-    let node_fields = r#"number title state url createdAt updatedAt
+    let node_fields = ISSUE_NODE_FIELDS;
+    format!(
+        "    issues(first: 30, states: [OPEN]{filter}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {node_fields} }}\n    }}"
+    )
+}
+
+const ISSUE_NODE_FIELDS: &str = r#"number title state url createdAt updatedAt
         author { login }
         labels(first: 10) { nodes { name color } }
         assignees(first: 5) { nodes { login } }
         milestone { title }
         comments { totalCount }"#;
+/// Intake filters before the page limit; the client issue selection stays independent.
+pub fn intake_issues_section(label: &str, after: Option<&str>) -> String {
+    let label = serde_json::to_string(label).expect("a label is a JSON string");
+    let after = serde_json::to_string(&after).expect("a cursor is a JSON string or null");
     format!(
-        "    issues(first: 30, states: [OPEN]{filter}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {node_fields} }}\n    }}"
+        "intakeIssues: issues(first: 100, states: [OPEN], labels: [{label}], after: {after}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {ISSUE_NODE_FIELDS} }}\n      pageInfo {{ hasNextPage endCursor }}\n    }}"
     )
 }
 
@@ -716,7 +726,7 @@ pub fn build_unified_batch_query(
         filter_mode,
         viewer,
         hide_drafts,
-        false,
+        None,
     )
 }
 
@@ -727,7 +737,7 @@ pub fn build_unified_batch_query_with_intake(
     filter_mode: &str,
     viewer: &str,
     hide_drafts: bool,
-    intake: bool,
+    intake_label: Option<&str>,
 ) -> (String, Vec<(String, String)>) {
     let states = if include_merged {
         "[OPEN, MERGED]"
@@ -775,11 +785,8 @@ pub fn build_unified_batch_query_with_intake(
         } else {
             String::new()
         };
-        if intake {
-            issues_section.push_str(&format!(
-                "\n    intakeIssues: {}",
-                issues_repo_section("all", viewer)
-            ));
+        if let Some(label) = intake_label {
+            issues_section.push_str(&format!("\n    {}", intake_issues_section(label, None)));
         }
         parts.push(format!(
             "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed\n    pullRequests(first: {pr_first}, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}{issues_section}\n  }}"
@@ -810,7 +817,7 @@ pub fn build_unified_batch_query_with_intake(
 
 /// Result of a unified batch poll.
 pub struct BatchPollResult {
-    /// Unfiltered machine-owned intake snapshots; never delivered to clients.
+    /// Complete label-filtered machine-owned intake snapshots; never delivered to clients.
     pub intake_issues: std::collections::HashMap<String, Vec<GitHubIssue>>,
     pub prs: std::collections::HashMap<String, Vec<BranchPrStatus>>,
     /// Client snapshots; disabled intake paths carry empty lists to clear stale badges.

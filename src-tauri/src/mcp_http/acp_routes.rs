@@ -34,8 +34,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
-    AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoHoldRequest,
+    AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectRequest, AcpConnectionId,
+    AcpDetachKind, AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId,
+    EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -124,6 +125,9 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
             post(respond_elicitation),
         )
         .route("/one-shot", post(one_shot_prompt))
+        .route("/one-shot/prepare", post(one_shot_prepare))
+        .route("/one-shot/{request_id}/cancel", post(one_shot_cancel))
+        .route("/story-draft", post(story_draft))
 }
 
 /// The HTTP status that carries an ACP client error code.
@@ -245,12 +249,12 @@ async fn connect(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<axum::Extension<Authenticated>>,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<RootBody>,
+    Json(body): Json<AcpConnectRequest>,
 ) -> Response {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    answer(acp_commands::connect(&state, body.root).await)
+    answer(acp_commands::connect(&state, body).await)
 }
 
 async fn reconnect(
@@ -281,6 +285,51 @@ async fn one_shot_prompt(
         return resp.into_response();
     }
     answer(crate::acp::oneshot::run_prompt(&state, body.root, body.prompt).await)
+}
+
+async fn one_shot_prepare(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    Json(crate::acp::oneshot::prepare(&state)).into_response()
+}
+
+async fn one_shot_cancel(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<String>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    Json(crate::acp::oneshot::cancel(&state, &request_id)).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoryDraftBody {
+    project: String,
+    request: String,
+    request_id: String,
+}
+
+async fn story_draft(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StoryDraftBody>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(
+        crate::stories::draft::generate(&state, body.project, body.request, body.request_id).await,
+    )
 }
 
 async fn chat_selection(State(state): State<Arc<AppState>>) -> Response {

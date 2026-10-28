@@ -356,7 +356,7 @@ pub(crate) fn abandoned_shell_process(root_pid: u32, processes: &[ProcessTreeEnt
 }
 
 /// The pid whose process tree represents this session's foreground work.
-pub(super) fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
+pub(crate) fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
     let entry = state.session_maps.sessions.get(session_id)?;
     let session = entry.value().lock();
     #[cfg(not(windows))]

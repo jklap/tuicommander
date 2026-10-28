@@ -46,6 +46,8 @@ temporary directory; this avoids `operation not permitted` on certificate writes
 ### QR Code
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
+It refreshes when the selected address, listener TLS state or port changes, or after
+you regenerate the access token. Unchanged status polls keep the current QR code.
 
 The Remote Mobile Connection dialog shows the complete connection URL as selectable
 text. Use **Copy URL** to copy it; the action shows **Copied** after success.
@@ -193,7 +195,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
    display. A 404 means no subscription; `stale_removed` after HTTP 410 means
    the phone must re-subscribe. A 503 means push is disabled or the VAPID key is
    unavailable. Confirm the notification actually appears on the phone.
-4. Have a managed agent report `progress type=blocked` with its question.
+4. If the agent was spawned by another agent, turn off **Settings → Notifications → Silence subagent sounds and notifications** on the host for this delivery check. This setting also controls mobile sounds and session Web Push; it defaults on. Have a managed agent report `progress type=blocked` with its question.
    After the desktop is unfocused, or the Mac has had no HID input for two
    minutes, the phone notification contains the question and opens that
    session. Type one answer and tap Send. The PWA waits for the same submission
@@ -894,7 +896,13 @@ Remote host cards name DNS, refused connections, timeout, TLS, and authenticatio
 A desktop secret request shows a full one-time URL in its private window.
 Open **Open on a trusted browser or phone** to select or copy the URL, open the
 link, or scan its QR code. The address uses the same network and HTTPS policy as
-Remote Mobile Connection. If Remote Access is off, enable it in Settings and
+Remote Mobile Connection. Both choose the first backend-ranked address: Tailscale
+with an active HTTPS listener, then Wi-Fi/LAN, then HTTP-only Tailscale, then
+another detected network address. Interface order breaks ties within each group.
+IPv6 literals use brackets. You can choose another address in Remote Access or
+the pairing dialog; detection does not guarantee that the phone can reach it.
+If no address is detected, the private form shows network setup guidance instead
+of a phone URL. If Remote Access is off, enable it in Settings and
 request a new form. Enter only the requested fields. Entry uses the existing server authentication and transport;
 use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
 See [Private secret forms](secrets.md).

@@ -266,7 +266,13 @@ retry. Native harness retry output is not a final failure.
 Native Claude transport/auth and Codex stream errors match short anchored
 failure prefixes, not the complete English sentence. Rendered physical rows are
 joined with newlines, so a narrow pane can split the remaining sentence.
-Claude's native `⏺` and `⎿` markers are accepted; Codex still requires its final
+Claude's friendly auth/transport signatures accept an unadorned row with at
+most two leading spaces or an assistant `⏺` bullet. A tool receipt `⎿`, a
+tab-indented row, or a continuation with four or more spaces quotes another
+process and cannot set an agent failure. The recorded expanded tool transcript
+`claude-tool-auth-output-2429.tcap` covers archived auth and transport diagnostics
+through the production event/state accumulator after startup grace.
+Codex still requires its final
 `■` marker, and retry-exhaustion status separators accept wrapped whitespace.
 `claude-wrapped-provider-failure-2335.tcap` records a real 40-column Claude
 connection failure, including a wrap inside `Connection to the API was lost`.

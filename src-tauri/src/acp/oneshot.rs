@@ -250,6 +250,90 @@ pub(crate) fn unparseable(what: &str, err: impl std::fmt::Display, answer: &str)
     )
 }
 
+/// Reserved cancellation handles close the cancel-before-start race without
+/// changing the lifetime of existing one-shot callers.
+#[derive(Default)]
+pub(crate) struct OneShotRequests {
+    pending: parking_lot::Mutex<std::collections::HashMap<String, PreparedTurn>>,
+}
+
+struct PreparedTurn {
+    cancel: tokio::sync::watch::Sender<bool>,
+    receiver: Option<tokio::sync::watch::Receiver<bool>>,
+}
+
+impl OneShotRequests {
+    fn reserve(&self) -> String {
+        let id = uuid::Uuid::now_v7().to_string();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        self.pending.lock().insert(
+            id.clone(),
+            PreparedTurn {
+                cancel,
+                receiver: Some(receiver),
+            },
+        );
+        id
+    }
+
+    fn claim(&self, id: &str) -> Result<tokio::sync::watch::Receiver<bool>, AcpClientError> {
+        self.pending
+            .lock()
+            .get_mut(id)
+            .and_then(|turn| turn.receiver.take())
+            .ok_or_else(|| {
+                AcpClientError::invalid_input(
+                    "One-shot request cancelled, expired or already started",
+                )
+            })
+    }
+
+    fn cancel(&self, id: &str) -> bool {
+        if let Some(turn) = self.pending.lock().remove(id) {
+            turn.cancel.send_replace(true);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Reserve before launching, so Cancel also works while the frontend is
+/// waiting for the start call to be accepted. An abandoned reservation expires
+/// at the same outer budget as a one-shot (60s initialize + 240s turn).
+pub(crate) fn prepare(state: &Arc<AppState>) -> String {
+    let id = state.one_shot_requests.reserve();
+    let weak = Arc::downgrade(state);
+    let expiry_id = id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        if let Some(state) = weak.upgrade() {
+            state.one_shot_requests.cancel(&expiry_id);
+        }
+    });
+    id
+}
+
+pub(crate) fn cancel(state: &AppState, request_id: &str) -> bool {
+    state.one_shot_requests.cancel(request_id)
+}
+
+pub(crate) async fn run_prepared(
+    state: &Arc<AppState>,
+    root: PathBuf,
+    prompt: String,
+    request_id: String,
+) -> Result<EgoTurn, AcpClientError> {
+    let receiver = state.one_shot_requests.claim(&request_id)?;
+    let state = Arc::clone(state);
+    detached(async move {
+        let outcome = run_turn_cancellable(&state, root, prompt, receiver).await;
+        state.one_shot_requests.pending.lock().remove(&request_id);
+        outcome
+    })
+    .await
+}
+
 /// Run one prompt through a fresh ego and give back what it said.
 ///
 /// Every exit shuts the connection down, including the failing ones: an ego
@@ -297,20 +381,44 @@ async fn run_turn(
     root: PathBuf,
     prompt: String,
 ) -> Result<EgoTurn, AcpClientError> {
+    let (_cancel, receiver) = tokio::sync::watch::channel(false);
+    run_turn_cancellable(state, root, prompt, receiver).await
+}
+
+async fn run_turn_cancellable(
+    state: &AppState,
+    root: PathBuf,
+    prompt: String,
+    mut cancellation: tokio::sync::watch::Receiver<bool>,
+) -> Result<EgoTurn, AcpClientError> {
+    if *cancellation.borrow() {
+        return Err(AcpClientError::invalid_input("One-shot request cancelled"));
+    }
     let config = ego_config(state)?;
     // Bounded by `INITIALIZE_TIMEOUT` inside the manager, which is why no
     // deadline is wrapped around it here: a timeout at this level would drop a
     // future that is not the one holding the ego child.
     let connection = state
         .acp
-        .connect(&config, AcpConnectRequest { root: root.clone() })
+        .connect(
+            &config,
+            AcpConnectRequest {
+                root: root.clone(),
+                env: None,
+            },
+        )
         .await?;
     let connection_id = connection.connection_id;
 
     // The budget covers `session/new` and the prompt as well as the answer.
     // Around `collect` alone it bounded the part that was already the least
     // likely to hang, and left the caller's total unbounded.
-    let outcome = match tokio::time::timeout(
+    let outcome = tokio::select! {
+        biased;
+        _ = cancellation.wait_for(|cancelled| *cancelled) => {
+            Err(AcpClientError::invalid_input("One-shot request cancelled"))
+        }
+        result = tokio::time::timeout(
         TURN_TIMEOUT,
         drive(
             state,
@@ -319,9 +427,7 @@ async fn run_turn(
             root,
             prompt,
         ),
-    )
-    .await
-    {
+    ) => match result {
         Ok(outcome) => outcome,
         // `None` for the operation: a turn that ran out of time is not a
         // capability ego failed to offer, and naming one would send a reader
@@ -334,6 +440,7 @@ async fn run_turn(
                 TURN_TIMEOUT.as_secs()
             ),
         )),
+        },
     };
 
     // The settlement is not reported: the caller asked for an answer, and a
@@ -499,6 +606,31 @@ mod tests {
             Step::Done
         );
         assert_eq!(collector.failure(), Some("no capabilities are configured"));
+    }
+
+    // Catches: Cancel arriving before generation still allowing a new model process.
+    #[test]
+    fn one_shot_cancel_before_claim_revokes_the_reserved_handle() {
+        let requests = OneShotRequests::default();
+        let id = requests.reserve();
+        assert!(requests.cancel(&id));
+        assert!(requests.claim(&id).is_err());
+        assert!(!requests.cancel(&id));
+    }
+
+    // Catches: cancelling one fill stopping a sibling or allowing the same reservation to launch twice.
+    #[tokio::test]
+    async fn one_shot_cancel_wakes_only_the_owned_claimed_turn() {
+        let requests = OneShotRequests::default();
+        let first = requests.reserve();
+        let second = requests.reserve();
+        let mut receiver = requests.claim(&first).unwrap();
+        let sibling = requests.claim(&second).unwrap();
+        assert!(requests.claim(&first).is_err());
+        assert!(requests.cancel(&first));
+        receiver.changed().await.unwrap();
+        assert!(*receiver.borrow());
+        assert!(!*sibling.borrow());
     }
 
     fn permission_asked(request_id: AcpHostRequestId) -> AcpClientEvent {

@@ -5,14 +5,21 @@ import "../../mocks/tauri";
 
 // Deep-linking to `settings-upstream-mcp` opens the MCP tab, which mounts
 // `LocalMcpPanel` and `UpstreamMcpPanel` — both call several `rpc()` commands
-// on mount, and the test disposes before any of them settle. Stub the whole
-// transport instead of each resource: the fetches are incidental to what
-// these cases assert (scroll position), and every one has to keep working for
-// the panel to render at all.
-vi.mock("../../../transport", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../transport")>()),
-	rpc: vi.fn(async () => []),
-}));
+// on mount. Stub the transport instead of each resource: the fetches are
+// incidental to the scroll assertions, but load_config still needs the real
+// config shape so the mounted MCP page can adopt it without a reload failure.
+vi.mock("../../../transport", async (importOriginal) => {
+	const { default: defaults } = await import("../../fixtures/settings-concurrency/app-defaults.json");
+	const config = {
+		...defaults,
+		// Current McpCapabilities::default(); the recorded snapshot predates this field.
+		mcp_capabilities: { denied: ["settings", "diagnostics"], migration_unknown_tools: [] },
+	};
+	return {
+		...(await importOriginal<typeof import("../../../transport")>()),
+		rpc: vi.fn(async (command: string) => (command === "load_config" ? structuredClone(config) : [])),
+	};
+});
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
@@ -43,6 +50,8 @@ vi.mock("../../../stores/repositories", () => ({
 
 import { SettingsPanel } from "../../../components/SettingsPanel/SettingsPanel";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../../components/SettingsPanel/sections";
+import { appLogger } from "../../../stores/appLogger";
+import { rpc } from "../../../transport";
 
 /** Run the frame the scroll effect schedules. */
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
@@ -57,6 +66,21 @@ describe("SettingsPanel — deep link to a section", () => {
 		Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
 			scrolled.push(this);
 		};
+	});
+
+	// Catches: an array-shaped load_config stub makes the mounted MCP settings reload fail.
+	it("does not report a config reload failure when the MCP deep link mounts", async () => {
+		const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		try {
+			render(() => (
+				<SettingsPanel visible onClose={() => {}} initialTab="mcp" initialSection={SETTINGS_SECTION_UPSTREAM_MCP} />
+			));
+			await nextFrame();
+			expect(rpc).toHaveBeenCalledWith("load_config");
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it("scrolls the upstream MCP block into view when asked for it", async () => {
