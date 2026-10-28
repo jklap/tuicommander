@@ -88,6 +88,17 @@ pub(super) fn read_plan_stories(conn: &Connection, plan_id: &str) -> Result<Vec<
         .collect()
 }
 
+/// A new edge must not hide unfinished work behind the archive filter.
+pub(super) fn require_actionable_dependency(dependency: &Story) -> Result<(), String> {
+    if dependency.archived && dependency.status != StoryStatus::Done {
+        return Err(format!(
+            "dependency {} is archived and unresolved; restore it first",
+            dependency.id
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn check_revision(story: &Story, expected: i64) -> Result<(), String> {
     if story.revision != expected {
         return Err(format!(

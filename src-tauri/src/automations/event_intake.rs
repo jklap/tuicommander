@@ -66,8 +66,9 @@ pub(crate) fn admit_issues(
 }
 
 /// The poller's latest issues per repository, kept so a capacity-refused issue is
-/// retried. The poller emits only on change, so a lost update must empty it:
-/// retrying a stale snapshot would run an issue whose label was withdrawn.
+/// retried. The poller emits intake snapshots on every successful poll. A lost
+/// update must empty this cache until resync: retrying a stale snapshot would run
+/// an issue whose label was withdrawn.
 #[derive(Default)]
 pub(crate) struct IssueSnapshot(std::collections::HashMap<String, Vec<GitHubIssue>>);
 

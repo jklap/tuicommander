@@ -236,33 +236,33 @@ Config domains write through `ConfigFile<T>`:
 
 ```rust
 impl<T: Serialize + DeserializeOwned + Default> ConfigFile<T> {
-    pub fn load(&self) -> (T, Stamp)
     pub fn update<F: FnOnce(&mut T) -> bool>(&self, mutate: F) -> Result<(), String>
     pub fn update_with<R, F>(&self, mutate: F) -> Result<R, String>
     pub fn update_with_strict<R, F>(&self, mutate: F) -> Result<R, String>
-    pub fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError>
     pub fn save_delta(&self, base: &T, desired: &T) -> Result<(), String>
-    pub fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String>
-    pub fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String>
-    pub fn save(&self, value: &T) -> Result<(), String>
+    pub fn read_preserving_invalid(&self) -> Result<T, String>
+    // Available with the dictation feature or in tests:
+    pub fn save_delta_normalized(
+        &self, base: &T, desired: &T, recover_invalid: bool,
+        normalize: impl FnOnce(T) -> T,
+    ) -> Result<(), String>
 }
 ```
 
 Two locks protect every write: an in-process `CONFIG_WRITE_LOCK` mutex, and a
 cross-process advisory file lock (`std::fs::File::lock()` on a sibling
 `<file>.lock`) that serializes writers across the debug/release instances that
-now share one config dir. `save_checked` additionally compares a `Stamp`
-(mtime+len, captured at `load()`) against the file's current on-disk state and
-returns `ConfigWriteError::Conflict` instead of overwriting a change it never
-saw. Interactive per-domain saves use `save_delta`: each request carries the
-snapshot loaded by that client (`base`) and its edited document (`config`). The
+now share one config dir. Interactive per-domain saves use `save_delta`: each
+request carries the snapshot loaded by that client (`base`) and its edited document (`config`). The
 server applies only the base-to-config changes to the latest locked file. Object
 keys merge recursively, arrays replace as a unit, and JSON null deletes a key.
 Null also deletes a key within a newly added nested object, so that key is not
 persisted there.
-`save_delta_strict` uses the same rules but refuses to replace a corrupt notes
-file. Dictation's recovery save rechecks under the lock: it repairs a file that
-is still malformed, or merges its edit into a valid file saved meanwhile.
+Notes saves use `update_with_strict` with ID-keyed note deltas and refuse to
+replace a corrupt file. Dictation uses `save_delta_normalized` to normalize the
+latest document and apply the caller's delta under both locks. If its strict read
+fails, it writes the desired document only when `recover_invalid` is true;
+otherwise it returns the error. A valid file saved meanwhile receives the delta.
 Remote connection edits use the same JSON delta per connection id; they also
 hold the shared file lock while reading and writing `connections.json`.
 `config.json` (`AppConfig`) and `mcp-upstreams.json` also merge deltas under
@@ -270,20 +270,24 @@ the lock. `repositories.json` uses the ID-keyed optimistic delta protocol
 documented below. See
 [`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
 
-### Corrupt Files Are Moved Aside, Never Overwritten
+### Corrupt File Handling
 
-A config file that exists but does not parse is renamed to
-`<name>.corrupt-<uuid>` before anything falls back to defaults
+Strict loads attempt to rename a config file that does not parse to
+`<name>.corrupt-<uuid>` before returning an error
 (`preserve_corrupt_config`). The UUID is fresh per occurrence on purpose: a fixed
 backup name would let a second corrupt load erase the document the first one
 saved, which is the same data loss one step removed. Nothing ever deletes these
 files — recovery is by hand.
 
-Two entry points reach it. `load_json_config_strict` refuses to return `Default`
-for a broken file on the **read** side (`notes.json`, GH #107), and
+Two strict entry points reach it. `load_json_config_strict` refuses to return
+`Default` for a broken file on the **read** side (`notes.json`, GH #107), and
 `update_with_strict` does the same on the **write** side, so a read-modify-write
 aborts instead of persisting `Default` over real data (`repositories.json`,
-`mcp-upstreams.json`).
+`mcp-upstreams.json`). Missing files still start from `Default`. Ordinary
+`update_with` and `save_delta` use the non-strict loader, which logs read or parse
+errors and returns defaults without moving the file aside.
+`read_preserving_invalid` instead returns an error without moving invalid input,
+so repeated safety checks cannot mistake quarantined data for an empty default.
 
 `config.json` reaches neither, because `load_app_config` must return an
 `AppConfig` and has no error channel to a caller. It preserves the file directly:

@@ -59,11 +59,16 @@ export const LocalMcpPanel: Component = () => {
 		}),
 	);
 
+	const capabilityDenied = (name: string) =>
+		deniedCapabilities().includes(name) || (name === "settings" && !settingsEnabled());
 	const capabilityRow = (capability: McpCapability) => {
-		const disabled = () =>
-			deniedCapabilities().includes(capability.name) || (capability.name === "settings" && !settingsEnabled());
+		const parentDenied = () => capability.parent !== null && capabilityDenied(capability.parent);
+		const hint = () =>
+			parentDenied()
+				? `${capability.description} Enable ${capabilities.find((parent) => parent.name === capability.parent)?.title ?? capability.parent} to change this capability. Its saved preference is retained.`
+				: capability.description;
 		return (
-			<SettingRow label={capability.title} hint={capability.description}>
+			<SettingRow label={capability.title} hint={hint()}>
 				{(id, descriptionId) => (
 					<Switch
 						role="checkbox"
@@ -71,7 +76,8 @@ export const LocalMcpPanel: Component = () => {
 						id={id}
 						aria-describedby={descriptionId()}
 						aria-label={capability.title}
-						checked={!disabled()}
+						checked={!parentDenied() && !capabilityDenied(capability.name)}
+						disabled={parentDenied()}
 						onChange={(event) => {
 							const enabled = event.currentTarget.checked;
 							const updated = enabled

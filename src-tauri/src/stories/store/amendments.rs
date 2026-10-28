@@ -100,6 +100,9 @@ impl StoryStore {
                 if dependency.plan_id != story.plan_id {
                     return Err("dependencies must belong to one plan".into());
                 }
+                if !story.dependencies.contains(id) {
+                    require_actionable_dependency(&dependency)?;
+                }
                 let mut stack = vec![id.clone()];
                 while let Some(next) = stack.pop() {
                     if next == story.id {

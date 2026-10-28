@@ -32,6 +32,11 @@ export function listen<T>(event: string, handler: (event: Event<T>) => void): Pr
 - **Tauri mode:** Delegates directly to `@tauri-apps/api/core.invoke()` (zero overhead)
 - **Browser mode:** Maps command to HTTP endpoint via `transport.ts`
 
+In development, an exact local IPC `Command <requested command> not found`
+rejection becomes a backend/frontend version mismatch error with manual restart
+guidance. Both deduplicated reads and writes use this diagnosis. Other failures,
+release builds, browser HTTP calls and remote-owner calls keep their original errors.
+
 ### In-flight dedup (Tauri mode)
 
 Concurrent identical calls for read-only commands in `DEDUP_COMMANDS` share a single IPC round-trip — the second caller gets the same `Promise` as the first, cleared on settle. Prevents the `repo-changed` fan-out storm where ~20 mounted components each spawned parallel git processes for the same repo. Mutations (stage/commit/push) are never deduped. Browser mode has the equivalent via `isIdempotentRpc` in `transport.ts`.
