@@ -1,3 +1,8 @@
+## Bare repository inventory (2413-19e4) — Rust restart required
+
+- [ ] Coordinator: run `bare_main_entry_has_no_missing_checkout_diagnostic`, `sidebar_removal_identity_2334_candidate_states`, `orphan_validation_refuses_a_bare_repository_entry`, and `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` on the final commit. The pre-fix CLI regression reproduced on native macOS after build-slot automatically fell back from an unavailable rb status probe; no post-fix GREEN run was made.
+- [ ] After an authorized `make dev` restart or `make build`, refresh a bare repository and one of its linked checkouts. Bare metadata must not show repair guidance; real missing linked registrations must still do so. The daily app was not restarted; Rust does not hot-reload.
+
 ## Archived external worktrees (2412-11f3) — Rust restart required
 
 - [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.

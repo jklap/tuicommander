@@ -991,6 +991,7 @@ impl GitReads for GixGitReads {
             let branch = crate::git::read_branch_from_head(&path);
             entries.push(crate::worktree::WorktreeEntry {
                 path: git_spelling(&path.to_string_lossy()),
+                bare: false,
                 detached: branch.is_none() && !head.trim().is_empty() && !head.starts_with("ref:"),
                 branch,
                 head: head.trim().to_string(),
