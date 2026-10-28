@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Index native stories and notes through the mdkb daemon without project files; preserve mutations while the daemon is down and reconcile durable revisions on reconnect (#2333-b498).
+
 ### Changed
 
 - Shorten the terminal Compose newline hint to Ctrl+Enter and hide shortcut hints in compact panels instead of wrapping (#2411-c7c9).

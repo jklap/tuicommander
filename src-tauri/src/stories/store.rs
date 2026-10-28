@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 mod amendments;
 mod archive;
+mod ingest;
 mod notes;
 #[cfg(test)]
 mod plan_update_tests;
@@ -20,11 +21,12 @@ mod qa_tests;
 mod records;
 mod transitions;
 
+pub(super) use ingest::IngestVersion;
 use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug)]
 pub struct StoryStore {
@@ -195,6 +197,9 @@ impl StoryStore {
                     "ALTER TABLE plans ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
                 )
                 .map_err(|e| format!("add plan archive metadata: {e}"))?;
+            }
+            if current < 6 {
+                ingest::migrate(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("save story schema version: {e}"))?;

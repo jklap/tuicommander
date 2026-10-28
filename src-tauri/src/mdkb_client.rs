@@ -3,6 +3,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
+/// The generic external-ingest contract owned by mdkb (030-9ce2).
+#[derive(Debug, Clone, Serialize)]
+pub struct ExternalDocument {
+    pub title: String,
+    pub body: String,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExternalRecord {
+    pub id: String,
+    pub revision: i64,
+    pub document_id: Option<i64>,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MdkbPing {
     pub pong: bool,
@@ -418,6 +434,73 @@ mod platform {
 }
 
 pub use platform::MdkbClient;
+
+impl MdkbClient {
+    pub async fn external_list(&mut self, root: &str, source: &str) -> Result<Vec<ExternalRecord>> {
+        #[derive(Deserialize)]
+        struct Listing {
+            documents: Vec<ExternalRecord>,
+        }
+        let result = self
+            .call(
+                "external.list",
+                serde_json::json!({ "root": root, "source": source }),
+            )
+            .await?;
+        Ok(serde_json::from_value::<Listing>(result)?.documents)
+    }
+
+    pub async fn external_upsert(
+        &mut self,
+        root: &str,
+        source: &str,
+        id: &str,
+        revision: i64,
+        document: ExternalDocument,
+    ) -> Result<ExternalRecord> {
+        let params = serde_json::json!({
+            "root": root, "source": source, "id": id, "revision": revision,
+            "title": document.title, "body": document.body, "metadata": document.metadata,
+        });
+        self.external_mutation("external.upsert", params, id, revision)
+            .await
+    }
+
+    pub async fn external_delete(
+        &mut self,
+        root: &str,
+        source: &str,
+        id: &str,
+        revision: i64,
+    ) -> Result<ExternalRecord> {
+        self.external_mutation(
+            "external.delete",
+            serde_json::json!({
+                "root": root, "source": source, "id": id, "revision": revision,
+            }),
+            id,
+            revision,
+        )
+        .await
+    }
+
+    async fn external_mutation(
+        &mut self,
+        method: &str,
+        params: Value,
+        id: &str,
+        revision: i64,
+    ) -> Result<ExternalRecord> {
+        let record: ExternalRecord = serde_json::from_value(self.call(method, params).await?)?;
+        if record.id != id
+            || record.revision < revision
+            || record.deleted != record.document_id.is_none()
+        {
+            bail!("mdkb: inconsistent {method} acknowledgement");
+        }
+        Ok(record)
+    }
+}
 
 #[cfg(all(test, unix))]
 pub(crate) mod tests {
