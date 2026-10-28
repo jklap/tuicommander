@@ -1922,8 +1922,8 @@ mod tests {
                 if inventory.worktree_paths.contains_key("archived-external") {
                     exposed.push(format!("{name}: {case}"));
                 }
-                assert!(inventory.detached_worktrees.is_empty());
-                assert!(inventory.worktree_diagnostics.is_empty());
+                assert_eq!(inventory.detached_worktrees, []);
+                assert_eq!(inventory.worktree_diagnostics, []);
             }
             // Removal must retain access to pooled registrations.
             assert!(
