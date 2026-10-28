@@ -713,3 +713,69 @@ async fn api_error_2335_inventory_reaches_session_error() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Catches: archived tool diagnostics latch the live Claude session error badge.
+#[tokio::test]
+async fn quoted_tool_auth_output_does_not_latch_api_error() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-tool-auth-output-2429.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "quoted-tool-auth-2429";
+    let (state, silence) = chunk_trace_state(sid);
+    // Exercise an established session, not startup's blanket error suppression.
+    silence.lock().startup_settled = true;
+    state.config.write().progress_tracking = false;
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(rows, cols);
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut visible_diagnostic = false;
+    let mut errors = Vec::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escapes.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let screen = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .screen_rows();
+        visible_diagnostic |= screen
+            .iter()
+            .any(|row| row.contains("Authentication required in archived diagnostic"));
+        if let Some(error) = state.session_state_with_shell(sid).unwrap().last_error {
+            errors.push(error);
+        }
+    }
+    assert!(
+        visible_diagnostic,
+        "real tool diagnostics must reach the terminal grid"
+    );
+    assert!(
+        errors.is_empty(),
+        "successful tool output became agent failures: {errors:?}"
+    );
+}

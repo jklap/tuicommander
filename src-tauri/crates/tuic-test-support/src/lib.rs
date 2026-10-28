@@ -46,6 +46,22 @@ const TEST_GITCONFIG: &str = "\
 \tautocrlf = false
 ";
 
+static OWNED_GIT_CONFIG: std::sync::OnceLock<(u32, std::path::PathBuf)> =
+    std::sync::OnceLock::new();
+
+// Normal exit (including process::exit) runs this finalizer. Abort, SIGKILL and
+// other termination that skips finalizers can still leave the owned file behind.
+#[ctor::dtor]
+fn remove_test_git_config() {
+    if let Some((owner, path)) = OWNED_GIT_CONFIG.get()
+        && *owner == std::process::id()
+    {
+        // Tests may replace GIT_CONFIG_GLOBAL or change cwd. Never derive the
+        // cleanup target from their environment, or remove a fork parent's file.
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Point every git process this test binary starts — the fixtures' own `git`
 /// calls and the production code under test alike — at [`TEST_GITCONFIG`]
 /// instead of the developer's global and system config. A global
@@ -57,8 +73,13 @@ const TEST_GITCONFIG: &str = "\
 fn isolate_git_config(root: &std::path::Path) {
     // Each live process owns its pathname. Starting another nextest worker must
     // not change the mtime used by an existing worker's Git config cache.
-    let path = root.join(format!("gitconfig.{}", std::process::id()));
+    let owner = std::process::id();
+    let path = std::path::absolute(root.join(format!("gitconfig.{owner}")))
+        .expect("resolve the test gitconfig path");
     std::fs::write(&path, TEST_GITCONFIG).expect("write the test gitconfig");
+    OWNED_GIT_CONFIG
+        .set((owner, path.clone()))
+        .expect("record the process-owned test gitconfig");
     // SAFETY: called from the process constructor, before libtest starts threads.
     unsafe {
         std::env::set_var("GIT_CONFIG_GLOBAL", &path);
@@ -395,6 +416,83 @@ mod tests {
                 None,
                 "{leaked} leaked in from the developer's git config"
             );
+        }
+    }
+
+    // Catches: each completed worker leaving its constructor-created config behind,
+    // or teardown deleting a replacement config selected by a test.
+    #[test]
+    fn test_process_removes_its_isolated_gitconfig_on_exit() {
+        let parent = std::path::PathBuf::from(std::env::var_os("GIT_CONFIG_GLOBAL").unwrap());
+        let parent_bytes = std::fs::read(&parent).unwrap();
+        let parent_modified = std::fs::metadata(&parent).unwrap().modified().unwrap();
+        for mode in ["return", "exit", "override"] {
+            let dir = tempfile::tempdir_in(super::test_temp_root()).unwrap();
+            let report = dir.path().join("config-path");
+            let unrelated = dir.path().join("gitconfig.unrelated");
+            std::fs::write(&unrelated, "preserve this config").unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::gitconfig_exit_probe_child",
+                    "--nocapture",
+                ])
+                .env("TUIC_TEST_TMP_ROOT", dir.path())
+                .env("TUIC_GITCONFIG_EXIT_REPORT", &report)
+                .env("TUIC_GITCONFIG_EXIT_MODE", mode)
+                .env("TUIC_GITCONFIG_REPLACEMENT", &unrelated)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let child_path = std::path::PathBuf::from(std::fs::read_to_string(report).unwrap());
+            assert!(child_path.starts_with(dir.path()));
+            assert_ne!(child_path, parent);
+            assert_eq!(std::fs::read(&parent).unwrap(), parent_bytes);
+            assert_eq!(
+                std::fs::metadata(&parent).unwrap().modified().unwrap(),
+                parent_modified
+            );
+            assert_eq!(
+                std::fs::read_to_string(unrelated).unwrap(),
+                "preserve this config"
+            );
+            assert!(
+                !child_path.exists(),
+                "{mode}: completed test process retained {}",
+                child_path.display()
+            );
+        }
+    }
+
+    // Child half of the exit regression: observe the real constructor's config.
+    #[test]
+    fn gitconfig_exit_probe_child() {
+        let Some(report) = std::env::var_os("TUIC_GITCONFIG_EXIT_REPORT") else {
+            return;
+        };
+        let path = std::path::PathBuf::from(std::env::var_os("GIT_CONFIG_GLOBAL").unwrap());
+        assert!(path.is_file());
+        assert_only_test_gitconfig();
+        std::fs::write(report, path.to_str().unwrap()).unwrap();
+        match std::env::var("TUIC_GITCONFIG_EXIT_MODE").unwrap().as_str() {
+            "exit" => std::process::exit(0),
+            "override" => {
+                // SAFETY: this re-exec runs only this probe; no concurrent test
+                // or subprocess reads the environment after this point.
+                unsafe {
+                    std::env::set_var(
+                        "GIT_CONFIG_GLOBAL",
+                        std::env::var_os("TUIC_GITCONFIG_REPLACEMENT").unwrap(),
+                    );
+                }
+            }
+            "return" => {}
+            mode => panic!("unexpected exit mode: {mode}"),
         }
     }
 

@@ -237,8 +237,8 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		/** Launch ego on a repo root and read everything that connection holds. */
-		async connect(root: string): Promise<AcpConnectionSnapshot> {
-			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root }));
+		async connect(root: string, env?: Record<string, string>): Promise<AcpConnectionSnapshot> {
+			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root, ...(env !== undefined ? { env } : {}) }));
 		},
 
 		/**
