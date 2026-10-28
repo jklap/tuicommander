@@ -316,6 +316,12 @@ own sibling `.d`. Vite does not guess an mbx target directory. Source archives
 with build artifacts can work without Git (the SHA is diagnostic only). Release
 builds do not expose launch identity or include the warning module.
 
+A local IPC failure such as `Command select_ai_chat_conversation not found` also
+reports a **Backend/frontend version mismatch** in development. Restart `make dev`
+(or `pnpm tauri dev`) when you are ready to end the backend session. A frontend
+reload or Retry cannot add a missing command to the running binary. AI Chat hides
+Retry for this failure. This does not change release or remote-owner errors.
+
 ### Browser Mode
 
 When the MCP server is enabled in settings, the frontend can run standalone:

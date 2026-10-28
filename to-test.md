@@ -1,3 +1,9 @@
+## Development backend command mismatch (2409-aa48)
+
+- [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
+
+- [ ] Coordinator critic: run `dev_missing_command_explains_backend_frontend_mismatch_without_retry`, `src/__tests__/invoke.test.ts`, and the existing backend-skew startup/HMR tests. The implementation lane reproduced the pre-fix raw command error and Retry; post-fix GREEN belongs to integration. TypeScript passes locally. No Rust changes or daily-app restart.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
