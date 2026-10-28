@@ -3293,6 +3293,8 @@ Plugin HTTP requests accept AbortSignal cancellation through both desktop IPC an
 
 Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
 
+Mobile terminal streaming restarts on visibility return after retry exhaustion retires its subscription; confirmed ended sessions do not reopen (#2422-a267).
+
 Mobile outage recovery: failed navigation shows a self-contained cached connection test with the server address, last error, manual retry and automatic backoff. It reopens the original address when the server returns. The running app shows a connection-test card for API or terminal-stream outages; bounded session reads and automatic recovery refresh failed view loads while mounted views preserve drafts (#1930-f4c2, #2294-078f).
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
@@ -3443,7 +3445,7 @@ percentage used and client-local reset times. The session menu scrolls inside th
 remaining session pane, below banners and above navigation. Markdown entries are
 unique by absolute file path; files in different worktrees remain separate.
 
-Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
+Worktree discovery diagnostics: forced duplicate-branch checkouts remain visible as read-only paths, missing or moved registrations show repair guidance without automatic pruning, and a folded repository retains a diagnostic count. Bare repository metadata is excluded from missing-checkout diagnostics, including discovery from its linked checkouts. Discovery errors are reported and not cached as empty success. Bisect and relative-gitdir rebase preserve branch identity.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 

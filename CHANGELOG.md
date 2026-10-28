@@ -29,6 +29,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).
 
+- Settle unspawned workflow implementation attempts from approved manual QA instead of launching another implementer on resume; keep non-startable stories paused (#2416-52e8).
+- Do not show bare repository metadata as a missing checkout, including when refreshing from a linked worktree (#2413-19e4).
+
+- Keep TUIC-archived external worktrees and former-storage checkouts out of live sidebar and MCP inventory without hiding unrelated `__archived` folders (#2412-11f3).
+- Stop stable idle timer ticks from repeatedly retrying orchestrator mail wakes blocked by a user draft; retry on new Ready confirmation without changing queued-command flushing (#2418-fd33).
+- Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
 - Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
 - Recover live but unresponsive stdio MCP upstreams after two consecutive failed health probes, without changing ordinary tool-call reply timeout behavior or respawn throttling (#2417-793a).
 
