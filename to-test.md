@@ -1,3 +1,10 @@
+## Headless file credentials (2343-5358) — daemon rebuild/restart required
+
+- [ ] Coordinator critic: verify the final Linux unsupervised update/relaunch uses the startup executable path and authenticates the rotated file token. The captured pre-fix running executable had the Linux ` (deleted)` suffix and restart failed with OS error 2. Rebuild the daemon to load the fix; no daily app restart was performed.
+
+- [ ] Coordinator critic: run `headless_credential_file_selector_is_accepted`, `credential_file_is_fail_closed_read_once_and_process_local`, `headless_credential_file_boots_without_a_session_bus` and `headless_credential_file_rejects_bad_input_without_secret_diagnostics`. The CLI regression failed on pre-fix Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After rebuilding the headless binary, launch a disposable named instance with `--credential-file` and a read-only seed on unprivileged Linux without a session bus. Authenticate with the seeded token, replace the file, confirm the old token remains active until restart, then confirm the replacement token works. Rust does not hot-reload. The daily app was not restarted; desktop defaults are unchanged.
+
 ## Remote Untrusted Host retry (2438-4c2f) — Rust restart required
 
 - [x] Live mac-mint probes reproduce HTTP 403 for the full MagicDNS name and HTTP 200 for its IP and short hostname. The pre-fix rb regression received three health requests instead of one. Evidence: `src-tauri/src/fixtures/remote/untrusted-host.md` and `~/Gits/.tmp/results/tuic-2438-evidence/red.log`.

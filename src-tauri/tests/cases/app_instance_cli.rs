@@ -216,6 +216,189 @@ fn named_debug_vault_ignores_and_does_not_mutate_default_legacy_entries() {
     );
 }
 
+// Catches selected credentials still requiring a session bus or the debug vault.
+#[test]
+fn headless_credential_file_boots_without_a_session_bus() {
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("mounted-vault.json");
+    let contents = r#"{"remote/session-token":"mounted-file-token"}"#;
+    fs::write(&seed, contents).unwrap();
+    run_cli_until_killed_with_vars(
+        &env,
+        &[
+            "--instance",
+            NAMED_ID,
+            "--credential-file",
+            seed.to_str().unwrap(),
+            "--no-agent-configs",
+        ],
+        "mounted-file-token",
+        &[(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent-tuic-test-bus",
+        )],
+    );
+    assert_eq!(fs::read_to_string(seed).unwrap(), contents);
+    assert!(!env.named_vault(NAMED_ID).exists());
+    assert!(!env.debug_vault().exists());
+    if env.named_config(NAMED_ID).exists() {
+        let config = fs::read_to_string(env.named_config(NAMED_ID)).unwrap();
+        assert!(!config.contains("mounted-file-token"));
+    }
+}
+
+// Catches automatic update/relaunch forwarding the old token over a rotated seed.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_credential_file_rotation_wins_after_automatic_update() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::process::CommandExt;
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("mounted-vault.json");
+    fs::write(&seed, r#"{"remote/session-token":"before-update"}"#).unwrap();
+    // The update replaces only this disposable copy, never the build artifact.
+    let executable = env._dir.path().join("tuic-remote");
+    fs::copy(env!("CARGO_BIN_EXE_tuic-remote"), &executable).unwrap();
+    let binary = fs::read(&executable).unwrap();
+    let digest = hex::encode(Sha256::digest(&binary));
+    let port = isolated_port();
+    let mut child = Command::new(&executable)
+        .args([
+            "--instance",
+            NAMED_ID,
+            "--credential-file",
+            seed.to_str().unwrap(),
+            "--no-agent-configs",
+        ])
+        .env("HOME", &env.home)
+        .env("XDG_CONFIG_HOME", &env.config)
+        .env("APPDATA", &env.appdata)
+        .env("USERPROFILE", &env.userprofile)
+        .env("TUIC_PORT", port.to_string())
+        .env_remove("TUIC_PAIRING_TOKEN")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent-tuic-test-bus",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = i32::try_from(child.id()).unwrap();
+    // Always reap our own process group, including the automatic relaunch child.
+    let result = std::panic::AssertUnwindSafe(async {
+        assert!(matches!(
+            wait_for_ready_or_exit(&mut child, port, READY_SETUP_TIMEOUT, |p| {
+                probe_authenticated_session_once(p, "before-update")
+            }),
+            ReadinessOutcome::Ready
+        ));
+        let client = reqwest::Client::builder()
+            .timeout(READY_SETUP_TIMEOUT)
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let health: serde_json::Value = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rotated = r#"{"remote/session-token":"after-update"}"#;
+        fs::write(&seed, rotated).unwrap();
+        let response = client
+            .post(format!("{base}/remote/update"))
+            .header("Cookie", "tui-session=before-update")
+            .header("x-tuic-target", health["build"]["target"].as_str().unwrap())
+            .header("x-tuic-sha256", digest)
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(binary)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        #[cfg(target_os = "linux")]
+        let replaced_executable = fs::read_link(format!("/proc/{group}/exe"));
+        let deadline = Instant::now() + READY_SETUP_TIMEOUT;
+        while !probe_authenticated_session_once(port, "after-update") {
+            #[cfg(target_os = "linux")]
+            if Instant::now() >= deadline {
+                eprintln!("daemon executable after replacement: {replaced_executable:?}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "automatic relaunch did not authenticate the rotated credential-file token"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            !probe_authenticated_session_once(port, "before-update"),
+            "automatic relaunch retained the old credential-file token"
+        );
+        assert_eq!(fs::read_to_string(&seed).unwrap(), rotated);
+    });
+    use futures_util::FutureExt;
+    let outcome = result.catch_unwind().await;
+    // SAFETY: this group was created above for this test's daemon only.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+    if let Err(panic) = outcome {
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        eprintln!("automatic update daemon stderr: {stderr}");
+        std::panic::resume_unwind(panic);
+    }
+}
+
+// Catches bad mounted data silently falling back to a keyring or empty vault.
+#[test]
+fn headless_credential_file_rejects_bad_input_without_secret_diagnostics() {
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("bad-vault.json");
+    for contents in [
+        None,
+        Some(r#"{"secret-do-not-log":42}"#),
+        Some("secret-do-not-log"),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&seed, contents).unwrap();
+        }
+        let output = run_cli_with_vars(
+            &env,
+            &[
+                "--instance",
+                NAMED_ID,
+                "--credential-file",
+                seed.to_str().unwrap(),
+            ],
+            None,
+            &[(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-tuic-test-bus",
+            )],
+        );
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("credential file"));
+        assert!(!stderr.contains("secret-do-not-log"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("secret-do-not-log"));
+        assert!(!env.named_config(NAMED_ID).exists());
+    }
+}
+
 #[test]
 fn default_set_password_preserves_legacy_config() {
     let env = IsolatedEnv::new();
@@ -455,6 +638,15 @@ const REAP_AFTER_KILL_TIMEOUT: Duration = Duration::from_secs(5);
 /// never accidentally probe with a different instance's secret; it is never
 /// logged.
 fn run_cli_until_killed(env: &IsolatedEnv, args: &[&str], token: &str) {
+    run_cli_until_killed_with_vars(env, args, token, &[]);
+}
+
+fn run_cli_until_killed_with_vars(
+    env: &IsolatedEnv,
+    args: &[&str],
+    token: &str,
+    vars: &[(&str, &str)],
+) {
     // Pay any first-run exec-scan cost once, outside every timed assertion
     // below, so it can never be mistaken for slow CLI startup.
     warm_cli_binary(env);
@@ -470,6 +662,7 @@ fn run_cli_until_killed(env: &IsolatedEnv, args: &[&str], token: &str) {
             .env("APPDATA", &env.appdata)
             .env("USERPROFILE", &env.userprofile)
             .env("TUIC_PORT", port.to_string())
+            .envs(vars.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());

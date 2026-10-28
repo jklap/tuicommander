@@ -122,8 +122,15 @@ uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
 scan, import, modify, or delete default or legacy credential entries, including
 the dynamic legacy MCP credential locations. Release `tuic-remote` probes a
 named vault before binding its socket and exits on failure; it does not interpret
-a keyring error as an empty vault or fall back to a file. Debug builds retain the
-file-backed credential adapter, scoped below the selected instance directory.
+a keyring error as an empty vault or silently fall back to a file.
+`tuic-remote --credential-file <path>` explicitly selects a read-once JSON vault
+map instead: no OS keyring or legacy migration is used, including for missing
+slots. Credential writes are process-local; the seed file is never modified.
+Unreadable or malformed input stops startup before listeners bind, with no input
+contents in the diagnostic. Rotate by replacing the file and restarting; API
+credential edits do not survive restart. This selector is not a config JSON field
+and does not change desktop defaults. See the remote-access guide for setup.
+Debug builds retain the file-backed credential adapter, scoped below the selected instance directory.
 Instance selection precedes `--set-password`, so password setup writes only to
 the selected namespace.
 

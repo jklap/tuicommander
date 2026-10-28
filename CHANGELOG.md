@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Allow headless release daemons to use `--credential-file` with a read-once mounted JSON vault and process-local credential changes, without an OS keyring or session bus (#2343-5358).
 - Draft a New story from a plain request with **Fill with AI**, review every field before saving, and cancel the owned model turn without discarding the request (#2357-a8f2).
 - Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
 - Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
@@ -34,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
+
+- Relaunch updated Linux headless daemons from their startup executable path instead of the deleted running inode (#2343-5358).
 
 - Stop automatic remote connection retries after HTTP 403 Untrusted Host, retain the cause and manual reconnect, and log unchanged failures only once (#2438-4c2f).
 - Apply the existing subagent-silence setting to mobile/PWA sounds and session Web Push, preserving parentage across asynchronous exit teardown (#2342-4a1c).

@@ -724,9 +724,42 @@ The default instance keeps the platform paths listed in
 keyring entry. A named instance instead stores files in the corresponding
 `instances/<id>/` subdirectory and uses keyring service
 `tuicommander-instance-<id>`, user `vault`. It starts empty: it never falls back
-to, imports, changes, or deletes default or legacy files and credentials. In a
-release build the OS keyring is mandatory; if a named instance's vault cannot be
-opened, the daemon exits before binding its network socket.
+to, imports, changes, or deletes default or legacy files and credentials. The OS keyring remains the default in release builds. If a named instance's
+selected vault cannot be opened, the daemon exits before binding its network socket.
+
+#### Mounted credentials without an OS keyring
+
+For an unprivileged Linux daemon without a session bus, select a private JSON
+file explicitly. This option works in release builds and does not enable the
+debug credential store:
+
+```bash
+./tuic-remote --instance build-host --credential-file /run/secrets/tuic-vault.json --no-agent-configs
+```
+
+The file is a JSON object whose keys are vault slots and whose values are strings:
+
+```json
+{"remote/session-token": "replace-with-a-private-random-token"}
+```
+
+Use that session token to authenticate protected HTTP requests. Keep the file
+private and mount it read-only if possible. The daemon reads it once before any
+credential access. A missing, unreadable or malformed file stops boot with a
+content-free diagnostic; there is no keyring or legacy-vault fallback, even for
+missing slots. The option does not put credentials in config JSON or logs.
+
+This is a file-seeded **process-local** source: credential changes made through
+APIs remain in memory, never update the selected file, and are lost on restart.
+Other configuration changes can still be persisted normally. To rotate a token,
+replace the mounted file and restart the daemon; live file changes do not reload
+credentials. Each process reads its own snapshot. An automatic daemon relaunch
+uses the startup executable path after binary replacement, retains the file
+option and rereads the file; a service supervisor must retain it
+in its launch command. Do not share a seed across instances unless they are meant
+to share secrets. `--set-password` cannot be combined with this option; use a
+seeded session token, or the default keyring source for durable password setup.
+The desktop default is unchanged.
 
 Automation that depends on this isolation contract must pin and verify the
 digest of the release artifact it launches. Artifact verification belongs to

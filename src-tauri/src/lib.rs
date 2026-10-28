@@ -2988,6 +2988,12 @@ pub struct RemoteOptions {
     pairing_token: Option<String>,
 }
 
+/// Select a mounted, read-once credential seed before headless startup.
+#[cfg(not(feature = "desktop"))]
+pub fn select_remote_credential_file(path: &std::path::Path) -> Result<(), String> {
+    credentials::select_credential_file(path)
+}
+
 /// Read-only metadata for selecting a locally built daemon binary.
 pub fn remote_build_info_json() -> Result<String, String> {
     let build = remote_deploy::assets::running_build_identity()?;
@@ -3088,6 +3094,11 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     app_logger::init_tracing(log_buffer.clone());
 
     let mut app_config = config::load_app_config();
+    if credentials::credential_file_selected() {
+        // A first boot has no config.json, so the config reader returns defaults
+        // without hydration. Mounted credentials still apply to that first boot.
+        let _ = config::hydrate_app_config_secrets(&mut app_config);
+    }
     // Reject invalid key material before starting either IPC or TCP listeners.
     let tls_config = load_remote_tls(&app_config.services.tls).await?;
     app_config.services.server.enabled = true;
@@ -3140,8 +3151,9 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
     let restart = Arc::new(tokio::sync::Notify::new());
+    let executable = std::env::current_exe()?;
     app_state.remote_update = Some(remote_update::RemoteUpdateState {
-        executable: std::env::current_exe()?,
+        executable: executable.clone(),
         restart: restart.clone(),
         in_progress: tokio::sync::Mutex::new(()),
         installed: std::sync::atomic::AtomicBool::new(false),
@@ -3311,17 +3323,21 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         if options.supervised {
             anyhow::bail!("Remote update installed; exiting for supervisor restart");
         }
-        let mut child = std::process::Command::new(std::env::current_exe()?);
+        // Linux current_exe() refers to the deleted inode after replacement.
+        // Relaunch the same startup path that the updater installed into.
+        let mut child = std::process::Command::new(executable);
         child.args(
             std::env::args()
                 .skip(1)
                 .filter(|arg| arg != "--wait-for-restart"),
         );
         child.arg("--wait-for-restart");
-        child.env(
-            "TUIC_PAIRING_TOKEN",
-            &app_config.services.auth.session_token,
-        );
+        if !credentials::credential_file_selected() {
+            child.env(
+                "TUIC_PAIRING_TOKEN",
+                &app_config.services.auth.session_token,
+            );
+        }
         child
             .spawn()
             .map_err(|e| anyhow::anyhow!("Updated remote failed to restart: {e}"))?;

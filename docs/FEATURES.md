@@ -2658,6 +2658,13 @@ partial work, and their child processes may continue.
 - Named instances start empty and never fall back to or migrate default/legacy
   files or credentials. A release daemon exits before binding if its named OS
   keyring vault cannot be opened
+- `--credential-file <path>` explicitly seeds a process-local vault from a private
+  JSON string map in release or debug builds, without an OS keyring or session
+  bus. Missing or malformed input fails boot without exposing contents. Runtime
+  credential edits stay in memory; rotation requires a file replacement and
+  daemon restart. Automatic updates relaunch the installed startup executable
+  path, including on Linux after the running inode is replaced, and reread the
+  selected file. Desktop keyring defaults remain unchanged
 - Default port: 9877 (overridable via `TUIC_PORT` env var)
 - `--set-password` performs interactive password setup (bcrypt hashed) inside
   the instance selected earlier on the same command line
