@@ -1,3 +1,7 @@
+## Archived New plan source (2425-5cfa) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `new_plan_archived_source_has_visible_result` and `adding_a_plan_source_derives_its_title_and_reuses_its_record` against the final commit. The regression failed on pre-fix Linux rb; GREEN belongs to the critic.
+- [ ] After an authorized `make dev` restart or `make build`, select a source owned by an archived plan. Confirm the visible error identifies the plan and points to Archived plans and Restore plan. The daily app was not restarted; Rust does not hot-reload.
 ## Nested MCP parent denial (2433-2f3f)
 
 - [ ] Coordinator critic: run `src/__tests__/components/SettingsPanel/LocalMcpPanel.test.tsx` and existing native-catalog consumers. The pre-fix regression reproduced a checked child under a denied parent. No implementation-lane GREEN run is claimed; TypeScript passes.
