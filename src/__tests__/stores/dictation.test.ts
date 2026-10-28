@@ -88,8 +88,6 @@ async function browserMode(
 	globalThis.fetch = fetchMock as unknown as typeof fetch;
 
 	vi.resetModules();
-	// The desktop-only entries (transportExtended.ts) into this fresh module graph.
-	await import("../../transportExtended");
 	const module = await import("../../stores/dictation");
 	// Built after the import: the statuses name this tab's owner, which only
 	// the freshly imported module knows.
@@ -152,7 +150,6 @@ describe("dictationStore", () => {
 					: undefined,
 			),
 		);
-		await import("../../transportExtended");
 		store = (await import("../../stores/dictation")).dictationStore;
 	});
 
