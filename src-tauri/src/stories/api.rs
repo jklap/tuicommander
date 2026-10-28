@@ -61,6 +61,12 @@ pub enum StoryAction {
         plan_id: String,
         filter: super::StoryFilter,
     },
+    /// Read stories across the project's active (or archived-only) plans, with shared filters.
+    ProjectStoryView {
+        #[serde(default)]
+        archived_plans: bool,
+        filter: super::StoryFilter,
+    },
     CreateStory {
         input: NewStory,
     },
@@ -165,6 +171,7 @@ pub enum StoryReply {
     PlanSources(Vec<PlanSource>),
     PlanState(PlanState),
     PlanView(PlanView),
+    ProjectStoryView(super::ProjectStoryView),
     Summary(StorySummary),
     Story(Story),
     Transitions(Vec<StoryTransition>),
@@ -293,6 +300,14 @@ fn story_action_with_source(
                 store.filtered_plan_view(&plan_id, &filter)?,
             ))
         }
+        StoryAction::ProjectStoryView {
+            archived_plans,
+            filter,
+        } => Ok(StoryReply::ProjectStoryView(store.project_story_view(
+            &project,
+            archived_plans,
+            &filter,
+        )?)),
         StoryAction::PlanView { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanView(store.plan_view(&plan_id)?))

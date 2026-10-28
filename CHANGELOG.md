@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
 - Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
 
 - Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
@@ -35,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Remove the permanent manual-prefix hint from New story without changing `[MANUAL]` criteria (#2444-9461).
 
+- Share bounded, cached ego usage reads between the status-bar badge and session details to avoid repeated or overlapping CLI processes (#2431-0847).
 - Keep event-run draft PR configuration and git reads off async runtime workers, so slow publication prerequisites do not block unrelated async work (#2428-cd8d).
 - Do not turn successful Claude tool-result auth or transport diagnostics into sticky agent API-error badges (#2429-a18d).
 - Tell agents to use TUIC managed peers for delegation or parallel work through the launch playbook, with an MCP fallback and the existing Claude Code isolated-task exception (#2441-bbcf).
