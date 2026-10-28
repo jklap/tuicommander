@@ -3113,6 +3113,13 @@ If stopping one run fails, it stays active while other runs still enforce their
 deadlines. Reconciliation reports the stop errors after processing those runs.
 Blocked runs remain active; idle alone does not prove success. Rust restart required.
 
+Event-run details retain durable publication outcomes and exact pre-POST intent.
+Restart and lost-response reconciliation use a repository/head/base PR lookup;
+uncertain writes are never automatically repeated. Filtered, duplicate and
+capacity decisions retain coalesced skipped history without consuming admission.
+The outcome includes PR/comment URL slots, decision and failure/refusal reason;
+comment publication and machine-enforced review/check gating are not added.
+
 Automation needs-you and failure notices use durable per-run/status/channel claims, existing notification preferences, and canonical saved-run/owning-session bell navigation. Unknown and interrupted outcomes remain history, not success. Notice navigation edits only the current definition; deleted definitions retain read-only run details.
 The Automations editor exposes **Include precheck stdout in the agent prompt**,
 off by default, using the same saved definition flag (#1624-c5f5).
