@@ -372,7 +372,12 @@ mod tests {
         assert_cli_status(&cache, &sibling);
         assert_eq!(computations(&cache, &sibling), after + 1);
         run_git(&sibling, &["add", "-f", "target/tracked.txt"]);
-        let index = crate::git::resolve_git_dir(&sibling).unwrap().join("index");
+        // Git's gitdir file uses portable paths; the watch root is canonical.
+        let index = crate::git::resolve_git_dir(&sibling)
+            .unwrap()
+            .join("index")
+            .canonicalize()
+            .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             let event = rx
@@ -695,7 +700,11 @@ mod tests {
                 added.to_str().unwrap(),
             ],
         );
-        let new_admin = crate::git::resolve_git_dir(&added).unwrap();
+        // Match notify's canonical watch-root spelling, not Git's gitdir text.
+        let new_admin = crate::git::resolve_git_dir(&added)
+            .unwrap()
+            .canonicalize()
+            .unwrap();
         let wait_for = |path: &Path| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
