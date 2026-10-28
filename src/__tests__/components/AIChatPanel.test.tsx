@@ -5750,6 +5750,23 @@ describe("AIChatPanel: ACP slash commands", () => {
 		expect(container.querySelector('[aria-label="Slash commands"]')).toBeNull();
 		expect(client.cancel).not.toHaveBeenCalled();
 	});
+	it.each([
+		"/Users/x/file.ts is broken",
+		"/tmp/error.log",
+		"/quit/file.ts needs review",
+		"//server/share/file.ts is broken",
+		"/Users/x/My Project/file.ts is broken",
+	])(
+		"composer_sends_absolute_path_prompt: %s — catches filesystem paths rejected as unknown commands",
+		async (text) => {
+			const { container } = await renderPanel();
+			await typeAndSend(container, text);
+			expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, text, [], ROOT);
+			expect(container.querySelector("textarea")!.value).toBe("");
+			expect(container.textContent).not.toContain("not available in AI Chat");
+			expect(client.disconnect).not.toHaveBeenCalled();
+		},
+	);
 	it.each(["/not-a-command", "/name new title", "/retry"])(
 		"retains %s with available actions — catches unknown commands silently sent",
 		async (command) => {
