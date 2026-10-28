@@ -2124,3 +2124,10 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority.
 Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
+Jira Tasks setup uses the registered core account's Basic or Bearer kind rather
+than a Cloud default. Jira detail editors retain current typed description and
+custom values; unsupported structured values do not get an empty editor. Jira
+create metadata retains Description requiredness for the fixed body input, not
+a second schema control. Empty or whitespace-only required descriptions block
+creation in both the host form and provider action.

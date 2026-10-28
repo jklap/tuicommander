@@ -9,9 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Add opt-in per-repository issue triage with operator-attested read-only profiles, trusted-author admission, durable policy-versioned decisions and host-owned rejection comments/intake labels. TUIC does not enforce credential isolation; uncertain publication is not replayed (#2324-424d).
+- Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
+- Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).
 
 ### Fixed
 
+- Start terminal Compose at one line, grow with the draft up to its existing 96px editor height, and scroll longer drafts inside (#2447-9d28).
+
+- Keep known remote daemon versions visible after connection failures and explain updating and restarting an outdated daemon as a possible remedy for HTTP 403 Untrusted Host (#2445-fc5d).
 - Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).
 
 ## [2.0.0-beta.4] - 2026-10-28
@@ -82,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
 - Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
 - Recover live but unresponsive stdio MCP upstreams after two consecutive failed health probes, without changing ordinary tool-call reply timeout behavior or respawn throttling (#2417-793a).
+- Preserve Jira description and custom-field editor values, literal ADF text, registered Data Center account mode, and required-description create validation (#1694-161f).
 
 - Serve headless manual TLS connections with HTTPS, SSE and WSS instead of plaintext HTTP; fail invalid certificates before bind and report the live TLS listener mode (#2344-59cf).
 
@@ -94,8 +100,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Open a fresh AI Chat tab without first replaying the saved conversation, so an old greeting title or refused replay cannot replace or block New chat (#2405-86c5).
 
 - Keep mobile session usage visible across session polling updates and show one plan heading above its quota windows (#2400-d006).
+- Forward cancellation through all Jira Tasks requests and reject assignee lookup without a configured project instead of sending `project=undefined` (#2387-4c05).
 
 - Remove the persistent mobile dictation failure label and red failure mic state; keep the failure detail in its toast and announce mobile toasts to assistive technology (#2399-e2ae).
+- Preserve unsent drafts when At-Capacity Retry and Claude Wakeup submit idle prompts by using the atomic empty-composer check. Rejected attempts do not consume retry or wake budgets; busy-time error-loop nudges remain a separate deferred path (#2389-258c).
+
 - Keep the mobile composer border on the text editor only, clear editor focus when tapping the mic, and avoid a second recording border while retaining keyboard focus rings (#2398-1de9).
 - Show ACP slash command offers in AI Chat with descriptions, input hints and keyboard/mouse completion. Route `/compact`, `/fork`, `/quit` (`/q`), `/new`, `/clear`, `/usage`, and advertised pause/resume actions to host controls; keep unknown commands out of model prompts (#2393-19fc).
 - Automatically compact an exhausted ego AI Chat conversation and retry the submitted prompt once in its continuation; stop with an error if recovery fails. Keep composer drafts during compaction and allow sends in other conversations (#2392-b2e3).

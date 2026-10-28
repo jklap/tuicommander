@@ -2702,6 +2702,7 @@ Query parameters:
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
 - `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `permanentDelete` (optional, default `false`) -- explicitly deletes rather than recycling a clean finished checkout; requires `deleteBranch=true`, clean and integrated state and no live sessions, and rejects force or lock overrides. Safety is checked again at removal.
 - `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
@@ -3208,6 +3209,16 @@ Automation runtime transitions are streamed on `/events` as
 to the desktop event. This includes failure and needs-you changes. Final runs
 retain bounded output; missed live events are reconciled from host state rather
 than replaying or restarting execution.
+
+Event run replies add nullable `outcome: {decision, pr_url, comment_url,
+failure_reason, publication_intent}`. The intent has `{repository, head, base,
+issue_number}`. This is identical through IPC and HTTP, including `run`,
+`list_runs` and `automation-run-changed` (`notice: false` on publication updates).
+Execution `completed` is distinct from outcome `published`,
+`publication_pending`, `publication_unknown`, `publication_failed` or
+`publication_refused`. `skipped_filtered` and `skipped_duplicate` history rows
+retain refusal reasons; repeated event/reason observations coalesce in one row.
+The empty default intake evaluates nothing. No comment publication is added.
 
 Automation action `run` accepts `{id: "<run id>"}` and returns the canonical saved AutomationRun independent of definition lifetime. The live `automation-run-changed` payload adds `notice: boolean`; only true invites a bell item. False and history reads never notify.
 ### Design Mode extension pilot

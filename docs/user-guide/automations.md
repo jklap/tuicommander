@@ -257,3 +257,28 @@ unknown comment also stops automatic rejection-label publication. Inspect the ru
 repair. This prevents duplicate automatic comments, but it does not guarantee
 successful delivery during an outage. Do not change the policy version merely to
 retry an uncertain publication. Removing the policy prevents pending publication.
+#### Durable event outcomes
+
+The `run` and `list_runs` actions return `outcome` independently of execution
+status: `decision`, `pr_url`, `comment_url`, `failure_reason` and
+`publication_intent` (repository, head, base and issue number). Existing records
+without an outcome remain readable. A completed agent is not proof of a
+published PR. No comment publisher is added; `comment_url` remains null.
+
+Before publication, TUIC saves the exact intent and claims it once. It looks up
+all PR states for the same repository/head/base before creation and after a lost
+response. On restart it reconciles saved pending/unknown intents by lookup only,
+even if the worktree was removed. An unavailable, incomplete or empty lookup
+leaves `publication_unknown` with a reason; TUIC never automatically repeats an
+uncertain POST. Inspect the repository and saved intent before operator action.
+Historical runs from older builds are not automatically republished.
+
+Filtered issues with a valid GitHub issue identity, duplicate admissions,
+disabled definitions and capacity refusals retain skipped history rows and
+reasons. Repeated observations of the same event/reason update one row's
+`updated_ms`, not one row per poll. These rows do not consume the admission key;
+a later eligible issue or free slot can still be admitted. Invalid issue URLs
+have no trusted event identity and are ignored. An empty intake allowlist stays
+disabled and performs no evaluations. History retention also applies to these
+rows; summaries count rows, not poll observations. The saved run API exposes
+outcomes; this change does not add outcome controls to the Automations dialog.

@@ -71,6 +71,8 @@ pub enum RunStatus {
     SkippedConcurrency,
     SkippedExpired,
     SkippedMissed,
+    SkippedFiltered,
+    SkippedDuplicate,
 }
 
 impl RunStatus {
@@ -116,6 +118,37 @@ pub struct PrecheckContext {
     pub bytes: u64,
 }
 
+/// Publication identity is committed before any GitHub write.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PublicationIntent {
+    pub repository: String,
+    pub head: String,
+    pub base: String,
+    pub issue_number: i64,
+}
+
+/// Separate from execution status: a completed agent can still fail publication.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RunOutcome {
+    pub decision: String,
+    pub pr_url: Option<String>,
+    pub comment_url: Option<String>,
+    pub failure_reason: Option<String>,
+    pub publication_intent: Option<PublicationIntent>,
+}
+
+impl RunOutcome {
+    pub fn decision(decision: &str, reason: Option<String>) -> Self {
+        Self {
+            decision: decision.into(),
+            pr_url: None,
+            comment_url: None,
+            failure_reason: reason,
+            publication_intent: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AutomationRun {
     pub id: String,
@@ -146,6 +179,8 @@ pub struct AutomationRun {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triage_decision: Option<super::triage::TriageDecision>,
+    #[serde(default)]
+    pub outcome: Option<RunOutcome>,
 }
 
 /// Fields learned after reservation; terminal records reject later mutations.

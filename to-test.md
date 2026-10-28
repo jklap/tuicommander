@@ -1,3 +1,11 @@
+## Terminal Compose growth (2447-9d28)
+
+- [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
+## Remote daemon version guidance (2445-fc5d) — Rust rebuild/restart required
+
+- [ ] Coordinator: capture the remote card with a known older daemon in Error and Connected states. Renderer-only screenshot attempts with both installed Chrome 149 builds returned empty DOM and no PNG; no visual pass is claimed. Focused component/store tests passed, but do not prove layout.
+- [ ] After an authorized manual `make dev` restart or `make build`, check that an older daemon’s known version remains on its card after a Host refusal, with guidance to install the current `tuic-remote` and restart its service. Initial plain refusals without a successful `/health` observation must not invent a version. The daily app and Mac-mint daemon were not restarted or changed. Rust does not hot-reload.
+
 ## Headless file credentials (2343-5358) — daemon rebuild/restart required
 
 - [ ] Coordinator critic: verify the final Linux unsupervised update/relaunch uses the startup executable path and authenticates the rotated file token. The captured pre-fix running executable had the Linux ` (deleted)` suffix and restart failed with OS error 2. Rebuild the daemon to load the fix; no daily app restart was performed.
@@ -3232,3 +3240,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 
 - [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
+## Workspace Delete alternative (#2446-2de7)
+
+Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering is not yet verified. Focused component, coordinator and backend tests pass.
+
+- [ ] After the next manual Rust rebuild/restart, remove a clean integrated workspace with no live sessions. Confirm the dialog shows Cancel, red Delete, and Archive; Delete removes its checkout and local branch, while Archive retains its existing behavior. Dirty or live-owned workspaces must not offer Delete, and a safety change while the dialog is open must stop deletion.
+- [ ] Event outcomes (#2326-98f1): after a manual Rust restart, inspect a permitted event run through `automations` run details; verify the PR URL and decision persist after restart and unknown publication does not create a second PR. No live GitHub write or desktop launch was performed in this implementation.

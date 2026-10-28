@@ -151,18 +151,20 @@ describe("work-item plugin setup", () => {
 	it("clears optional form keys while preserving the saved authentication kind", async () => {
 		const setup = setupFor("jira");
 		if (!setup) throw new Error("jira setup missing");
-		invoke.mockResolvedValue(
-			JSON.stringify({
-				accounts: [
-					{
-						id: "work",
-						host: "https://jira.example",
-						kind: "bearer",
-						projectId: "7",
-						boards: [{ id: "1", name: "Sprint" }],
-					},
-				],
-			}),
+		invoke.mockImplementation(async (command: string) =>
+			command === "account_action"
+				? [{ id: "work", provider: "jira", kind: "bearer" }]
+				: JSON.stringify({
+						accounts: [
+							{
+								id: "work",
+								host: "https://jira.example",
+								kind: "bearer",
+								projectId: "7",
+								boards: [{ id: "1", name: "Sprint" }],
+							},
+						],
+					}),
 		);
 		await saveWorkItemSetup(setup, { id: "work", host: "https://jira.example", projectId: "", boards: "" });
 		const write = invoke.mock.calls.find(([command]) => command === "write_plugin_data");
@@ -181,6 +183,7 @@ it.each(["github-work", "jira", "gitlab"])("Tasks accounts round-trip through %s
 			: { id: "test-account", host: "https://example.test" };
 	const files = new Map<string, string>();
 	invoke.mockImplementation(async (command: string, args: { path: string; content?: string }) => {
+		if (command === "account_action") return [{ id: "test-account", provider: "jira", kind: "basic" }];
 		// The real host reserves this name for schema-backed settings, not Tasks data.
 		if (args.path === "config.json") throw new Error("Configurable plugin requires a settings schema");
 		if (command === "write_plugin_data") files.set(args.path, args.content!);
@@ -200,5 +203,48 @@ process.stdout.write(JSON.stringify(result));`;
 	const result = JSON.parse(
 		execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }),
 	);
-	expect(result.accounts).toEqual([accountFromValues(setup, values)]);
+	expect(result.accounts).toEqual([
+		{ ...accountFromValues(setup, values), ...(pluginId === "jira" ? { kind: "basic" } : {}) },
+	]);
+});
+
+// Catches: new Data Center setup defaults to Cloud or stale plugin kind wins over the registered account.
+it.each(["basic", "bearer"])("Jira setup uses registered %s account kind", async (kind) => {
+	const setup = setupFor("jira")!;
+	invoke.mockImplementation(async (command: string) => {
+		if (command === "account_action") return [{ id: "work", provider: "jira", kind }];
+		if (command === "read_plugin_data")
+			return JSON.stringify({ accounts: [{ id: "work", kind: kind === "basic" ? "bearer" : "basic" }] });
+	});
+	await saveWorkItemSetup(setup, { id: "work", host: "https://jira.example" });
+	const write = invoke.mock.calls.find(([command]) => command === "write_plugin_data");
+	expect(JSON.parse(write?.[1].content).accounts[0].kind).toBe(kind);
+});
+
+// Catches: a newly configured Data Center site gets the Cloud constant when no plugin account exists yet.
+it("new Jira setup stores registered Data Center kind", async () => {
+	invoke.mockImplementation(async (command: string) =>
+		command === "account_action" ? [{ id: "dc", provider: "jira", kind: "bearer" }] : null,
+	);
+	await saveWorkItemSetup(setupFor("jira")!, { id: "dc", host: "https://jira.example/jira" });
+	const write = invoke.mock.calls.find(([command]) => command === "write_plugin_data");
+	expect(JSON.parse(write?.[1].content).accounts).toEqual([
+		{ id: "dc", host: "https://jira.example/jira", kind: "bearer" },
+	]);
+});
+
+// Catches: an unknown account or another provider's account silently registers Jira Cloud.
+it("Jira setup refuses missing or unsupported registered accounts without writing", async () => {
+	for (const accounts of [
+		[],
+		[{ id: "work", provider: "gitlab", kind: "bearer" }],
+		[{ id: "work", provider: "jira", kind: "ambient" }],
+	]) {
+		invoke.mockReset();
+		invoke.mockResolvedValue(accounts);
+		await expect(saveWorkItemSetup(setupFor("jira")!, { id: "work", host: "https://jira.example" })).rejects.toThrow(
+			"registered Jira",
+		);
+		expect(invoke).not.toHaveBeenCalledWith("write_plugin_data", expect.anything());
+	}
 });

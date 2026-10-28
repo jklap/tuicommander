@@ -108,6 +108,42 @@ builds can publish even if every desktop build fails. `tauri-action` reuses the
 release with that tag and alone writes `latest.json`; daemon uploads contain only
 `tuic-remote` and `tuic-bridge` binaries.
 
+## Nightly macOS build budget
+
+The nightly macOS Tauri step has a 90-minute limit inside a 105-minute job.
+Linux and Windows retain their 60-minute step and 90-minute job limits.
+The version-tag release workflow is unchanged.
+
+### Duration evidence (story 2449-758d)
+
+| Nightly run / macOS job | Cargo target cache | Tauri step | Main Cargo build |
+|---|---|---:|---:|
+| `40293763128` / `121474831042` (last green) | Restored about 986 MB | 32m28s | 30m04s |
+| `40267929758` / `121394367658` (earlier cold green) | Not found | 50m34s | 47m14s |
+| `40706484667` / `122880064054` (failed) | Not found | Cancelled at 60m01s | Did not finish |
+
+All three used Rust 1.99.1 and runner image `20261013.0424.1`
+(`macos-26-arm64`). The failed run spent 45 seconds on job setup. Within the
+Tauri step, the frontend finished at 14:31:32 UTC and both sidecars finished
+by 14:32:26. The main Cargo build then ran until cancellation at 15:30:53,
+without reaching application bundling, signing or notarization. Its last
+compiler log line was at 14:44:17. sccache reported zero Rust hits and 863 Rust
+misses, compared with 14 Rust misses in the last green run. The earlier cold
+green also had 863 Rust misses. The last green needed about 96 seconds after
+Cargo completed for packaging, notarization and upload.
+
+This proves a cold build exceeded the old step limit; it does not prove whether
+the final quiet period was slow optimization/linking or a compiler hang. The
+90-minute step gives 50% more time than the exhausted 60-minute budget. The
+105-minute job reserves another 15 minutes for setup and post actions. These
+are bounded allowances, not a measured completion time for the failed commit.
+The next nightly must confirm completion and asset publication; a local build
+cannot prove the hosted runner's elapsed time.
+
+The `retry-failed` job did not run a second build: its log says
+`run 40706484667 cannot be rerun; This workflow is already running`.
+That separate retry limitation is not evidence of a second build timeout.
+
 ## The Rust toolchain is pinned
 
 Every `dtolnay/rust-toolchain` step takes its version from a workflow-level
