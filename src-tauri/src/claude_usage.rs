@@ -1293,11 +1293,26 @@ where
     if !backing_off {
         let (token, plan) = read_credentials(profile.config_dir())?;
         let token = token.ok_or("Claude account unavailable")?;
-        if let Ok(Ok(mut data)) = tokio::time::timeout(Duration::from_secs(15), fetch(token)).await
-        {
-            data.plan = plan;
-            cache_response(profile, &data);
-            return Ok((data, false));
+        match tokio::time::timeout(Duration::from_secs(15), fetch(token)).await {
+            Ok(Ok(mut data)) => {
+                RATE_LIMITED_UNTIL.lock().remove(profile);
+                data.plan = plan;
+                cache_response(profile, &data);
+                return Ok((data, false));
+            }
+            Ok(Err(error)) if error.status == 429 => {
+                // Share desktop's minimum backoff, but cap untrusted Retry-After
+                // at five minutes so a malformed hint cannot strand the profile.
+                let delay_secs = error
+                    .retry_after_secs
+                    .unwrap_or(RATE_LIMIT_BACKOFF.as_secs())
+                    .clamp(RATE_LIMIT_BACKOFF.as_secs(), 300);
+                RATE_LIMITED_UNTIL.lock().insert(
+                    profile.clone(),
+                    Instant::now() + Duration::from_secs(delay_secs),
+                );
+            }
+            _ => {}
         }
     }
     get_stale_cache(profile)

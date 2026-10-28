@@ -3635,7 +3635,12 @@ are null, not inferred from defaults. Scope is `account_quota` or `session_usage
 Claude/Codex quota windows describe shared account windows, not session spend.
 Claude mobile refreshes retain the local credential plan in the profile-scoped cache
 shared with desktop. A missing credential plan stays absent; stale fallback data
-keeps its original plan and is marked stale.
+keeps its original plan and is marked stale. A mobile primary GET that returns HTTP 429 sets the
+same profile backoff used by desktop reads. The delay is at least 120 seconds;
+a numeric Retry-After can extend it up to 300 seconds. During backoff, reads
+return stale cache or unavailable without another request. Mobile quota reads
+never use the generating messages fallback. Timeouts and other errors do not
+activate rate-limit backoff.
 ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
