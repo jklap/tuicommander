@@ -2,8 +2,9 @@
 name: check-gate
 description: >
   Run TUICommander's full make-check gate (tsc, biome, architecture cycles,
-  rustfmt, clippy, the full Rust test suite, vitest, plugin tests, pnpm/cargo
-  audit) reliably before declaring any code change complete. Use before
+  a production frontend build + bundle-size budget check, rustfmt, clippy,
+  the full Rust test suite, vitest, plugin tests, pnpm/cargo audit) reliably
+  before declaring any code change complete. Use before
   telling the user "all tests pass" or a feature is done — a scoped test
   filter or a partial run is not sufficient. Also use if asked to "run all
   checks", "run the check gate", or "verify everything passes".
