@@ -191,8 +191,8 @@ describe("remote story fill ownership", () => {
 		await screen.findByText("Fill cancelled. Your request and form are kept.");
 		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
 			"http://story-daemon.test/acp/one-shot/prepare",
-			"http://story-daemon.test/stories/draft",
-			"http://story-daemon.test/acp/one-shot/cancel",
+			"http://story-daemon.test/acp/story-draft",
+			"http://story-daemon.test/acp/one-shot/remote-fill/cancel",
 		]);
 		expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
 	});
@@ -217,7 +217,7 @@ describe("remote story fill ownership", () => {
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 		expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
 			"http://story-daemon.test/acp/one-shot/prepare",
-			"http://story-daemon.test/acp/one-shot/cancel",
+			"http://story-daemon.test/acp/one-shot/late-remote/cancel",
 		]);
 	});
 
@@ -239,7 +239,7 @@ describe("remote story fill ownership", () => {
 		setProject("/other/repo");
 		view.unmount();
 		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
-		expect(String(fetch.mock.calls[2][0])).toBe("http://story-daemon.test/acp/one-shot/cancel");
+		expect(String(fetch.mock.calls[2][0])).toBe("http://story-daemon.test/acp/one-shot/remote-fill/cancel");
 		finish(Response.json(draft));
 	});
 });
