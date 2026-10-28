@@ -1,3 +1,15 @@
+## Event-run publication prerequisites (2428-cd8d) — Rust restart required
+
+- [ ] Coordinator critic: run `event_publication_does_not_block_runtime_worker`, `event_publication_prerequisites_preserve_config_and_git_errors`, and existing `automations::publish::tests` on the final commit. Pre-fix RED reproduced a blocked independent async task on Linux rb; no post-fix GREEN is claimed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm completed allowlisted event runs still open draft PRs and report prerequisite failures. Rust does not hot-reload; this peer did not restart the daily app or write to GitHub.
+## Quoted Claude tool diagnostics (2429-a18d) — Rust restart required
+
+- [ ] Coordinator critic: run `quoted_tool_auth_output_does_not_latch_api_error`, `claude_friendly_failures_reject_tool_result_rows`, `api_error_2335_final_failures_reject_quoted_prose`, `api_error_2335_inventory_reaches_session_error`, and existing API recovery consumers. Native pre-fix replay reproduced the latched transport error; no post-fix GREEN run was performed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm expanded successful tool diagnostics do not turn the session red, and genuine native failures still do. Rust does not hot-reload; the daily app was not restarted.
+## Managed delegation instructions (2441-bbcf) — Rust restart required
+
+- [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, launch a fresh agent and inspect Git and worktrees for the managed-delegation sentence and CC-only exception. Confirm MCP only carries the delegation fallback for clients without a launch channel. Existing module off switches and child scope stay in effect. The daily app was not restarted; Rust does not hot-reload.
 ## Worktree archive-pool cache (2424-e871) — Rust restart required
 
 - [ ] Coordinator critic: run `cached_worktree_inventory_does_not_reload_archive_pool`, `cached_worktree_inventory_tracks_storage_changes`, and existing `discovery_2157` / `discovery_2156` inventory consumers on the final commit. RED reproduced three pool resolutions instead of one for both cache-entry orders on Linux rb; no post-fix GREEN run is claimed.
