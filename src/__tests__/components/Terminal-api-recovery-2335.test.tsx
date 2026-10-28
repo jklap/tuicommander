@@ -181,6 +181,33 @@ describe("Terminal API failure recovery 2335", () => {
 		vi.unstubAllGlobals();
 	});
 
+	// Catches: reconnect resize succeeds but a failed eager handshake leaves parsed events unattached.
+	it("recovers parsed events after an eager subscription handshake fails", async () => {
+		vi.useRealTimers();
+		mounted?.unmount();
+		const transport = await import("../../transport");
+		vi.spyOn(transport, "subscribePty").mockRejectedValueOnce(new Error("WebSocket closed before opening"));
+		const replacement = openIdleAgentTab();
+		try {
+			await waitFor(() =>
+				expect(appLogger.info).toHaveBeenCalledWith(
+					"terminal",
+					`initSession(${replacement}) — reconnected to live-session`,
+				),
+			);
+			expect(appLogger.error).toHaveBeenCalledWith("terminal", "Failed to attach session listeners", expect.any(Error));
+			vi.mocked(appLogger.error).mockClear();
+			failed();
+			expect(appLogger.error).toHaveBeenCalledExactlyOnceWith(
+				"terminal",
+				"claude: server error (claude-transport-error)",
+			);
+		} finally {
+			mounted?.unmount();
+			terminalsStore.remove(replacement);
+		}
+	});
+
 	// Catches: one parsed transport error is logged twice by the terminal consumer.
 	it("logs one entry for one transport error", () => {
 		failed();
