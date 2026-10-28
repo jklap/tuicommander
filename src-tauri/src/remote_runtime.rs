@@ -199,8 +199,16 @@ impl Entry {
             base_url: connected.then(|| self.base_url.clone()).flatten(),
             token: connected.then(|| self.token.clone()).flatten(),
             protocol_version: connected.then_some(self.protocol_version).flatten(),
-            build: connected.then(|| self.build.clone()).flatten(),
-            out_of_date: connected.then_some(self.out_of_date).flatten(),
+            // Build identity is diagnostic, not a usable route or credential.
+            // Keep the last health observation visible when a later probe fails.
+            build: self.build.clone(),
+            out_of_date: if self.build.as_ref().is_some_and(daemon_is_older_than_client) {
+                Some(true)
+            } else if connected || self.build.is_some() {
+                self.out_of_date
+            } else {
+                None
+            },
             live_sessions: connected.then_some(self.live_sessions).flatten(),
             update_notice: connected.then(|| self.update_notice.clone()).flatten(),
             update_in_progress: (connected && self.update_in_progress.is_some()).then_some(true),
@@ -829,6 +837,15 @@ fn request_error_message(
     format!("Unreachable: {message}")
 }
 
+fn daemon_is_older_than_client(build: &crate::remote_deploy::assets::BuildIdentity) -> bool {
+    let Ok(remote) = semver::Version::parse(&build.version) else {
+        return false;
+    };
+    let client = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("the package version is valid semver");
+    remote.cmp_precedence(&client).is_lt()
+}
+
 const UNTRUSTED_HOST_REFUSAL: &str = "HTTP 403 Untrusted Host";
 
 async fn response_error(mut response: reqwest::Response, base_url: &str) -> String {
@@ -848,7 +865,7 @@ async fn response_error(mut response: reqwest::Response, base_url: &str) -> Stri
         let text = String::from_utf8_lossy(&prefix);
         if text.to_ascii_lowercase().contains("untrusted host") {
             return format!(
-                "{host} rejected this name ({UNTRUSTED_HOST_REFUSAL}) — automatic retries stopped. Use a name trusted by the daemon, then reconnect."
+                "{host} rejected this name ({UNTRUSTED_HOST_REFUSAL}) — automatic retries stopped. An outdated daemon may cause this refusal; install the current tuic-remote and restart the service. If it persists, check the daemon's trusted names, then reconnect."
             );
         }
         return format!("Access denied by {host} (HTTP 403) — check permissions");
@@ -1292,6 +1309,9 @@ async fn handshake(
         read_health(&client, &base_url).await
     };
 
+    if let Ok(health) = &first_health {
+        record_health(state, id, health);
+    }
     let mut deployed = false;
     let health =
         if deploy_reason(connection, first_health.as_ref().map_err(String::as_str)).is_some() {
@@ -1301,6 +1321,7 @@ async fn handshake(
             first_health.map_err(ConnectFailure::error)?
         };
 
+    record_health(state, id, &health);
     if connection.deploy != DeployMode::Never
         && health.protocol_version != Some(REMOTE_PROTOCOL_VERSION)
     {
@@ -1325,11 +1346,6 @@ async fn handshake(
              Point this connection at another machine's daemon."
         )));
     }
-    update(state, id, |e| {
-        e.protocol_version = health.protocol_version;
-        e.build = health.build.clone();
-        e.out_of_date = health.build.is_none().then_some(true);
-    });
 
     // The daemon handed its token over inside the encrypted channel, so there is
     // no password to trade for one.
@@ -1355,6 +1371,16 @@ async fn handshake(
         )),
         Probe::Failed(e) => Err(ConnectFailure::error(e)),
     }
+}
+
+// A successful health observation is diagnostic even if deployment, protocol
+// compatibility or authentication subsequently prevents a connection.
+fn record_health(state: &Arc<AppState>, id: &str, health: &Health) {
+    update(state, id, |entry| {
+        entry.protocol_version = health.protocol_version;
+        entry.build = health.build.clone();
+        entry.out_of_date = health.build.is_none().then_some(true);
+    });
 }
 
 fn deploy_reason(
@@ -3046,7 +3072,7 @@ mod tests {
     fn verified_update_clears_badge_without_resurrecting_a_disconnected_machine() {
         let state = test_state();
         let build = crate::remote_deploy::assets::BuildIdentity {
-            version: "1.7.7".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
             target: "aarch64-apple-darwin".into(),
             sha256: "b".repeat(64),
         };
@@ -4654,6 +4680,145 @@ mod tests {
     // -----------------------------------------------------------------------
     // Supervisor: autoconnect, retry, and the two ways it must stop
     // -----------------------------------------------------------------------
+
+    // Catches: semantic ordering mistakes warn for newer versions or miss prereleases.
+    #[test]
+    fn daemon_version_warning_uses_semver_precedence_not_text_or_build_metadata() {
+        let client = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        for (version, expected) in [
+            ("1.8.0".to_string(), true),
+            (
+                format!("{}.{}.{}", client.major + 1, client.minor, client.patch),
+                false,
+            ),
+            (format!("{client}+other-build"), false),
+            (client.to_string(), false),
+            ("unknown".to_string(), false),
+        ] {
+            let build = crate::remote_deploy::assets::BuildIdentity {
+                version: version.clone(),
+                target: "fixture".into(),
+                sha256: "fixture".into(),
+            };
+            assert_eq!(daemon_is_older_than_client(&build), expected, "{version}");
+        }
+    }
+
+    // Catches: an initial bare Host refusal asserts a version or only suggests renaming.
+    #[tokio::test]
+    async fn unknown_daemon_host_refusal_explains_possible_outdated_daemon() {
+        let mut server = mockito::Server::new_async().await;
+        let refusal = server
+            .mock("GET", "/health")
+            .with_status(403)
+            .with_body(include_str!("fixtures/remote/untrusted-host.body"))
+            .expect(1)
+            .create_async()
+            .await;
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+        let error = connect(&state, &id).await.unwrap_err();
+        let snapshot = state.remote.snapshot().pop().unwrap();
+        teardown(&state, &id);
+        refusal.assert_async().await;
+        assert!(
+            error.contains("outdated daemon may cause this refusal"),
+            "{error}"
+        );
+        assert!(
+            error.contains("install the current tuic-remote and restart the service"),
+            "{error}"
+        );
+        assert!(snapshot.build.is_none());
+    }
+
+    // Catches: protocol rejection discards the build already returned by /health.
+    #[tokio::test]
+    async fn installed_protocol_rejection_retains_known_daemon_version() {
+        let mut server = mockito::Server::new_async().await;
+        let health = server.mock("GET", "/health").with_status(200)
+            .with_body(r#"{"protocol_version":0,"build":{"version":"1.8.0","target":"x86_64-unknown-linux-gnu","sha256":"75bb1c7c36ebc0515dc8417fc5c2f07e4c8fcf9886e7d74895ca5085c576ff1b"}}"#)
+            .expect(1).create_async().await;
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("installed", &server.url(), "boss");
+        connection.deploy = DeployMode::Installed;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        let error = connect(&state, &id).await.unwrap_err();
+        let snapshot = state.remote.snapshot().pop().unwrap();
+        teardown(&state, &id);
+        health.assert_async().await;
+        assert!(
+            error.contains("installed daemon protocol mismatch"),
+            "{error}"
+        );
+        assert_eq!(
+            snapshot.build.as_ref().map(|build| build.version.as_str()),
+            Some("1.8.0")
+        );
+        assert_eq!(snapshot.out_of_date, Some(true));
+        assert!(snapshot.base_url.is_none() && snapshot.token.is_none());
+    }
+
+    // Catches: a known older daemon loses its version on refusal and blames the name alone.
+    #[tokio::test]
+    async fn older_daemon_host_refusal_retains_version_and_update_guidance() {
+        let mut server = mockito::Server::new_async().await;
+        // Build fields recorded in fixtures/remote/untrusted-host.md.
+        let health = server
+            .mock("GET", "/health")
+            .with_status(200)
+            .with_body(r#"{"protocol_version":1,"build":{"version":"1.8.0","target":"x86_64-unknown-linux-gnu","sha256":"75bb1c7c36ebc0515dc8417fc5c2f07e4c8fcf9886e7d74895ca5085c576ff1b"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let refusal = server
+            .mock("GET", "/api/version")
+            .with_status(403)
+            .with_body(include_str!("fixtures/remote/untrusted-host.body"))
+            .expect(1)
+            .create_async()
+            .await;
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+        let error = connect(&state, &id).await.unwrap_err();
+        let snapshot = state.remote.snapshot().pop().unwrap();
+        for status in [
+            RemoteStatus::Disconnected,
+            RemoteStatus::Connecting,
+            RemoteStatus::Deploying {
+                step: "checking".into(),
+            },
+            RemoteStatus::Unauthenticated,
+            RemoteStatus::Error,
+        ] {
+            update(&state, &id, |entry| entry.status = Some(status.clone()));
+            let diagnostic = state.remote.snapshot().pop().unwrap();
+            assert_eq!(diagnostic.build, snapshot.build, "{status:?}");
+            assert_eq!(diagnostic.out_of_date, Some(true), "{status:?}");
+            assert!(
+                diagnostic.base_url.is_none() && diagnostic.token.is_none(),
+                "{status:?}"
+            );
+        }
+        teardown(&state, &id);
+
+        health.assert_async().await;
+        refusal.assert_async().await;
+        assert!(error.contains("outdated daemon"), "{error}");
+        assert!(
+            error.contains("install the current tuic-remote and restart the service"),
+            "{error}"
+        );
+        assert_eq!(
+            snapshot.build.as_ref().map(|build| build.version.as_str()),
+            Some("1.8.0")
+        );
+        assert_eq!(snapshot.out_of_date, Some(true));
+        assert_eq!(snapshot.status, RemoteStatus::Error);
+        assert!(snapshot.base_url.is_none() && snapshot.token.is_none());
+        assert_eq!(snapshot.retry_after_secs, None);
+    }
 
     // Catches: a permanent Host refusal repeatedly requests the same rejected name.
     #[tokio::test]

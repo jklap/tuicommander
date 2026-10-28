@@ -713,7 +713,7 @@ and an invalid ID or unavailable named release vault terminates before network
 bind. Runtime switching is unsupported.
 
 Production black-box consumers pin and verify the digest of the exact
-`tuic-remote` artifact they launch. The daemon also reports its running build's
+`tuic-remote` artifact they launch. Remote cards retain the last successful `/health.build` version through failed or reconnecting runtime states and warn when it is older than the client. A bare Host refusal has no version; the error names an outdated daemon as a possible cause and recommends installing the current daemon and restarting its service. No alternate Host probe is made; explicit disconnect discards runtime build knowledge. The daemon also reports its running build's
 version, target triple and SHA-256 in `/health`; the desktop uses that identity
 to detect an outdated remote and to verify an update after restart.
 
