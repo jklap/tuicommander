@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
 - Keep the Remote Access QR code stable across unchanged status polls, while refreshing it for listener, address and token changes (#2432-edf6).
 
 - Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
