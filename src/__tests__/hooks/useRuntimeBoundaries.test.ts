@@ -112,18 +112,20 @@ describe("application runtime boundaries", () => {
 		expect(setVisible).not.toHaveBeenCalled();
 	});
 
-	it("starts sleep prevention, clears focus badges, and stops polling on cleanup", () => {
+	// Catches: a busy WebView takes sleep ownership back from the backend.
+	it("leaves sleep ownership to the backend, clears focus badges, and stops polling on cleanup", () => {
 		createRoot((rootDispose) => {
 			dispose = rootDispose;
 			useSystemLifecycle();
 		});
 
-		expect(mockInvoke).toHaveBeenCalledWith("block_sleep");
 		window.dispatchEvent(new Event("focus"));
 		expect(mockNotifications.clearBadge).toHaveBeenCalledOnce();
 		dispose?.();
 		dispose = undefined;
 		expect(mockGithub.stopPolling).toHaveBeenCalledOnce();
+		expect(mockInvoke).not.toHaveBeenCalledWith("block_sleep");
+		expect(mockInvoke).not.toHaveBeenCalledWith("unblock_sleep");
 	});
 
 	it("owns regular dictation key handlers and cleanup", () => {
