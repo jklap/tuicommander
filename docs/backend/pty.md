@@ -768,7 +768,12 @@ snapshot generation. That reconciliation is also an authoritative idle edge for
 the session itself: if a registered orchestrator accumulated inbox mail while
 the probe still reported it as working, settling the probe reevaluates the
 pending payload-free inbox wake immediately. It does not wait for a later child
-lifecycle event, and the child payload remains in the inbox. One app-wide process snapshot is collected at most once
+lifecycle event, and the child payload remains in the inbox. A new idle edge or
+first confirmed Ready observation grants a fresh mail-wake attempt budget.
+Later stable Ready ticks may chase outstanding mail within that budget, but do
+not reset it. A wake blocked before writing any bytes, such as by a retained
+user draft, exhausts the budget until new idle evidence arrives. Queued user
+commands still use the stable Ready level to retry their existing guarded flush. One app-wide process snapshot is collected at most once
 per second on Tokio's
 blocking pool and shared by every session. The refresher runs only while a
 ready probe or tracked background process needs it, skips missed interval ticks,

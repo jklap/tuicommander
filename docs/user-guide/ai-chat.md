@@ -69,7 +69,11 @@ TUICommander handles these actions locally instead of sending them to the model:
 Host actions do not accept arguments or attachments, except `/clear`, which
 removes attachments. Unsupported commands, including `/name` and `/retry`, stay
 in the composer with an inline **not available in AI Chat** explanation and a
-list of available names. Nothing is sent silently. Open a conversation with
+list of available names. A leading path token with another `/`, such as
+`/Users/x/file.ts` or `/tmp/error.log`, is sent as prompt text unless it matches
+an advertised command name. Bare names such as `/retry` remain command attempts;
+write `/tmp/` with its trailing slash when referring to a top-level directory.
+Nothing is sent silently. Open a conversation with
 **New** or `/new` to receive its agent command offer.
 
 ## Automatic context compaction
