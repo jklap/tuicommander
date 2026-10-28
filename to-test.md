@@ -1,3 +1,7 @@
+## Worktree archive-pool cache (2424-e871) — Rust restart required
+
+- [ ] Coordinator critic: run `cached_worktree_inventory_does_not_reload_archive_pool`, `cached_worktree_inventory_tracks_storage_changes`, and existing `discovery_2157` / `discovery_2156` inventory consumers on the final commit. RED reproduced three pool resolutions instead of one for both cache-entry orders on Linux rb; no post-fix GREEN run is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, change global and per-repository worktree storage settings with disposable checkouts. Confirm archive-pool rows refresh and repeated inventory reads remain cached. Rust does not hot-reload; the daily app was not restarted.
 ## Claude mobile 429 backoff (2430-4049) — Rust restart required
 
 - [ ] Coordinator critic: run `mobile_quota_429_sets_shared_profile_backoff`, `mobile_quota_non_429_and_timeout_do_not_set_backoff`, `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` on the final commit. Native macOS and Linux rb RED reproduced repeated credential IO after 429; post-fix GREEN belongs to integration.

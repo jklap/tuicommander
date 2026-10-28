@@ -301,11 +301,14 @@ async fn cached_worktree_paths(
     repo_path: String,
 ) -> Result<crate::worktree::WorktreeInventory, String> {
     let p = repo_path.clone();
-    let pool = crate::worktree::archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
+    let worktrees_dir = state.worktrees_dir.clone();
     cached_try(
         state.git_cache.worktree_paths.clone(),
         repo_path,
-        move || git_reads().worktree_inventory(Path::new(&p), Some(&pool)),
+        move || {
+            let pool = crate::worktree::archive_pool_for_repo(Path::new(&p), &worktrees_dir);
+            git_reads().worktree_inventory(Path::new(&p), Some(&pool))
+        },
     )
     .await
     .map_err(|e| format!("get_worktree_paths failed: {e}"))
@@ -990,6 +993,123 @@ pub(crate) async fn get_commit_graph(
 mod tests {
     use super::*;
     use tuic_git::test_fixtures::setup_test_repo_with_commit;
+
+    /// Catches: async and synchronous cache hits still canonicalize/load archive settings.
+    #[tokio::test]
+    async fn cached_worktree_inventory_does_not_reload_archive_pool() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().into_owned();
+        let state = crate::state::tests_support::make_test_app_state();
+        let reads = Arc::new(AtomicUsize::new(0));
+        crate::worktree::ARCHIVE_POOL_READS.insert(path.clone(), reads.clone());
+        let mut counts = Vec::new();
+        for async_first in [true, false] {
+            state.git_cache.worktree_paths.invalidate_all();
+            reads.store(0, Ordering::SeqCst);
+            if async_first {
+                cached_worktree_paths(&state, repo.clone()).await.unwrap();
+            } else {
+                crate::worktree::get_worktree_paths_cached(&state, &repo).unwrap();
+            }
+            let inventory = cached_worktree_paths(&state, repo.clone()).await.unwrap();
+            let sync = crate::worktree::get_worktree_paths_cached(&state, &repo).unwrap();
+            assert_eq!(inventory.worktree_paths, sync);
+            counts.push(reads.load(Ordering::SeqCst));
+        }
+        crate::worktree::ARCHIVE_POOL_READS.remove(&path);
+        assert_eq!(counts, [1, 1], "only the cold loader may resolve the pool");
+    }
+
+    /// Catches: storage saves leave a pool-filtered inventory stale, or no-op saves evict it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn cached_worktree_inventory_tracks_storage_changes() {
+        use crate::config::{RepoSettingsEntry, RepoSettingsMap, WorktreeStorage};
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().into_owned();
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let checkout = path.join(".worktrees/__archived/pooled");
+        git_cmd(&path)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "pooled",
+                checkout.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        let initial = cached_worktree_paths(&state, repo.clone()).await.unwrap();
+        assert!(initial.worktree_paths.contains_key("pooled"));
+        let cached = state.git_cache.worktree_paths.get(&repo).unwrap();
+
+        // Saving unrelated settings must not force Git/config work on the next hit.
+        let base = crate::config::load_repo_defaults();
+        let mut defaults = base.clone();
+        defaults.setup_script = "echo setup".into();
+        crate::config::save_repo_defaults(base, defaults).unwrap();
+        crate::settings::api::publish_change(&state, "repo_defaults", true);
+        assert!(Arc::ptr_eq(
+            &cached,
+            &state.git_cache.worktree_paths.get(&repo).unwrap()
+        ));
+
+        let base = crate::config::load_repo_defaults();
+        let mut defaults = base.clone();
+        defaults.worktree_storage = WorktreeStorage::InsideRepo;
+        crate::config::save_repo_defaults(base, defaults).unwrap();
+        crate::settings::api::publish_change(&state, "repo_defaults", true);
+        assert!(
+            !crate::worktree::get_worktree_paths_cached(&state, &repo)
+                .unwrap()
+                .contains_key("pooled")
+        );
+        assert!(
+            !cached_worktree_paths(&state, repo.clone())
+                .await
+                .unwrap()
+                .worktree_paths
+                .contains_key("pooled")
+        );
+
+        let settings = RepoSettingsMap {
+            repos: HashMap::from([(
+                repo.clone(),
+                RepoSettingsEntry {
+                    path: repo.clone(),
+                    worktree_storage: Some(WorktreeStorage::Sibling),
+                    ..Default::default()
+                },
+            )]),
+        };
+        crate::config::save_repo_settings(Default::default(), settings.clone()).unwrap();
+        crate::settings::api::publish_change(&state, "repositories", true);
+        assert!(
+            cached_worktree_paths(&state, repo.clone())
+                .await
+                .unwrap()
+                .worktree_paths
+                .contains_key("pooled")
+        );
+        let cached = state.git_cache.worktree_paths.get(&repo).unwrap();
+        crate::config::save_repo_settings(settings.clone(), settings.clone()).unwrap();
+        crate::settings::api::publish_change(&state, "repositories", true);
+        assert!(Arc::ptr_eq(
+            &cached,
+            &state.git_cache.worktree_paths.get(&repo).unwrap()
+        ));
+
+        crate::config::save_repo_settings(settings, Default::default()).unwrap();
+        crate::settings::api::publish_change(&state, "repositories", true);
+        assert!(
+            !crate::worktree::get_worktree_paths_cached(&state, &repo)
+                .unwrap()
+                .contains_key("pooled")
+        );
+    }
 
     fn labelled_repo(branch: &str) -> (tempfile::TempDir, String, tempfile::TempDir) {
         let (dir, path) = setup_test_repo_with_commit();
