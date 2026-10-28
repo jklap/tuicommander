@@ -3239,6 +3239,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
 
 
+- [ ] After rebuilding the backend, put a short-TTL task secret, spawn with its scope, and confirm echoed output is masked in desktop, mobile and a diagnostic capture. A later spawn must reject the expired scope while the original session remains masked (#2319-02f6). Rust does not hot-reload; restart only when ready to end the current live app session.
 - [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
 ## Reviewed event issue publication (#2325-10c4)
 
@@ -3251,3 +3252,6 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] Event outcomes (#2326-98f1): after a manual Rust restart, inspect a permitted event run through `automations` run details; verify the PR URL and decision persist after restart and unknown publication does not create a second PR. No live GitHub write or desktop launch was performed in this implementation.
 
 - [ ] After a backend rebuild, open Archive workspace for a dirty, unmerged checkout and a clean integrated checkout. Confirm counts and disabled/enabled Delete; Archive must keep all changes. Rust changes require a manual restart to load. Automated Git and rendering evidence is recorded in story 2453-2ec7.
+## Incoming PR review automation (2327-1ca0)
+
+- [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.

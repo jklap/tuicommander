@@ -7,6 +7,8 @@ mod mask;
 pub(crate) mod policy;
 mod run;
 mod schema;
+mod task;
+pub(crate) use mask::StreamMask;
 use schema::valid_name;
 
 /// The one rule for a submitted secret value: non-empty, at most 16 KiB, no NUL.
@@ -86,12 +88,14 @@ struct ApprovedTemplate {
 struct Inner {
     values: BTreeMap<String, Zeroizing<String>>,
     templates: Vec<ApprovedTemplate>,
+    scopes: BTreeMap<String, task::ScopedValues>,
     pending: Option<Pending>,
 }
 
 #[derive(Default)]
 pub(crate) struct SecretStore {
     inner: parking_lot::Mutex<Inner>,
+    session_masks: dashmap::DashMap<String, std::sync::Arc<Vec<Zeroizing<String>>>>,
     // Window lifetime outlives the pending reply. Inspection stays blocked until
     // native destruction, including a submit/close race and failed destruction.
     // open() allows one form, so at most one window exists.
@@ -253,6 +257,7 @@ impl SecretStore {
         let mut inner = self.inner.lock();
         inner.values.clear();
         inner.templates.clear();
+        inner.scopes.clear();
         inner.pending.take();
     }
     fn allowed(&self, argv: &[String], names: &[String], cwd: &str) -> bool {
@@ -289,12 +294,15 @@ pub(crate) use run::handle_secret;
 pub(crate) fn tool_definition() -> serde_json::Value {
     serde_json::json!({
         "name": "secret",
-        "description": "Request a private sensitive-field form, then run a user-approved argv with named values in the child environment only. Values are never returned. An approved command can exfiltrate. request opens a separate native form; HTTP/mobile entry uses its private one-time capability link. run uses user-approved command templates or asks for exact argv consent; shell/interpreter evaluation and environment dumpers are forbidden. Templates match exact argv, names and directory. Output masks exact values, JSON-escaped values and base64, hex and URL encodings, including line wraps and embedded Basic-auth payloads. Values are shared by name across callers of this backend process and survive MCP reconnects. remove zeroizes named values and returns removed, including already absent names; it does not report prior presence. Requests require a desktop host; the phone can submit the desktop-opened form.",
+        "description": "Put task-scoped write-only values with a TTL in seconds, or request a private sensitive-field form, then run a user-approved argv with named values in the child environment only. Values are never returned. An approved command can exfiltrate. request opens a separate native form; HTTP/mobile entry uses its private one-time capability link. run uses user-approved command templates or asks for exact argv consent; shell/interpreter evaluation and environment dumpers are forbidden. Templates match exact argv, names and directory. Output masks exact values, JSON-escaped values and base64, hex and URL encodings, including line wraps and embedded Basic-auth payloads. Put values are selected with agent spawn scope and injected only into child env. TTL revokes new injection; masks survive until session teardown. Form values are shared by name across callers of this backend process and survive MCP reconnects. remove zeroizes named values and returns removed, including already absent names; it does not report prior presence. Requests require a desktop host; the phone can submit the desktop-opened form.",
         "inputSchema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["request", "run", "remove"]},
+            "action": {"type": "string", "enum": ["request", "run", "remove", "put"]},
             "fields": {"type": "array", "items": {"type": "object", "properties": {
                 "name": {"type": "string"}, "kind": {"type": "string", "enum": ["username", "password", "otp", "sso"]}, "display": {"type": "string", "description": "HTTP(S) SSO link to display without navigating"}
             }, "required": ["name", "kind"], "additionalProperties": false}},
+            "values": {"type": "array", "items": {"type": "string"}, "description": "Write-only values in names order (put)"},
+            "scope": {"type": "string", "description": "Task id (put); agent spawn scope selects these values"},
+            "ttl": {"type": "integer", "minimum": 1, "description": "Seconds until new injection is revoked; existing session masks survive until teardown"},
             "reason": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}},
             "argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}
         }, "required": ["action"], "additionalProperties": false}

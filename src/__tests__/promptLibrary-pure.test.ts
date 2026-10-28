@@ -148,7 +148,9 @@ describe("promptLibrary pure functions", () => {
 				expect(delivered).toContain(
 					"Existing configurations without workflow retain legacy completion-only publication",
 				);
-				expect(guide.builtInVersion).toBe(6);
+				expect(delivered).toContain("pull_request_reviews with repositories and definition_id");
+				expect(delivered).toContain("unknown publication is never retried");
+				expect(guide.builtInVersion).toBe(7);
 			});
 		});
 

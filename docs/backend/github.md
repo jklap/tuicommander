@@ -599,6 +599,20 @@ The shared poller keeps intake and client issue delivery separate. For an intake
 
 GitHub applies assigned, created and mentioned client predicates with the resolved account viewer. The client connection keeps its existing 30-node bound and never adopts the intake selection. Disabled client issues publish an empty client snapshot. Complete intake snapshots use an internal event consumed only by the automation runtime and excluded from SSE; desktop and SSE receive the same filtered client snapshot. The runtime retains the full eligible set for capacity retries, and the run store still deduplicates event keys.
 
+### Automatic review-only PR intake
+
+The automation runtime can subscribe to registered github.com repositories through
+its separate `pull_request_reviews` allowlist. It consumes the shared poller's PR
+snapshots only from the single registered polling path selected for each
+repository. Snapshots from sibling checkouts cannot roll back the admitted head;
+after bus lag it waits for the selected path to resync. The ACP one-shot review reads the
+GitHub comparison of immutable base/head SHAs. Host-owned publication revalidates
+eligibility and uses a durable claim plus `COMMENT` and an explicit `commit_id`.
+It never sends the manual review panel's diff hash as a commit. Unknown POST
+outcomes are not retried, including after restart. This path cannot launch a PTY,
+create worktrees, push branches or create another PR. See the
+[automation guide](../user-guide/automations.md#incoming-pr-reviews-review-only).
+
 
 ### Host-owned issue triage publication (#2324-424d)
 

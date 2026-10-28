@@ -88,3 +88,44 @@ Bootstrap checks the native window identity; the main WebView cannot acquire
 its nonce. Inputs are cleared and unmounted before submit begins, and the native
 window is destroyed after successful entry. OS-level screen capture outside
 TUIC is not controlled by this mechanism.
+
+## Task-scoped controller entry
+
+A controller can call the `secret` MCP tool through the authenticated app
+transport without opening a desktop form:
+
+```json
+{"action":"put","names":["SERVICE_TOKEN"],"values":["example-value"],"scope":"task-42","ttl":300}
+```
+
+`values` is an array in the same order as `names`. Names must be unique valid
+environment names, and cannot replace `TUIC_SESSION` or `TUIC_PARENT`. Each value
+must be nonempty, contain no NUL, and fit in 16 KiB. At most 16 names are accepted.
+`ttl` is a positive whole number of seconds. The reply contains names and
+`status: "stored"`, never values. Storage is memory-only. Use HTTPS for remote
+entry; the existing app authentication and local-machine trust boundary apply.
+
+Pass the same task ID as `scope` to `agent action=spawn`, or to
+`POST /sessions/agent`. Only the child environment receives these values; TUIC
+does not add them to arguments, prompt receipts or terminal input. A missing or
+expired scope is rejected at launch admission. Each spawn attempt rechecks the
+deadline; a reservation delayed past expiry starts without the scoped values.
+Scopes do not share values with the form-based `run` store or with other scopes.
+A new put replaces that scope atomically, without changing an existing child.
+
+TTL revokes future injection. It cannot revoke an environment the OS already
+copied into a running child. That session therefore retains zeroizing masking
+material until session teardown, even after expiry or scope replacement.
+No masking material or raw values are persisted. Normal exit clears the store.
+The `remove` action continues to remove form-store names; task values expire
+with their scope.
+
+Scoped output is masked before the terminal grid, VT history, HTTP output,
+WebSocket streams, output watchers and diagnostic captures receive it. A possible
+secret prefix at a read boundary is withheld until later output disambiguates
+it; an unfinished prefix is discarded when the session ends. Oversized ambiguous
+runs are redacted rather than retained without a bound. The diagnostic byte ring
+also receives sanitized output for these sessions. Captures of scoped output
+are therefore not byte-for-byte recordings of the original child stream.
+As with approved commands, arbitrary transformations and deliberate exfiltration
+by a child are outside this protection.

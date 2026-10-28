@@ -538,6 +538,7 @@ fn native_reference_tool_definitions() -> serde_json::Value {
                 "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
+                "scope": { "type": "string", "description": "Task-secret scope from secret put. Fails if missing/expired; values enter child env only (action=spawn)." },
                 "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Child environment overrides. Applied after run-config env and before protected TUIC_SESSION/TUIC_PARENT (action=spawn)" },
                 "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
                 "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },

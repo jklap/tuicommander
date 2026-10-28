@@ -583,3 +583,257 @@ async fn secret_remove_reports_completion_across_mcp_reconnects() {
         vec![serde_json::json!({"names": ["TARGET", "ABSENT"], "status": "removed"}); 4]
     );
 }
+
+// Catches: a controller cannot store a task secret without a desktop form.
+#[tokio::test]
+async fn task_secret_put_is_write_only_2319() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let reply = handle_secret(
+        &state,
+        &serde_json::json!({
+            "action": "put", "names": ["TASK_TOKEN"],
+            "values": ["canary-secret-2319"], "scope": "task-2319", "ttl": 60
+        }),
+    )
+    .await;
+    assert_eq!(
+        reply,
+        serde_json::json!({"names": ["TASK_TOKEN"], "status": "stored"})
+    );
+    assert!(!format!("{reply}").contains("canary-secret-2319"));
+}
+
+// Catches: expiry erases an active child's masks or a late old timer revokes a replacement.
+#[tokio::test(start_paused = true)]
+async fn task_secret_ttl_revokes_injection_not_active_session_masks_2319() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let put = |value: &str, ttl: u64| {
+        serde_json::json!({
+            "action": "put", "names": ["TASK_TOKEN"], "values": [value], "scope": "task-a", "ttl": ttl
+        })
+    };
+    assert_eq!(
+        handle_secret(&state, &put("old-canary-2319", 2)).await["status"],
+        "stored"
+    );
+    let environment = state.secrets.scope_environment("task-a").unwrap();
+    state.secrets.bind_scope("child-a", &environment);
+    assert_eq!(environment.values["TASK_TOKEN"].as_str(), "old-canary-2319");
+    assert!(state.secrets.scope_environment("unrelated-task").is_err());
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(
+        handle_secret(&state, &put("new-canary-2319", 5)).await["status"],
+        "stored"
+    );
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        state.secrets.scope_environment("task-a").unwrap().values["TASK_TOKEN"].as_str(),
+        "new-canary-2319"
+    );
+    tokio::time::advance(std::time::Duration::from_secs(4)).await;
+    assert!(state.secrets.scope_environment("task-a").is_err());
+    let mut delayed = portable_pty::CommandBuilder::new("test-child");
+    delayed.env("TASK_TOKEN", "old-canary-2319");
+    environment.apply_to(&mut delayed);
+    assert_eq!(
+        delayed.get_env("TASK_TOKEN"),
+        None,
+        "a delayed retry must not inject an expired reservation"
+    );
+    drop(environment);
+    let mut mask = StreamMask::default();
+    let masked = mask
+        .push("old-canary-2319!", state.secrets.pty_needles("child-a"))
+        .unwrap();
+    assert!(!masked.contains("old-canary-2319"));
+    state.secrets.release_session("child-a");
+    assert_eq!(
+        state.secrets.pty_needles("child-a"),
+        Vec::<Zeroizing<String>>::new()
+    );
+}
+
+// Catches: invalid/partial writes overwrite a valid scope, and names leak across scopes.
+#[tokio::test]
+async fn task_secret_put_validation_is_atomic_2319() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let valid = serde_json::json!({"action":"put", "names":["TOKEN"], "values":["keep-canary-2319"], "scope":"task", "ttl":60});
+    assert_eq!(handle_secret(&state, &valid).await["status"], "stored");
+    for (key, value) in [
+        ("values", serde_json::json!([])),
+        ("values", serde_json::json!([""])),
+        ("ttl", serde_json::json!(0)),
+        ("ttl", serde_json::json!(-1)),
+        ("names", serde_json::json!(["NOT=ENV"])),
+        ("names", serde_json::json!(["TUIC_SESSION"])),
+        ("names", serde_json::json!(["TOKEN", "TOKEN"])),
+    ] {
+        let mut invalid = valid.clone();
+        invalid[key] = value;
+        assert!(
+            handle_secret(&state, &invalid).await.get("error").is_some(),
+            "invalid {key}"
+        );
+        assert_eq!(
+            state.secrets.scope_environment("task").unwrap().values["TOKEN"].as_str(),
+            "keep-canary-2319"
+        );
+    }
+    assert!(state.secrets.environment(&["TOKEN".into()]).is_err());
+}
+
+// Catches: a raw or encoded value split at any PTY read boundary publishes its prefix.
+#[test]
+fn task_secret_stream_masks_split_values_without_dropping_safe_output_2319() {
+    use base64::Engine;
+    let value = "canary-secret-2319";
+    let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+    for echo in [value.to_string(), encoded, "canary-\r\nsecret-2319".into()] {
+        for split in 0..=echo.len() {
+            let mut mask = StreamMask::default();
+            let first = mask
+                .push(
+                    &format!("before!{}", &echo[..split]),
+                    mask::representations(value),
+                )
+                .unwrap();
+            assert!(!first.contains(value));
+            let second = mask
+                .push(&format!("{}!after!", &echo[split..]), Vec::new())
+                .unwrap();
+            let result = first + &second;
+            assert!(
+                result.starts_with("before!") && result.ends_with("!after!"),
+                "split={split}"
+            );
+            assert!(
+                !result.contains(value) && !result.contains(&echo),
+                "split={split}"
+            );
+        }
+    }
+}
+
+// Catches: scoped env injection bypasses masking on the real HTTP/WS/grid/capture paths.
+#[cfg(unix)]
+#[tokio::test]
+async fn task_secret_child_echo_is_masked_on_every_transport_2319() {
+    use futures_util::StreamExt;
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = crate::mcp_http::build_router(state.clone(), false, true);
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    struct Cleanup {
+        state: std::sync::Arc<crate::AppState>,
+        session: Option<String>,
+        server: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            crate::pty_capture::set_enabled(false, None, std::path::PathBuf::new());
+            if let Some(session) = &self.session {
+                if let Some(entry) = self.state.session_maps.sessions.get(session) {
+                    let _ = entry.lock()._child.kill();
+                }
+                crate::pty::cleanup_session(session, &self.state);
+            }
+            self.server.abort();
+        }
+    }
+    let mut cleanup = Cleanup {
+        state: state.clone(),
+        session: None,
+        server,
+    };
+    let stored = handle_secret(&state, &serde_json::json!({
+        "action":"put", "names":["TASK_TOKEN"], "values":["canary-secret-2319"], "scope":"task-wire", "ttl":60
+    })).await;
+    assert_eq!(stored["status"], "stored");
+    let client = reqwest::Client::new();
+    let base = format!("http://{address}");
+    let reply: serde_json::Value = client.post(format!("{base}/sessions/agent")).json(&serde_json::json!({
+        "binary_path":"/bin/sh", "args":["-c", "read -r line; printf 'before!%s!after!\\n' \"$TASK_TOKEN\"; read -r line"],
+        "prompt":"not a secret", "scope":"task-wire"
+    })).send().await.unwrap().json().await.unwrap();
+    let id = reply["session_id"]
+        .as_str()
+        .expect("scoped child spawned")
+        .to_string();
+    cleanup.session = Some(id.clone());
+    crate::pty_capture::set_enabled(true, Some(id.clone()), root.path().to_path_buf());
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/sessions/{id}/stream"))
+            .await
+            .unwrap();
+    // Only ordinary input is written; the value is inherited from the spawn environment.
+    client
+        .post(format!("{base}/sessions/{id}/write"))
+        .json(&serde_json::json!({"data":"go\n"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut wire = String::new();
+    while !wire.contains("!after!") {
+        let frame = ws.next().await.expect("WS remains open").unwrap();
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = frame {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if let Some(data) = json["data"].as_str() {
+                wire.push_str(data);
+            }
+        }
+    }
+    assert!(wire.contains("before!"));
+    assert!(!wire.contains("canary-secret-2319"));
+    for format in ["raw", "text", "log", "mcp_raw"] {
+        let body = client
+            .get(format!("{base}/sessions/{id}/output?format={format}"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("before!"), "missing child output: {format}");
+        assert!(!body.contains("canary-secret-2319"), "secret in {format}");
+    }
+    // WS publication precedes the reader's diagnostic tap. Wait for that
+    // consumer to receive this output, not merely for the earlier WS send.
+    let diagnostic = loop {
+        let snapshot: Option<Vec<u8>> = state.grid.pty_raw_rings.get(&id).map(|entry| {
+            let bytes = entry.lock();
+            bytes.iter().copied().collect()
+        });
+        if let Some(bytes) = snapshot
+            && String::from_utf8_lossy(&bytes).contains("!after!")
+        {
+            break bytes;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert!(!String::from_utf8_lossy(&diagnostic).contains("canary-secret-2319"));
+    crate::pty_capture::set_enabled(false, None, std::path::PathBuf::new());
+    let capture = std::fs::read(root.path().join(format!("{id}.tcap"))).unwrap();
+    let records = crate::pty_capture::decode(&capture).unwrap();
+    let captured: Vec<_> = records
+        .iter()
+        .flat_map(|record| record.data.iter().copied())
+        .collect();
+    assert!(String::from_utf8_lossy(&captured).contains("before!"));
+    assert!(!String::from_utf8_lossy(&captured).contains("canary-secret-2319"));
+    ws.close(None).await.unwrap();
+    drop(cleanup);
+}

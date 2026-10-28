@@ -266,10 +266,12 @@ fn execute_stored_configured(
     match action {
         AutomationAction::List {} => {
             let mut items = Vec::new();
-            for definition in definitions.load()?.definitions {
+            let config = definitions.load()?;
+            for definition in &config.definitions {
+                let review_only = config.review_only(&definition.id);
                 let cursor = cursor(runs, &definition.id)?;
                 let schedule = definition.schedule()?;
-                let next = if definition.enabled && !schedule.is_completed(cursor) {
+                let next = if definition.enabled && !review_only && !schedule.is_completed(cursor) {
                     schedule.next_after(now.max(cursor.unwrap_or(now)))?
                 } else {
                     None
@@ -278,7 +280,7 @@ fn execute_stored_configured(
                     .history(Some(&definition.id), 1, 0)?
                     .first()
                     .map(|run| run.status);
-                let profile_error = profiles.and_then(|profiles| {
+                let profile_error = profiles.filter(|_| !review_only).and_then(|profiles| {
                     profiles
                         .require_named_run_config(&definition.run_config)
                         .err()

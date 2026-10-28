@@ -954,15 +954,15 @@ pub(crate) async fn get_all_batch_with_intake_impl(
     };
 
     let intake_label = if intake {
-        Some(
-            tokio::task::spawn_blocking(|| {
-                crate::automations::definitions::DefinitionStore::new().load()
-            })
-            .await
-            .map_err(|e| format!("intake config load task panicked: {e}"))??
+        let config = tokio::task::spawn_blocking(|| {
+            crate::automations::definitions::DefinitionStore::new().load()
+        })
+        .await
+        .map_err(|e| format!("intake config load task panicked: {e}"))??;
+        config
             .event_intake
-            .poll_label(),
-        )
+            .enabled()
+            .then(|| config.event_intake.poll_label())
     } else {
         None
     };
