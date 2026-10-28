@@ -10,12 +10,35 @@
 //! - Linux: kernel keyutils / Secret Service (GNOME Keyring / KWallet)
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 type Vault = HashMap<String, String>;
 type VaultGuard<'a> = MutexGuard<'a, Option<Vault>>;
 
 static VAULT: Mutex<Option<Vault>> = Mutex::new(None);
+
+// Selected by the headless entry point before any credential consumer runs.
+// Separate from the keyring cache so misses can never trigger legacy migration.
+static FILE_VAULT: OnceLock<Mutex<Vault>> = OnceLock::new();
+
+/// Whether startup explicitly selected a file-seeded process-local source.
+pub fn credential_file_selected() -> bool {
+    FILE_VAULT.get().is_some()
+}
+
+/// Seed a process-local vault from a mounted JSON string map. Read once at boot;
+/// never write the selected file. A fresh process is required for rotation.
+/// Call only during headless startup, before starting other threads.
+pub fn select_credential_file(path: &std::path::Path) -> Result<(), String> {
+    let bytes =
+        std::fs::read(path).map_err(|_| "Cannot read selected credential file".to_string())?;
+    let vault: Vault = serde_json::from_slice(&bytes).map_err(|_| {
+        "Selected credential file must be a JSON object of string values".to_string()
+    })?;
+    FILE_VAULT
+        .set(Mutex::new(vault))
+        .map_err(|_| "Credential source is already selected".to_string())
+}
 
 use std::time::{Duration, Instant};
 
@@ -306,6 +329,13 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
 
 pub fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
     let key = cred.vault_key();
+    if let Some(vault) = FILE_VAULT.get() {
+        return Ok(vault
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .cloned());
+    }
     let mut guard = lock();
     load(&mut guard)?;
 
@@ -334,6 +364,13 @@ pub fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
 pub fn set(cred: Credential<'_>, value: &str) -> Result<(), String> {
     let key = cred.vault_key();
     let trimmed = value.trim().to_string();
+    if let Some(vault) = FILE_VAULT.get() {
+        vault
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, trimmed);
+        return Ok(());
+    }
     let mut guard = lock();
     load(&mut guard)?;
     let mut next = guard.as_ref().unwrap().clone();
@@ -345,6 +382,10 @@ pub fn set(cred: Credential<'_>, value: &str) -> Result<(), String> {
 
 pub fn delete(cred: Credential<'_>) -> Result<(), String> {
     let key = cred.vault_key();
+    if let Some(vault) = FILE_VAULT.get() {
+        vault.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        return Ok(());
+    }
     let mut guard = lock();
     load(&mut guard)?;
     let mut next = guard.as_ref().unwrap().clone();
@@ -357,6 +398,9 @@ pub fn delete(cred: Credential<'_>) -> Result<(), String> {
 /// Fail a named instance before it binds if its vault namespace is unreadable.
 /// The default instance has nothing to prove here: `load()` already sweeps it.
 pub fn probe_named_vault_read() -> Result<(), String> {
+    if FILE_VAULT.get().is_some() {
+        return Ok(());
+    }
     let instance = crate::app_instance::current_app_instance();
     if instance.is_default() {
         return Ok(());

@@ -2972,6 +2972,12 @@ pub struct RemoteOptions {
     pairing_token: Option<String>,
 }
 
+/// Select a mounted, read-once credential seed before headless startup.
+#[cfg(not(feature = "desktop"))]
+pub fn select_remote_credential_file(path: &std::path::Path) -> Result<(), String> {
+    credentials::select_credential_file(path)
+}
+
 /// Read-only metadata for selecting a locally built daemon binary.
 pub fn remote_build_info_json() -> Result<String, String> {
     let build = remote_deploy::assets::running_build_identity()?;
@@ -3072,6 +3078,11 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     app_logger::init_tracing(log_buffer.clone());
 
     let mut app_config = config::load_app_config();
+    if credentials::credential_file_selected() {
+        // A first boot has no config.json, so the config reader returns defaults
+        // without hydration. Mounted credentials still apply to that first boot.
+        let _ = config::hydrate_app_config_secrets(&mut app_config);
+    }
     // Reject invalid key material before starting either IPC or TCP listeners.
     let tls_config = load_remote_tls(&app_config.services.tls).await?;
     app_config.services.server.enabled = true;

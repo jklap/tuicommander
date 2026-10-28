@@ -2487,7 +2487,7 @@ fn hydrate_one_secret(
 /// Hydrate every vault-backed secret. Returns `true` when plaintext was migrated out of
 /// config.json and the file must be rewritten.
 #[must_use]
-fn hydrate_app_config_secrets(config: &mut AppConfig) -> bool {
+pub(crate) fn hydrate_app_config_secrets(config: &mut AppConfig) -> bool {
     let session = hydrate_one_secret(
         crate::credentials::Credential::RemoteSessionToken,
         &mut config.services.auth.session_token,

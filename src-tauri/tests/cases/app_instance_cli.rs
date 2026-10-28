@@ -216,6 +216,73 @@ fn named_debug_vault_ignores_and_does_not_mutate_default_legacy_entries() {
     );
 }
 
+// Catches selected credentials still requiring a session bus or the debug vault.
+#[test]
+fn headless_credential_file_boots_without_a_session_bus() {
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("mounted-vault.json");
+    let contents = r#"{"remote/session-token":"mounted-file-token"}"#;
+    fs::write(&seed, contents).unwrap();
+    run_cli_until_killed_with_vars(
+        &env,
+        &[
+            "--instance",
+            NAMED_ID,
+            "--credential-file",
+            seed.to_str().unwrap(),
+            "--no-agent-configs",
+        ],
+        "mounted-file-token",
+        &[(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent-tuic-test-bus",
+        )],
+    );
+    assert_eq!(fs::read_to_string(seed).unwrap(), contents);
+    assert!(!env.named_vault(NAMED_ID).exists());
+    assert!(!env.debug_vault().exists());
+    if env.named_config(NAMED_ID).exists() {
+        let config = fs::read_to_string(env.named_config(NAMED_ID)).unwrap();
+        assert!(!config.contains("mounted-file-token"));
+    }
+}
+
+// Catches bad mounted data silently falling back to a keyring or empty vault.
+#[test]
+fn headless_credential_file_rejects_bad_input_without_secret_diagnostics() {
+    let env = IsolatedEnv::new();
+    let seed = env._dir.path().join("bad-vault.json");
+    for contents in [
+        None,
+        Some(r#"{"secret-do-not-log":42}"#),
+        Some("secret-do-not-log"),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&seed, contents).unwrap();
+        }
+        let output = run_cli_with_vars(
+            &env,
+            &[
+                "--instance",
+                NAMED_ID,
+                "--credential-file",
+                seed.to_str().unwrap(),
+            ],
+            None,
+            &[(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-tuic-test-bus",
+            )],
+        );
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("credential file"));
+        assert!(!stderr.contains("secret-do-not-log"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("secret-do-not-log"));
+        assert!(!env.named_config(NAMED_ID).exists());
+    }
+}
+
 #[test]
 fn default_set_password_preserves_legacy_config() {
     let env = IsolatedEnv::new();
@@ -455,6 +522,15 @@ const REAP_AFTER_KILL_TIMEOUT: Duration = Duration::from_secs(5);
 /// never accidentally probe with a different instance's secret; it is never
 /// logged.
 fn run_cli_until_killed(env: &IsolatedEnv, args: &[&str], token: &str) {
+    run_cli_until_killed_with_vars(env, args, token, &[]);
+}
+
+fn run_cli_until_killed_with_vars(
+    env: &IsolatedEnv,
+    args: &[&str],
+    token: &str,
+    vars: &[(&str, &str)],
+) {
     // Pay any first-run exec-scan cost once, outside every timed assertion
     // below, so it can never be mistaken for slow CLI startup.
     warm_cli_binary(env);
@@ -470,6 +546,7 @@ fn run_cli_until_killed(env: &IsolatedEnv, args: &[&str], token: &str) {
             .env("APPDATA", &env.appdata)
             .env("USERPROFILE", &env.userprofile)
             .env("TUIC_PORT", port.to_string())
+            .envs(vars.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());

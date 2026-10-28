@@ -1,3 +1,8 @@
+## Headless file credentials (2343-5358) — daemon rebuild/restart required
+
+- [ ] Coordinator critic: run `headless_credential_file_selector_is_accepted`, `credential_file_is_fail_closed_read_once_and_process_local`, `headless_credential_file_boots_without_a_session_bus` and `headless_credential_file_rejects_bad_input_without_secret_diagnostics`. The CLI regression failed on pre-fix Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After rebuilding the headless binary, launch a disposable named instance with `--credential-file` and a read-only seed on unprivileged Linux without a session bus. Authenticate with the seeded token, replace the file, confirm the old token remains active until restart, then confirm the replacement token works. Rust does not hot-reload. The daily app was not restarted; desktop defaults are unchanged.
+
 ## MDKB hook telemetry state (2442-61f6)
 
 - [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.
