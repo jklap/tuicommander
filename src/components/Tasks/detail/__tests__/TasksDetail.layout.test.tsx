@@ -18,7 +18,7 @@ it("wide_lan_detail_reads_description_and_comments_before_the_folded_fields", as
 	expect(group.open).toBe(false);
 	expect(group).toHaveTextContent(`Fields (${fields.length})`);
 	expect(section.querySelectorAll("form")).toHaveLength(fields.length);
-	const description = screen.getByLabelText("Description");
+	const description = screen.getByRole("region", { name: "Description" });
 	const comments = screen.getByLabelText("Comments");
 	expect(follows(description, group)).toBe(true);
 	expect(follows(group, comments)).toBe(true);

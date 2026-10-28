@@ -1,5 +1,6 @@
 /** Setup descriptors for the work-item plugins, so core can edit their data/work-items.json without the user writing JSON. */
 import { invoke } from "../invoke";
+import type { AccountView } from "../types/accounts";
 import { reloadPlugin } from "./pluginLoader";
 
 export interface SetupField {
@@ -60,7 +61,7 @@ export const WORK_ITEM_PLUGINS: readonly WorkItemPluginSetup[] = [
 		name: "Jira",
 		missing: "a site and a project",
 		purpose: "Jira issues",
-		constants: { kind: "basic" },
+		constants: {},
 		fields: [
 			accountId("my-site"),
 			{ key: "host", label: "Host", placeholder: "https://site.atlassian.net", required: true },
@@ -161,11 +162,17 @@ export async function loadWorkItemSetup(setup: WorkItemPluginSetup): Promise<Val
 }
 
 export async function saveWorkItemSetup(setup: WorkItemPluginSetup, values: Values): Promise<void> {
-	const content = upsertAccount(
-		await readRaw(setup.pluginId),
-		accountFromValues(setup, values),
-		setup.fields.map((field) => field.key),
-	);
+	const account = accountFromValues(setup, values);
+	const editedKeys = setup.fields.map((field) => field.key);
+	if (setup.providerId === "jira") {
+		const accounts = await invoke<AccountView[]>("account_action", { request: { action: "list" } });
+		const registered = accounts.find((entry) => entry.provider === "jira" && entry.id === account.id);
+		if (!registered || (registered.kind !== "basic" && registered.kind !== "bearer"))
+			throw new Error("Choose a registered Jira Basic or Bearer account");
+		account.kind = registered.kind;
+		editedKeys.push("kind");
+	}
+	const content = upsertAccount(await readRaw(setup.pluginId), account, editedKeys);
 	await invoke("write_plugin_data", { pluginId: setup.pluginId, path: CONFIG, content });
 	// Writes under data/ are not watched, so the plugin only sees them after an explicit reload.
 	await reloadPlugin(setup.pluginId);

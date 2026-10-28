@@ -77,10 +77,13 @@ export function TasksCreate(props: TasksCreateProps) {
 					/>
 				)}
 			</SettingField>
-			<SettingField label="Description">
-				{(id) => (
+			<SettingField label={model.description()?.required ? "Description *" : "Description"} error={model.bodyError()}>
+				{(id, hintId) => (
 					<Textarea
 						id={id}
+						aria-describedby={hintId}
+						aria-required={model.description()?.required || undefined}
+						aria-invalid={!!model.bodyError()}
 						value={model.body()}
 						disabled={model.submitting()}
 						onInput={(event) => model.setBody(event.currentTarget.value)}
