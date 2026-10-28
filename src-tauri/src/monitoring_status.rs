@@ -33,12 +33,16 @@ struct State {
 
 pub(crate) struct StatusCache {
     entries: moka::sync::Cache<PathBuf, Arc<Entry>>,
+    #[cfg(test)]
+    diagnostics: Mutex<Option<Vec<String>>>,
 }
 
 impl Default for StatusCache {
     fn default() -> Self {
         Self {
             entries: moka::sync::Cache::new(256),
+            #[cfg(test)]
+            diagnostics: Mutex::new(None),
         }
     }
 }
@@ -46,7 +50,32 @@ impl Default for StatusCache {
 pub(crate) static CACHE: LazyLock<StatusCache> = LazyLock::new(StatusCache::default);
 
 impl StatusCache {
+    #[cfg(test)]
+    fn record(&self, message: String) {
+        if let Some(diagnostics) = self.diagnostics.lock().as_mut() {
+            diagnostics.push(message);
+        }
+    }
+
+    #[cfg(test)]
+    fn enable_diagnostics(&self) {
+        *self.diagnostics.lock() = Some(Vec::new());
+    }
+
+    #[cfg(test)]
+    fn diagnostics(&self) -> String {
+        self.diagnostics
+            .lock()
+            .as_ref()
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn set_watching(&self, base: &Path, checkout: &Path, watching: bool) {
+        #[cfg(test)]
+        self.record(format!(
+            "set_watching base={base:?} checkout={checkout:?} watching={watching}"
+        ));
         if let Some(entry) = self.entries.get(checkout) {
             let mut state = entry.state.lock();
             state.watching = false;
@@ -92,6 +121,8 @@ impl StatusCache {
     }
 
     pub(crate) fn stop(&self, base: &Path) {
+        #[cfg(test)]
+        self.record(format!("stop base={base:?}: revoke all checkout watches"));
         for (_, entry) in self.entries.iter().filter(|(_, entry)| entry.base == base) {
             let mut state = entry.state.lock();
             state.watching = false;
@@ -101,11 +132,17 @@ impl StatusCache {
 
     /// Raw events must arrive here before ignore/classification filters.
     pub(crate) fn event(&self, base: &Path, event: &notify::Event) -> bool {
+        #[cfg(test)]
+        self.record(format!("raw event base={base:?}: {event:?}"));
         if event.need_rescan() || event.paths.is_empty() {
+            #[cfg(test)]
+            self.record("event decision=watch-loss: rescan or no paths".into());
             self.stop(base);
             return false;
         }
         if crate::repo_watcher::is_ignorable_access(&event.kind) {
+            #[cfg(test)]
+            self.record("event decision=ignore read-only access".into());
             return true;
         }
         let entries: Vec<_> = self
@@ -121,6 +158,10 @@ impl StatusCache {
             if path.starts_with(&common)
                 && crate::fs::is_directory_metadata_event(&event.kind, path)
             {
+                #[cfg(test)]
+                self.record(format!(
+                    "event decision=ignore Git directory metadata path={path:?}"
+                ));
                 continue;
             }
             // Replacement and unmapped paths cannot retain watch authority. A
@@ -138,6 +179,10 @@ impl StatusCache {
             // New admin directories belong to inventory growth, not watch loss.
             // Their checkout has no snapshot until sync arms its recursive watch.
             if lost {
+                #[cfg(test)]
+                self.record(format!(
+                    "event decision=watch-loss: replacement/unmapped path={path:?}"
+                ));
                 self.stop(base);
                 return false;
             }
@@ -164,6 +209,11 @@ impl StatusCache {
                 let working = owner == Some(root.as_path())
                     && !path.starts_with(&common)
                     && !path.starts_with(&entry.admin);
+                #[cfg(test)]
+                self.record(format!(
+                    "event decision checkout={root:?} path={path:?} shared={shared} branch={branch} admin={admin} working={working} generation={} watching={} event={event:?}",
+                    state.generation, state.watching
+                ));
                 if shared || branch || admin || working {
                     state.generation = state.generation.wrapping_add(1);
                 }
@@ -173,6 +223,8 @@ impl StatusCache {
     }
 
     pub(crate) fn invalidate_checkout(&self, checkout: &Path) {
+        #[cfg(test)]
+        self.record(format!("explicit invalidation checkout={checkout:?}"));
         if let Some(entry) = self.entries.get(checkout) {
             let mut state = entry.state.lock();
             state.generation = state.generation.wrapping_add(1);
@@ -201,6 +253,10 @@ impl StatusCache {
         after_load: impl FnOnce(),
     ) -> Status {
         let Some(entry) = self.entries.get(checkout) else {
+            #[cfg(test)]
+            self.record(format!(
+                "read checkout={checkout:?} decision=fresh: no registered entry"
+            ));
             return tuic_git::git_reads::git_reads().monitoring_status(checkout);
         };
         let _compute = entry.compute.lock();
@@ -220,12 +276,20 @@ impl StatusCache {
                 && snapshot.generation == generation
                 && now.saturating_duration_since(snapshot.at) < SNAPSHOT_TTL
             {
+                #[cfg(test)]
+                self.record(format!("read checkout={checkout:?} decision=hit signature={signature} generation={generation}"));
                 return snapshot.value.clone();
             }
         }
         #[cfg(test)]
         {
-            entry.state.lock().computations += 1;
+            let mut state = entry.state.lock();
+            self.record(format!(
+                "read checkout={checkout:?} decision=compute watching={watching}/{} generation={generation}/{} signature={signature:?} snapshot={:?}",
+                state.watching, state.generation,
+                state.snapshot.as_ref().map(|s| (s.signature, s.generation, now.saturating_duration_since(s.at)))
+            ));
+            state.computations += 1;
         }
         let (diff, dirty, complete) =
             tuic_git::git_reads::git_reads().monitoring_status_with_cacheability(checkout);
@@ -235,6 +299,11 @@ impl StatusCache {
         let after =
             signature.and_then(|_| tuic_git::git_reads::monitoring_status_signature(checkout));
         let mut state = entry.state.lock();
+        #[cfg(test)]
+        self.record(format!(
+            "publish checkout={checkout:?} complete={complete} dirty_ok={} watching={} generation={generation}/{} signature={signature:?}/{after:?} branch={branch:?}",
+            value.1.is_ok(), state.watching, state.generation
+        ));
         state.branch = branch;
         if complete
             && value.1.is_ok()
@@ -243,6 +312,8 @@ impl StatusCache {
             && let Some(signature) = signature
             && after == Some(signature)
         {
+            #[cfg(test)]
+            self.record(format!("publish checkout={checkout:?} decision=store"));
             state.snapshot = Some(Snapshot {
                 signature,
                 generation,
@@ -250,6 +321,8 @@ impl StatusCache {
                 value: value.clone(),
             });
         } else {
+            #[cfg(test)]
+            self.record(format!("publish checkout={checkout:?} decision=reject"));
             state.snapshot = None;
         }
         value
@@ -295,6 +368,9 @@ mod tests {
             ],
         );
         let cache = Arc::new(StatusCache::default());
+        // DEFERRED (2026-10-29) — the remaining Windows rescan has no raw-event
+        // attribution yet; keep the next failure's cache decisions and inputs.
+        cache.enable_diagnostics();
         let (tx, rx) = std::sync::mpsc::channel();
         let callback_cache = Arc::clone(&cache);
         let callback_repo = repo.clone();
@@ -321,7 +397,9 @@ mod tests {
         loop {
             let event = rx
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("watch event missing: {error}\n{}", cache.diagnostics())
+                });
             if !crate::repo_watcher::is_ignorable_access(&event.kind)
                 && event.paths.iter().any(|p| p == &marker)
             {
@@ -338,7 +416,9 @@ mod tests {
         loop {
             let event = rx
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("watch event missing: {error}\n{}", cache.diagnostics())
+                });
             if !crate::repo_watcher::is_ignorable_access(&event.kind)
                 && event
                     .paths
@@ -364,13 +444,16 @@ mod tests {
             .state
             .lock()
             .computations;
+        let refresh_diagnostics = cache.diagnostics();
         let tracked = sibling.join("target/tracked.txt");
         std::fs::write(&tracked, "one\ntwo\n").unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             let event = rx
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("watch event missing: {error}\n{}", cache.diagnostics())
+                });
             if !crate::repo_watcher::is_ignorable_access(&event.kind)
                 && event.paths.contains(&tracked)
             {
@@ -378,7 +461,12 @@ mod tests {
             }
         }
         assert_cli_status(&cache, &sibling);
-        assert_eq!(computations(&cache, &sibling), after + 1);
+        assert_eq!(
+            computations(&cache, &sibling),
+            after + 1,
+            "tracked write scan count\n{}",
+            cache.diagnostics()
+        );
         run_git(&sibling, &["add", "-f", "target/tracked.txt"]);
         // Git's gitdir file uses portable paths; the watch root is canonical.
         let index = crate::git::resolve_git_dir(&sibling)
@@ -390,7 +478,9 @@ mod tests {
         loop {
             let event = rx
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("watch event missing: {error}\n{}", cache.diagnostics())
+                });
             if !crate::repo_watcher::is_ignorable_access(&event.kind)
                 && event.paths.contains(&index)
             {
@@ -411,7 +501,7 @@ mod tests {
         assert_eq!(
             after - before,
             0,
-            "unchanged sibling repeated a status computation"
+            "unchanged sibling repeated a status computation\n{refresh_diagnostics}"
         );
     }
     fn changed(cache: &StatusCache, repo: &Path, path: &Path) {
@@ -431,7 +521,9 @@ mod tests {
         let (diff, dirty) = cache.read(repo);
         assert_eq!(
             serde_json::to_value(diff).unwrap(),
-            serde_json::to_value(CliGitReads.diff_stats(repo, None)).unwrap()
+            serde_json::to_value(CliGitReads.diff_stats(repo, None)).unwrap(),
+            "diff mismatch\n{}",
+            cache.diagnostics()
         );
         let out = tuic_git::git_cli::git_cmd(repo)
             .args([
@@ -442,7 +534,12 @@ mod tests {
             ])
             .run()
             .unwrap();
-        assert_eq!(dirty.unwrap(), out.stdout.lines().count());
+        assert_eq!(
+            dirty.unwrap(),
+            out.stdout.lines().count(),
+            "dirty mismatch\n{}",
+            cache.diagnostics()
+        );
     }
 
     /// Catches Git directory metadata retiring every sibling's watch authority.
@@ -724,6 +821,7 @@ mod tests {
             ],
         );
         let cache = Arc::new(StatusCache::default());
+        cache.enable_diagnostics();
         let complete = Arc::new(AtomicBool::new(true));
         let (tx, rx) = std::sync::mpsc::channel();
         let callback_cache = Arc::clone(&cache);
@@ -775,7 +873,11 @@ mod tests {
                 let event = rx
                     .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
                     .unwrap_or_else(|error| {
-                        panic!("no mutating event for {}: {error}", path.display())
+                        panic!(
+                            "no mutating event for {}: {error}\n{}",
+                            path.display(),
+                            cache.diagnostics()
+                        )
                     });
                 if !crate::repo_watcher::is_ignorable_access(&event.kind)
                     && event.paths.iter().any(|p| p == path)
@@ -800,12 +902,13 @@ mod tests {
         wait_for(&repo.join(".git/refs/heads/main"));
         assert_eq!(cache.read(&sibling).1.unwrap(), 0);
         let after = computations(&cache, &sibling);
+        let refresh_diagnostics = cache.diagnostics();
         run_git(&repo, &["worktree", "remove", added.to_str().unwrap()]);
         run_git(&repo, &["worktree", "remove", sibling.to_str().unwrap()]);
         assert_eq!(
             after - before,
             0,
-            "inventory addition retired unchanged sibling watching"
+            "inventory addition retired unchanged sibling watching\n{refresh_diagnostics}"
         );
     }
 }
