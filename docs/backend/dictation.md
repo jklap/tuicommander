@@ -1271,8 +1271,14 @@ one does become argv.
 | exits 0 and writes nothing, or an empty file | `Failed` — the silent success this exists to prevent |
 | writes something that is not 16-bit PCM or 32-bit float WAVE | `Failed` naming the encoding it did write |
 | does not finish in time | `Failed`, after being killed. The budget is 30 s or four times the audio the text justifies, whichever is larger — a cold engine loads a model before it says the first word |
-| is abandoned mid-run | `Cancelled`, within a poll interval, with the child killed and reaped |
+| is abandoned mid-run | `Cancelled`, after the next poll stops the command tree and reaps the direct child |
 | returns more audio than the text can justify | `Runaway`, at the same ceiling the bundled adapter stops itself at |
+
+Timeout and cancellation stop the owned Unix process group, or the Windows
+process tree through `taskkill /T /F`, before reaping the direct child. This
+also stops an engine started by a shell wrapper, rather than leaving it
+running with the stderr pipe open. Commands that deliberately detach from
+their process group are outside this cleanup contract.
 
 Stereo is mixed down to mono rather than refused. `WAVE_FORMAT_EXTENSIBLE`
 headers are read through to the encoding inside them.
