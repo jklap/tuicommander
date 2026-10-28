@@ -30,6 +30,14 @@ describe("mdkb dashboard hook telemetry", () => {
 		expect(body.textContent).not.toContain("slow (7d)");
 	});
 
+	// Catches: enabled telemetry with no recorded events silently hides the Hooks section.
+	it("enabled hook telemetry with no events shows zero activity", () => {
+		const body = dashboard({ telemetry_enabled: true, events: [], slow_events_7d: 0 });
+		expect([...body.querySelectorAll("h2")].map((heading) => heading.textContent)).toContain("Hooks");
+		expect(body.textContent).toContain("No hook activity recorded");
+		expect(body.textContent).not.toContain("Hook telemetry is off");
+	});
+
 	// Catches: a truthiness check treats older MDKB reports as disabled telemetry.
 	it.each([true, undefined])("enabled or legacy telemetry (%s) retains event metrics", (enabled) => {
 		const body = dashboard({ ...(enabled === undefined ? {} : { telemetry_enabled: enabled }), events: [event] });
