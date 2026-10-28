@@ -308,7 +308,9 @@ export function OutputView(props: OutputViewProps) {
 	});
 
 	async function startStream() {
-		if (disposed || props.sessionExists === false) return;
+		// Session health is reactive and can change while the handshake awaits.
+		const sessionExists = () => props.sessionExists;
+		if (disposed || sessionExists() === false) return;
 		clearTimeout(retryTimer);
 		const generation = ++streamGeneration;
 		unsubscribe?.();
