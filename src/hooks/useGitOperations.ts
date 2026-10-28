@@ -106,6 +106,7 @@ export interface GitOperationsDeps {
 			workspaceId: string,
 			action: "archive" | "delete",
 			force?: boolean,
+			expectedFingerprint?: string,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 		listLocalBranches: (repoPath: string) => Promise<string[]>;
 		getMergedBranches: (repoPath: string) => Promise<string[]>;
@@ -149,7 +150,7 @@ export interface GitOperationsDeps {
 			branchName: string,
 			status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 			deleteBranch: boolean,
-		) => Promise<boolean | "delete">;
+		) => Promise<boolean | "delete" | "archive">;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (

@@ -62,6 +62,43 @@ describe("worktree removal cwd authority", () => {
 		});
 	}
 
+	// Catches: confirming Archive on dirty unmerged work falls through to destructive Remove.
+	it("archives dirty unmerged work with its reviewed fingerprint and keeps the branch label", async () => {
+		await repoSettingsStore.hydrate();
+		repoSettingsStore.getOrCreate(REPO, "repo");
+		repoSettingsStore.update(REPO, { deleteBranchOnRemove: true, branchLabels: { feature: "Keep" } });
+		const removeWorktree = vi.fn();
+		const finalizeMergedWorktree = vi.fn(async () => ({ action: "archived" }));
+		const [removingBranches, setRemovingBranches] = createSignal(new Set<string>());
+		try {
+			const coordinator = createWorktreeRemovalCoordinator({
+				repo: {
+					removeWorktree,
+					finalizeMergedWorktree,
+					getWorkspaceLifecycle: async () => ({
+						dirtyFiles: 3,
+						commitStatus: "unmerged",
+						removalSafety: "requires_force",
+						dirtyFingerprint: "reviewed",
+						archiveChecklist: { checks: [], can_delete: false, archive_explanation: "", delete_explanation: "" },
+					}),
+				},
+				dialogs: { confirmRemoveWorktree: async () => "archive" },
+				closeTerminal: async () => {},
+				setStatusInfo: vi.fn(),
+				removingBranches,
+				setRemovingBranches,
+			});
+			await coordinator.handleRemoveWorkspace(REPO, "feature");
+			expect(finalizeMergedWorktree).toHaveBeenCalledWith(REPO, "feature", "archive", true, "reviewed");
+			expect(removeWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+			expect(repoSettingsStore.get(REPO)?.branchLabels.feature).toBe("Keep");
+		} finally {
+			repoSettingsStore.remove(REPO);
+		}
+	});
+
 	// Catches: sidebar cleanup erases a label after the backend recycled and kept its branch.
 	it("recycling a worktree keeps its branch label after sidebar cleanup", async () => {
 		await repoSettingsStore.hydrate();

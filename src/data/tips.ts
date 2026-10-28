@@ -18,7 +18,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Delete instead of archive",
 		description:
-			"The Archive workspace dialog offers Delete for a clean, integrated workspace with no live sessions. Delete removes its checkout and local branch; Archive keeps them for reuse.",
+			"The Archive workspace checklist shows changed files, commits outside the base branch and open sessions. Delete is disabled when a check fails; Archive keeps the branch and changes.",
 		shortcut: null,
 	},
 	{

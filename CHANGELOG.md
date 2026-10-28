@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).
+
 - Add opt-in per-repository issue triage with operator-attested read-only profiles, trusted-author admission, durable policy-versioned decisions and host-owned rejection comments/intake labels. TUIC does not enforce credential isolation; uncertain publication is not replayed (#2324-424d).
 - Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
 - Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
