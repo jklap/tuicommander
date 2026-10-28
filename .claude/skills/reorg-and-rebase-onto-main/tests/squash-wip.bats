@@ -139,3 +139,16 @@ snapshot() {
   [ "$status" -eq 0 ]
   [ "$(git -C "$REPO" log --format=%s main..wip-squashed | grep -c '^fix(git): shared fix$')" -eq 1 ]
 }
+
+@test "submodule.recurse=true does not make the result fetch touch submodule remotes" {
+  local sub=$BATS_TEST_TMPDIR/sub
+  git init -q "$sub" && git -C "$sub" commit -q --allow-empty -m sub
+  git -C "$REPO" -c protocol.file.allow=always submodule -q add "$sub" plugins
+  cm 'chore(plugins): add the plugins submodule'
+  # an unreachable submodule remote, as with a locked SSH agent
+  git -C "$REPO/plugins" remote set-url origin "$BATS_TEST_TMPDIR/gone"
+  git config --file "$GIT_CONFIG_GLOBAL" submodule.recurse true
+  run_squash "$REPO"
+  [ "$status" -eq 0 ]
+  git -C "$REPO" diff --quiet wip wip-squashed
+}

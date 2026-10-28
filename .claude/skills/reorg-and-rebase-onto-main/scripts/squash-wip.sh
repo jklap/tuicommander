@@ -55,7 +55,7 @@ R=$WORK/clone.git
 git clone -q --bare --no-local "$REPO" "$R"
 up_ref=$(git -C "$REPO" rev-parse --symbolic-full-name "$WIP_UPSTREAM" 2>/dev/null || true)
 [[ -n $up_ref ]] || up_ref=refs/heads/$WIP_UPSTREAM
-git -C "$R" fetch -q "$REPO" "+$up_ref:refs/squash/upstream" "+refs/heads/$WIP_BRANCH:refs/squash/orig"
+git -C "$R" fetch -q --no-recurse-submodules "$REPO" "+$up_ref:refs/squash/upstream" "+refs/heads/$WIP_BRANCH:refs/squash/orig"
 cd "$R"
 
 TIP=$(git rev-parse refs/squash/orig)
@@ -88,6 +88,8 @@ if (( DRY )); then
   echo "   dry run: nothing written to $REPO"
 else
   git update-ref "refs/heads/$RESULT" "$NEW"
-  git -C "$REPO" fetch -q "$R" "refs/heads/$RESULT:refs/heads/$RESULT"
+  # --no-recurse-submodules: with submodule.recurse=true this fetch would otherwise reach out
+  # to every submodule's remote (and its SSH agent) just to copy one local ref.
+  git -C "$REPO" fetch -q --no-recurse-submodules "$R" "refs/heads/$RESULT:refs/heads/$RESULT"
   echo "   created refs/heads/$RESULT in $REPO"
 fi
