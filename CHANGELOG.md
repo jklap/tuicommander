@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Remove the permanent manual-prefix hint from New story without changing `[MANUAL]` criteria (#2444-9461).
+
 - Share bounded, cached ego usage reads between the status-bar badge and session details to avoid repeated or overlapping CLI processes (#2431-0847).
 - Keep event-run draft PR configuration and git reads off async runtime workers, so slow publication prerequisites do not block unrelated async work (#2428-cd8d).
 - Do not turn successful Claude tool-result auth or transport diagnostics into sticky agent API-error badges (#2429-a18d).
