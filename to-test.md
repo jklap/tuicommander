@@ -1,3 +1,7 @@
+## Complete labelled issue intake (2415-dccf) — Rust restart required
+
+- [ ] Coordinator: run the focused intake regressions, overlapping client delivery tests, and existing capacity-retry/event-deduplication tests on the final commit. The implementer ran only pre-fix RED; no post-fix GREEN run is claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), confirm an allowlisted labelled open issue outside the latest 30 unfiltered issues can start a run. Rust does not hot-reload; the daily app was not restarted.
 ## Empty branch reflog recovery (2437-b45b) — Rust restart required
 
 - [x] The pre-fix `empty_branch_reflog_does_not_abort_repository_merge_listing` regression fails on Linux rb with `branch creation is absent from reflog`. Log: `~/Gits/.tmp/results/tuic-2437-red.log`.

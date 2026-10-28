@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
 - Keep repository structure available when a branch reflog is empty or absent; classify that branch as unknown without repeated refresh errors (#2437-b45b).
 - Preserve Claude subscription metadata when mobile quota refreshes the account cache shared with desktop (#2420-f7a6).
 - Keep agent and panel Ideas in the same registered repository collection across Windows canonical paths and symlink aliases, including existing Ideas (#2414-9805).
