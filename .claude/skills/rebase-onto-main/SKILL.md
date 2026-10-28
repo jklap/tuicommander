@@ -49,6 +49,16 @@ assessment, lessons), then `post-replay-fixes.md` and `reviews.md`. Its
 agent files described under Strategy D, and `agent-final-reports/av_extract.py`
 recovers truncated subagent reports from AgentsView (see Strategy D).
 
+The 2026-10-27 re-org (`wip` 524 commits squashed by feature to ~124 on its own base, tree
+byte-identical, before rebasing) is documented in the `reorg-and-rebase-onto-main` skill.
+
+**Before you start: re-org first?** If `<branch>` has hundreds of commits over its merge base,
+or ledger noise dominates (a large share of its commits touch `CHANGELOG.md`/`to-test.md`/
+`docs/FEATURES.md`/`.gitignore`), run the `reorg-and-rebase-onto-main` skill first. It squashes
+the branch by feature on its current base with zero conflicts and an identical tree, collapses
+all ledger edits into one commit, then hands back to this skill (its Phase B) with far fewer
+stops.
+
 **Do all rebase work in a dedicated worktree, never the primary checkout.**
 Use the exact worktree path for every Read/Edit/Write/Bash call once you're in
 one — a stray `cd` back toward the main checkout silently propagates through
@@ -223,6 +233,9 @@ append-only files getting replayed commit-by-commit):
   into the shared `.git/info/attributes`.) Union merge is line-additive — it
   never conflicts, but it silently interleaves both sides' lines, including
   near-duplicates, and needs a real editorial pass afterward (Step 5).
+  **Alternative for a long branch:** the `reorg-and-rebase-onto-main` skill moves every
+  ledger edit into one ledgers commit before the rebase, so there is a single ledger stop to
+  resolve by hand and no union driver (or its editorial pass) is needed.
 - Disable rerere for the rebase itself: `git -c rerere.enabled=false rebase main`.
   With only a handful of real conflicts left after the union driver, rerere
   buys nothing and can replay a stale/wrong cached resolution from an earlier
@@ -380,6 +393,11 @@ A fixup whose target commit does not exist anywhere in history (an orphaned
 (CHANGELOG, to-test) and leaves duplicated blocks: restore both from the pre-squash
 tip in one explicit follow-up commit, then prove `git diff <pre-squash-tip> HEAD`
 is empty. Record the fixup → target map in the effort's `plans/` directory.
+
+The `reorg-and-rebase-onto-main` tool (`scripts/plan.py`) squashes `fixup!` commits with the
+same `git merge-tree` proof, automatically: a fixup joins its target's group and moves back
+only if it and everything after it still merge cleanly, else it stays in place. Ledgers are
+stripped at tree level first, so the autosquash ledger reordering above does not arise.
 
 ### Strategy D — pure commit-by-commit replay (the user forbids merge and squash)
 
@@ -689,6 +707,13 @@ deliberately removed. Take main's post-purge structure as the base and
 replay only your branch's entries dated after the purge (or whose subject
 doesn't match one of the removed/refiled items); this needs an actual
 read-through per entry, not a mechanical merge tool.
+
+**If the branch was re-organised first** (`reorg-and-rebase-onto-main`), all ledger edits sit in
+one `docs(ledgers): ...` commit and this step happens at that single stop instead of afterwards.
+That commit's own diff (`git show <ledgers-commit> -- <file>`) is exactly the branch's net entries
+against the old base: take `main`'s file and re-add those entries, applying the CHANGELOG and
+to-test rules above (`--ours`/`--theirs` each lose one side). Take the union for `.gitignore`;
+the personal `.gitignore` lines are not in it, they live in the personal commit at the tip.
 
 ## Step 6 — Full verification recipe
 
