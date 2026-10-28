@@ -207,7 +207,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history
-- Session persistence across app restarts (lazy restore on branch click); only agent tabs are restored — plain shell tabs are discarded and a fresh terminal is spawned instead
+- Session persistence across app restarts (lazy restore on branch click) — every tab a branch had open is restored, each with a fresh live shell in its saved directory (**Restore open terminals on launch** in Settings → Terminal, default on; off restores only agent tabs)
+- Terminal scrollback restore (opt-in, **Save terminal scrollback** in Settings → Terminal, default off since it writes plaintext to disk): a restored tab shows its recent output above a live prompt, separated by a dim "restored from previous session" marker; capped by **Scrollback lines to save** (default 1000) and clearable via a settings button
 - Orchestrated PTYs show a task description above the terminal alongside the last submitted user prompt; MCP callers can supply `pty_description`, while spawn-only orchestration schemas fall back to a compact summary of the task prompt without changing agent launch or prompt-delivery behavior
 - Managed-agent automation submits a command with one MCP `session action=submit` call: an idle empty composer is claimed atomically, raw-mode text/Enter framing cannot interleave with another writer, and the same response reports terminal acknowledgement or a precise non-retryable timeout. The action never queues or overwrites a draft; `session action=input` remains write-only compatibility, with a text-to-Enter gap for detected agent sessions
 - Agent session restore shows a clickable banner ("Agent session was active — click to resume") instead of auto-injecting the resume command; Space/Enter resumes, other keys dismiss
@@ -240,9 +241,9 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Rename: double-click tab name (inline editing)
 - Reorder: drag-and-drop with visual drop indicators (works for all tab types: terminal, diff, editor, markdown, plugin panels)
 - Tab status dot (left of name): grey=idle, blue-pulse=busy, green=done, purple=unseen (completed while not viewed), orange-pulse=question (needs input), red-pulse=error
-- Tab type colors: red gradient=diff, blue gradient=editor, teal gradient=markdown, purple gradient=panel, amber gradient=remote PTY session
-- Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and amber styling
-- Progress bar (OSC 9;4)
+- Tab type colors: red gradient=diff, blue gradient=editor, green gradient=markdown, purple gradient=panel, amber gradient=HTML preview, cyan gradient=remote PTY session. Toggle the tint (background gradient + border) on/off with **Show tab type highlighting** in Settings → Appearance — off keeps each type's icon color but removes the background/border. Every color/icon/animation above is customizable via the UI Legend (see **11.2**)
+- Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and cyan styling
+- Progress bar (OSC 9;4) — states: normal and warning show a solid fill at the reported percentage (full-width if no percentage was sent), error shows the same but in the error color, and indeterminate ignores any percentage and instead plays a continuous sweep animation across the full bar
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path
   - Copy Path appears on every file-backed tab — diff, editor, markdown, HTML preview, and a plugin panel opened from a `file://` url — and copies the ABSOLUTE path with `$HOME` shortened to `~`. The tab stores keep `filePath` relative to the tab's filesystem root, so the root is joined back on before copying
   - "Open in Browser" on a `file://` plugin panel hands the file to the OS default application, not to the URL allowlist (which permits only http/https/mailto, because the URLs it was built for come off a PTY)
@@ -259,10 +260,13 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Vertical split: `Cmd+\` (side by side)
 - Horizontal split: `Cmd+Alt+\` (stacked)
 - Navigate: `Alt+←/→` (vertical), `Alt+↑/↓` (horizontal)
-- Close active pane: `Cmd+W`
+- Close active pane: `Cmd+W` (closes the full-page tab in front of the split instead, when that tab is not part of the split)
 - Drag-resize divider between panes
 - Up to 6 panes in same direction (N-way split)
 - Split layout persists per branch
+- The tmux compatibility shim's `select-layout tiled`/`main-vertical` (§21.5) can arrange a Claude
+  Code agent-teams swarm's teammate sessions into a split view programmatically, via the same
+  mechanism as a manual split
 
 ### 1.4 Zoom (Per-Terminal)
 - Desktop session Chat and AI Chat share a 14px default reading scale and the terminal zoom delta; AI Chat follows the active terminal. Active and all-terminal zoom actions update both Chat views; mobile keeps its device-local reading preference
@@ -283,7 +287,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Claude prompt copy** — Selections remove the composer prompt marker and continuation margin, rejoin width-supported wraps, and preserve typed breaks and pasted glyphs. Composer cleanup requires a column-zero origin outside VT soft-wrap continuations; partial body selections remain literal.
 - **Copy on Select** — When enabled (Settings > Terminal > Copy on select), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
-- **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
+- **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each successful write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice (a failed write logs quietly instead of toasting), and the behavior can be disabled entirely via Settings > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
+- **OSC 1337 commands** — `CursorShape`, `ClearScrollback`, `Copy`/`CopyToClipboard`+`EndCopy` (clipboard writes, gated by the same OSC 52 permission), `StealFocus` (brings the window to the front), `RequestAttention` (bounces the dock icon), and `OpenURL` are all recognized. `StealFocus`/`RequestAttention` are gated by Settings > Terminal > "Allow terminal focus/attention requests" (default on). `OpenURL` always asks for confirmation first (the same confirm dialog `ui action=confirm` MCP requests use) before opening the URL, and only http/https/mailto schemes are ever opened.
 
 ### 1.6 Clear Terminal
 - `Cmd+L` — clears display, running processes unaffected
@@ -384,17 +389,42 @@ The experimental read-only scrollback overlay (`AltScreenHistory`) and its `scro
 
 ### 1.19 Command Blocks
 
-Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
+Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks come from
+two sources:
 
-- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance. Toggled by **Show scrollbar marks** in Settings > Terminal (`show_scrollbar_marks`, on by default). The flag covers the history markers — these ticks and the user-prompt ticks below — and deliberately **not** the search-match ticks, which stay visible so a search never silently draws nothing
+- **Primary — the agent's own busy/idle hook signal.** For any agent TUICommander installs hooks
+  for (Claude Code, and others via their own hook maps), a block starts on the idle→busy edge and
+  ends on the matching busy→idle edge — one block per turn, regardless of how many tool calls the
+  turn makes. The block's prompt text is populated from the keystrokes that submitted it (only
+  for prompts of 10 words or more — shorter prompts leave it untitled; the block itself is
+  unaffected).
+- **Fallback — `⏺` tool-header heuristic.** For agents without hook instrumentation, blocks are
+  synthesized per tool call from `⏺ ToolName(args)`-style headers. This granularity is coarser
+  (one block per tool call, not per turn) and never has prompt text.
+
+A session only ever uses one source: once it's received a hook-driven signal, the heuristic is
+suppressed for that session.
+
+- **Fullscreen (alternate-screen) agents.** Claude Code's default "fullscreen" renderer draws
+  entirely inside the terminal's alternate screen buffer, which — being a fully-repainted TUI —
+  never grows real scrollback (confirmed empirically: `total_lines == screen_lines` for the
+  entire life of such a session). A block recorded while that's active still gets created (so
+  the Commands overview panel keeps showing live prompt text, duration, and pass/fail), but it
+  carries no valid row to anchor into — gutter marks, scrollbar ticks, fold, `Cmd+Shift+Up/Down`
+  jump-nav, block-scoped search, and "Copy Block Output" all skip it. This resumes normally for
+  whatever runs after the agent returns to a plain shell prompt.
+
+- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance, shown without holding any modifier. Toggled by **Show scrollbar marks** in Settings > Terminal (`show_scrollbar_marks`, on by default), which covers these ticks and the user-prompt ticks below; with it on, the expert toggles **Show block marks** (`show_block_marks`) and **Show prompt marks** (`show_prompt_marks`) (both on by default) turn each kind off independently. None of them hides the search-match ticks, which stay visible so a search never silently draws nothing
 - **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=prompt` the submit-prompt hook emits; tool-call `state=busy` carries no row via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
-- **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
-- **Gutter click** — Click the gutter area to select the entire block output for easy copying
-- **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Backend stores fold state per session via `set_block_fold` Tauri command
-- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only
+- **Red ticks (turn failure)** — A block is flagged failed, primary tier: the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type; the `tuic-hook` binary extracts the exit code from the hook's own stdin JSON natively, with no external dependency) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code's hooks expose no per-call retry-succeeded signal to clear it against; fallback tier for sessions without hook instrumentation enabled: text-pattern matching on `⎿ Error: Exit code N` (Bash tool call failures only) or a detected API error, which *is* recovery-aware — a failure the agent retries and resolves before the turn ends does not flag the block there
+- **Timestamp overlay** — Configurable display mode: off, always visible, or hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
+- **Gutter marks** — Red/green bar next to a shell command's prompt line marking its exit status
+- **Gutter click** — Click anywhere in a block's gutter except its fold chevron to select the entire block output for easy copying; the gutter is a wide, pointer-cursored click target
+- **Block folding** — Collapse/expand block output with `Cmd+Shift+.`, or by clicking the fold chevron on a block's header row in the gutter. Folded output is fully hidden behind a summary line, not dimmed. Fold state is in-memory per session (not persisted across restarts)
+- **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only, shown with an accent bar along the block's left edge
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
-- **Settings** — Configure block features at Settings > Terminal > Terminal: show/hide timestamps, enable/disable folding
+- **Settings** — Configure block features at Settings > Terminal > Terminal: timestamp display mode (off/hold Ctrl+Cmd/always), show/hide scrollbar marks (with separate block-mark and prompt-mark toggles), enable/disable folding
 
 ### 1.20 Compose Panel (`Cmd+I`)
 
@@ -436,6 +466,26 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 - **MCP verdict** — `session action=suspend` returns `{ok:true}` after Rust persists and ends the PTY, including when no UI is attached. Refusals return `Cannot suspend: <reason>`.
 - **Event** — `session-suspended` carries `{record}` over desktop events and SSE before the PTY closes. The IPC/HTTP `suspended_session_action` endpoint supports listing, suspending, resuming, forgetting and metadata synchronization.
 
+### 1.22 Smart Selection
+
+Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's Smart Selection. Settings > Smart Selection.
+
+- **Word boundaries** — "Character list" (a literal separator set, customizable; defaults to today's punctuation class) or "Regular expression" (`|`-joined alternates; the longest match at each position joins onto the adjacent word — e.g. adding `https://` lets a double-click on a URL's host include the scheme)
+- **Smart selection rules** — a precision-scored (`very_low`…`very_high`) regex rule list; the highest `precision × matchLength` score spanning the click wins. Ships with iTerm2's built-in ten plus dev-terminal extras (git commit SHA, `file:line:col`, semver, IPv4/IPv6, UUID, issue key, `#NNN` issue ref)
+- **Double-click performs** — "Word" (character-class expansion) or "Smart" (default: try the rule list first, fall back to word). Quad-click (4 rapid clicks) always tries smart selection regardless of this setting
+- **Rule actions** — Copy, Open URL, Open File, Send Text, Run Command, Run Command in New Terminal, Ask AI — surfaced in the right-click context menu when the click lands on a match (link detection's own Open/Copy-link pair takes priority over a rule's when both apply to the same span). One action per rule may be marked default — Option/Alt+double-click runs it directly, in addition to selecting the match
+- **Export/Import** — a scope dropdown (All rules / Modified only / Custom only) plus Export…/Import…, mirroring Smart Prompts' toolbar; export opens the native Save dialog, import reviews NEW/CONFLICT rules before applying and forces any rule with a command-running or text-sending action to import disabled
+- See [terminal-features.md](frontend/terminal-features.md#smart-selection) for the scoring/dispatch details
+
+### 1.23 Inline Images
+
+Images render inline in the terminal, on a dedicated canvas layer above the text and below the cursor/selection — no setting to enable, works in any program that emits the right escape codes.
+
+- **iTerm2 OSC 1337 (`File=`)** — the protocol iTerm2's own `imgcat`/`imgls`/`divider` scripts use; TUICommander ships clean-room reimplementations of all three (see the CLI guide's "Inline Images" section)
+- **Kitty graphics protocol** — transmit (`a=t`), transmit-and-display (`a=T`), and placement (`a=p`); covers neovim image plugins (`image.nvim`, `snacks.nvim`), `yazi`'s previewer, and `mpv`/`timg` in-terminal video, including negative-`z` (behind-text) placements and Unicode virtual placeholders (`U=1`)
+- Known limits: an image overwritten by ordinary text is detected heuristically (its top-left cell only), and raw pixel formats (`f=24`/`f=32`) require an extra metadata round-trip to decode since there's no container to sniff
+- See [pty.md](backend/pty.md#iterm2-inline-images-osc-1337) and [pty.md](backend/pty.md#kitty-graphics-protocol) for the wire-protocol scope, and [terminal-features.md](frontend/terminal-features.md#inline-images-color-tools-plan-phase-5) for the rendering/compositing details
+
 ---
 
 ## 2. Sidebar
@@ -473,8 +523,9 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Background Git actions share a subcommand and per-command flag policy across desktop IPC and HTTP.
 - `+` button: click opens a terminal in that branch; long press (500 ms) lists the enabled agents and opens a tab running the chosen one (a shell row has no agents, so there a long press acts as it did before: a click, or the row menu on touch); right-click opens the row menu
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
-- PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
-- Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
+- PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover. Toggle with **Show PR status badges** (Settings → Appearance)
+- Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there). Toggle with **Show diff stats** (Settings → Appearance)
+- Git repo status badge: "Rebasing"/"Merging"/"Cherry-picking"/"Reverting"/"Bisecting" when the worktree has that operation in progress — see **7.2**. Toggle with **Show git repo status indicators** (Settings → Appearance)
 - Merged badge: branches merged into main show a "Merged" badge
 - Unmerged mark: a small neutral outlined square shows commits outside the default branch even when the diff and dirty counts are zero
 - Question indicator: `?` icon (orange, pulsing) when agent asks a question
@@ -724,6 +775,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **Search modes**: type `!` to search files by name, `?` to search file contents, `~` to search across all open terminal buffers. File/content results open in editor tab (content matches jump to the matched line). Terminal results navigate to the terminal tab/pane and scroll to the matched line. Leading spaces after prefix are ignored
 - Browser filename and content searches use the existing HTTP routes. Content results are correlated with a per-search random ID and republished only inside the requesting page, preventing results from leaking across windows or panels
 - **Discoverable search commands**: "Search Terminals", "Search Files", "Search in File Contents" appear as regular palette commands and pre-fill the corresponding prefix
+- **Scope chips**: a row of six chips (All / Actions / Prompts / Files / Content / Terminals) below the search box filters the result list by type. All/Actions/Prompts filter command-mode actions by category (Actions hides Smart Prompts entries, Prompts shows only them); Files/Content/Terminals select the same `!`/`?`/`~` search modes above by rewriting the query's prefix. `Tab`/`Shift+Tab` cycle forward/backward through the six chips (wrapping at either end) without leaving the search input; clicking a chip does the same. Typed text carries over across a scope switch. Typing a `!`/`?`/`~` prefix directly still lights up the matching chip even without using Tab or clicking
 - **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Remote Access connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines. Failed local IP discovery shows a wrapped inline error and Retry without closing the dialog
 - Powered by `actionRegistry.ts` (`ACTION_META` map)
 
@@ -740,6 +792,8 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Status color codes: green=working, yellow=waiting, red=rate-limited, gray=idle
 - Ready input composers remain gray/idle when an agent leaves a long-lived background terminal running
 - Rate limit indicators with countdown timers
+- Idle rows sort by most-recently-active first; the working group never reshuffles
+- Full keyboard navigation: arrow keys move the selection cursor, `Return` activates it, digit keys `1`-`9` jump-and-activate a row directly — works the same in the detached panel window
 - Click any row to switch to that terminal and close the dashboard. Sessions outside registered repositories open their own Global Workspace tabs; the previous repository tab keeps its session. Opening an existing session focuses its tab without creating another session.
 - Relative timestamps auto-refresh ("2s ago", "1m ago")
 
@@ -984,6 +1038,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
   - Follows the focused Claude terminal's `CLAUDE_CONFIG_DIR` credential profile; an unresolved profile shows unknown rather than another account's quota
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
+  - Enterprise/spend-based plans don't populate those named buckets — falls back to the `extra_usage` figure those plans send instead, without masking a genuine bottleneck if a named bucket is populated but low
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
   - Reset countdown per bucket
 - **Usage Over Time chart:** SVG line chart of token usage over 7 days
@@ -1040,17 +1095,18 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **MCP bridge install:** One-click install/remove of `tui-mcp-bridge` into agent's native MCP config file
 - **Supported MCP agents:** Claude, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, OpenCode, Droid, Goose, pi (through pi-mcp-adapter)
 - **Shared settings files are opt-in:** Zed, Amp and Gemini store MCP servers inside their general `settings.json`, so those three are never written automatically — the panel says so and the Install button does it on request
-- **Remove all MCP integrations:** Lists every client holding a bridge entry and clears them in one action, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind
 - **Edit agent config:** Opens agent's own configuration file in the user's preferred IDE
 - **Context menu integration:** Right-click terminal > Agents submenu with per-agent run configurations; selected environment variables apply only to the launched agent, including from the sidebar menu
 - **Busy detection:** Agents submenu disabled when a process is already running in the active terminal
-- **Environment Flags** — Per-agent environment variables injected into every new terminal session. Configure in Settings > Agents > expand an agent > Environment Flags. Useful for setting feature flags like `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` without manual export.
+- **Environment Flags** — Per-agent environment variables injected into every new terminal session. Configure in Settings > Agents > expand an agent > Environment Flags. Useful for setting feature flags without manual export. (Note: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is not one of these — it's injected unconditionally by TUICommander itself and isn't user-togglable here.)
+- **Wrap my own claude/codex/goose function** — zsh only. If your shell already defines its own `claude`/`codex`/`goose` function (e.g. to pick a model), TUIC's launch-flag injection above is skipped for that shell. When this is detected, a dialog asks whether to wrap your function (calling it with the flag added) or leave it alone, explaining the trade-off (wrapping only works if your function forwards its arguments, and a flag your function already sets would conflict with TUIC's). Nothing is wrapped without that explicit answer, and it applies to that exact function (fingerprinted): editing the function asks again. Configure per agent in Settings > Agents > expand an agent > "If your shell already defines its own ⟨agent⟩ function" (expert setting; Ask when detected / Wrap my function / Leave my function alone — "Wrap" there still waits for the prompt's yes for the actual function). Applies to new terminals only. TUIC's own zsh wrappers load after `.zshrc`, so `command -v claude` checks in your startup files see the real binary.
 
 ### 6.10 Agent Teams
 - **Purpose:** Enables Claude Code's Agent Teams feature to use TUIC tabs instead of tmux panes
-- **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected into PTY sessions, which unlocks Claude Code's TeamCreate/TaskCreate/SendMessage tools. Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
+- **Approach:** Environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` injected unconditionally into every PTY session, which unlocks Claude Code's `SendMessage` tool (as of current Claude Code versions, `TeamCreate`/`TaskCreate` no longer exist as separate tools — team membership is implicit). Agent spawning uses direct MCP tool calls (`agent spawn`) instead of the deprecated it2 shim
 - **Session lifecycle events:** MCP-spawned sessions emit `session-created` and `session-closed` events so they automatically appear as tabs and clean up on exit
-- **Settings toggle:** Settings > Agents > Agent Teams
+- **No settings toggle:** enabled unconditionally for every Claude Code PTY session — there is no Settings > Agents > Agent Teams switch
+- **Prefer TUICommander messaging / spawning:** two independent per-agent-type settings (Settings > Agents > *agent* > Prefer TUICommander messaging / Prefer TUICommander agent spawning, both default on) controlling whether TUIC's own `agent` guidance is advertised to that agent type — messaging (register/send/inbox/wait) and spawning (`agent action=spawn`, plus the "prefer TUIC over your native subagent/Task tool" framing) independently, in any of the four combinations. Gated on **both** the MCP `initialize` instructions' prose *and* the `agent` tool's own MCP schema description (`agent_tool_definition` in `mcp_transport.rs`, resolved per connection from `McpSessionMeta::agent_type`) — a client reads the latter via `tools/list` independently of the former, so gating only the prose left the tool's baked-in description just as persuasive regardless of the setting (confirmed via a live Claude Code teammate-spawn test that still called `agent action=spawn` with both preferences off, before this was fixed). Turning either off only softens that half's guidance on both surfaces; it does not remove the corresponding actions from the schema, disable the underlying tool/API, or affect the other setting. Both preferences collapse to off automatically when the `agent` MCP tool itself is disabled (nothing left to prefer)
 - **Suggest follow-ups:** Agents can propose follow-up actions via `suggest: [ A | B | C ]` tokens, displayed as floating chip bar
 - **Deprecated:** The it2 shim approach (iTerm2 CLI emulation) is commented out — superseded by direct MCP tool spawning
 
@@ -1076,7 +1132,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Identity**: Each agent uses its `$TUIC_SESSION` env var (stable tab UUID) as its messaging identity. A headerless external caller may `register` without `tuic_session` to be issued an MCP-scoped UUID, or supply a stable UUID to reclaim an existing identity
 - **Actions**: `register` (announce presence, or rename/re-project an auto-bound peer), `list_peers` (discover other agents, optional `path` filter), `send` (message a peer by `to` = tuic_session), `inbox` (poll for messages), `wait` (block until new mail)
 - **Dual delivery**: Real-time push via MCP `notifications/claude/channel` over SSE into already working Claude Code turns; idle/completed managed agents and managed non-Claude agents use submitted PTY delivery even when their MCP bridge has an SSE stream; polling fallback via `inbox` is always available
-- **Channel support**: TUICommander declares `experimental.claude/channel` capability; spawned Claude Code agents automatically get `--dangerously-load-development-channels server:tuicommander`
+- **Channel support**: TUICommander declares `experimental.claude/channel` capability. Spawned Claude Code agents are *documented* to automatically get `--dangerously-load-development-channels server:tuicommander`, but the code that adds this flag was accidentally dropped in a later refactor and hasn't been restored — SSE push is currently unreachable for MCP-spawned agents (see `docs/backend/mcp-http.md`); the inbox-poll and terminal-typing delivery paths are unaffected
 - **Lifecycle**: Peer registrations cleaned up on MCP session delete and TTL reap; `PeerRegistered`/`PeerUnregistered` events broadcast via event bus for frontend visibility
 - **Limits**: 64 KB max message size, 100 messages per inbox (lifecycle-first eviction; peer mail back-pressure), optional path filtering for `list_peers`
 - TUICommander acts as the messaging hub — no external daemon needed
@@ -1218,22 +1274,27 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - Configurable storage strategies: sibling (`__wt`), app directory, inside-repo (`.worktrees/`), or Claude Code default (`.claude/worktrees/`)
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
-- Base ref selection: choose which branch to start from when creating new worktrees
+- Base ref selection: choose which branch to start from when creating new worktrees. The "Start from" dropdown has its own search box and full keyboard navigation (`↑`/`↓`/`Enter`/`Esc`), grouped into Local/Remote sections; the existing-branch list below the name input also supports `↑`/`↓`/`Enter` navigation and highlights the matched substring as you type. The last base ref used successfully in the dialog is remembered per repo for the rest of the session (not persisted across restarts) and preselected next time
 - Orphan cleanup ignores detached checkouts under OS/environment temporary roots and `~/Gits/.tmp`, including symlink aliases and missing checkout registrations. Detached sidebar rows remain visible; stale removal requests are refused.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
+- Copy ignored/untracked files into new worktrees: two "Use global default (On/Off)" / On / Off selects, plus a repo-specific "always copy these files/directories" list (each entry copied fully or symlinked, independent of the toggles). The copy runs in the background after the worktree is created — a toast marks when it starts and finishes, naming how many files were skipped if any
+- A worktree with a rebase, merge, cherry-pick, revert, or bisect in progress shows a distinct colored badge in the sidebar naming which one ("Rebasing", "Merging", "Cherry-picking", "Reverting", "Bisecting" — including on the **main** checkout's own row, not just linked worktrees) and is never archived or deleted by the merge cleanup flows (Merge & Archive, auto-archive-merged) — even when confirmed — until the operation is resolved. Toggle visibility with **Show git repo status indicators** in Settings → Appearance; colors/animations are customizable via the UI Legend (see **11.2**).
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
 - Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
-- Remove via sidebar `×` button or context menu (with confirmation)
-- **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; `.tmp` and `.mdkb` directories, tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
+- Remove via sidebar `×` button or context menu (with confirmation). A workspace with a terminal attached gets a second, Cancel-by-default "in use" confirmation naming what's attached, shown BEFORE any terminal is closed
+- The backend refuses to remove a checkout any live session still works in (its cwd is inside, or it was spawned there), even a clean one, on every transport (desktop, HTTP `DELETE /worktrees/{id}`, MCP `repo worktree_remove`): `worktree_busy:` with the sessions. The desktop asks the same "in use" question for those sessions and retries with the explicit `override_busy` only on yes
+- **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; `.tmp` and `.mdkb` directories, tracked paths, ignored files, nested repositories, and the destination ancestor are never copied. Up to four directories are copied at a time; a path that traverses a symlink committed in the new branch is refused, never followed
+  - Runs in the background after creation returns: a "Warming…" badge on the branch row shows live copied/total progress (tooltip) and clears when the copy finishes, with a safety timeout should the completion event be missed; after a reload the next structure refresh seeds (or clears) it from the worktree list's `warm_artifacts` until a warm event for that worktree arrives
+  - On by default; turn it off per repo (Settings → Repository → Worktree) or globally (Settings → Git & GitHub → Repository Defaults, expert) with `warm_ignored_directories`. The setting applies to every creation path (desktop, HTTP `POST /worktrees` and `POST /sessions/worktree`, MCP `repo worktree_create`)
   - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
   - Read-only copied files and directories gain owner write permission in the new worktree only; symlinks are not followed
   - Parent tracked and untracked changes are not carried into the new checkout
   - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal. Branch-name status diagnostics appear once; main-checkout tooltips do not describe removal
-  - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
+  - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status, including `phase`/`copied`/`total` progress while pending. A cancelled create marks warming failed; removal and archive cancel queued copies
   - The Archive workspace dialog shows backend-owned file, commit and open-session checks with counts. Failed or unknown checks disable Delete; Archive keeps dirty and unmerged work.
   - The Archive workspace dialog offers a red Delete alternative for a clean, integrated checkout without live sessions. Delete removes the checkout and local branch through the existing safety checks instead of recycling it; Archive remains the default.
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Submodule commits, stash history, and reflog-only commits receive durable refs in the initialized main-checkout module repository. An uninitialized, misdirected, or deinitialized module with retained Git history stops removal, including nested modules with names different from their paths. A registered checkout whose directory is missing has an explicit lifecycle verdict and needs confirmed force to prune its registration; cleanup skips its inaccessible archive script. Dirty-file force still proves branch safety and never overrides a lock by itself
@@ -1268,10 +1329,12 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 
 ### 7.5 Diff
 - Working tree diff and per-commit diff via Git Panel Changes tab
+- **Conflicts banner** — when the working tree has unmerged (conflicted) files, the Changes tab shows a banner naming the count plus a read-only list of each conflicted path and its raw 2-char status code (e.g. `UU`). Gated by **Show git repo status indicators** (Settings → Appearance); not yet interactive — conflicted files aren't diffable or stage/discard-able from this list.
 - Per-file diff counts (additions/deletions) shown inline in Changes tab
 - Click a file row to view its diff
-- **Side-by-side (split), unified (inline), and scroll (all files) view modes** — toggle in toolbar, preference persisted
-- **Scroll mode (all-files diff)** — shows every changed file (staged + unstaged) in a continuous scrollable view with collapsible file sections, per-file addition/deletion stats, sticky header with totals, and clickable filenames that open in the editor. Reactively reloads on git operations via revision tracking
+- **Side-by-side (split) and unified (inline) view modes** — toggle in toolbar, preference persisted per-tab, never affects a different open diff tab
+- **Diff Scroll tab (all files)** — a dedicated tab (not a shared view-mode toggle) showing every changed file (staged + unstaged) in a continuous scrollable view with collapsible file sections (collapse state follows the file, not its position in the list), per-file addition/deletion stats, sticky header with totals, `<`/`>` file-to-file navigation, and clickable filenames that open in the editor. Reactively reloads on git operations via revision tracking; a changed file still on screen updates in place with a brief highlight, one that's scrolled off-screen instead shows a "Refresh (N)" button
+- **Diff comparison options** (Settings > General > Diffs, or the toolbar's diff-options button) — ignore leading/trailing whitespace, ignore whitespace amount, and case-insensitive comparison, applied identically to Diff Scroll, the per-file diff tab, and Session Diff Review via a shared engine (git itself has no flag for leading-only whitespace or case-insensitivity). Soft-wrap and a configurable per-change truncation threshold (with a "Show all N more lines" expander) apply everywhere a diff renders
 - **Auto-unified for new/deleted files** — split view is forced to unified when the diff is one-sided
 - **Word-level diff highlighting** via `@git-diff-view/solid` with virtualized rendering
 - **Hunk-level restore** — hover a hunk header to reveal a revert button (discard for working tree, unstage for staged)
@@ -1280,6 +1343,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - `Cmd+F` search in diff tabs via SearchBar + DomSearchEngine
 - Submodule entries are filtered from working tree status (not shown as regular files)
 - Standalone DiffPanel removed in v0.9.0 (see section 3.2)
+- **Session Diff Review** — step through everything a Claude Code session changed, reconstructed from its transcript (`~/.claude/projects/`) and, where available, its `~/.claude/file-history/` pre-edit backups — no new agent instrumentation. Opens as a tab (Command Palette: "Session diff review"), defaulting to the focused terminal's live agent session or the most recent session for the repo, with a picker to switch sessions that refreshes automatically as new sessions appear. Two views: grouped-by-file (default — cumulative diff per file, with the file's individual edits collapsible underneath, `<`/`>` navigating file to file) or flat chronological (every edit, across all files, in the order the agent made them, `<`/`>` navigating step to step, each step individually collapsible, with `^`/`v` buttons to jump to the previous/next edit of the same file). A **turn picker** dropdown in chronological mode lists each user prompt's turn (time, size, files touched) and jumps to its first edit. Actions per step/file: open the file at that change, comment on selected lines (sent to the agent terminal, same format as the regular Diff tab), copy the diff, and revert — a single step (`git apply --reverse`, keeping every later edit) or a whole file back to its session-start content (byte-exact when a backup is available, reconstructed otherwise, or deletion if the session created the file). A file whose content at session start couldn't be determined, or that's changed outside the session since, is flagged rather than guessed at. Subagent edits are included by default (toggle to exclude) and show a friendly display name (the subagent's own recorded name/description, not its bare id) instead of a UUID — clicking an agent's name jumps to the terminal tab actually running that Claude session, when one is currently open. **Live updates**: the tab watches the session's transcript and refreshes automatically — a "Follow" checkbox in chronological mode auto-scrolls to new edits as they arrive (off: an "N new changes" button jumps to the first unseen one); in file mode, a changed file still on screen updates in place with a brief highlight, a new file appends at the bottom with a "New content below" button, and a changed file that's off-screen shows a "Refresh (N)" button. A setting (Settings > General > Diffs, "Auto-open Session Diff Review": off/ask/auto) can open the tab automatically the moment TUIC detects an agent editing files, and the tab's own icon shows a small unseen-content dot when it isn't the active tab.
 
 ---
 
@@ -1316,10 +1380,9 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 ### 8.4 PR Visibility Filters
 - Global filters and nullable repository overrides persist across restarts; an explicit Show overrides a global Hide. Rust catalogue metadata and owner refresh cover both scopes.
 - Global settings (Settings > Git & GitHub > Pull Requests): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
-- Per-repo overrides (Settings > [Repo] > PR Visibility): tri-state toggle per filter (Show / Default / Hide)
-- Default = inherit from global setting, shown in parentheses (e.g. "Draft PRs (Show)")
+- Per-repo overrides (Settings > [Repo] > PR Visibility): a "Use global default" / Show / Hide select per filter
+- "Use global default" inherits the global setting, whose current value is shown in parentheses (e.g. "Use global default (Show)")
 - Resolution chain: per-repo override → global setting
-- TriStateToggle component: 3-position pill switch (left=hide, center=default, right=show) matching existing toggle style
 
 ### 8.5 Auto-Heal
 - Auto-heal resolves failing checks from the exact commit over account-bound GraphQL, including external CI; check pagination and newest-rerun deduplication do not depend on the open PR count.
@@ -1332,7 +1395,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - Max 3 delivered attempts per block cycle, then stops and logs a warning; log-fetch and terminal-delivery failures do not consume the budget
 - Enabling while already blocked kicks off a heal immediately
 - Attempt counter visible in PR detail popover
-- Status tracked per-branch in `BranchState.ciAutoHeal`
+- Status tracked per-branch in `WorkspaceState.ciAutoHeal`
 
 ### 8.6 PR Notifications
 - Types: Merged, Closed, Conflicts, CI Failed, Changes Requested, Ready
@@ -1560,8 +1623,8 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 
 ### 10.2 Prompts
 - Create, edit, delete saved prompts
-- Variable substitution: `{{variable_name}}`
-- Built-in variables: `{{diff}}`, `{{changed_files}}`, `{{repo_name}}`, `{{branch}}`, `{{cwd}}`
+- Variable substitution: `{variable_name}` (single braces — `{{variable_name}}` is not supported)
+- Built-in variables: `{diff}`, `{changed_files}`, `{repo_name}`, `{branch}`, `{cwd}`, and more — see §10.7
 - Custom variables prompt user for input
 - Categories: Custom, Recent, Favorites
 - Pin prompts to top
@@ -1583,10 +1646,10 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - **Open**: `Cmd+K` or toolbar lightning bolt button
 - Drawer with category filtering (All/Custom/Recent/Favorites), search by name/description, and enable/disable toggles
 - Prompt rows show inline badges: execution mode (inject/shell/headless/api), built-in, placement tags
-- Prompts are context-aware: 31 variables auto-resolved from git, GitHub, and terminal state
+- Prompts are context-aware: 51 variables auto-resolved from git, worktree context, GitHub, terminal state, and file/issue/branch hosts — see §10.7
 - **Variable Input Dialog**: unresolved variables show a compact form with variable name + description before execution
-- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes, execution mode, auto-execute, and keyboard shortcut capture
-- **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
+- **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes (user-friendly labels with a hover description of where each one surfaces), execution mode, target, auto-execute, and keyboard shortcut capture. The Prompt Library drawer's own edit form and Settings > Smart Prompts both expose the same fields
+- **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: **Auto** (default) — the Compose box if one is already open, otherwise the terminal input — **Compose box** (always), or **Terminal** (always)
 - **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
 - **API execution mode runs one unattended ego turn (#787-ee50)**: it used to call LLM providers directly over HTTP from TUICommander; that client, its provider registry and its keyring entry were deleted with the embedded AI engine (#784-0aec). It now goes through `acp_one_shot_prompt` — launch the configured ego, one `session/new` with **no MCP server**, one prompt, shut down — and the turn's final text goes to the prompt's `outputTarget`. Nothing streams: a Smart Prompt runs with no panel open. A `headless` prompt whose resolved agent is `api` takes the same one path. Every permission request and elicitation is declined the instant it arrives, because a seat nobody takes is a turn that never ends; the count comes back as `declined` so an empty answer caused by a refused tool is reported as that rather than as an empty answer. The turn is abandoned after 300s
 - **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Chat` (786-4a6d). With no ego binary named, the mode refuses and names `Settings > General` for the binary and `Settings > AI Chat` for the model
@@ -1605,14 +1668,20 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 
 ### 10.7 Context Variables
 
-Variables are resolved from the Rust backend (`resolve_context_variables`) and frontend stores:
+Variables are resolved from the Rust backend (`resolve_context_variables`) and frontend stores.
+The single source of truth for this list is `src/data/contextVariables.ts` (51 entries as of this
+writing) — a `contextVariablesParity.test.ts` guard keeps it in sync with the Rust resolver and the
+`TUIC_*` script-env names below. Resolution follows the **active terminal's** cwd, not just "the
+active repo": with a worktree tab focused, git-context variables describe that worktree, not the
+main checkout (falls back to the active repo when the cwd belongs to no registered repo).
 
 | Variable | Source | Description |
 |----------|--------|-------------|
 | `{branch}` | git | Current branch name |
 | `{base_branch}` | git | Detected default branch (main/master/develop) |
-| `{repo_name}` | git | Repository directory name |
-| `{repo_path}` | git | Full filesystem path to the repository root |
+| `{branch_status}` | git | Ahead/behind counts vs. the upstream tracking branch |
+| `{repo_name}` | git | Main checkout's directory name (not a worktree's) |
+| `{repo_path}` | git | The tree the variables were resolved against — worktree root or repo root |
 | `{repo_owner}` | git | GitHub owner parsed from remote URL |
 | `{repo_slug}` | git | Repository name parsed from remote URL |
 | `{diff}` | git | Full working tree diff (truncated to 50KB) |
@@ -1623,9 +1692,13 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{last_commit}` | git | Last commit hash + message |
 | `{conflict_files}` | git | Files with merge conflicts |
 | `{stash_list}` | git | Stash entries |
-| `{branch_status}` | git | Ahead/behind remote tracking branch |
 | `{remote_url}` | git | Remote origin URL |
 | `{current_user}` | git | Git config user.name |
+| `{branch_name}` | host (branch menu) | The right-clicked branch — distinct from `{branch}` |
+| `{worktree_path}` | git | The worktree root (same as `repo_path` outside a worktree) |
+| `{main_repo_path}` | git | The main checkout — always the repo root, never a worktree |
+| `{worktree_name}` | git | Basename of `worktree_path` |
+| `{is_worktree}` | git | `"true"`/`"false"` |
 | `{pr_number}` | GitHub store | PR number for current branch |
 | `{pr_title}` | GitHub store | PR title |
 | `{pr_url}` | GitHub store | PR URL |
@@ -1639,12 +1712,27 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{merge_status}` | GitHub store | PR mergeable status |
 | `{review_decision}` | GitHub store | PR review decision |
 | `{agent_type}` | terminal store | Active agent type (claude, gemini, etc.) |
-| `{cwd}` | terminal store | Active terminal working directory |
-| `{issue_number}` | manual | Prompted from user at execution time |
+| `{cwd}` | terminal store | Active terminal's working directory |
+| `{session_id}` | terminal store | Stable per-tab session UUID (same as `$TUIC_SESSION`) |
+| `{file_path}` | host (file context) | Absolute path of the selected file or folder |
+| `{file_rel_path}` | host (file context) | Path relative to the repository root |
+| `{file_name}` | host (file context) | Basename of the file (e.g. `foo.ts`) |
+| `{file_ext}` | host (file context) | File extension including the dot (e.g. `.ts`) |
+| `{file_dir}` | host (file context) | Parent directory absolute path |
+| `{file_is_dir}` | host (file context) | `"true"`/`"false"` |
+| `{issue_number}` | host (issue popover) | GitHub issue number |
+| `{issue_title}` | host (issue popover) | GitHub issue title |
+| `{issue_author}` | host (issue popover) | GitHub issue author |
+| `{issue_labels}` | host (issue popover) | Comma-separated issue labels |
+| `{issue_state}` | host (issue popover) | Issue state: OPEN or CLOSED |
+| `{issue_url}` | host (issue popover) | GitHub issue URL |
+| `{issue_assignees}` | host (issue popover) | Comma-separated assignee usernames |
+| `{issue_milestone}` | host (issue popover) | Issue milestone name |
+| `{issue_comments_count}` | host (issue popover) | Number of comments on the issue |
 
 ### 10.8 Execution Modes
 
-- **Inject** (default): routes the resolved prompt text to the active terminal. **Auto-execute** decides whether the action submits. Submissions are idle-gated (configurable via `requiresIdle`) and use agent-aware Enter semantics. Review-only actions are not idle-gated; the **Target** sub-option places their editable text in the Compose box (default) or directly in the terminal input. If the Compose box is unavailable, the terminal input is the fallback.
+- **Inject** (default): routes the resolved prompt text to the active terminal. **Auto-execute** decides whether the action submits. Submissions are idle-gated (configurable via `requiresIdle`) and use agent-aware Enter semantics. Review-only actions are not idle-gated; the **Target** sub-option places their editable text in the Compose box or directly in the terminal input — **Auto** (default) picks whichever the Compose box's current open/closed state calls for, **Compose box** always opens it, **Terminal** always uses the terminal input. If the Compose box is unavailable (browser/PWA), the terminal input is the fallback regardless of Target.
 - **Shell script**: executes the prompt content directly as a shell script via `execute_shell_script` Tauri command. No agent involved — runs content as-is via `sh -c` (macOS/Linux) or `cmd /C` (Windows) in the repo directory. Output routed via `outputTarget`. 60-second timeout cap. No prerequisites (no terminal, agent, or API config needed)
 - **Headless**: runs a one-shot subprocess via `execute_headless_prompt` Tauri command. Requires a per-agent headless template configured in Settings → Agents (e.g. `claude -p "{prompt}"`). Output routed to clipboard or toast depending on `outputTarget`. Falls back to inject in PWA mode. 5-minute timeout cap
 
@@ -1655,18 +1743,22 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | **Toolbar dropdown** | All enabled prompts with `toolbar` placement | `Cmd+Shift+K` or lightning bolt button |
 | **Git Panel — Changes tab** | SmartButtonStrip with `git-changes` placement | Inline buttons above changed files |
 | **PR Detail Popover** | SmartButtonStrip with `pr-popover` placement | Inline buttons in PR detail view |
-| **Command Palette** | All prompts with `Smart:` prefix | `Cmd+P` then type "Smart" |
+| **Command Palette** | Prompts with `command-palette` placement, prefixed `Smart:` — every built-in ships with this placement enabled by default | `Cmd+P` then the "Prompts" scope chip, or type "Smart" |
 | **Branch context menu** | Prompts with `git-branches` placement | Right-click branch in Branches tab |
 
 ### 10.10 Smart Prompts Management (Cmd+Shift+K Drawer)
 
 - All prompt management consolidated in the Cmd+Shift+K drawer (Settings tab removed)
+- The search field keeps keyboard focus at all times; `Tab`/`Shift+Tab` cycle the category chips (All/Custom/Recent/Favorites) instead of moving focus, wrapping at either end — mirrors the Command Palette's scope-chip cycling
+- The footer shows key-hint chips (`↑↓` navigate, `↵` insert, `⌘E` edit, `⌘F` favorite, `esc` close, `⇥` category), styled like the Command Palette's own footer
 - Enable/disable individual prompts via toggle button on each row
-- Edit prompt: opens modal with name, description, content, variable dropdown, placement, execution mode, auto-execute, keyboard shortcut
-- A normal click or Enter follows the saved auto-execute setting; double-click and **Insert & Run** force one submission, while **Insert** always keeps the result editable
+- Edit prompt: opens modal with name, description, content, variable dropdown, placement (with user-friendly labels and a hover description of where each surfaces), execution mode, target, auto-execute, keyboard shortcut
+- A normal click, double-click, or Enter on a Shell/Headless/API-mode prompt runs it directly (there is no review state for these modes); for Inject-mode prompts a normal click or Enter follows the saved auto-execute setting, while double-click and **Insert & Run** force one submission and **Insert** always keeps the result editable
+- The drawer is registered with the app's central modal stack, so Escape closes it without also reaching the terminal underneath, and keystrokes are never redirected into the active terminal while it's open
 - Variable insertion dropdown below content textarea: grouped by Git/GitHub/Terminal, click to insert `{variable}` at cursor
 - Create custom smart prompts with `+ New Prompt` button
 - Built-in prompts show a "Reset to Default" button when content is overridden
+- Import/export: export scope picker (All prompts / Modified only / Custom only — "All prompts" covers the entire prompt library, not just what's shown in the drawer) opens the native Save dialog to write a portable `.json`; Import reads a file and shows a per-prompt review dialog (NEW/CONFLICT badges, select which to apply) before anything is overwritten. Imported `shell`/`api` prompts land disabled pending review. Smart Selection rules (Settings > Smart Selection) have the identical toolbar and review dialog.
 
 ### 10.11 Headless Template Configuration
 
@@ -1686,12 +1778,14 @@ The navigation groups the global pages by task. Each group is a static label row
 | Application | General (**11.1**), Appearance (**11.2**), Notifications (**11.5**) |
 | Workspace | Terminal (**11.9**), Keyboard Shortcuts (**11.6**), Git & GitHub (**11.10**) |
 | AI | Agents (**11.7**), AI Chat (**11.8**), Voice (section 9), Smart Prompts (**10.5**) |
-| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Machines (**11.3**), Plugins (**17.2**) |
+| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Servers (**11.3**, **24**), Plugins (**17.2**) |
 | Repositories | One page per configured repository (**11.4**) |
 
 ### 11.0 Search
 - Search box at the top of the page list; filters every setting across every page at once
-- Each result shows the setting name and its `Page › Section` trail; selecting one opens that page and scrolls to the field
+- Results are BM25-ranked (every query word must match; label/hint/section/page text all count), so the setting named by the query outranks entries that merely mention it
+- Each result shows the setting name, its `Page › Section` trail, and the setting's hint text when it has one; selecting one opens that page, scrolls to the field, and briefly flashes it
+- The same settings appear in the Command Palette (`Cmd+P`) under the "Settings" category, so one can be jumped to without opening the Settings panel first; an expert setting is revealed on arrival, and the palette offers only the controls this client renders
 - Repository pages are not indexed — a global box cannot know which repository a query means
 - Settings the current build does not render (the AI Chat page while Experimental Features is off, for example) report no match instead of opening an absent page
 - A result inside an expert setting shows an **Expert** badge; opening it reveals that setting (see **11.11**)
@@ -1700,13 +1794,15 @@ The navigation groups the global pages by task. Each group is a static label row
 ### 11.1 General
 - Language: the locales that ship a message catalog, each named in its own language. The pick persists to `config.json` and re-renders every translated string without a reload. Locales with no catalog are not listed — they would render English while claiming to be translated — so the list holds only English until more catalogs land
 - Show agent context bar
+- Window: restore size and position on launch (desktop app only, default on)
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
+- Diffs (applies to Session Diff Review, Branch Diff Scroll and the per-file diff view; the toolbar's diff-options popover sets the same values): ignore leading/trailing whitespace, ignore whitespace amount, case-insensitive comparison, soft-wrap long lines, auto-open Session Diff Review (off/ask/auto), truncate long changes above N lines (0 = never). All but soft-wrap are expert settings
 - Updates: auto-check, update channel, check now. Beta builds migrate old saved Stable preferences to Beta once; later explicit channel choices are preserved
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
-- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
+- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel and the **AI Chat** settings page (**11.8**); SSH Tunnels graduated out of it (**23**). The three AI sub-flags went with the embedded engine (#784-0aec)
 
 ### 11.2 Appearance
 - Split tab mode: separate / unified
@@ -1715,30 +1811,40 @@ The navigation groups the global pages by task. Each group is a static label row
 - Max tab name length: 10-60 slider
 - Repository groups: create, rename, delete, color-coded
 - Layout: reset panel sizes (restore sidebar and panel widths to defaults)
-- UI legend: reference for colors, symbols and badges
+- Bell style: none / visual / sound / both
+- UI legend: reference for colors, symbols and badges — rendered with the real sidebar components (branch icons, unmerged marker, compact PR markers), plus the tab activity dot (the unseen-content indicator on an inactive Session Diff Review tab) — that doubles as their editor (**UI Legend indicator customization**): a color swatch, an 18-shape icon picker, and an animation
+  picker (narrowed per indicator — e.g. badges don't offer "glow") per capable row, plus a reset
+  "×" and a "Reset all indicators" button. Overriding a PR state recolors that state's marker on every branch row and its badge in the GitHub panel. Overrides persist in `config.json` and apply live, no
+  restart, surviving theme switches. Four group headings (Tab Types, PR Status Badges, Git Repo
+  Status, Diff Stats) additionally carry a show/hide toggle for that whole group. Help → UI Legend shows the same reference read-only.
 
-### 11.3 MCP, Remote Access and Remote Machines
-Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
+### 11.3 MCP, Remote Access and Remote Servers
+Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll. The former **Remote Machines** page is now a section of **Remote Servers** (an old `remote-machines` deep link opens it).
 - **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
-- **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
+- **MCP** — TUIC MCP Server: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.); a note above the manual-configure disclosure points to the per-agent auto-configure option in Settings → Agents instead
 - **MCP** — TUIC capability switches: enable or deny capability domains and grouped actions to restrict what AI agents can access; three always-visible sections group approved domains and nested member denials, with configuration status for conditional domains; parent-blocked member switches show off with an enable-parent hint and retain their saved preferences
 - **MCP** — Upstream MCP Servers: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, Bearer/OAuth and multiple masked secret header rows backed by the OS credential vault, origin-bound credentials that fail closed on provider changes or unbound old entries, same-origin-only credential redirects, live status dots, tool count and metrics. Saved upstreams auto-connect on boot. The MCP popup's "Manage in Settings" opens this page at this section
+- **MCP** — **Remove all MCP integrations:** lists every client holding a bridge entry and clears them in one action, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind (moved here from the Agents page)
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
+- File Access: **Additional Readable Directories** — extra absolute directories a browser/remote/PWA client may read files from, on top of registered repository roots. Default: `~/.claude/plans` (so a Claude Code plan-file link an agent printed opens with no setup). Desktop reads are never restricted; never widens writing, copying, or moving — see **14.6**
 - **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, Tailscale HTTPS, cloud relay. A discovery failure replaces only the address choices with an inline error and Retry; other settings remain available
-- **Remote Machines** — `tuic-remote` connections over SSH or a direct URL; the page lists SSH hosts discovered from `~/.ssh/config` and `known_hosts` (hashed entries are only counted), shows the loaded agent keys, probes hosts on demand and prefills the Add form from a click
+- **Remote Servers** — one page, one merged editor (**Add Connection**, a Kind of SSH Tunnel / Remote Server — SSH / Direct / Local / Relay), then the **SSH Port-Forwarding Tunnels** list and the **Remote Machines** list of `tuic-remote` connections; that list shows SSH hosts discovered from `~/.ssh/config` and `known_hosts` (hashed entries are only counted), the loaded agent keys, probes hosts on demand and opens the editor prefilled from a click (see **24**)
 - Voice dictation has its own **Voice** page (section 9)
 
 ### 11.4 Repository Settings (per-repo)
 - Display name
-- Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
+- Worktree tab: Branch From (which base branch new worktrees are created from — "Use global default", "Automatic", or any of the repo's actual local/remote branches, fetched live and grouped; a configured branch that's since been deleted is shown with a "no longer exists" marker and a warning rather than silently dropped), storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
+- PR Visibility (hide draft/conflicting/CI-failing) and, on macOS, Cmd+1-9 terminal hotkeys — also per-repo overridable
 - Scripts tab: setup script (post-worktree), run script (`Cmd+Shift+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
+- **Tri-state overrides:** every on/off field above (plus the per-agent "Show intent as tab title" / "Show suggested follow-ups" overrides in **11.7**) uses a shared `TriStateToggle` control with three directly-selectable positions — On, Use global default, Off — instead of a checkbox that can only ever hold a concrete value. Selecting "Use global default" writes `null` (or, for the per-agent overrides, `undefined`) so the setting tracks the global value going forward, without needing the panel's "Reset to Defaults" button.
 
 ### 11.5 Notifications
 - Master toggle, volume (0-100%)
-- Per-event: question, error, completed, warning, info
+- Per-event: question, error, completed, warning, info, attention
 - Test buttons per sound
 - Reset to defaults
+- **Sound customization** — per-event dropdown picks the sound source: the event's own default tone, another event's tone borrowed as a preset (e.g. use the "Attention" call for "Question"), or a custom audio file (desktop only, native file picker; `.wav`/`.mp3`/`.ogg`/`.flac`). A custom file that fails to open or decode falls back to that event's default tone rather than staying silent. Browser/PWA mode supports presets but not custom files (no filesystem access) — falls back to the default tone the same way.
 - **Keep toasts in the bell** — mirrors toasts into the bell's Messages section (see **4.4**). Outside the audio block, because the bell is visual and must stay configurable without an audio device
 
 ### 11.6 Keyboard Shortcuts
@@ -1773,7 +1879,10 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Theme: terminal and app color theme, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
-- Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry), scrollbar marks, scrollback reflow on resize
+- Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, OSC 1337 focus/attention requests (StealFocus/RequestAttention), block timestamp mode (elapsed-time label per command block: off / while Ctrl+Cmd is held / always), block folding (gates the Toggle Block Fold shortcut, its palette entry and the gutter fold chevron), scrollbar marks, scrollback reflow on resize
+- Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
+- Custom Environment Variables (expert): user-authored `KEY=value` pairs applied to every spawned terminal (shell and agent tabs alike), overriding any other source of the same variable; `TUIC_*`, `ZDOTDIR` and dynamic-loader variables (`LD_*`, `DYLD_*`) are reserved. Default: empty. Global only — no per-repo/`.tuic.json` tier, same as Additional Readable Directories (**11.3**)
+- Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.10 Git & GitHub
 - GitHub authentication (see **8.13**), additional accounts and repository bindings (see **8.14**)
@@ -1790,6 +1899,10 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - A search result for an expert setting carries an **Expert** badge; opening it opens the page, reveals the setting and scrolls to it. The reveal lasts until Settings is opened again and does not change the switch
 - Expert settings per page: General (auto-standby timeout, content indexing, update channel); Notifications (master volume, audio output device); Terminal (shell, font weight, OSC 52 clipboard, block folding, scrollbar marks, scrollback reflow); Git & GitHub (auto-delete on PR close, copy ignored files, copy untracked files, storage strategy, auto-archive merged, orphan cleanup, after-merge behavior, auto-fetch interval, the "Add another GitHub account" button while no additional account exists); Agents (collect project progress, and per agent idle-close delay, auto-retry, native status signals, install hooks globally, track intent, collect progress, suggested follow-ups, headless command template, Claude environment flags); Voice (long-press threshold, auto-send, input device, level gate, speech confidence gate, hold-back, notify model on hands-free, start notice); MCP (collapse tools); Remote Access (port, session token duration, IPv6). Full table: [Settings → Expert Mode](user-guide/settings.md#expert-mode)
 - Every section keeps at least one basic setting, so no heading and no page hides in basic mode
+
+### 11.9 Selection
+- Word boundaries: character list or regex, plus a precision-scored smart-selection rule list with actions
+- See **1.22 Smart Selection** for full details
 
 ---
 
@@ -1809,6 +1922,8 @@ All data persisted to platform config directory via Rust:
 - `dictation_config.json` — dictation settings
 - `.tuic.json` — repo-root team config (read-only from app, highest precedence for overridable fields)
 - `claude-usage-cache.json` — incremental session transcript parse cache
+- `window-geometry.json` — main window size/position/maximized/fullscreen, owned outside `tauri-plugin-window-state` (`src-tauri/src/window_geometry.rs`)
+- `scrollback/<tuic_session>.json` — one file per tab's saved scrollback, opt-in (see `docs/backend/pty.md` § Scrollback restore)
 
 ### 12.2 Hydration Safety
 - `save()` blocks before `hydrate()` completes to prevent data loss
@@ -1873,6 +1988,7 @@ Buffer eviction is reported; it does not create another output store.
 - `tuic-bridge` ships as a Tauri sidecar; auto-installs MCP configs on first launch for Claude Code, Cursor, Windsurf, VS Code, Codex, Grok, opencode, Droid, goose and pi — but only for the ones actually installed on the machine. Zed, Amp and Gemini keep MCP inside their general `settings.json` and wait for an explicit install. JSON configs are edited member-by-member, never reserialized, so comments, key order and indentation survive (see [MCP auto-install](backend/config.md#mcp-bridge-auto-install))
 - Local connections use Unix domain socket (`<config_dir>/mcp.sock`) on macOS/Linux or named pipe (`\\.\pipe\tuicommander-mcp`) on Windows; TCP port reserved for remote access only
 - Unix socket lifecycle is crash-safe: RAII guard removes the socket file on `Drop`; bind retries 3× (×100 ms) removing any stale file before each attempt; liveness check uses a real `connect()` probe so a dead socket from a crashed run never blocks MCP tool loading
+- **Additional Readable Directories** (Settings → Remote Access → File Access) — a browser/remote/PWA client reading an absolute file path (a plan-file link, a code-editor open) is gated to registered repository roots plus this user-configurable list of extra directories. Ships with `~/.claude/plans` enabled by default. Desktop reads are never restricted; this setting never widens writing, copying, or moving a file — those stay confined to registered repository roots
 
 ### 14.7 Cross-Repo Knowledge Base
 - Knowledge base functionality is available via the `mdkb` MCP upstream server (configure in MCP Upstreams settings)
@@ -1895,16 +2011,46 @@ Buffer eviction is reported; it does not create another output store.
 ### 14.9 macOS Dock Badge
 - Badge count for attention-requiring notifications (questions, errors)
 
-### 14.9 Tailscale HTTPS
+### 14.10 Tailscale HTTPS
 - Auto-detects Tailscale daemon and FQDN via `tailscale status --json` (cross-platform)
 - Headless daemon refreshes Tailscale Host trust every 30 seconds, recovering late startup and removing stale names after rename or stop
 - Provisions TLS certificates from Tailscale Local API (Unix socket on macOS/Linux, CLI on Windows)
 - HTTP+HTTPS dual-protocol on same port via `axum-server-dual-protocol`
-- Graceful fallback: HTTP-only when Tailscale unavailable or HTTPS not enabled
+- Falls back to the self-signed HTTPS cert (§14.11) when Tailscale HTTPS is unavailable, rather
+  than plain HTTP — zero-warning Tailscale HTTPS still wins whenever it's available
 - QR code uses `https://` scheme with Tailscale FQDN when TLS active
 - Background cert renewal every 24h with hot-reload via `RustlsConfig::reload_from_pem()`
 - Session cookie gets `Secure` flag on TLS connections
 - Settings panel shows Tailscale status with actionable guidance
+
+### 14.11 Self-Signed HTTPS Fallback
+- When Tailscale HTTPS isn't active (or fails to provision) and remote access is enabled,
+  generates and serves a self-signed TLS cert instead of falling back to plain HTTP — LAN/remote
+  access gets HTTPS by default, since some browser APIs (e.g. the async Clipboard API) are
+  gated behind a secure context
+- Cert covers `localhost`, `127.0.0.1`, `::1`, every current LAN IP, and (macOS only) the
+  machine's existing Bonjour/mDNS hostname (`<name>.local`) — no new mDNS infrastructure, just
+  reading the name macOS's built-in mDNSResponder already answers for anything listening on the
+  machine, the same mechanism AirDrop/file sharing rely on; 10-year validity (a
+  locally-trusted-by-exception cert accepted via a one-time browser warning per device gets no
+  security benefit from short rotation)
+- Cached under the app's config directory; regenerates on expiry-within-30-days or when the
+  machine's LAN IPs or Bonjour hostname no longer match the cached SAN list (checked at
+  boot/restart, and via a 60s background re-check loop that hot-reloads the live TLS config for
+  network changes mid-session)
+- The Bonjour hostname also appears as an extra "mDNS" entry (alongside the IP entries) in the
+  network picker (`RemoteQrDialog`, Settings → Remote Access), letting a device connect via
+  `https://<name>.local` instead of a raw IP — appended last so it never displaces the existing
+  Tailscale/Wi-Fi/LAN auto-select preference
+- Plain `http://` requests on the same port automatically 301-redirect to `https://` while the
+  self-signed fallback (not Tailscale) is the active TLS source — old bookmarks/QR codes keep working
+- Settings panel (Remote Access → Self-Signed HTTPS) shows status (active/generated/expiry), a SHA-256
+  fingerprint for verifying the browser's warning dialog shows the genuine cert, and a Regenerate
+  action
+- Concurrent regeneration attempts (e.g. a settings-driven restart racing the Regenerate button)
+  are serialized so cert.pem/key.pem/meta.json can't end up as a mismatched set
+- `tuic-remote` (the headless daemon) does not generate a self-signed cert — it only serves a
+  manually-configured `TlsConfig::Manual` cert (`services.tls` in config.toml)
 
 ---
 
@@ -1993,6 +2139,7 @@ Terminal Compose uses `Enter` to send, `Ctrl+Enter` or `Shift+Enter` for a new l
 | `Cmd+B` | Quick branch switch (fuzzy search) |
 | `Cmd+Shift+D` | Git Panel (opens on last active tab) |
 | `Cmd+G` | Git Panel — Branches tab |
+| _unbound_ | Session diff review — step through everything a Claude Code session changed (Command Palette: `open-session-review`) |
 
 ### Branches Panel (when panel is focused)
 | Shortcut | Action |
@@ -2116,7 +2263,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import
 - Per-plugin error logging with ring buffer (500 entries)
-- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
+- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `ui:external-link`, `ui:file-picker`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - CLI execution API: sandboxed execution of whitelisted CLI binaries (`mdkb`) with timeout and size limits
 - Filesystem API: sandboxed text read, base64 binary read, write, rename, list, tail-read, and watch operations restricted to `$HOME`; binary reads keep a 10 MiB default and accept a per-call budget capped at 512 MiB
 - HTTP API: outbound requests scoped to manifest-declared URL patterns (SSRF prevention)
@@ -2152,6 +2299,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
 - CLI `tuic <dir>` / `tuic open <dir>` and MCP `repo action=add` register and activate directories through the running server, without an OS URL handler; repeat adds preserve existing workspaces and terminals. MCP `ui tab` rejects `tuic://open-repo` and directs callers to `repo add`.
 - `tuic://open-repo?path=/path` — Activate a repo already in the sidebar; a folder that is not in it yet is added after one confirmation (native deep-link flow)
+- `tuic://open-terminal?path=/path&path=/path2...` — Open a new terminal pane at each given path (a file resolves to its parent directory), capped at 5 paths per invocation. This is what the macOS Finder "New TUICommander Tab Here" service and `tuic open-here` send. No confirmation dialog — see [17.4.2](#1742-finder-service-macos-new-tuicommander-tab-here) for the placement logic and why this one is unconfirmed by design
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open a Markdown file in a native tab. MCP `ui action=tab` also accepts absolute Markdown paths outside registered repositories; the iframe SDK keeps its repository path validation.
 - Absolute file URLs use `tuic://open//Users/name/file.md` or `tuic://edit//home/name/file.rs`. Redundant leading slashes normalize to one filesystem root before tab creation, including iframe SDK and mobile output links; relative paths and Windows drive paths keep their existing meaning.
@@ -2173,7 +2321,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - **Path resolution:** relative paths resolve against active repo; absolute paths match longest repo prefix; `../` traversal outside repo root is blocked
 - **Repository:** `tuic.activeRepo()` returns active repo path; `tuic.onRepoChange(cb)` / `tuic.offRepoChange(cb)` for live updates
 - **Terminal:** `tuic.terminal(repoPath)` — open terminal in repository
-- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications with optional sound (info blip, warn double-beep, error descending sweep); `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
+- **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications; `sound: true` plays through the same customizable Info/Warning/Error sounds as everything else in Settings > Notifications (master toggle, volume, device, and any preset/custom file chosen for that event), matched to `level`; `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
 - **Messaging:** `tuic.send(data)` / `tuic.onMessage(cb)` — bidirectional host↔plugin communication; `PanelHandle.send` reaches SDK listeners through the host-message envelope
 - **Plugin lifecycle:** panel tabs and bridges close on plugin unload; state observers receive active branch, shell state and awaiting-input transitions
 - **HTTP scope:** `net:http` requires a non-empty `allowedUrls` manifest declaration
@@ -2181,6 +2329,19 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `<a href="tuic://open/...">` and `<a href="tuic://terminal?repo=...">` links intercepted automatically
 - `data-pinned` attribute on links sets pinned flag
 - Interactive test page: `docs/examples/sdk-test.html` (see `docs/tuic-sdk.md` for launch instructions)
+
+### 17.4.2 Finder Service (macOS, "New TUICommander Tab Here")
+- Right-click a folder (or a file — its parent directory is used) in Finder and choose **New TUICommander Tab Here** to open a terminal pane there
+- Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`) installed into `~/Library/Services/` and ad-hoc code-signed there (required for Gatekeeper to let Finder's Services menu run it) — no native `NSServices`/Cocoa code
+- Install/uninstall from **Settings → General → Finder Integration**, or accept the one-time first-run prompt (never repeated once dismissed, mirrors the `tuic` CLI install prompt)
+- Chain: Finder → the bundle's shell action → `tuic open-here <paths...>` → launches TUICommander if it isn't running → `tuic://open-terminal` deep link
+- **Which repo the new pane opens in** (`resolvePlacementForCwd`, `src/stores/terminalPlacement.ts`):
+  1. the path is inside a registered repo or one of its linked worktrees → opens there, on that repo's branch
+  2. otherwise, the repo you're currently active in → opens there
+  3. otherwise, a picker dialog asks: pick a registered repo, register the clicked folder as a new repo, or open an unattached terminal
+- The new pane's cwd is always the exact folder clicked, even when it's nested inside a repo — never the repo root
+- A selection of multiple items opens one pane per item, capped at 5
+- Rust: `src-tauri/src/finder_service.rs` (install/uninstall/status), `src-tauri/crates/tuic-cli/src/main.rs` (`open-here` subcommand). Frontend: `src/deep-link-handler.ts` (`open-terminal` case), `src/components/RepoPickerDialog/`
 
 ### 17.5 Preinstalled External Plugins
 - **Plan Tracker** — Detects agent plan files from structured events and opens them as background tabs
@@ -2197,7 +2358,8 @@ See `examples/plugins/` for reference implementations:
 - `repo-dashboard` — Read-only state and dynamic markdown
 - `report-watcher` — Generic report file watcher with markdown viewer
 - `claude-status` — Agent-scoped plugin (`agentTypes: ["claude"]`) tracking usage and rate limits
-- `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop
+- `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop — see [Wiz Kanban](user-guide/wiz-kanban.md) for the file/frontmatter conventions it expects
+- `md-kanban` — **Not in this build:** it lives only in newer revisions of the plugins repository; the `plugins` submodule pinned here (and its `registry.json`) does not include it until the next pin bump. Kanban board over checkbox tasks (`- [ ]`) in a single markdown file: inline `[field:: value]`/`(field:: value)` metadata (priority, dependsOn, id), `#tags`, heading-path labels, a small upstream/downstream dependency graph with hover-highlight, and multi-board support via a native file picker
 
 ### 17.7 Claude Wakeup Plugin
 Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it stalls without asking a question. Ships in `plugins/claude-wakeup/`.
@@ -2388,7 +2550,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Claude AskUserQuestion publishes its actual choices in the same mobile overlay; a tap follows the backend's arrow-and-Enter selection contract instead of using generic Yes/No keys
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
-- HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
+- HTTP detection: shows "Requires HTTPS — reload via https://" when not on a secure context (rare now that remote access defaults to the self-signed HTTPS fallback, §14.11)
 
 ### 18.9 Notification Sounds
 - Session notification sounds play only while the Sessions list and PWA document are visible; session detail, Chat, Files, Progress, Activity, and Settings remain silent. Muted transitions are tracked without replay, and deferred completions recheck visibility and the host subagent-silence setting before playback. Parented sessions follow **Silence subagent sounds and notifications** without replaying muted transitions. Mobile startup loads the host notification snapshot before subscribing to settings refresh, so a fresh PWA respects the saved host preference.
@@ -2397,7 +2559,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Native tones end on an exact zero-amplitude sample and keep the output stream alive for a 100 ms silent tail, avoiding end-of-chime clicks when CoreAudio releases a short-lived stream
 - One shared 500 ms anti-spam gate covers every sound type, preventing different tones in a notification burst from overlapping; explicit Settings test playback bypasses it
 - State transition detection: question, rate-limit, error, completion
-- Completion notifications deferred 10s and suppressed when active sub-tasks are running (detected via `⏵⏵`/`››` mode-line prefix)
+- Completion notifications deferred 10s and suppressed when active sub-tasks are running (detected via `⏵⏵`/`››` mode-line prefix), and while Claude has declared background tasks still running (`declaredBackgroundWork` — the shell can go idle by silence while the agent is still working)
 - In the desktop app, an unfocused agent question also sends a native OS notification naming its terminal. The Tauri notification plugin handles desktop delivery; macOS retains the native response handle through a desktop command so a click returns to the terminal. Permission is checked once, and focused windows and repeated notices within five seconds are suppressed
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
 - Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
@@ -2554,6 +2716,7 @@ partial work, and their child processes may continue.
 
 ### 20.4 Process Name via Syscall
 - `proc_pidpath` (macOS) / `/proc/pid/comm` (Linux) replaces `ps` fork
+- No process-inspection tool is exec'd anywhere (`ps`/`pgrep`/`pkill` fail in sandboxed hosts): the shared process snapshot, process monitor, CPU-watchdog child listing and tunnel ssh check read the OS natively through `tuic_core::process_info`; `ps` survives only as the logged fallback of the process snapshot (see `docs/backend/pty.md`), and `scripts/check-no-process-exec.mjs` keeps it that way
 - Eliminates ~100 fork+exec/min with 5 terminals open
 
 ### 20.5 MCP Concurrent Tool Calls
@@ -2566,7 +2729,7 @@ partial work, and their child processes may continue.
 
 ### 20.7 Frontend Bundle Splitting
 - Vite `manualChunks`: terminal, codemirror, diff-view, markdown as separate chunks
-- SettingsPanel, ActivityDashboard, HelpPanel lazy-loaded with `lazy()` + `Suspense`
+- SettingsPanel, ActivityDashboard, HelpPanel, TunnelsPanel, WorktreeManager, ErrorLogPanel, CreateWorktreeDialog, ProcessManagerModal, GeneratorsModal, RemoteQrDialog, TaskQueuePanel, ChangelogModal, AutofixDialog lazy-loaded with `lazy()` + `Suspense`
 - PTY read buffer increased from 4KB to 64KB for natural batching
 
 ### 20.8 Conditional Timers
@@ -2581,7 +2744,8 @@ partial work, and their child processes may continue.
 ### 20.10 Process Monitor
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
 - Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A descendant that started within 60s of the agent itself is also excluded whatever its name, which covers the daemons no list can anticipate — `codex-code-mode-host`, or an MCP server launched through `npm exec`; platforms that report no process age fall back to the name rule alone A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
-- Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
+- A second, hook-authoritative signal (`declared_background_work`) also keeps a Claude session `agent_state=working`: Claude Code's own `Stop`/`StopFailure` hook payload can name outstanding work still running as the turn ends — a backgrounded tool call (e.g. `run_in_background` Bash) OR an Agent Teams teammate — scraped by `tuic-hook` into the `bgtasks` and `bgtasksummary` OSC 7770 verbs. An *idle* teammate does not keep its lead working (Claude Code lists a teammate as running until it is shut down); only a teammate whose own terminal is busy does, and the lead returns to idle the moment the teammate finishes. Unlike the process-tree classification above, this bypasses the "show Idle once the composer is ready" carve-out that protects a Codex-left-running dev server — see `docs/backend/pty.md`
+- Unix: one native process-table read for the parent map, then per-pid resident size and lifetime-average CPU% (CPU time / wall time since start — on macOS `ps` used to show the kernel's decayed estimate) via `tuic_core::process_info`; a pid owned by another user (a `sudo` subtree) has no readable usage on macOS and shows 0. Windows: per-process working-set size via the platform API
 - Process statistics use HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), while `GET /process/monitor` serves a self-contained HTML dashboard with no build step or external assets. The removed MCP `session action=process_stats` is not supported; clients must call the HTTP route directly.
 - Frontend `ProcessManagerModal` opens the dashboard in-app
 - Use to diagnose which agent/terminal is driving high CPU or memory
@@ -2593,14 +2757,35 @@ partial work, and their child processes may continue.
 - **Persistent stall evidence:** selected slow refresh, UI freeze and heartbeat-gap observations use a bounded two-file metadata-only journal. The replay builder creates anonymized count-based inputs, not a reconstruction of the original stall. See [Stall journal](backend/stall-journal.md).
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
-- **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
+- **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate lifetime-average %cpu of TUIC's direct children + the hottest individual child, read natively — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, sessions with grid frames outstanding (`session×count`, from the `GridGate` counters), event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
 - **Frontend liveness** (always on, desktop only): the WebView beats every 5s from its main thread; six missed beats log `Frontend unresponsive: no heartbeat for Ns` exactly once, and the return beat logs a matching recovery line. Sleep/wake re-baselines the clock so a lid-close is never charged to the frontend. Recover with `POST /debug/reload_webview` — a native-side navigation that works while the JS thread does not, and keeps every PTY session (they live in the backend). Recovery remembers only a URL on the app origin, including the configured development origin. Native navigations log their trigger, action, and target URL; each frontend initialization logs the document navigation type and start time. Frontend: `src/utils/frontendHeartbeat.ts`; backend: `src-tauri/src/frontend_liveness.rs`, `src-tauri/src/webview_recovery.rs`
 - Control via HTTP: `POST /diagnostics {"enabled":true}` to toggle, `GET /diagnostics` for status, `GET /logs?source=diagnostics` to read the snapshots
 - Developer agent capture scenarios record installed CLIs in isolated headless debug sessions; fixture promotion preserves bytes and checks ordered expected states through the replay oracle. See `scripts/agent_capture/README.md`.
 
 - Raw PTY captures can be directed to an absolute `TUIC_CAPTURE_DIR` for isolated regression evidence; the capture status reports the chosen directory.
 - Catches known failure patterns: IPC flush loops, content-index CPU saturation, a blocked or dead WebView main thread (missed heartbeats — *not* grid frames outstanding, which a hidden terminal produces on purpose by never acking), FD/thread leaks, and sleep/wake false-idle cascades
+- **Per-session overload attribution and a lag-recovery fix** (2026-09-28): a per-session broadcast receiver (`handle_ws_session`/`handle_ws_grid_session`'s event lane, and the global-bus SSE handler) that falls behind past a bounded threshold is now disconnected — forcing a clean reconnect with a fresh snapshot — instead of logging a warning and re-lagging forever, which previously let one session's WebSocket lag climb unbounded (419ms → 12.4s observed) with no recovery. New per-session counters (event rate, output-byte rate, cumulative WS lag) are read-and-reset every watchdog tick and surfaced two ways: appended to the `CPU SPIKE` line as `top_sessions_by_*` (top 5 each), and a new independent `SESSION OVERLOAD` warning that names a single session crossing a hard per-tick threshold *even when total process CPU never spikes* — the gap that let one session drive several minutes of elevated CPU without ever being individually identified. `GET /diagnostics/sessions` (mirrors `GET /diagnostics/markers`'s shape) answers "who's hot right now" on demand without disturbing the watchdog's own tick.
 - Backend: `src-tauri/src/cpu_watchdog.rs`
+
+### 20.12 Session State Explain
+- Read-only troubleshooting dump for "why is this session's status badge what it is" — a badge
+  showing idle while genuinely working, or working after it already finished, is a regular
+  occurrence as agents change their output over time
+- Reports the four-layer chain that produces the visible badge: the held ranked evidence per
+  axis (busy/idle/awaiting), whether the arbiter would flip the shell state right now
+  (`decide_now`), which rung of the `agent_state` ladder won (`agent_state_rung`), and the
+  frontend's own badge computation — flagging when the two disagree outside a documented
+  carve-out
+- **Decision trail**: an always-on, 64-entry ring recording every evidence-recorder call,
+  including *rejected* attempts and exactly what outranked them — the single most useful field
+  for tracking down a stuck badge, and previously invisible since the rejection `bool` was
+  discarded everywhere it was returned
+- Surfaced identically on all three transports (desktop command, `GET /sessions/{id}/explain-state`,
+  MCP `debug action=explain_state`) from one shared assembler
+- Frontend: an "Explain state" modal reachable from the Activity Dashboard row and the terminal
+  tab context menu, with a copy-as-JSON button
+- Backend: `src-tauri/src/pty/explain.rs`, `src-tauri/src/pty.rs` (`DecisionTrail`), full design
+  in `docs/backend/pty.md`'s "Session State Explain" section
 
 ## 21. CLI Companion (`tuic`)
 
@@ -2632,8 +2817,24 @@ partial work, and their child processes may continue.
 
 ### 21.5 tmux Compatibility Mode
 - `tuic alias` creates `tmux → tuic` symlink; `argv[0]` detection switches to compat mode
-- Supports: `new-session`, `list-sessions`, `kill-session`, `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`
-- Tools expecting tmux (e.g. Claude Code `--tmux`) transparently use TUICommander
+- Global options (`-L <name>`, `-S <path>`) partition state, exactly as with real tmux — two
+  concurrent tmux-driving processes never see each other's panes
+- Supports: `-V`, `new-session`, `new-window`, `split-window`, `respawn-pane`, `list-sessions`,
+  `list-windows`, `list-panes`, `display-message`, `select-pane`, `kill-pane`, `kill-session`,
+  `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`
+- `set-option`'s three color options (`window-style`/`pane-border-style`/`pane-active-border-style`
+  — Claude Code's per-teammate `--agent-color`) set a real accent color, rendered as a sidebar tab
+  marker and a terminal pane border; `select-layout tiled`/`main-vertical` arranges a window's
+  materialized panes into an actual split view (each pane stays its own independent sidebar tab —
+  only the terminal area's current split changes). Every other `set-option`/`select-layout` value,
+  plus `set-window-option`/`switch-client`/`rename-window`, are accepted as explicit no-ops
+- A real pane/window/session graph lives app-side (`GET/POST/DELETE /tmux/*`), reconciled
+  against live sessions so a manually-closed tab doesn't leave a dangling pane reference
+- Every invocation is logged (`<config dir>/logs/tmux-shim.log` + `POST /logs`, source
+  `tmux-shim`) — including unrecognized subcommands, `TUIC_TMUX_LOG=0`/`stderr` to control it
+- Tools expecting tmux (e.g. Claude Code's teammate-pane backend) transparently use
+  TUICommander — see `docs/user-guide/cli.md`'s "tmux Compatibility" section for the full
+  table and `tmux-swarm-shim.md` (repo root) for the investigation this was built from
 
 ### 21.6 Installation
 - First-run prompt on app launch (one-time, dismissible)
@@ -2739,11 +2940,13 @@ partial work, and their child processes may continue.
 - Indexed on `tunnel_id` and `timestamp` for fast lookups
 
 ### 23.5 Profile Configuration
-- TOML-based profiles with name, host, port, user, identity file, and port forwards
+- TOML-based profiles with name, an `[ssh]` table (host, port, user, identity file, keepalive, host-key policy, compression — `SshConnectionParams`, shared with remote connections), and port forwards
+- Profiles written by older builds (flat `host`/`port`/`user` + `[options]`) still load; global ones are rewritten to `[ssh]` once at startup, keeping `<id>.toml.pre-nested-ssh-<UTC>.bak`
 - Global scope: `<config_dir>/tunnels/*.toml` — available across all repos
 - Per-repo scope: `<repo>/.tuic/tunnels/*.toml` — overrides global profiles with same ID
 - Forward types: Local (`-L`) and Remote (`-R`) port forwarding
-- Options: ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes/AcceptNew)
+- Options: ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes/AcceptNew), Compression (default on)
+- Save mints a UUID for an empty id and delete of a missing profile is an error on both IPC and HTTP (one shared body each)
 - Validation: duplicate bind ports, empty fields, port range (1-65535)
 - Pre-spawn port availability check for local forwards
 
@@ -2763,7 +2966,7 @@ partial work, and their child processes may continue.
 
 ### 23.9 Orphan SSH Process Cleanup
 - `check_local_port()` distinguishes `PermissionDenied` (privileged ports) from `AddrInUse`
-- `kill_ssh_on_port()` finds SSH processes holding a port via `lsof`, verifies with `ps`, sends SIGTERM
+- `kill_ssh_on_port()` finds SSH processes holding a port via `lsof`, verifies each is `ssh` natively (executable path / kernel name, no `ps` exec), sends SIGTERM
 - Only kills confirmed `ssh` processes — never unrelated services
 
 ### 23.10 Statusbar Shield
@@ -2777,20 +2980,25 @@ partial work, and their child processes may continue.
 - Shutdown kills each tunnel's whole process group, not only the `ssh` child, and waits for confirmed exit within a bound; forked `ProxyCommand` grandchildren are not orphaned. A start that arrives after shutdown began is refused.
 
 ### 23.12 UI
-- **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
-- **TunnelEditorModal** — Create and edit tunnel profiles with form validation; file browse dialog for identity file; remote host pre-populated from tunnel host when adding forwards; type-aware Local/Remote forward endpoint fields; numeric input mode for port fields
-- **TunnelStatusBadge** — Color-coded status indicator (green=connected, blue=starting, orange=reconnecting, red=error, grey=stopped)
-- **Command Palette** — `toggle-tunnels` action registered for quick access
+- Tunnel profile create/edit lives in **Settings → Remote Servers**, through the merged connection editor shared with remote-server connections (see §24) — Kind "SSH Tunnel". Tunnel-specific fields: Port Forwards list, "Connect automatically on startup"
+- **TunnelsPanel** — the standalone overlay is status/control-only: list of tunnel profiles with status badges, start/stop, audit log ("Log"), and delete. No "+ New Tunnel"/per-row Edit anymore — its header has an "Edit in Settings" link instead, which closes the overlay and navigates to Settings → Remote Servers
+- **TunnelProfileList** — the list/row rendering, extracted so both the overlay and Settings render the identical component
+- **`SshConnectionFields`** (shared) — host with `~/.ssh/config` autocomplete, port, user, identity file with Browse dialog (desktop only; the path field works everywhere), live SSH-agent detection (including each key's fingerprint), ServerAliveInterval, ServerAliveCountMax (now has its own field), StrictHostKeyChecking (Yes/AcceptNew for both kinds; a new Remote Server defaults to AcceptNew, with a hint, a new tunnel to Yes), compression (`ssh -C`). Used by both the "SSH Tunnel" and "Remote Server — SSH" kinds
+- **`PortForwardsEditor`** (shared, extracted from the old TunnelEditorModal) — add/remove, type-aware Local/Remote forward endpoint fields, numeric input mode for port fields
+- **TunnelStatusBadge** — now a thin wrapper around a shared **ConnectionStatusBadge** presentation component (color=green/connected, blue/starting, orange/reconnecting, red/error, grey/stopped) — the same component the Remote Servers connection list uses for its own status vocabulary
+- **Command Palette** — `toggle-tunnels` action registered for quick access. No longer behind the experimental-features flag — tunnels are a fully graduated feature
 
-## 24. Remote Connection Manager
+## 24. Remote Servers
+
+Settings → **Remote Servers** (it replaced the separate **Remote Machines** page, which is now its last section; the old `remote-machines` key opens this page) hosts one merged connection editor for both SSH tunnel profiles and remote-server connections — a "Kind" dropdown with exactly four options: SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local. See §23.12 for the shared SSH-fields/Port-Forwards components.
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877), deploy policy, survive time
-  - The host picker probes deduplicated SSH config hosts on demand and labels
-    shell, no-shell, auth-failed and unreachable results; free text remains valid
+  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning, compression; host-key checking Yes/AcceptNew, default AcceptNew, honoured by every SSH command run for the server), remote daemon port (default 9877), deploy policy, survive time, auto-update, optional Instance ID (`--instance <id>` used only when this app starts or configures the daemon), "Offer to start the remote daemon if it is not running" and "Leave it running on disconnect" (§24.4), optional auth username/password
+  - The Remote Machines list probes deduplicated SSH config hosts on demand and labels
+    shell, no-shell, auth-failed and unreachable results; clicking a discovered host opens the editor prefilled with it
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
-  - Fields: URL, auth username
+  - Fields: URL, auto-update, optional auth username/password
 - **Relay** — Reaches a `tuic-remote` daemon that has no inbound port through a
   relay. Paste the bundle printed by `tuic-remote --relay-pair <url>`; the end-to-end
   secret never reaches the relay. The desktop exposes the daemon on a loopback port, so
@@ -2809,18 +3017,26 @@ partial work, and their child processes may continue.
   Progress, success and errors appear in Remote Machines. One update owns each
   connection at a time: manual and automatic updates both show in-progress,
   and overlapping requests over IPC, HTTP, or MCP receive an error.
+- **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
+  - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
+  - No host/user/identity/TLS fields — loopback only. Connect resolves the port (instance id read from its `config.json` on every attempt) and connects to `http://127.0.0.1:<port>` with the normal token handshake — loopback is not a credential; an unresolvable instance fails closed; Update & restart is refused for Local (not offered in the list); a version different from this app's shows "Remote out of date" with a version-mismatch notice
 
 - **Daemon version guidance** — Show the last `/health.build` version in every retained runtime state. A semantic version older than the client warns before authentication succeeds. Host refusals explain that an outdated daemon may be responsible and recommend installing the current `tuic-remote` and restarting the service. A bare 403 carries no version; without a prior health observation, the version stays unknown. Explicit disconnect clears the observation.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
-- Each connection has UUID, name, transport, auth username, enabled flag,
+- Each connection has UUID, name, transport, optional auth username (`null` when unset), enabled flag,
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
-- The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`; optional `start_if_not_running`, `leave_running_on_disconnect`, `instance_id`, written only when set), `Direct` (`url`, optional pinned `tls_fingerprint`), `Local` (`port` or `instance_id`; connects over loopback HTTP, update refused), `Relay` (pairing bundle, below)
+- A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
+- The Basic Auth **password** (`set_remote_connection_password` — an empty string forgets it — and `remote_connection_password_exists`; HTTP `PUT`/`GET /config/remote-connections/{id}/password`) goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
 - Relay peer admission publishes ordered presence before stats writes, so simultaneous joins do not restart the pairing handshake.
 - The relay pairing bundle goes to the vault (`Credential::RelayPairing`), keyed by the connection UUID, never to `connections.json`
+- No username + a stored password fails closed: the empty username is refused by the daemon
+- Test Connection (`test_connection` / `POST /config/remote-connections/test`) checks an unsaved connection without persisting anything: SSH one-shot `true` with the tunnel's options (never over a live multiplexed master), then for a Remote Server the daemon's `/health` through `ssh -W 127.0.0.1:<daemon port>` (`DaemonUnreachable` when SSH works but no daemon answers), Direct/Local `GET /health` (no redirects; a Direct `https://` certificate is judged like Connect first — a matching pin goes through a one-shot pinned relay, an untrusted or changed certificate fails closed before anything is sent), Local `instance_id` resolved from disk; the password is request-only. The editor's **Test Connection** button runs it on the form's current values
+- Direct `https://` with a self-signed/untrusted certificate: trust on first use. Connect probes it (`probe_direct_tls_connection` / `POST /config/remote-connections/probe-direct-tls`), `DirectCertConfirmDialog.tsx` shows the SHA-256 fingerprint, accepting pins it (`tls_fingerprint`); the backend then routes through a loopback relay that accepts only that certificate (`direct_proxy.rs`), refuses a changed one ("Certificate changed"), and fails an unpinned untrusted daemon closed. The relay carries no credentials; there is no route to start or stop it
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon
@@ -2846,6 +3062,20 @@ partial work, and their child processes may continue.
   or a protected launchd plist on macOS. **Uninstall** stops and removes them
 - Deployment publishes `deploying` status with the current step. Failures retain
   the step and remote log tail in `error`; they are never misreported as an auth failure
+- **Confirmed provisioning** (`ssh_provision.rs`, `ProvisionConfirmDialog.tsx`):
+  a failed connect can publish `provision_offer` — `start` (a Never-deploy SSH
+  connection with "Offer to start…" found nothing answering) or `set_password`
+  (the daemon has no password at all; never for a wrong one). The row's
+  **Start remote daemon…** / **Set remote password…** button shows the plan —
+  destination and every remote command verbatim — and runs it only on
+  **Accept and run**, sending back the plan's digest, which the backend checks
+  against the stored connection before any SSH. Start reuses the pinned,
+  checksummed deployment with `--instance <id>` and per-instance PID/log files,
+  then connects; set-password pipes the saved credentials on stdin to
+  `tuic-remote --set-password-if-unset`, which refuses to overwrite. Disconnect
+  stops a daemon started this way unless "Leave it running" is set or it still
+  has live sessions (then it is left running, logged), only after
+  the PID file is proven to name a running `tuic-remote`
 
 ### 24.5 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge
@@ -3567,3 +3797,40 @@ approves or merges. See [Incoming PR reviews](user-guide/automations.md#incoming
 ## Archived worktree retention
 
 Opt-in global and per-repository retention in days (0/Off by default). Repository refresh removes only eligible recorded checkouts under `__archived/`, keeps dirty or unsafe archives with named status reasons, and retains commit recovery refs. No new timer or branch deletion. See [Worktrees](user-guide/worktrees.md#archived-worktree-retention).
+
+---
+
+## 28. StreamDock M18 Macropad
+
+A 15-key LCD macropad (5×3 grid, 64×64px keys, plus 3 plain push buttons) that mirrors live
+session state — each key shows a session's status (working/idle/needs input/error/completed)
+and pressing it focuses that session's tab. Desktop only.
+
+### 28.1 Rendering
+- Each key face is content-hash cached: an unchanged session never re-encodes or re-transfers its image
+- Full-bleed background color encodes state; only the "needs input" state pulses (a scarce, deliberately reserved signal)
+- Primary label is the session's short `term_alias` (e.g. `tc-1`); secondary line shows the current task or an elapsed-idle "ready (Nm)" escalation
+
+### 28.2 Slot Assignment
+- Sessions are assigned to keys by **stable identity**, never arrival order — a closed session's slot goes blank rather than shifting its neighbors, and a session keeps its slot for as long as it exists
+- With no empty slot, the lowest-priority occupant is evicted — but a session awaiting input is never evicted by another session also awaiting input, and a pinned session (Settings) is never evicted
+- More live sessions than slots renders as an overflow count rather than paginating
+
+### 28.3 Gestures
+- Tap, double-tap, and hold are all resolved from the device's own press/release event pairing — a hold is only knowable once the physical release arrives, since the hardware reports no "still held" signal
+- Tap answers a pending choice prompt (highlighted option) or focuses the session's tab; double-tap answers the second option; hold sends an interrupt (Ctrl-C)
+- Three plain buttons and the bottom LCD row are fixed verb keys: jump to the next session awaiting input, approve/reject a choice prompt, interrupt the focused session
+
+### 28.4 Architecture
+- `src-tauri/crates/tuic-streamdock/` — device transport (built on the `mirajazz` crate), rendering, gesture resolution, and slot-assignment policy, all decoupled from `AppState` behind a `StateSource`/`ActionSink` port so a future sidecar split needs no changes here
+- `src-tauri/src/streamdock/` — the in-process supervisor: reconciles the device connection with config, implements the two ports against `AppState` directly, and exposes status/device-list over HTTP + Tauri IPC
+- Config: `AppConfig.streamdock` (enable, device selection, screen/LED brightness, pinned sessions) — see [config.md](backend/config.md)
+- Settings tab: enable toggle, live status, device picker with rescan, brightness sliders, per-session pin toggles
+
+### 28.5 Hardware Notes
+- Reading a button press and writing a key's LCD image use two independent numbering spaces on this hardware for the same physical key — confirmed empirically, not documented by the vendor
+- Hot-plug (unplug/replug) recovers automatically via a 2s discovery poll; the vendor's own Creator app holds the device exclusively and must not be running alongside TUICommander
+
+### 28.6 Ambient LED Ring
+- The 24-LED ring renders one aggregate color for the whole panel, not per-key: green when nothing needs you, peach when at least one live session is awaiting input, red on an error/rate-limited session
+- Only sent when it actually changes (one write per state transition, not per tick) and only on firmware that negotiated RGB support at connect time — an `V2.M18` unit has no LEDs and this is skipped entirely, never attempted

@@ -44,7 +44,6 @@ stories
 # mdkb:index
 reviews
 ideas
-.claude
 .aider*
 benchmarks
 .mdkb
@@ -96,6 +95,7 @@ scripts/fixtures/*
 !scripts/test_dev_exe_copy_critic.py
 !scripts/test_dev_exe_copy.py
 !scripts/run-remote-fixture.sh
+!scripts/test-run-remote-fixture.sh
 !scripts/generate-release-notes.sh
 !scripts/third-party-notices.mjs
 !scripts/check-release-tag.sh
@@ -110,11 +110,16 @@ scripts/fixtures/*
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
 !scripts/check-chat-readability.mjs
+!scripts/test-tmp-root.mjs
+!scripts/check-no-process-exec.mjs
 !scripts/check-make-instance-scope.sh
+!scripts/test-check-make-instance-scope.sh
 !scripts/check-make-dev-builds-sibling.sh
 !scripts/mutants.sh
 !scripts/ts-mutants.mjs
 !scripts/with-test-tmp.sh
+!scripts/test-tmp-lib.sh
+!scripts/test-with-test-tmp-roots.sh
 !scripts/check-nextest-fixture-scope.sh
 !scripts/test-remote-mcp.py
 !scripts/install-launch-shells.sh
@@ -123,8 +128,21 @@ scripts/fixtures/*
 !scripts/test-make-build-signing.sh
 !scripts/test-append-only-merge.sh
 !scripts/test-with-test-tmp-prune.sh
+!scripts/test-with-test-tmp-readonly-home.sh
 !scripts/test-with-test-tmp-worktree-target.sh
 !scripts/test-install-sh-tmpdir.sh
+!scripts/test-with-test-tmp-git-template.sh
+!scripts/test-with-test-tmp-git-ceiling.sh
+!scripts/test-with-test-tmp-git-config.sh
+!scripts/test-with-test-tmp-fake-home.sh
+!scripts/test-tmp-lib-functions.sh
+!scripts/check-no-nul-bytes.mjs
+!scripts/check-no-home-gits.mjs
+!scripts/check-no-hardcoded-tmp.mjs
+!scripts/hardcoded-tmp-baseline.json
+!scripts/run-plugin-tests.mjs
+!scripts/check-gate.sh
+!scripts/test-check-gate.sh
 !scripts/hooks/
 !scripts/speech-assets/
 !scripts/perf/
@@ -139,7 +157,8 @@ src-tauri/target/
 src-tauri/target-clippy/
 
 # Sidecar binaries (built during cargo tauri build)
-src-tauri/binaries/tuic-bridge-*
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 docs/research/
 docs/solutions/
 docs/book
@@ -188,3 +207,10 @@ ORCHESTRATOR.md
 # Website: film is a release asset fetched at deploy; review screenshots stay local
 website/public/video/
 website/.review/
+# Personal Claude Code state (`.claude/` itself is tracked: agents, hooks, skills).
+# The hook debug log rotates to dated names (`hook-debug.log.YYYY-MM-DD`) that
+# `*.log` does not match, and has reached 1.6 GB in a day.
+.claude/hook-debug.log*
+.claude/settings.local.json
+.claude/worktrees/
+.claude/*.lock
