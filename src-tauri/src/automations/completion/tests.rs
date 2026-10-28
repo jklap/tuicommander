@@ -402,8 +402,8 @@ async fn event_publication_prerequisites_preserve_config_and_git_errors() {
     let path = dir.path().join("automations.json");
     let workspace = dir.path().to_str().unwrap().to_owned();
     std::fs::write(&path, "not JSON").unwrap();
-    let parse_error = serde_json::from_str::<super::super::model::AutomationsConfig>("not JSON")
-        .unwrap_err();
+    let parse_error =
+        serde_json::from_str::<super::super::model::AutomationsConfig>("not JSON").unwrap_err();
     let expected = format!("Corrupt {}: {parse_error}", path.display());
     let config_path = path.clone();
     let actual = event_publication_prerequisites(
