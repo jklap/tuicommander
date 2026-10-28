@@ -1244,8 +1244,11 @@ the existing exact PID/session binding, the terminal executable (or normal agent
 binary discovery), the manifest workspace and the actual store. AI Chat ACP
 executable configuration is not required. Explicit CLI store
 overrides remain unavailable rather than guessed. Its `usage --json` output is
-capped at 4 MiB and 20 seconds; normalized session snapshots are cached for
-30 seconds. Codex snapshots are cached for five minutes. Cache entries are
+capped at 4 MiB and 25 seconds. The status-bar badge and session details share
+one identity-bound raw report cached for 30 seconds; formatting remains separate.
+Both consumers recheck the live binding after every read, including cache hits,
+and the 30-second deadline includes the single-flight lock and reader queue. Codex snapshots are cached for five minutes. Cache entries are
 bounded to 32, with per-identity single flight and two concurrent CLI reads.
-Cached fallback after a transient failure is visibly stale, limited to 30 minutes.
+Cached fallback after a transient failure is limited to 30 minutes; session details
+mark it stale. The compact ego badge retains its existing text format.
 Claude cache fallback retains its existing age policy and is explicitly stale.

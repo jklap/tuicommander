@@ -107,6 +107,12 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback. When mdkb is installed, the launch playbook also carries a fixed "Code search" rule that tells the agent to search with MDKB first; without mdkb it is absent. TUICommander checks once when it writes the launch files (startup, settings change, mdkb install or uninstall).
 
+The **Git and worktrees** module routes delegated or parallel work through TUIC
+`agent action=spawn`/`launch`, not client-native subagents such as Claude Code
+Agent/Task. The CC-only `cc_agent_hint` isolated-task path remains the exception.
+Clients without a launch instruction channel receive the delegation rule in MCP
+instructions instead. The Children module still forbids further delegation.
+
 | Agent | Channel |
 |---|---|
 | Claude Code | `--append-system-prompt-file <config-dir>/agent-hooks/instructions-claude.md` |
@@ -401,7 +407,11 @@ Assisted configuration uses the published Settings owner contract, not agent-ses
 
 Open **More session actions** to load usage for that session. Claude and Codex
 show **Account quota** and reported reset times for the live session profile.
-These are shared account windows, not the selected model's session spend.
+These are shared account windows, not the selected model's session spend. If Claude
+rate-limits a mobile quota refresh, mobile and desktop reads share a 2–5 minute
+backoff for that account profile. The menu shows stale cached quota, or
+**Usage not available** when no cached quota exists; other profiles are not
+blocked. Mobile quota reads do not generate messages.
 
 ego shows **Session usage** from its own durable ledger, with **Cost** when
 reported. Terminal usage uses the terminal executable and does not require the

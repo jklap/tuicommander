@@ -472,3 +472,38 @@ fn mdkb_detection_finds_a_file_not_a_directory() {
     std::fs::write(dir.path().join(name), b"").unwrap();
     assert!(mdkb_in(&dirs));
 }
+
+/// Catches: delegation guidance delivered only through MCP, bypassing native launch channels.
+#[test]
+fn launch_playbook_prevents_invisible_native_subagents() {
+    let app = AppConfig::default();
+    let mut agents = AgentsConfig::default();
+    let mut failures = Vec::new();
+    for agent in ["claude", "codex", "ego", "grok", "opencode", "goose", "pi"] {
+        for child in [false, true] {
+            let text = effective_text_for(&app, &agents, agent, child);
+            let section = text
+                .split("## Git and worktrees\n")
+                .nth(1)
+                .and_then(|section| section.split("\n## ").next())
+                .unwrap_or("");
+            if !section.contains("Delegate or parallelize via TUIC `agent action=spawn`/`launch`")
+                || !section.contains("never client-native subagents such as Claude Code Agent/Task")
+                || !section.contains("CC-only `cc_agent_hint` isolated-task")
+            {
+                failures.push(format!("{agent}, child={child}: launch module omits managed delegation or its CC exception"));
+            }
+            if child && !text.contains("Stay within the assigned scope; do not delegate.") {
+                failures.push(format!(
+                    "{agent}: delegation guidance overrides child scope"
+                ));
+            }
+        }
+    }
+    agents.launch_modules.insert("git_worktree".into(), false);
+    let disabled = effective_text(&app, &agents, "ego");
+    if disabled.contains("Delegate or parallelize") {
+        failures.push("disabled Git and worktrees module still emits its delegation rule".into());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

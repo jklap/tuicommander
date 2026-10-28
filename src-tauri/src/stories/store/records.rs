@@ -1,8 +1,29 @@
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) fn immediate(conn: &mut Connection) -> Result<Transaction<'_>, String> {
+/// Every committed store transaction wakes ingestion after SQLite has committed.
+/// The wake carries no data; rollback and failed commits never publish a snapshot.
+pub(super) struct StoryTransaction<'a>(Transaction<'a>);
+
+impl<'a> std::ops::Deref for StoryTransaction<'a> {
+    type Target = Transaction<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl StoryTransaction<'_> {
+    pub(super) fn commit(self) -> rusqlite::Result<()> {
+        self.0.commit()?;
+        super::super::ingest::notify_committed();
+        Ok(())
+    }
+}
+
+pub(super) fn immediate(conn: &mut Connection) -> Result<StoryTransaction<'_>, String> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map(StoryTransaction)
         .map_err(|e| format!("begin story transaction: {e}"))
 }
 
@@ -65,6 +86,17 @@ pub(super) fn read_plan_stories(conn: &Connection, plan_id: &str) -> Result<Vec<
         .iter()
         .map(|doc| serde_json::from_str(doc).map_err(|e| format!("decode story: {e}")))
         .collect()
+}
+
+/// A new edge must not hide unfinished work behind the archive filter.
+pub(super) fn require_actionable_dependency(dependency: &Story) -> Result<(), String> {
+    if dependency.archived && dependency.status != StoryStatus::Done {
+        return Err(format!(
+            "dependency {} is archived and unresolved; restore it first",
+            dependency.id
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn check_revision(story: &Story, expected: i64) -> Result<(), String> {
