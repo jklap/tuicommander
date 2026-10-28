@@ -2262,6 +2262,100 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     assert_eq!(queued_command_count(&state, sid), 0);
 }
 
+/// Catches: periodic Ready levels granting a fresh mail-wake budget after
+/// NotStarted exhausted it on a retained user draft. Drive the real timer;
+/// count reservations because refused claims correctly write no PTY bytes.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn stable_ready_ticks_do_not_rearm_not_started_mail_wake() {
+    tokio::time::pause();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "stable-ready-mail-budget";
+    agent_session(&state, sid, SHELL_IDLE);
+    let bytes = insert_recording_session(&state, sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type_from_run_config = true;
+    state.orchestrator_peers.insert(sid.to_string());
+    state.push_agent_inbox(
+        sid,
+        crate::state::AgentMessage {
+            id: "retained-result".into(),
+            from_tuic_session: "child".into(),
+            from_name: "worker".into(),
+            content: "child result remains in inbox".into(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        },
+    );
+    let mut draft = InputLineBuffer::new();
+    draft.feed("retained user draft");
+    state
+        .session_maps
+        .input_buffers
+        .insert(sid.into(), Mutex::new(draft));
+    assert_eq!(
+        route_registered_orchestrator_mail(&state, sid, "retained-result", 1),
+        Some(crate::state::OrchestratorDeliveryAssignment::InboxOnly)
+    );
+    assert_eq!(state.orchestrator_wake_attempt_sequence(sid), 1);
+
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.force_idle_unconfirmed();
+        sl.cached_screen_activity = AgentScreenActivity::Ready;
+        sl.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        sl.startup_settled = true;
+    }
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    for tick in 0..4 {
+        tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            state.orchestrator_wake_attempt_sequence(sid),
+            2,
+            "tick {tick}: only the first new Ready confirmation may retry the refused wake"
+        );
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "a retained draft must receive no bytes"
+        );
+    }
+
+    // New working evidence starts another readiness episode in the same turn.
+    {
+        let mut sl = silence.lock();
+        sl.note_working_screen();
+        sl.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    }
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    assert_eq!(
+        state.orchestrator_wake_attempt_sequence(sid),
+        3,
+        "a later real Ready confirmation must grant one fresh attempt"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(
+        state
+            .session_maps
+            .input_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .content(),
+        "retained user draft"
+    );
+    assert_eq!(state.orchestrator_wake_needed_through(sid), Some(1));
+}
+
 /// Gemini removes its bottom prompt while a turn runs. The child
 /// repaint after Enter, rather than the master's successful write, settles it.
 #[cfg(unix)]

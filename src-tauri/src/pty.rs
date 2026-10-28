@@ -355,12 +355,10 @@ const SCREEN_VERIFY_ROWS: usize = 20;
 struct TimerIdleTransition {
     transitioned: bool,
     force_cleared_subtasks: bool,
-    /// Read only by tests: it separates a transition the screen confirmed from
-    /// one the silence timer forced, which `transitioned` alone cannot. The
-    /// `cfg_attr` keeps the lint armed in test builds, so the field still goes
-    /// dead-code the moment the last assertion on it disappears.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// A stable Ready level still drives queued-command flushing.
     screen_confirms_idle: bool,
+    /// Only a new confirmation grants another orchestrator wake budget.
+    screen_newly_confirms_idle: bool,
     // Returned provenance is inspected by regression tests; production uses the transition result.
     #[cfg_attr(
         not(test),
@@ -382,7 +380,14 @@ fn try_timer_idle_transition(
     // probe locks the PtySession, which the reader thread holds while it takes
     // this same SilenceState.
     let nested_prompt = agent_type.is_none() && explicit_busy_is_a_nested_prompt(state, session_id);
-    let (transitioned, force_cleared_subtasks, screen_confirms_idle, evidence, parent_dispatch) = {
+    let (
+        transitioned,
+        force_cleared_subtasks,
+        screen_confirms_idle,
+        screen_newly_confirms_idle,
+        evidence,
+        parent_dispatch,
+    ) = {
         let mut silence = silence.lock();
         if evidence_turn_epoch.is_some_and(|observed| {
             state
@@ -395,6 +400,7 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle: false,
+                screen_newly_confirms_idle: false,
                 evidence: None,
             };
         }
@@ -430,6 +436,7 @@ fn try_timer_idle_transition(
             }
             AgentScreenActivity::Working => false,
         };
+        let screen_newly_confirms_idle = screen_confirms_idle && !idle_was_confirmed;
         let observed_shell = state
             .session_maps
             .shell_states
@@ -456,6 +463,7 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle,
+                screen_newly_confirms_idle,
                 evidence: None,
             };
         }
@@ -486,6 +494,7 @@ fn try_timer_idle_transition(
                 transitioned: false,
                 force_cleared_subtasks: false,
                 screen_confirms_idle,
+                screen_newly_confirms_idle,
                 evidence: None,
             };
         }
@@ -540,6 +549,7 @@ fn try_timer_idle_transition(
             transitioned,
             decision.force_cleared_subtasks,
             screen_confirms_idle,
+            screen_newly_confirms_idle,
             evidence,
             parent_dispatch,
         )
@@ -551,6 +561,7 @@ fn try_timer_idle_transition(
         transitioned,
         force_cleared_subtasks,
         screen_confirms_idle,
+        screen_newly_confirms_idle,
         evidence,
     }
 }
@@ -741,7 +752,15 @@ fn spawn_silence_timer(
                     // Silence can mark the shell idle before the Ready screen
                     // stabilizes. That later confirmation has no second shell
                     // edge, so it must retry the existing self-guarded flush.
-                    reevaluate_orchestrator_mail_wake(&state, &session_id);
+                    if transition.screen_newly_confirms_idle {
+                        reevaluate_orchestrator_mail_wake(&state, &session_id);
+                    } else if let Some(recipient) =
+                        orchestrator_recipient_for_pty(&state, &session_id)
+                    {
+                        // A stable Ready level may chase leftovers, but must not
+                        // undo the NotStarted cap for an unchanged composer.
+                        chase_orchestrator_mail_wake(&state, &recipient);
+                    }
                     if queued_command_count(&state, &session_id) > 0 {
                         flush_pending_injections(&state, &session_id);
                     }

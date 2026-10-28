@@ -3477,6 +3477,15 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Reservation sequence, including attempts refused before any PTY write.
+    #[cfg(test)]
+    pub(crate) fn orchestrator_wake_attempt_sequence(&self, tuic_session: &str) -> u64 {
+        self.active_agent_waiters
+            .get(tuic_session)
+            .map(|gate| gate.lock().orchestrator_wake_attempt)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn orchestrator_wake_needed_through(&self, tuic_session: &str) -> Option<u64> {
         self.active_agent_waiters
             .get(tuic_session)

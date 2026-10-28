@@ -1,3 +1,8 @@
+## Orchestrator mail wake budget (2418-fd33) — Rust restart required
+
+- [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
+- [ ] Coordinator: run `stable_ready_ticks_do_not_rearm_not_started_mail_wake`, `a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle`, `rearming_never_disturbs_a_wake_in_flight`, and `queued_codex_command_submits_when_ready_confirms_after_shell_idle` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] Load the Rust change with an authorized `make dev` restart or `make build` when ready to end live sessions. The daily app was not restarted; Rust does not hot-reload.
 ## Mobile terminal stream restart (2422-a267)
 
 - [ ] Coordinator: run `outputViewConnection.test.tsx` and `outputViewVisibility.test.tsx` against the final commit. The pre-fix hidden-exhaustion regression failed because visibility return kept the disposed subscription; GREEN belongs to the critic. No physical iOS or live-server outage check is claimed.
