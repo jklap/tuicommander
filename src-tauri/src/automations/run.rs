@@ -13,6 +13,12 @@ pub enum RunTrigger {
         occurrence_ms: i64,
     },
     Manual,
+    /// Every eligible issue, once per repository, issue and policy version.
+    Triage {
+        repository: String,
+        issue_number: i64,
+        policy_version: String,
+    },
     /// A labelled GitHub issue admitted by event intake, once per issue and label.
     Event {
         repository: String,
@@ -25,6 +31,15 @@ impl RunTrigger {
     /// Durable deduplication identity; GitHub names compare case-insensitively.
     pub fn event_key(&self) -> Option<String> {
         match self {
+            Self::Triage {
+                repository,
+                issue_number,
+                policy_version,
+            } => Some(format!(
+                "triage:{}#{issue_number}:{}",
+                repository.to_ascii_lowercase(),
+                policy_version
+            )),
             Self::Event {
                 repository,
                 issue_number,
@@ -162,6 +177,8 @@ pub struct AutomationRun {
     #[serde(default)]
     pub precheck_context: Option<PrecheckContext>,
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage_decision: Option<super::triage::TriageDecision>,
     #[serde(default)]
     pub outcome: Option<RunOutcome>,
     #[serde(default)]

@@ -28,7 +28,7 @@ fn intake() -> EventIntake {
         repositories: vec![REPOSITORY.into()],
         label: "run".into(),
         definition_id: "event".into(),
-        workflow: None,
+        ..Default::default()
     }
 }
 fn completed(store: &RunStore) -> String {

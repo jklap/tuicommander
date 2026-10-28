@@ -3073,3 +3073,14 @@ in seconds. MCP runs through the existing app transport authentication. MCP
 only child environment variables. Deadlines revoke future injection; per-session
 zeroizing masks remain until teardown. The PTY ingestion boundary sanitizes
 output before every publication path, including tcap and diagnostic rings.
+
+### Bound issue triage decision (#2324-424d)
+
+The `automations` MCP action `triage_decision` takes a saved run `id` and
+`decision={outcome:accepted|rejected|needs_input,reason}` (1–4000 UTF-8 bytes).
+The host resolves the MCP caller to its live managed PTY and checks the run's
+persisted binding. An identical retry is idempotent; a conflicting report is
+rejected. The report finalizes the run. GitHub publication is a separate host-owned
+effect, not permission for the evaluator to write. HTTP/IPC share the parser but
+have no managed-agent identity and reject this action. Existing run/list_runs
+responses expose the triage trigger, decision and result reason on all transports.

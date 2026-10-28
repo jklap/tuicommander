@@ -3240,6 +3240,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 
 - [ ] After rebuilding the backend, put a short-TTL task secret, spawn with its scope, and confirm echoed output is masked in desktop, mobile and a diagnostic capture. A later spawn must reject the expired scope while the original session remains masked (#2319-02f6). Rust does not hot-reload; restart only when ready to end the current live app session.
+- [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
 ## Reviewed event issue publication (#2325-10c4)
 
 - [ ] After a manual `make dev` restart or release rebuild, configure an allowlisted sandbox event with a published story workflow revision and passing deterministic checks. Verify native story/run links in automation history, independent review, draft findings and stale-push refusal. No live GitHub publication was authorized in the implementation assignment.

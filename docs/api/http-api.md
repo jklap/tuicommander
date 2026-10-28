@@ -3735,3 +3735,14 @@ Output is sanitized before raw/text/log HTTP, raw/log/grid WS, terminal history
 and tcap output captures. Potential split-secret prefixes are withheld until
 resolved, and incomplete trailing prefixes are discarded at teardown. See
 [Private secret forms](../user-guide/secrets.md#task-scoped-controller-entry).
+
+### Bound issue triage decisions (#2324-424d)
+
+Issue triage: `run` and `list_runs` can return
+`trigger={kind:"triage",repository,issue_number,policy_version}` and optional
+`triage_decision={outcome:"accepted"|"rejected"|"needs_input",reason}`.
+The shared parser also recognizes `triage_decision` with `id` and `decision`,
+but HTTP/IPC callers have no managed-agent binding and receive
+`Triage decision requires a bound agent caller`; only the bound managed MCP
+evaluator can submit. A decision completes the run; GitHub publication remains
+a separate host effect.

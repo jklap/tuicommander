@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Accept write-only task secrets with a TTL, inject them into scoped child environments, and mask terminal output before HTTP, WebSocket, history and capture publication. Expiry revokes new injection; existing session masks remain until teardown (#2319-02f6).
+- Add opt-in per-repository issue triage with operator-attested read-only profiles, trusted-author admission, durable policy-versioned decisions and host-owned rejection comments/intake labels. TUIC does not enforce credential isolation; uncertain publication is not replayed (#2324-424d).
 - Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
 - Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
 - Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).

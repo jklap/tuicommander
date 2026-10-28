@@ -568,6 +568,7 @@ pub struct GitHubIssue {
     pub state: String, // OPEN, CLOSED
     pub url: String,
     pub author: String,
+    pub author_association: String,
     pub labels: Vec<PrLabel>, // Reuse PrLabel — same GitHub schema
     pub assignees: Vec<String>,
     pub milestone: Option<String>,
@@ -635,6 +636,7 @@ pub fn parse_issue_node(v: &serde_json::Value) -> Option<GitHubIssue> {
         assignees,
         milestone,
         comments_count,
+        author_association: v["authorAssociation"].as_str().unwrap_or("").into(),
         created_at,
         updated_at,
     })
@@ -667,18 +669,26 @@ fn issues_repo_section(filter_mode: &str, viewer: &str) -> String {
     )
 }
 
-const ISSUE_NODE_FIELDS: &str = r#"number title state url createdAt updatedAt
+const ISSUE_NODE_FIELDS: &str = r#"number title state url createdAt updatedAt authorAssociation
         author { login }
-        labels(first: 10) { nodes { name color } }
+        labels(first: 10) { nodes { name color } pageInfo { hasNextPage endCursor } }
         assignees(first: 5) { nodes { login } }
         milestone { title }
         comments { totalCount }"#;
 /// Intake filters before the page limit; the client issue selection stays independent.
 pub fn intake_issues_section(label: &str, after: Option<&str>) -> String {
-    let label = serde_json::to_string(label).expect("a label is a JSON string");
+    // Empty label requests every open issue for operator-enabled triage.
+    let label = if label.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", labels: [{}]",
+            serde_json::to_string(label).expect("a label is a JSON string")
+        )
+    };
     let after = serde_json::to_string(&after).expect("a cursor is a JSON string or null");
     format!(
-        "intakeIssues: issues(first: 100, states: [OPEN], labels: [{label}], after: {after}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {ISSUE_NODE_FIELDS} }}\n      pageInfo {{ hasNextPage endCursor }}\n    }}"
+        "intakeIssues: issues(first: 100, states: [OPEN]{label}, after: {after}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {ISSUE_NODE_FIELDS} }}\n      pageInfo {{ hasNextPage endCursor }}\n    }}"
     )
 }
 
@@ -975,6 +985,23 @@ pub fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: triage polls retain the intake label filter or omit author-association evidence.
+    #[test]
+    fn triage_issue_query_fetches_every_open_issue_and_author_association() {
+        let query = intake_issues_section("", Some("next-page"));
+        assert!(!query.contains("labels: ["), "{query}");
+        assert!(
+            query.contains("states: [OPEN]") && query.contains("authorAssociation"),
+            "{query}"
+        );
+        assert!(
+            query.contains("next-page") && query.contains("hasNextPage"),
+            "{query}"
+        );
+        let labelled = intake_issues_section("tuic-run", None);
+        assert!(labelled.contains("labels: [\"tuic-run\"]"), "{labelled}");
+    }
 
     // --- review threads ---
 

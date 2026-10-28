@@ -172,7 +172,17 @@ impl<E: DispatchEffects> Dispatcher<E> {
                 &run.definition.prompt,
             );
             match super::event_intake::event_context(&run.trigger) {
-                Some(event) => (format!("{prompt}\n\n{event}"), context),
+                Some(event) => {
+                    let report = if matches!(run.trigger, RunTrigger::Triage { .. }) {
+                        format!(
+                            "\nDecision report run id: {}. Call automations with action=triage_decision, id=this run id, decision={{outcome:accepted|rejected|needs_input,reason:your reason}}. Do not substitute a terminal print or progress report.",
+                            run.id
+                        )
+                    } else {
+                        String::new()
+                    };
+                    (format!("{prompt}\n\n{event}{report}"), context)
+                }
                 None => (prompt, context),
             }
         } else {
@@ -260,7 +270,26 @@ impl<E: DispatchEffects> Dispatcher<E> {
         if self.runs.get(&run.id)?.status != RunStatus::Prechecking {
             return Err("Automation stopped before dispatch".into());
         }
-        let mut latest = self.definitions.get(&run.definition.id)?;
+        let config = self.definitions.load()?;
+        if let RunTrigger::Triage {
+            repository,
+            policy_version,
+            ..
+        } = &run.trigger
+            && !config.event_intake.triage.iter().any(|policy| {
+                policy.repository.eq_ignore_ascii_case(repository)
+                    && policy.policy_version == *policy_version
+                    && policy.definition_id == run.definition.id
+                    && policy.read_only_attested
+            })
+        {
+            return Err("Triage policy changed before dispatch".into());
+        }
+        let mut latest = config
+            .definitions
+            .into_iter()
+            .find(|definition| definition.id == run.definition.id)
+            .ok_or("Automation not found")?;
         if matches!(run.trigger, RunTrigger::Manual) {
             latest.enabled = run.definition.enabled;
         }

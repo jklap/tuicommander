@@ -34,6 +34,11 @@ impl RunStore {
         self.require_owner()?;
         definition.validate()?;
         let key = trigger.event_key().ok_or("Not an event trigger")?;
+        let namespace = if matches!(trigger, RunTrigger::Triage { .. }) {
+            "@triage"
+        } else {
+            &definition.id
+        };
         if max_concurrent_runs == 0 {
             return Err("Automation concurrency must be greater than zero".into());
         }
@@ -44,7 +49,7 @@ impl RunStore {
         let seen: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM automation_event_keys WHERE automation_id=?1 AND event_key=?2)",
-                params![definition.id, key],
+                params![namespace, key],
                 |r| r.get(0),
             )
             .map_err(error)?;
@@ -76,7 +81,7 @@ impl RunStore {
         write(&tx, &run)?;
         tx.execute(
             "INSERT INTO automation_event_keys(automation_id,event_key,run_id) VALUES(?1,?2,?3)",
-            params![definition.id, key, run.id],
+            params![namespace, key, run.id],
         )
         .map_err(error)?;
         tx.commit().map_err(error)?;
