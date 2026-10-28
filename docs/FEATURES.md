@@ -8,7 +8,7 @@ AI Chat automatically connects on opening, restores the selected conversation, a
 
 AI Chat uses a compact composer card: repository pinning and draft parking in the header, an input/send row, and live context plus clickable model/effort/mode details in the footer. Conversation actions remain in **⋯** (#2394-e3c4).
 
-- Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099).
+- Select text in a Markdown file and use **Send to AI Chat** to append its path, source line range and quoted text to an open conversation, without sending. Desktop and mobile share the selection action. Source lines follow the selected rendered block and ignore invisible Markdown link destinations (#2361-8099). Desktop and mobile selection changes reuse the current document's reference-link definitions; a source edit refreshes them on the next selection (#2434-73ec).
 
 - The owning daemon starts allowlisted GitHub issue intake without a UI. Intake keeps all-issue polling across client filter and stop calls, re-reads configuration on repository/settings events and its 30-second tick, and reports unregistered entries in daemon logs (#2323-c294).
 
@@ -146,6 +146,8 @@ The component is available for Tasks shell integration; it does not add a tab by
 | Setup and recovery | [Getting Started](user-guide/getting-started.md) · [Troubleshooting](user-guide/troubleshooting.md) |
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
+
+Selecting a New plan source that already belongs to an archived plan shows its title and ID with instructions to enable **Archived plans**, select it, and choose **Restore plan**. This does not create a duplicate or restore the plan implicitly; an active source match still selects its existing plan.
 
 Story details show the persisted origin, plan step, revision and claiming session. A live terminal name appears beside the stable session ID; closed or unavailable terminals retain the ID. Transition history shows committed commands, revisions and actors in backend order, with Refresh history and explicit loading, error and empty states. New story offers Native or Plan step origin; a plan-step story requires a step label.
 
@@ -1705,7 +1707,7 @@ The navigation groups the global pages by task. Each group is a static label row
 Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
 - **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
 - **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
-- **MCP** — TUIC capability switches: enable or deny capability domains and grouped actions to restrict what AI agents can access; three always-visible sections group approved domains and nested member denials, with configuration status for conditional domains
+- **MCP** — TUIC capability switches: enable or deny capability domains and grouped actions to restrict what AI agents can access; three always-visible sections group approved domains and nested member denials, with configuration status for conditional domains; parent-blocked member switches show off with an enable-parent hint and retain their saved preferences
 - **MCP** — Upstream MCP Servers: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, Bearer/OAuth and multiple masked secret header rows backed by the OS credential vault, origin-bound credentials that fail closed on provider changes or unbound old entries, same-origin-only credential redirects, live status dots, tool count and metrics. Saved upstreams auto-connect on boot. The MCP popup's "Manage in Settings" opens this page at this section
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
 - **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, Tailscale HTTPS, cloud relay. A discovery failure replaces only the address choices with an inline error and Retry; other settings remain available
