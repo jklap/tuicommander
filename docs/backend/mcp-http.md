@@ -3047,6 +3047,15 @@ expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
 
 `GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
 
+### Story request drafts
+
+The guarded ACP sub-router exposes `POST /acp/one-shot/prepare`,
+`POST /acp/one-shot/{request_id}/cancel` and `POST /acp/story-draft`.
+These match the desktop prepare, cancel and generation commands. Rust validates
+model output before returning an editable draft. Generation has no store access.
+The existing story action accepts an optional reviewed `problem` beside `input`
+and persists it atomically with creation; MCP and CLI use that same service.
+
 ### ACP connection launch environment
 
 `POST /acp/connections` and `acp_connect` accept the same optional string-map

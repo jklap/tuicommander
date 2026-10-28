@@ -2361,6 +2361,7 @@ pub struct AppState {
     /// here — it is read from configuration at each connect, so a changed
     /// setting takes effect without a restart.
     pub(crate) acp: crate::acp::AcpClientManager,
+    pub(crate) one_shot_requests: crate::acp::oneshot::OneShotRequests,
     /// Mobile alert windows for ACP conversations, separate from PTY state.
     acp_push_last_ms: DashMap<String, Option<u64>>,
     /// When true, the desktop window is currently focused and the user is at
@@ -3841,6 +3842,7 @@ impl AppState {
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
             acp: crate::acp::AcpClientManager::new(),
+            one_shot_requests: Default::default(),
             acp_push_last_ms: DashMap::new(),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),

@@ -48,9 +48,7 @@ impl StoryStore {
             story.origin = origin;
         }
         if let Some(problem) = patch.problem {
-            if let Some(text) = &problem {
-                validate_text("problem", text, 20_000)?;
-            }
+            validate_problem(problem.as_deref())?;
             story.problem = problem;
         }
         if let Some(risk) = patch.risk {

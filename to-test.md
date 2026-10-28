@@ -1,3 +1,7 @@
+## Story drafts from requests (2357-a8f2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run the focused AI draft UI, Rust story_draft and one_shot_cancel tests, existing one-shot cleanup tests, native stories creation/amendment consumers, transport parity and i18n collisions on the final commit. The implementer ran feature RED only; no GREEN application run is claimed.
+- [ ] Capture isolated agent-test screenshots before Fill, during Fill and after Fill; exercise configured ego success, malformed/error reply, cancellation during initialization and an active turn. No daily app restart was performed. Rust changes require an authorized manual `make dev` restart or `make build` to load.
 ## Stories across all plans (2358-b0b2) — Rust rebuild/restart required
 
 - [ ] Coordinator critic: run `stories::filter_tests` and `src/__tests__/components/StoriesDialog.filters.test.tsx`, plus `src/__tests__/i18nKeyCollisions.test.ts`. The implementer leaves GREEN to the critic.

@@ -386,6 +386,15 @@ locks and the native keepawake transition. Neither accepts a frontend busy flag.
 The dedicated `sleep-prevention` thread owns periodic reconciliation even when
 no WebView is loaded; it shares the same serialized native guard.
 
+### Story request draft commands
+
+`story_generate_draft` is asynchronous and awaits the existing owned ACP one-shot.
+`acp_one_shot_prepare` is asynchronous: reservation expiry uses `tokio::spawn`,
+so it must run on Tauri's executor, not the synchronous IPC thread.
+`acp_one_shot_cancel` only signals an in-memory watch handle. Neither command
+performs filesystem, model or subprocess work on the caller.
+The driver keeps connection teardown on its detached task when a caller disappears.
+
 ## Event-run draft PR publication
 
 Completed event runs load validated automation definitions and read the workspace

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Story drafts from requests",
+		description:
+			"In New story, describe what you need and choose Fill with AI. Review and edit the generated fields before Create story saves them. Cancel fill stops the owned model turn and keeps your request.",
+		shortcut: null,
+	},
+	{
 		feature: "Stories across plans",
 		description:
 			"Choose All plans in Plans and Stories to see a combined list or Kanban board. Cards show their plan; select one plan to filter back or create a story.",

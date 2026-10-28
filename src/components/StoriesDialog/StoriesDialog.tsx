@@ -1,4 +1,5 @@
 import {
+	batch,
 	type Component,
 	createEffect,
 	createMemo,
@@ -6,6 +7,7 @@ import {
 	createUniqueId,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	Show,
 	Suspense,
@@ -180,6 +182,14 @@ const storyTypeLabel = (kind: StoryType | null | undefined): string => {
 			return t("stories.type.untyped", "Untyped");
 	}
 };
+interface StoryDraft {
+	title: string;
+	storyType: StoryType;
+	priority: number;
+	problem: string;
+	criteria: string[];
+}
+
 const STORY_TYPES: StoryType[] = ["feature", "fix", "refactor", "chore", "task"];
 
 const planStateLabel = (state: string): string => {
@@ -254,6 +264,83 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [planTitle, setPlanTitle] = createSignal("");
 	const [planSource, setPlanSource] = createSignal("");
 	const [storyTitle, setStoryTitle] = createSignal("");
+	const [storyRequest, setStoryRequest] = createSignal("");
+	const [storyProblem, setStoryProblem] = createSignal("");
+	const [filling, setFilling] = createSignal(false);
+	const [cancellingFill, setCancellingFill] = createSignal(false);
+	const [fillError, setFillError] = createSignal("");
+	const [fillNotice, setFillNotice] = createSignal("");
+	let fillEpoch = 0;
+	let fillHandle: { id: string; project: string } | undefined;
+	let pendingFill: Promise<StoryDraft> | undefined;
+
+	async function fillStory(): Promise<void> {
+		if (filling() || busy() || !storyRequest().trim()) return;
+		const epoch = ++fillEpoch;
+		const project = props.project;
+		const request = storyRequest();
+		setFilling(true);
+		setFillError("");
+		setFillNotice("");
+		try {
+			const handle = await invoke<string>("acp_one_shot_prepare", { project });
+			if (epoch !== fillEpoch || project !== props.project) {
+				await invoke("acp_one_shot_cancel", { project, requestId: handle });
+				return;
+			}
+			fillHandle = { id: handle, project };
+			pendingFill = invoke<StoryDraft>("story_generate_draft", { project, request, requestId: handle });
+			const draft = await pendingFill;
+			if (epoch !== fillEpoch || project !== props.project) return;
+			batch(() => {
+				setStoryTitle(draft.title);
+				setNewStoryType(draft.storyType);
+				setPriority(draft.priority);
+				setStoryProblem(draft.problem);
+				setCriteriaText(draft.criteria.join("\n"));
+			});
+		} catch (cause) {
+			if (epoch === fillEpoch)
+				setFillError(
+					cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : String(cause),
+				);
+		} finally {
+			if (epoch === fillEpoch) {
+				fillHandle = undefined;
+				pendingFill = undefined;
+				setFilling(false);
+			}
+		}
+	}
+
+	async function cancelFill(): Promise<void> {
+		if (!filling() || cancellingFill()) return;
+		++fillEpoch;
+		const handle = fillHandle;
+		const pending = pendingFill;
+		setCancellingFill(true);
+		try {
+			if (handle) await invoke("acp_one_shot_cancel", { project: handle.project, requestId: handle.id });
+			// The generation call settles only after its owned connection is shut down.
+			await pending?.catch(() => {});
+			setFillNotice(t("stories.ai.cancelled", "Fill cancelled."));
+		} catch (cause) {
+			setFillError(cause instanceof HttpRpcError ? cause.detail : String(cause));
+		} finally {
+			fillHandle = undefined;
+			pendingFill = undefined;
+			setFilling(false);
+			setCancellingFill(false);
+		}
+	}
+
+	onCleanup(() => {
+		++fillEpoch;
+		if (fillHandle)
+			void invoke("acp_one_shot_cancel", { project: fillHandle.project, requestId: fillHandle.id }).catch((cause) => {
+				appLogger.warn("store", "Stories: cancel fill failed", { error: String(cause) });
+			});
+	});
 	const [criteriaText, setCriteriaText] = createSignal("");
 	const [scopeText, setScopeText] = createSignal("");
 	const [priority, setPriority] = createSignal(2);
@@ -790,6 +877,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	async function createStory(event: Event): Promise<void> {
 		event.preventDefault();
+		if (filling() || busy()) return;
 		const currentPlan = planId();
 		if (!currentPlan) return;
 		const criteria = criteriaText()
@@ -809,6 +897,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		try {
 			const reply = await call({
 				action: "create_story",
+				...(storyProblem().trim() ? { problem: storyProblem().trim() } : {}),
 				input: {
 					planId: currentPlan,
 					title: storyTitle().trim(),
@@ -823,6 +912,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			await refresh(currentPlan, reply.value.id);
 			setNewStory(false);
 			setStoryTitle("");
+			setStoryRequest("");
+			setStoryProblem("");
+			setFillNotice("");
+			setFillError("");
 			setCriteriaText("");
 			setScopeText("");
 			setNewStoryType("untyped");
@@ -1309,8 +1402,45 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							<Show when={newStory() && planId() && !selectedPlan()?.archived}>
 								<form class={s.form} onSubmit={(event) => void createStory(event)}>
 									<label>
+										{t("stories.ai.request", "Request")}
+										<Textarea
+											value={storyRequest()}
+											maxlength={20000}
+											disabled={filling()}
+											onInput={(event) => setStoryRequest(event.currentTarget.value)}
+										/>
+									</label>
+									<div class={s.headerActions}>
+										<Button disabled={filling() || busy() || !storyRequest().trim()} onClick={() => void fillStory()}>
+											{t("stories.ai.fill", "Fill with AI")}
+										</Button>
+										<Show when={filling()}>
+											<Button disabled={cancellingFill()} onClick={() => void cancelFill()}>
+												{t("stories.ai.cancel", "Cancel fill")}
+											</Button>
+										</Show>
+									</div>
+									<Show when={filling()}>
+										<p role="status" class={s.muted}>
+											{cancellingFill()
+												? t("stories.ai.cancelling", "Cancelling fill…")
+												: t("stories.ai.filling", "Filling story fields…")}
+										</p>
+									</Show>
+									<Show when={fillNotice()}>
+										<p role="status" class={s.muted}>
+											{fillNotice()}
+										</p>
+									</Show>
+									<Show when={fillError()}>
+										<p role="alert" class={s.error}>
+											{fillError()}
+										</p>
+									</Show>
+									<label>
 										{t("stories.titleLabel", "Title")}
 										<Input
+											disabled={filling()}
 											required
 											maxlength="200"
 											value={storyTitle()}
@@ -1318,8 +1448,18 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										/>
 									</label>
 									<label>
+										{t("stories.edit.problem", "Problem (optional)")}
+										<Textarea
+											maxlength={20000}
+											disabled={filling()}
+											value={storyProblem()}
+											onInput={(event) => setStoryProblem(event.currentTarget.value)}
+										/>
+									</label>
+									<label>
 										{t("stories.criteriaInput", "Acceptance criteria, one per line")}
 										<Textarea
+											disabled={filling()}
 											required
 											value={criteriaText()}
 											onInput={(event) => setCriteriaText(event.currentTarget.value)}
@@ -1327,11 +1467,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</label>
 									<label>
 										{t("stories.scopeInput", "File scope, one relative path per line")}
-										<Textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
+										<Textarea
+											disabled={filling()}
+											value={scopeText()}
+											onInput={(event) => setScopeText(event.currentTarget.value)}
+										/>
 									</label>
 									<label>
 										{t("stories.typeLabel", "Story type")}
 										<Select
+											disabled={filling()}
 											value={newStoryType()}
 											onChange={(event) => setNewStoryType(event.currentTarget.value as StoryType | "untyped")}
 										>
@@ -1342,6 +1487,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<label>
 										{t("stories.metadata.origin", "Origin")}
 										<Select
+											disabled={filling()}
 											value={originType()}
 											onChange={(event) => setOriginType(event.currentTarget.value as "native" | "plan_step")}
 										>
@@ -1353,6 +1499,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<label>
 											{t("stories.metadata.planStep", "Plan step")}
 											<Input
+												disabled={filling()}
 												required
 												maxlength="200"
 												value={planStep()}
@@ -1362,17 +1509,27 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</Show>
 									<label>
 										{t("stories.priority", "Priority")}
-										<Select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
+										<Select
+											disabled={filling()}
+											value={priority()}
+											onChange={(event) => setPriority(Number(event.currentTarget.value))}
+										>
 											<option value="1">P1</option>
 											<option value="2">P2</option>
 											<option value="3">P3</option>
 										</Select>
 									</label>
 									<div class={s.inline}>
-										<Button variant="primary" type="submit" disabled={busy()}>
+										<Button variant="primary" type="submit" disabled={busy() || filling()}>
 											{t("stories.createStory", "Create story")}
 										</Button>
-										<Button disabled={busy()} onClick={() => setNewStory(false)}>
+										<Button
+											disabled={busy()}
+											onClick={() => {
+												void cancelFill();
+												setNewStory(false);
+											}}
+										>
 											{t("stories.edit.cancel", "Cancel")}
 										</Button>
 									</div>

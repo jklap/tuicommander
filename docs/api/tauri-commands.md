@@ -786,6 +786,9 @@ can choose what the host runs.
 | `acp_pending_interactions` | `connectionId` | `Vec<AcpPendingInteraction>` | Questions the agent is waiting on, for a client that was not listening when they were asked |
 | `acp_respond_permission` | `connectionId, requestId, outcome` | `AcpInteractionSettlement` | Answer a `session/request_permission` |
 | `acp_respond_elicitation` | `connectionId, requestId, action` | `AcpInteractionSettlement` | Answer a `session/create_elicitation` |
+| `acp_one_shot_prepare` | — | `String` | Reserve a single-use owned cancellation handle; unused handles expire after 301s |
+| `acp_one_shot_cancel` | `requestId` | `bool` | Cancel only the reserved/active one-shot handle; false means it already settled, expired or was cancelled |
+| `story_generate_draft` | `project, request, requestId` | `StoryDraft` | Consume a prepared handle, run the existing isolated one-shot and validate an unsaved draft; never persists |
 | `acp_one_shot_prompt` | `root, prompt` | `EgoTurn` | One unattended turn: launch, prompt, shut down. No connection id — it owns the whole lifetime |
 
 Errors are an `AcpClientError` — `code`, `message`, `connectionId`,

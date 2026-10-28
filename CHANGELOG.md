@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Draft a New story from a plain request with **Fill with AI**, review every field before saving, and cancel the owned model turn without discarding the request (#2357-a8f2).
 - Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
 - Accept launch-only ACP connection environment overrides over HTTP and IPC without retaining credentials in connection state; reject env-bearing reuse until disconnect (#2320-f493).
 

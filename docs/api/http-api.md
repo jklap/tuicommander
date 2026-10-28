@@ -2821,6 +2821,9 @@ GET    /acp/connections/{connection_id}/interactions                            
 POST   /acp/connections/{cid}/permissions/{request_id}/response  {outcome}                 -> AcpInteractionSettlement
 POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}                  -> AcpInteractionSettlement
 POST   /acp/one-shot                                            {root, prompt}            -> EgoTurn
+POST   /acp/one-shot/prepare                                                               -> String
+POST   /acp/one-shot/{request_id}/cancel                                                    -> bool
+POST   /acp/story-draft                                         {project, request, requestId} -> StoryDraft
 ```
 
 The ACP session prompt route accepts a buffered JSON body large enough for the
@@ -3694,3 +3697,15 @@ With `services.tls.mode: "manual"`, daemon TCP routes support HTTPS, SSE over
 HTTPS, and WSS on the same port. Like desktop remote access, plain HTTP/WS stays
 available on that port for local relay and SSH clients. TLS off retains HTTP/WS. Invalid PEM stops startup before bind;
 `tls_active` reports the live TLS listener, not configured certificate paths.
+
+### Cancellable story drafts
+
+The prepare, cancel and story-draft routes require loopback or authentication.
+Prepare returns a single-use cancellation handle. Pass it as `requestId` to
+story-draft; this invokes the same isolated ego one-shot driver and returns
+`{title, storyType, priority, problem, criteria}` only after Rust validation.
+The request is nonblank and at most 20000 characters. Cancel signals the owned
+turn, including before it starts, and removes the handle. A running draft request
+settles after connection shutdown. Dropping an HTTP caller does not skip cleanup.
+Unused handles expire after 301 seconds. These calls never save a story.
+`create_story` accepts optional `problem` beside `input` and saves both atomically.
