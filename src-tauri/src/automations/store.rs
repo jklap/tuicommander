@@ -121,6 +121,9 @@ impl RunStore {
             CREATE INDEX IF NOT EXISTS automation_retention ON automation_runs(finished_ms);
             CREATE TABLE IF NOT EXISTS automation_cursors (
                 automation_id TEXT PRIMARY KEY, occurrence_ms INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS automation_review_heads (
+                repository TEXT NOT NULL, pr_number INTEGER NOT NULL, head_sha TEXT NOT NULL,
+                PRIMARY KEY(repository,pr_number));
             CREATE TABLE IF NOT EXISTS automation_event_keys (
                 automation_id TEXT NOT NULL, event_key TEXT NOT NULL, run_id TEXT NOT NULL,
                 PRIMARY KEY(automation_id,event_key));
@@ -215,10 +218,14 @@ fn reserve_in(
 ) -> Result<Option<AutomationRun>, String> {
     let occurrence = match trigger {
         RunTrigger::Scheduled { occurrence_ms } => Some(occurrence_ms),
-        RunTrigger::Manual | RunTrigger::Event { .. } => None,
+        RunTrigger::Manual | RunTrigger::Event { .. } | RunTrigger::PullRequestReview { .. } => {
+            None
+        }
     };
-    let outcome =
-        matches!(trigger, RunTrigger::Event { .. }).then(|| RunOutcome::decision("admitted", None));
+    let outcome = trigger
+        .event_key()
+        .is_some()
+        .then(|| RunOutcome::decision("admitted", None));
     let run = AutomationRun {
         id: uuid::Uuid::now_v7().to_string(),
         definition: definition.clone(),

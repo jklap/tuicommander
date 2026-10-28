@@ -37,3 +37,5 @@ pub(crate) mod event_intake;
 pub(crate) mod publish;
 
 pub(crate) mod event_workflow;
+
+pub(crate) mod pr_reviews;

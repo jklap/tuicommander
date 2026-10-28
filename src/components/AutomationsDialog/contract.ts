@@ -53,7 +53,8 @@ export interface AutomationRun {
 	trigger:
 		| { kind: "manual" }
 		| { kind: "scheduled"; occurrence_ms: number }
-		| { kind: "event"; repository: string; issue_number: number; label: string };
+		| { kind: "event"; repository: string; issue_number: number; label: string }
+		| { kind: "pull_request_review"; repository: string; pr_number: number; head_sha: string };
 	outcome?: {
 		decision: string;
 		pr_url: string | null;

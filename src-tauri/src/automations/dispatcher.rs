@@ -257,6 +257,11 @@ impl<E: DispatchEffects> Dispatcher<E> {
 
     fn require_current(&self, run: &AutomationRun) -> Result<(), String> {
         run.definition.validate()?;
+        if matches!(run.trigger, RunTrigger::PullRequestReview { .. })
+            || self.definitions.load()?.review_only(&run.definition.id)
+        {
+            return Err("PR review-only work cannot launch a generic agent".into());
+        }
         if self.runs.get(&run.id)?.status != RunStatus::Prechecking {
             return Err("Automation stopped before dispatch".into());
         }

@@ -11,6 +11,23 @@ pub struct AutomationsConfig {
     pub definitions: Vec<AutomationDefinition>,
     /// GitHub issue intake; an empty repository allowlist disables it and publishing.
     pub event_intake: EventIntake,
+    pub pull_request_reviews: PullRequestReviews,
+}
+
+/// Independent, default-off review-only subscription. No run configuration is launched.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PullRequestReviews {
+    pub repositories: Vec<String>,
+    pub definition_id: String,
+}
+
+impl PullRequestReviews {
+    pub fn allows(&self, repository: &str) -> bool {
+        self.repositories
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(repository))
+    }
 }
 
 /// Which labelled issues start which definition, and the only repositories
@@ -89,6 +106,7 @@ impl Default for AutomationsConfig {
             max_concurrent_runs: 2,
             definitions: Vec::new(),
             event_intake: EventIntake::default(),
+            pull_request_reviews: PullRequestReviews::default(),
         }
     }
 }
@@ -145,6 +163,11 @@ pub struct Precheck {
 }
 
 impl AutomationsConfig {
+    pub(crate) fn review_only(&self, id: &str) -> bool {
+        !self.pull_request_reviews.repositories.is_empty()
+            && self.pull_request_reviews.definition_id == id
+    }
+
     /// Reject invalid disk state before any caller can overwrite it.
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
@@ -163,7 +186,17 @@ impl AutomationsConfig {
                 return Err("Duplicate automation id in definitions".into());
             }
         }
-        self.event_intake.validate()
+        if self.event_intake.enabled() && self.review_only(&self.event_intake.definition_id) {
+            return Err("Issue intake and PR reviews require separate definitions".into());
+        }
+        self.event_intake.validate()?;
+        EventIntake {
+            repositories: self.pull_request_reviews.repositories.clone(),
+            definition_id: self.pull_request_reviews.definition_id.clone(),
+            label: "review-only".into(),
+            workflow: None,
+        }
+        .validate()
     }
 }
 

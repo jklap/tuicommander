@@ -25,6 +25,29 @@ impl RunStore {
         {
             return Ok(false);
         }
+        if let RunTrigger::PullRequestReview {
+            repository,
+            pr_number,
+            head_sha,
+        } = &run.trigger
+        {
+            let latest: Option<String> = tx.query_row(
+                "SELECT head_sha FROM automation_review_heads WHERE repository=?1 AND pr_number=?2",
+                params![repository.to_ascii_lowercase(), pr_number], |r| r.get(0)
+            ).optional().map_err(error)?;
+            if latest.as_deref() != Some(head_sha) {
+                run.outcome = Some(RunOutcome::decision("superseded", None));
+                write(&tx, &run)?;
+                tx.commit().map_err(error)?;
+                return Ok(false);
+            }
+            if intent.repository != *repository
+                || intent.issue_number != *pr_number
+                || intent.head != *head_sha
+            {
+                return Err("Review publication intent does not match the admitted head".into());
+            }
+        }
         let mut outcome = RunOutcome::decision("publication_pending", None);
         outcome.publication_intent = Some(intent);
         run.outcome = Some(outcome);

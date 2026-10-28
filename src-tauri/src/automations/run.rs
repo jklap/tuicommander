@@ -13,6 +13,11 @@ pub enum RunTrigger {
         occurrence_ms: i64,
     },
     Manual,
+    PullRequestReview {
+        repository: String,
+        pr_number: i64,
+        head_sha: String,
+    },
     /// A labelled GitHub issue admitted by event intake, once per issue and label.
     Event {
         repository: String,
@@ -25,6 +30,14 @@ impl RunTrigger {
     /// Durable deduplication identity; GitHub names compare case-insensitively.
     pub fn event_key(&self) -> Option<String> {
         match self {
+            Self::PullRequestReview {
+                repository,
+                pr_number,
+                head_sha,
+            } => Some(format!(
+                "pr:{}#{pr_number}:{head_sha}",
+                repository.to_ascii_lowercase()
+            )),
             Self::Event {
                 repository,
                 issue_number,

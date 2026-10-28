@@ -21,7 +21,7 @@ pub fn tick(
     for definition in config
         .definitions
         .iter()
-        .filter(|definition| definition.enabled)
+        .filter(|definition| definition.enabled && !config.review_only(&definition.id))
     {
         let schedule = definition.schedule()?;
         if let Some(occurrence) = schedule.latest_due(now, None)? {
@@ -49,6 +49,9 @@ pub fn run_now(
     now: DateTime<Utc>,
 ) -> Result<AutomationRun, String> {
     config.validate()?;
+    if config.review_only(automation_id) {
+        return Err("PR review-only definitions cannot launch a manual agent".into());
+    }
     let definition = config
         .definitions
         .iter()

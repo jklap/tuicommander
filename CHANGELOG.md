@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add default-off incoming PR reviews with durable per-head deduplication, stale-result suppression and host-only COMMENT publication pinned to the GitHub SHA; never retry uncertain review writes (#2327-1ca0).
+
 - Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
 - Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
 - Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).

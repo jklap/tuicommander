@@ -3720,3 +3720,11 @@ turn, including before it starts, and removes the handle. A running draft reques
 settles after connection shutdown. Dropping an HTTP caller does not skip cleanup.
 Unused handles expire after 301 seconds. These calls never save a story.
 `create_story` accepts optional `problem` beside `input` and saves both atomically.
+
+Automatic PR reviews reuse the automation run/history endpoints; no new mutation
+route is added. `trigger.kind: "pull_request_review"` carries `repository`,
+`pr_number` and `head_sha` (the actual GitHub commit). Review output is saved in
+`stdout`; `outcome` carries the publication decision/intent and the review URL in
+`pr_url`. This differs from a manual review result's diff-hash identity. A
+review-only definition has no scheduled next run and rejects Run Now. HTTP and
+Tauri expose the same stored record.

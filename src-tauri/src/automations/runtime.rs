@@ -66,6 +66,7 @@ impl AutomationRuntime {
             drop(state);
             // An issue refused for capacity is retried on the scheduler tick.
             let mut issues = super::event_intake::IssueSnapshot::default();
+            let mut reviews = super::pr_reviews::ReviewSnapshot::default();
             let mut last_intake = None;
             let mut timer = tokio::time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -78,6 +79,10 @@ impl AutomationRuntime {
                                 issues.replace(repo_path, update);
                                 (false, true)
                             }
+                            Ok(crate::state::AppEvent::GitHubPrUpdate { repo_path, statuses }) => {
+                                reviews.replace(repo_path, statuses);
+                                (false, true)
+                            }
                             Ok(crate::state::AppEvent::RepositoriesChanged
                                 | crate::state::AppEvent::SettingsChanged(_)) => (false, true),
                             Ok(crate::state::AppEvent::ProgressRecorded { .. }
@@ -88,6 +93,7 @@ impl AutomationRuntime {
                                 // Issue updates may be among the lost events: drop the
                                 // snapshot and ask the poller to emit everything again.
                                 issues.lost_updates();
+                                reviews.lost_updates();
                                 if let Some(state) = weak.upgrade()
                                     && let Err(error) = crate::github_poller::send_poller_cmd(&state, crate::github_poller::PollerCmd::ForceResync)
                                 {
@@ -128,11 +134,13 @@ impl AutomationRuntime {
                 let polling_state = state.clone();
                 let polling = tokio::task::spawn_blocking(move || {
                     let config = DefinitionStore::at_path(polling_config).load()?;
-                    let (paths, errors) = intake_poll_paths(&polling_state, &config.event_intake);
+                    let mut combined = config.event_intake.clone();
+                    combined.repositories.extend(config.pull_request_reviews.repositories.clone());
+                    let (paths, errors) = intake_poll_paths(&polling_state, &combined);
                     for error in errors {
                         tracing::error!(source="automations", %error, "Event intake configuration error");
                     }
-                    Ok::<_, String>((config.event_intake, paths))
+                    Ok::<_, String>(((config.event_intake, config.pull_request_reviews), paths))
                 })
                 .await;
                 let (paths, changed) = match polling {
@@ -160,6 +168,8 @@ impl AutomationRuntime {
                     tracing::error!(source="automations", %error, "Event intake configuration resync failed");
                     last_intake = None;
                 }
+                let review_state = state.clone();
+                let review_store = owner.store().clone();
                 let dispatcher = Arc::new(Dispatcher {
                     definitions: DefinitionStore::at_path(definitions.clone()),
                     runs: owner.store().clone(),
@@ -167,6 +177,7 @@ impl AutomationRuntime {
                 });
                 let blocking = dispatcher.clone();
                 let snapshot = issues.issues();
+                let review_snapshot = reviews.clone();
                 let runs = match tokio::task::spawn_blocking(move || {
                     // A failed half must not strand the other half's Reserved runs.
                     let now = chrono::Utc::now();
@@ -174,6 +185,14 @@ impl AutomationRuntime {
                     let mut errors = Vec::new();
                     if intake_wake {
                         match blocking.admit_events(&snapshot, now) {
+                            Ok(admitted) => runs.extend(admitted),
+                            Err(error) => errors.push(error),
+                        }
+                    }
+                    if intake_wake {
+                        match blocking.definitions.load().and_then(|config| {
+                            review_snapshot.admit(&blocking.runs, &config, now.timestamp_millis())
+                        }) {
                             Ok(admitted) => runs.extend(admitted),
                             Err(error) => errors.push(error),
                         }
@@ -203,6 +222,17 @@ impl AutomationRuntime {
                     .into_iter()
                     .filter(|run| run.status == super::run::RunStatus::Reserved)
                 {
+                    if matches!(
+                        run.trigger,
+                        super::run::RunTrigger::PullRequestReview { .. }
+                    ) {
+                        tokio::spawn(super::pr_reviews::dispatch(
+                            review_state.clone(),
+                            review_store.clone(),
+                            run,
+                        ));
+                        continue;
+                    }
                     let dispatcher = dispatcher.clone();
                     tokio::spawn(async move {
                         if let Err(error) = dispatcher.dispatch(&run.id).await {
