@@ -199,6 +199,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                 command,
                 RunCommand::ExpireDeadline
                     | RunCommand::StartGraphAgent { .. }
+                    | RunCommand::AcceptUnspawnedStory { .. }
                     | RunCommand::Graph { .. }
                     | RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }
