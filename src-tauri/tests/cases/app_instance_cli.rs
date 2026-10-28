@@ -323,8 +323,14 @@ async fn headless_credential_file_rotation_wins_after_automatic_update() {
             .await
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        #[cfg(target_os = "linux")]
+        let replaced_executable = fs::read_link(format!("/proc/{group}/exe"));
         let deadline = Instant::now() + READY_SETUP_TIMEOUT;
         while !probe_authenticated_session_once(port, "after-update") {
+            #[cfg(target_os = "linux")]
+            if Instant::now() >= deadline {
+                eprintln!("daemon executable after replacement: {replaced_executable:?}");
+            }
             assert!(
                 Instant::now() < deadline,
                 "automatic relaunch did not authenticate the rotated credential-file token"
@@ -345,6 +351,14 @@ async fn headless_credential_file_rotation_wins_after_automatic_update() {
     }
     let _ = child.wait();
     if let Err(panic) = outcome {
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        eprintln!("automatic update daemon stderr: {stderr}");
         std::panic::resume_unwind(panic);
     }
 }

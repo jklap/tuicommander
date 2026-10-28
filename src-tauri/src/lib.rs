@@ -3135,8 +3135,9 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
     let restart = Arc::new(tokio::sync::Notify::new());
+    let executable = std::env::current_exe()?;
     app_state.remote_update = Some(remote_update::RemoteUpdateState {
-        executable: std::env::current_exe()?,
+        executable: executable.clone(),
         restart: restart.clone(),
         in_progress: tokio::sync::Mutex::new(()),
         installed: std::sync::atomic::AtomicBool::new(false),
@@ -3306,7 +3307,9 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         if options.supervised {
             anyhow::bail!("Remote update installed; exiting for supervisor restart");
         }
-        let mut child = std::process::Command::new(std::env::current_exe()?);
+        // Linux current_exe() refers to the deleted inode after replacement.
+        // Relaunch the same startup path that the updater installed into.
+        let mut child = std::process::Command::new(executable);
         child.args(
             std::env::args()
                 .skip(1)

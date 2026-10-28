@@ -754,7 +754,8 @@ APIs remain in memory, never update the selected file, and are lost on restart.
 Other configuration changes can still be persisted normally. To rotate a token,
 replace the mounted file and restart the daemon; live file changes do not reload
 credentials. Each process reads its own snapshot. An automatic daemon relaunch
-retains the file option and rereads the file; a service supervisor must retain it
+uses the startup executable path after binary replacement, retains the file
+option and rereads the file; a service supervisor must retain it
 in its launch command. Do not share a seed across instances unless they are meant
 to share secrets. `--set-password` cannot be combined with this option; use a
 seeded session token, or the default keyring source for durable password setup.
