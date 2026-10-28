@@ -183,5 +183,6 @@ that stays unsized for 120 animation frames logs a warning. Hiding or closing th
 pane cancels the retry; showing it starts a new measurement.
 
 Restored PTY sessions attach their event listeners before the first layout pass.
-The reconnect resize reuses those listeners instead of adding another API-error
-consumer. Suspend detaches them; resume attaches the replacement PTY once.
+The reconnect resize waits for that attachment and reuses successful listeners
+instead of adding another API-error consumer. If the initial handshake failed,
+reconnect retries the attachment once. Suspend detaches them; resume attaches the replacement PTY once.
