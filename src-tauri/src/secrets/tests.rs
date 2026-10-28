@@ -583,3 +583,22 @@ async fn secret_remove_reports_completion_across_mcp_reconnects() {
         vec![serde_json::json!({"names": ["TARGET", "ABSENT"], "status": "removed"}); 4]
     );
 }
+
+// Catches: a controller cannot store a task secret without a desktop form.
+#[tokio::test]
+async fn task_secret_put_is_write_only_2319() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let reply = handle_secret(
+        &state,
+        &serde_json::json!({
+            "action": "put", "names": ["TASK_TOKEN"],
+            "values": ["canary-secret-2319"], "scope": "task-2319", "ttl": 60
+        }),
+    )
+    .await;
+    assert_eq!(
+        reply,
+        serde_json::json!({"names": ["TASK_TOKEN"], "status": "stored"})
+    );
+    assert!(!format!("{reply}").contains("canary-secret-2319"));
+}

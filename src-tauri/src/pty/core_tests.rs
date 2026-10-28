@@ -16007,3 +16007,74 @@ async fn captured_claude_narrow_question_remains_answerable() {
         .await
     );
 }
+
+// Catches: known-secret masking exists only on MCP reads, not HTTP or live WS.
+#[tokio::test]
+async fn task_secret_echo_does_not_leak_http_or_ws_2319() {
+    use tower::ServiceExt;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let form = state
+        .secrets
+        .open(
+            crate::secrets::Form::request(
+                vec![crate::secrets::Field {
+                    name: "TASK_TOKEN".into(),
+                    kind: crate::secrets::FieldKind::Password,
+                    display: None,
+                }],
+                "test output boundary".into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    state
+        .secrets
+        .submit(
+            &form.nonce,
+            crate::secrets::Submission {
+                nonce: form.nonce.clone(),
+                status: "stored".into(),
+                values: std::collections::BTreeMap::from([(
+                    "TASK_TOKEN".into(),
+                    "canary-secret-2319".into(),
+                )]),
+                template: None,
+            },
+        )
+        .unwrap();
+    let id = "secret-echo-2319";
+    state
+        .session_maps
+        .output_buffers
+        .insert(id.into(), Mutex::new(crate::OutputRingBuffer::new(4096)));
+    state
+        .grid
+        .vt_log_buffers
+        .insert(id.into(), Mutex::new(VtLogBuffer::new(24, 80, 100)));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    state.ws_clients.insert(id.into(), vec![tx]);
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk("before canary-secret-2319 after\r\n", &silence, id, &state);
+    let live = rx.try_recv().expect("live WS output");
+    let app = crate::mcp_http::build_router(state, false, true);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/sessions/{id}/output"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let http = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        !live.contains("canary-secret-2319") && !http.contains("canary-secret-2319"),
+        "known secret leaked through HTTP or live WS"
+    );
+    assert!(live.contains("before") && live.contains("after"));
+}
