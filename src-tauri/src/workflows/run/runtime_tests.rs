@@ -445,6 +445,16 @@ fn ready_and_review_stories_still_begin_implementation() {
     for review in [false, true] {
         let (config, project, _plan, story_id, _template, _guard) = fixture();
         let stories = StoryStore::open().unwrap();
+        let published = definition(project.path().to_str().unwrap(), false, true);
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_graph_run(&request(
+                project.path().to_str().unwrap(),
+                &story_id,
+                &published,
+                "start-development",
+            ))
+            .unwrap();
         if review {
             for command in [
                 crate::stories::StoryCommand::StartManual,
@@ -457,16 +467,6 @@ fn ready_and_review_stories_still_begin_implementation() {
                     .unwrap();
             }
         }
-        let published = definition(project.path().to_str().unwrap(), false, true);
-        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
-        let run = store
-            .start_graph_run(&request(
-                project.path().to_str().unwrap(),
-                &story_id,
-                &published,
-                "start-development",
-            ))
-            .unwrap();
         let current = drive_turn(&store, &run.id).unwrap();
         assert_eq!(
             store
