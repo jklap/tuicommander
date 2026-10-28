@@ -264,15 +264,13 @@ pub(super) fn render_mcp_instructions(
     // all live in the `agent` description, which reaches every client.
     // Keep inventory out of this cached prefix: it changes between handshakes.
     // The tools serve current peers and terminals when the caller needs them.
-    let is_claude_code = detect_claude_code_client(client_name);
     out.push_str("## Multi-Agent Work\n\n");
-    out.push_str("- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.\n");
+    if !launch_channel {
+        out.push_str("- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.\n");
+    }
     out.push_str("- `agent action=list_peers`; `session action=list`.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
-    if is_claude_code {
-        out.push_str("- **CC-only exception — single isolated task:** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
-    }
     out.push('\n');
 
     // ── Dynamic: repos ──────────────────────────────────────────────

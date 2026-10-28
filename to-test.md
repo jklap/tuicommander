@@ -1,7 +1,7 @@
 ## Managed delegation instructions (2441-bbcf) — Rust restart required
 
-- [ ] Coordinator critic: run `instructions_prevent_invisible_native_subagents_for_every_client` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Pre-fix RED reproduced all client/mode omissions on Linux rb; no implementation-lane GREEN is claimed.
-- [ ] After an authorized `make dev` restart or `make build`, reconnect an MCP client and inspect initialize instructions for the TUIC spawn/launch rule and the CC-only exception. The daily app was not restarted; Rust does not hot-reload.
+- [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, launch a fresh agent and inspect Git and worktrees for the managed-delegation sentence and CC-only exception. Confirm MCP only carries the delegation fallback for clients without a launch channel. Existing module off switches and child scope stay in effect. The daily app was not restarted; Rust does not hot-reload.
 
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 

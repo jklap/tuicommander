@@ -1107,33 +1107,27 @@ fn instructions_collapse_off_points_at_tool_descriptions() {
 
 #[test]
 fn instructions_prevent_invisible_native_subagents_for_every_client() {
-    // Catches a CC-only rule, a discovery-mode omission, or a leaked CC exception.
+    // Catches: fallback clients losing the duty, or launch clients receiving it twice.
     let state = test_state();
     let mut failures = Vec::new();
-    for client in [Some("claude-code"), Some("codex"), Some("ego"), None] {
+    for (client, fallback) in [
+        (Some("claude-code"), false),
+        (Some("codex"), false),
+        (Some("ego"), false),
+        (Some("gemini"), true),
+        (Some("cursor"), true),
+        (None, true),
+    ] {
         for collapsed in [false, true] {
             let out = build_mcp_instructions_for_mode(&state, client, collapsed);
             let rule = "- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.";
-            if out.lines().filter(|line| *line == rule).count() != 1 {
-                failures.push(format!(
-                    "{client:?}, collapsed={collapsed}: missing unique TUIC delegation rule"
-                ));
+            let expected_count = usize::from(fallback);
+            if out.lines().filter(|line| *line == rule).count() != expected_count {
+                failures.push(format!("{client:?}, collapsed={collapsed}: expected {expected_count} MCP delegation rules"));
             }
-            let exception = out.lines().find(|line| line.contains("cc_agent_hint"));
-            if client == Some("claude-code") {
-                if !exception.is_some_and(|line| {
-                    line.contains("CC-only exception")
-                        && line.contains("repo action=worktree_create")
-                        && line.contains("absolute paths")
-                        && line.contains("ONLY valid use of native Agent/Task")
-                }) {
-                    failures.push(format!(
-                        "{client:?}, collapsed={collapsed}: missing explicit CC exception"
-                    ));
-                }
-            } else if exception.is_some() {
+            if out.contains("cc_agent_hint") {
                 failures.push(format!(
-                    "{client:?}, collapsed={collapsed}: CC exception leaked"
+                    "{client:?}, collapsed={collapsed}: launch-only CC exception duplicated in MCP"
                 ));
             }
         }

@@ -107,6 +107,12 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback. When mdkb is installed, the launch playbook also carries a fixed "Code search" rule that tells the agent to search with MDKB first; without mdkb it is absent. TUICommander checks once when it writes the launch files (startup, settings change, mdkb install or uninstall).
 
+The **Git and worktrees** module routes delegated or parallel work through TUIC
+`agent action=spawn`/`launch`, not client-native subagents such as Claude Code
+Agent/Task. The CC-only `cc_agent_hint` isolated-task path remains the exception.
+Clients without a launch instruction channel receive the delegation rule in MCP
+instructions instead. The Children module still forbids further delegation.
+
 | Agent | Channel |
 |---|---|
 | Claude Code | `--append-system-prompt-file <config-dir>/agent-hooks/instructions-claude.md` |

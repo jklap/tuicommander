@@ -835,7 +835,7 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 Initialize instruction prose stays within 1,728-byte classic and
 1,792-byte collapsed empty-state budgets. The cross-client delegation rule adds
-one short line; other sections do not grow. Compact wording preserves the answer
+one short fallback line for clients without a launch channel; other sections do not grow. Compact wording preserves the answer
 marker, urgent mail and progress reporting rules. The answer marker can start a
 row or the text of a Markdown list item; status, tool and hook/task notices stay
 excluded.
@@ -1518,10 +1518,13 @@ This works around Claude Code's inability to change its working directory mid-se
 
 Non-Claude Code MCP clients do not receive this field.
 
-The cached initialize instructions tell every client to delegate or parallelize
-through TUIC `agent action=spawn`/`launch`, not client-native subagents. This keeps
-peers visible, mailable and managed. The Claude Code `cc_agent_hint` path above is
-the only native Agent/Task exception, for a single isolated worktree task.
+The Git and worktrees launch module tells launch-capable agents to delegate or
+parallelize through TUIC `agent action=spawn`/`launch`, never client-native
+subagents such as Claude Code Agent/Task. The Claude Code `cc_agent_hint` path
+above remains the CC-only exception for a single isolated worktree task. Clients
+without a launch instruction channel receive the consistent delegation rule in
+the cached MCP initialize prefix instead; launch-capable clients do not receive
+a second copy through MCP.
 
 ### MCP Tool: `repo` — Worktree List
 
