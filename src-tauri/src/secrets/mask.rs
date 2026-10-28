@@ -308,6 +308,7 @@ fn base64_stream_tail(flat: &[u8]) -> (Vec<u8>, Vec<usize>, u8, usize, usize) {
 pub(crate) struct StreamMask {
     needles: Vec<Zeroizing<String>>,
     pending: Zeroizing<String>,
+    pending_marks: Vec<bool>,
 }
 
 impl StreamMask {
@@ -359,14 +360,21 @@ impl StreamMask {
         // candidate. Withhold rather than retain unbounded sensitive bytes.
         if bytes.len().saturating_sub(cutoff) > 256 * 1024 {
             self.pending.zeroize();
+            self.pending_marks.clear();
             return Some("[REDACTED]".into());
         }
-        let masked = mask_preserving_offsets(bytes, &self.needles);
+        let mut marked = marked_bytes(bytes, &self.needles);
+        for (mark, previous) in marked.iter_mut().zip(&self.pending_marks) {
+            *mark |= previous;
+        }
+        let masked: Zeroizing<Vec<u8>> = Zeroizing::new(bytes.iter().zip(&marked)
+            .map(|(byte, hidden)| if *hidden { b'*' } else { *byte }).collect());
         while !self.pending.is_char_boundary(cutoff) {
             cutoff -= 1;
         }
         let result = String::from_utf8_lossy(&masked[..cutoff]).into_owned();
         let tail = Zeroizing::new(self.pending[cutoff..].to_owned());
+        self.pending_marks = marked[cutoff..].to_vec();
         self.pending.zeroize();
         self.pending = tail;
         Some(result)
