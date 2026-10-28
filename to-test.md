@@ -1,3 +1,6 @@
+## Mobile terminal stream restart (2422-a267)
+
+- [ ] Coordinator: run `outputViewConnection.test.tsx` and `outputViewVisibility.test.tsx` against the final commit. The pre-fix hidden-exhaustion regression failed because visibility return kept the disposed subscription; GREEN belongs to the critic. No physical iOS or live-server outage check is claimed.
 ## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
 
 - [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.
