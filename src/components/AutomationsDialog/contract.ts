@@ -31,7 +31,10 @@ export type RunStatus =
 	| "skipped_precheck"
 	| "skipped_overlap"
 	| "skipped_concurrency"
-	| "skipped_expired";
+	| "skipped_expired"
+	| "skipped_missed"
+	| "skipped_filtered"
+	| "skipped_duplicate";
 export interface AutomationListItem {
 	definition: AutomationDefinition;
 	next_run_ms: number | null;
@@ -47,7 +50,17 @@ export interface AutomationRun {
 	id: string;
 	definition: AutomationDefinition;
 	status: RunStatus;
-	trigger: { kind: "manual" } | { kind: "scheduled"; occurrence_ms: number };
+	trigger:
+		| { kind: "manual" }
+		| { kind: "scheduled"; occurrence_ms: number }
+		| { kind: "event"; repository: string; issue_number: number; label: string };
+	outcome?: {
+		decision: string;
+		pr_url: string | null;
+		comment_url: string | null;
+		failure_reason: string | null;
+		publication_intent: { repository: string; head: string; base: string; issue_number: number } | null;
+	} | null;
 	created_ms: number;
 	updated_ms: number;
 	finished_ms: number | null;
