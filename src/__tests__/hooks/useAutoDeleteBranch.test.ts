@@ -212,7 +212,9 @@ describe("useAutoDeleteBranch", () => {
 		});
 		expect(mockConfirm).not.toHaveBeenCalled();
 		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
-		expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("1 uncommitted file"));
+		await vi.waitFor(() =>
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("1 uncommitted file")),
+		);
 		dispose?.();
 	});
 

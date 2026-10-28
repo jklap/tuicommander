@@ -197,7 +197,7 @@ it("rejected writes reload the revision without echoing backend errors — catch
 	fireEvent.blur(input);
 	await waitFor(() => expect(reads).toBe(2));
 	expect(view.container.textContent).not.toContain("private credential");
-	expect(view.container.textContent).toContain("Setting was not saved");
+	await waitFor(() => expect(view.container.textContent).toContain("Setting was not saved"));
 	await waitFor(() =>
 		expect(
 			(view.container.querySelector("[data-settings-content] input[type=text]") as HTMLInputElement)?.disabled,

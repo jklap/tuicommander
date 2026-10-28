@@ -2776,13 +2776,13 @@ describe("Sidebar", () => {
 				fireEvent.contextMenu(row);
 				await Promise.resolve();
 				await Promise.resolve();
-				fireEvent.click(view.getByText("Copy process ID"));
+				fireEvent.click(await vi.waitFor(() => view.getByText("Copy process ID")));
 				for (let n = 0; n < 5; n++) await Promise.resolve();
 				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: pid });
 				fireEvent.contextMenu(row);
 				await Promise.resolve();
 				await Promise.resolve();
-				expect(view.getByText("Copy alias").closest("button")).toHaveAttribute("title", alias);
+				await vi.waitFor(() => expect(view.getByText("Copy alias").closest("button")).toHaveAttribute("title", alias));
 				fireEvent.click(view.getByText("Copy alias"));
 				for (let n = 0; n < 5; n++) await Promise.resolve();
 				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: alias });
