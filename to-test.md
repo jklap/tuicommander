@@ -1,3 +1,8 @@
+## Mobile subagent notification policy (2342-4a1c) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `subagent_push_does_not_lose_parentage_during_exit_teardown`, existing question/completion push-window tests, and `src/mobile/__tests__/useMobileNotifications.test.ts` against the final commit. Pre-fix RED reproduced the child push-budget reservation after teardown and both mobile sound bypasses; implementation-lane GREEN is not claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), check real-phone audio/Web Push with subagent silence on and off. Parented sessions follow the host setting, user-started sessions remain audible, and muted transitions do not replay. Real hardware delivery remains unverified; the daily app was not restarted.
+
 ## Story drafts from requests (2357-a8f2) — Rust rebuild/restart required
 
 - [ ] Coordinator critic: run the focused AI draft UI, Rust story_draft and one_shot_cancel tests, existing one-shot cleanup tests, native stories creation/amendment consumers, transport parity and i18n collisions on the final commit. The implementer ran feature RED only; no GREEN application run is claimed.

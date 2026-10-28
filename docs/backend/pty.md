@@ -107,6 +107,12 @@ close_pty(cleanup_worktree)
     └── Optionally remove associated git worktree
 ```
 
+The lossless session-state queue captures whether each PTY event belongs to a
+parented session before live teardown removes `session_parent`. Question and
+exit Web Push use that captured ancestry and the current host notification
+setting. Muted events do not reserve the per-session push budget. This metadata
+is internal to the queue; IPC, SSE and WebSocket event payloads stay unchanged.
+
 Each session may also carry an orchestrator-owned `pty_description`, separate
 from the last user prompt captured by input-line bookkeeping. MCP spawn and
 input actions update it through `pty-description-changed`; desktop and browser
