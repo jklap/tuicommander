@@ -419,3 +419,89 @@ async fn intake_rejects_missing_or_repeated_cursors_without_publishing_partial_p
         fixture.close().await;
     }
 }
+
+// Catches: all-open triage polling loses an intake label beyond ten display labels,
+// including on ordinary repositories sharing the same poll batch.
+#[tokio::test]
+async fn triage_poll_retains_eleventh_label_in_mixed_repository_intake() {
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("automations/fixtures/triage-issue.json")).unwrap();
+    let fixture = PollHttpFixture::with_response(move |request| {
+        let query = request["query"].as_str().unwrap();
+        let labels: Vec<_> = (0..11)
+            .map(|n| serde_json::json!({"name": if n == 10 {"tuic-run".to_string()} else {format!("label-{n}")}, "color":"d73a49"}))
+            .collect();
+        if query.contains("query IntakeIssueLabels") {
+            return serde_json::json!({"data":{"repository":{"issue":{"labels":{
+                "nodes": [labels[10].clone()], "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}});
+        }
+        let mut response = serde_json::json!({"data":{}});
+        for (alias, repository) in [("r0", "triaged"), ("r1", "ordinary")] {
+            let mut node = recorded["data"]["repository"]["issue"].clone();
+            node["state"] = serde_json::json!("OPEN");
+            node["url"] = serde_json::json!(format!("https://github.com/sstraus/{repository}/issues/119"));
+            node["labels"] = serde_json::json!({"nodes": &labels[..10],
+                "pageInfo":{"hasNextPage":true,"endCursor":"label-ten"}});
+            response["data"][alias] = serde_json::json!({"intakeIssues":{
+                "nodes":[node], "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }});
+        }
+        response
+    }).await;
+    let mut intake = std::collections::HashMap::new();
+    poll_one_account(
+        &fixture.state,
+        &github_com_account(&fixture.state),
+        None,
+        &[
+            ("/triaged".into(), "sstraus".into(), "triaged".into()),
+            ("/ordinary".into(), "sstraus".into(), "ordinary".into()),
+        ],
+        false,
+        "disabled",
+        false,
+        &mut Default::default(),
+        &mut Default::default(),
+        Some(""),
+        &mut intake,
+    )
+    .await
+    .unwrap();
+    fixture.close().await;
+    for path in ["/triaged", "/ordinary"] {
+        assert!(
+            intake[path][0]
+                .labels
+                .iter()
+                .any(|label| label.name == "tuic-run"),
+            "{path}: all-open polling discarded the eleventh intake label"
+        );
+    }
+    let config: crate::automations::model::AutomationsConfig = serde_json::from_value(serde_json::json!({
+        "event_intake":{"repositories":["sstraus/triaged","sstraus/ordinary"],"label":"tuic-run","definition_id":"pilot",
+            "triage":[{"repository":"sstraus/triaged","definition_id":"triage","policy_version":"v1","read_only_attested":true,"rejection_label":"declined"}]},
+        "definitions":[{"id":"pilot","name":"Pilot","prompt":"Resolve issue","run_config":"claude",
+        "repository":"/ordinary","workspace":{"mode":"new_per_run","base_branch":"main"},"cron":"0 * * * *",
+        "timezone":"UTC","enabled":true,"grace_secs":1800,"overlap":"skip","max_duration_secs":3600,"precheck":null},
+        {"id":"triage","name":"Triage","prompt":"Evaluate issue","run_config":"readonly",
+        "repository":"/triaged","workspace":{"mode":"existing"},"cron":"0 * * * *",
+        "timezone":"UTC","enabled":true,"grace_secs":1800,"overlap":"skip","max_duration_secs":3600,"precheck":null}]
+    })).unwrap();
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let owner =
+        crate::automations::store::RunOwner::acquire_at(&scratch.path().join("runs.sqlite3"), 0)
+            .unwrap();
+    let runs = crate::automations::event_intake::admit_issues(
+        owner.store(),
+        &config,
+        &intake["/ordinary"],
+        10,
+    )
+    .unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "triage on a sibling repository must not suppress labelled intake"
+    );
+}
