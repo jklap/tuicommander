@@ -456,8 +456,10 @@ fn ready_and_review_stories_still_begin_implementation() {
             ))
             .unwrap();
         if review {
+            store
+                .begin_graph_story(&run, &story_id, "workflow:test-start")
+                .unwrap();
             for command in [
-                crate::stories::StoryCommand::StartManual,
                 crate::stories::StoryCommand::CheckCriterion(0),
                 crate::stories::StoryCommand::SubmitReview,
             ] {
