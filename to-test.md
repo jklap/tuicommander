@@ -1,3 +1,8 @@
+## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
+
+- [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.
+- [ ] After an authorized `make dev` restart or `make build`, confirm a stuck stdio upstream recovers its tools through scheduled health probes. Ordinary tool-call reply timeouts must still leave the child alive and report an uncertain outcome. The daily app was not restarted; Rust does not hot-reload.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
