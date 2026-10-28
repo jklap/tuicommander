@@ -3313,10 +3313,12 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
                 .filter(|arg| arg != "--wait-for-restart"),
         );
         child.arg("--wait-for-restart");
-        child.env(
-            "TUIC_PAIRING_TOKEN",
-            &app_config.services.auth.session_token,
-        );
+        if !credentials::credential_file_selected() {
+            child.env(
+                "TUIC_PAIRING_TOKEN",
+                &app_config.services.auth.session_token,
+            );
+        }
         child
             .spawn()
             .map_err(|e| anyhow::anyhow!("Updated remote failed to restart: {e}"))?;
