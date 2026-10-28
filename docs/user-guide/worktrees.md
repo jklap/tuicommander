@@ -223,16 +223,21 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
 
-For a clean workspace whose branch commits are in the default branch (including a
-branch with no commits of its own), the **Archive workspace?** dialog offers
-**Cancel**, **Delete**, and **Archive** when no live session owns the workspace.
-**Archive** keeps its existing behavior: move the checkout into the archive pool
-and keep its local branch for reuse. The red **Delete** action permanently removes
-the checkout and its local branch instead. It uses the same workspace-id removal
-path and integration proof, without force or a lock override. The backend checks
-safety again, so new dirty files, unpublished submodule commits, or a live session
-stop deletion. Delete is not offered when those checks are unsafe or unknown.
-Enter still selects Archive; Escape cancels.
+The **Archive workspace?** dialog lists three safety checks: uncommitted files,
+commits absent from the named base branch, and open terminals or agents. Each check
+has a green pass or red fail mark. Failed checks show counts and explain what
+Delete would lose or interrupt. Unknown state never counts as a pass.
+
+**Cancel**, **Delete**, and **Archive** remain visible. **Archive** moves the whole
+checkout into the archive pool and keeps its local branch and uncommitted changes.
+It does not merge unmerged commits. **Delete** removes the checkout and local branch;
+it is disabled unless every check passes. Submodule commits without a remote copy
+also block Delete. The backend repeats the checklist before deleting, so a stale
+dialog cannot authorize new dirty files, commits or sessions. The commit check uses
+actual containment in the default integration refs; a squash-equivalent branch can
+still have commits absent from those refs and must be archived instead.
+Enter selects Archive; Escape cancels. Explicit keep-branch removal and missing
+checkout registration cleanup retain their separate removal confirmations.
 
 Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
 

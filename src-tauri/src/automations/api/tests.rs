@@ -531,6 +531,25 @@ fn automation_profiles_uses_the_same_saved_profiles_as_validation() {
     assert_eq!(reply, json!(["Review profile"]));
 }
 
+// Catches: review-only definitions advertise generic scheduled launches in shared API responses.
+#[test]
+fn review_only_list_has_no_scheduled_next_run() {
+    let (dir, definitions, owner) = setup();
+    std::fs::write(
+        dir.path().join("automations.json"),
+        json!({
+            "definitions":[definition("review")],
+            "pull_request_reviews":{"repositories":["cli/cli"],"definition_id":"review"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let listed = call(&definitions, owner.store(), json!({"action":"list"})).unwrap();
+    assert_eq!(listed[0]["definition"]["id"], "review");
+    assert_eq!(listed[0]["next_run_ms"], Value::Null);
+    assert_eq!(listed[0]["run_config_error"], Value::Null);
+}
+
 // Catches: an unbound HTTP/IPC client or agent submits a triage decision for another run.
 #[tokio::test]
 async fn triage_decision_requires_bound_agent_transport_identity() {

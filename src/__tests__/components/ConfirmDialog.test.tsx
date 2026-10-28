@@ -1,6 +1,7 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
+import { useConfirmDialog } from "../../hooks/useConfirmDialog";
 
 describe("ConfirmDialog", () => {
 	const baseProps = {
@@ -8,6 +9,49 @@ describe("ConfirmDialog", () => {
 		title: "Confirm",
 		message: "Proceed?",
 	};
+
+	// Catches: dirty/unmerged work is shown as safe or Delete can settle an unsafe dialog.
+	it("renders failed dirty and unmerged checks and prevents Delete while Archive preserves work", async () => {
+		const dialog = useConfirmDialog();
+		const pending = dialog.confirmRemoveWorktree(
+			"feat/work",
+			{
+				dirtyFiles: 3,
+				commitStatus: "unmerged",
+				removalSafety: "requires_force",
+				archiveChecklist: {
+					checks: [
+						{ passed: false, label: "3 files changed and not committed" },
+						{ passed: false, label: "2 commits not in main" },
+						{ passed: true, label: "No terminal or agent open here" },
+					],
+					can_delete: false,
+					archive_explanation: "keeps everything, branch and changes included.",
+					delete_explanation: "you would lose 3 changes and 2 commits.",
+				},
+			},
+			true,
+		);
+		const { getByRole, getByText, getAllByRole } = render(() => (
+			<ConfirmDialog
+				visible={!!dialog.dialogState()}
+				{...dialog.dialogState()!}
+				onClose={dialog.handleClose}
+				onConfirm={dialog.handleConfirm}
+				onDiscard={dialog.handleDiscard}
+			/>
+		));
+		expect(getAllByRole("img", { name: "Fail" })).toHaveLength(2);
+		expect(getAllByRole("img", { name: "Pass" })).toHaveLength(1);
+		expect(getByText("2 commits not in main")).toBeTruthy();
+		expect(getByText(/you would lose 3 changes and 2 commits/)).toBeTruthy();
+		expect((getByRole("button", { name: "Delete" }) as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(getByRole("button", { name: "Delete" }));
+		dialog.handleDiscard();
+		expect(dialog.dialogState()?.title).toBe("Archive workspace?");
+		fireEvent.click(getByRole("button", { name: "Archive" }));
+		expect(await pending).toBe("archive");
+	});
 
 	it("renders nothing when not visible", () => {
 		const { container } = render(() => (

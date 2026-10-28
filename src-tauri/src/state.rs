@@ -2175,8 +2175,8 @@ pub struct AppState {
     /// volume in production (issue #82).
     pub(crate) repo_head_emits_suppressed: AtomicU64,
     pub(crate) pending_orphan_cleanup: DashMap<String, crate::worktree::PendingOrphanCleanup>,
-    /// File watchers for directory contents (keyed by absolute dir path)
-    pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
+    /// Shared directory watches with acquire/release counts (keyed by absolute path).
+    pub(crate) dir_watchers: DashMap<String, crate::dir_watcher::DirectoryWatch>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
     pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
     /// Byte cursors and per-subagent summaries behind the Progress Flow view,

@@ -37,7 +37,7 @@ Click the funnel icon in the toolbar to switch sort order:
 
 Successful drops refresh the listing and expanded tree folders immediately, including the source after a move and transfers accepted in the confirmation dialog.
 
-The panel watches the current directory for filesystem changes. When a file is created, deleted, or renamed outside the app, the listing refreshes automatically without a visible loading spinner.
+The panel watches the current directory and each visible expanded tree folder for filesystem changes. Files and folders created, deleted, or renamed outside the app appear automatically without manual refresh. This also applies to non-Git folders and nested Git repositories. Collapsed folders reload when expanded again, so they do not retain changes missed while unwatched.
 
 ### Git Status Indicators
 

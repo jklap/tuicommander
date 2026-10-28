@@ -1934,3 +1934,16 @@ workspace and its own role profiles. Publication reloads its authoritative
 review/check receipts and verifies GitHub's pushed branch SHA. Publication success
 or refusal updates the completed event's durable `outcome`, not its execution status.
 See [reviewed issue workflows](../user-guide/automations.md#opt-in-reviewed-issue-workflows).
+
+### Review-only PR subscription
+
+`automations.json` has a default-empty `pull_request_reviews` object with
+`repositories: string[]` (`owner/name`) and `definition_id: string`. It is separate
+from labelled-issue `event_intake`. A nonempty allowlist reserves that definition
+for review-only ACP execution: scheduled and manual generic-agent dispatch are
+refused, and the same definition cannot also serve issue intake. Review runs use
+the poller's registered checkout. No additional endpoint or client-side scheduler
+is needed. The existing run SQLite store holds per-repository/PR latest observed
+heads, permanent head deduplication keys, publication claims and outcomes. A
+pending PR-review publication claim recovers to unknown, never to a retriable
+write. See [Incoming PR reviews](../user-guide/automations.md#incoming-pr-reviews-review-only).

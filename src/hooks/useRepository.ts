@@ -163,6 +163,7 @@ export function useRepository() {
 	/** Fresh backend preflight used immediately before removal. */
 	async function getWorkspaceLifecycle(repoPath: string, workspaceId: string): Promise<WorkspaceLifecycleStatus> {
 		const status = await invoke<{
+			archive_checklist?: WorkspaceLifecycleStatus["archiveChecklist"];
 			dirty_files: number | null;
 			untracked_files?: number | null;
 			live_sessions?: Array<{ session_id: string; name: string }>;
@@ -175,6 +176,7 @@ export function useRepository() {
 			error?: string;
 		}>("get_workspace_lifecycle", { repoPath, workspaceId });
 		return {
+			archiveChecklist: status.archive_checklist,
 			dirtyFiles: status.dirty_files,
 			untrackedFiles: status.untracked_files,
 			liveSessions: status.live_sessions?.map((session) => ({ sessionId: session.session_id, name: session.name })),

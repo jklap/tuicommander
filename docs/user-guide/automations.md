@@ -346,3 +346,51 @@ have no trusted event identity and are ignored. An empty intake allowlist stays
 disabled and performs no evaluations. History retention also applies to these
 rows; summaries count rows, not poll observations. The saved run API exposes
 outcomes; this change does not add outcome controls to the Automations dialog.
+
+## Incoming PR reviews (review-only)
+
+On the owning host, add a separate block to the selected instance's `automations.json`:
+
+```json
+"pull_request_reviews": {
+  "repositories": ["owner/name"],
+  "definition_id": "<enabled automation definition id>"
+}
+```
+
+An empty repository list disables PR review intake. This list is independent of
+`event_intake`; enabling issue intake does not authorize PR reviews. Repositories
+must be registered on that host with an unambiguous github.com account. The host
+must have working ego configuration and permission to post GitHub reviews.
+Confirm publication authorization before saving this opt-in: it permits unattended
+COMMENT reviews on open, non-draft PRs in the allowlist, including fork PRs.
+
+The selected definition supplies its name, enabled state and duration limit. Its
+prompt, run profile, precheck and workspace settings are not executed. While bound
+to this subscription it has no scheduled launches and Run Now is refused. Use a
+separate definition for issue intake or ordinary agent automation. Every review
+uses the registered repository path from the poller, not the definition's checkout.
+
+The host admits one durable run per repository, PR number and GitHub head SHA,
+even if the selected definition later changes. Open-run overlap and machine-wide
+capacity limits still apply; the latest snapshot is reconsidered on each tick.
+A new observed head revokes publication authority for an older result, including
+when capacity delays the newer run. Bus lag drops snapshots until a poller resync.
+Only observed heads can be admitted; this is not an exhaustive PR-history import.
+
+The existing no-host-tool ACP one-shot adapter reviews an immutable base/head
+comparison. The usual review file/line budgets and confidence filter apply. The
+host rechecks the current head, open/draft state, registration and subscription,
+then claims publication durably before one `POST pulls/{number}/reviews` with
+`event: COMMENT` and `commit_id` equal to the GitHub SHA. The manual review panel's
+diff hash is not used as a commit SHA. Findings appear in the review body, not as
+inline review threads. No code repair, deterministic check execution, check-result
+publication, branch push, worktree creation, PR creation, approval or merge occurs.
+
+Saved run output and outcome use the existing automation history API on desktop
+and HTTP. A review URL is retained in `outcome.pr_url`. Superseded run decisions are
+retained but their results are not posted. A lost POST response, or restart during a publication
+claim, becomes `publication_unknown` and is never retried automatically. Restart
+interrupts unfinished ACP runs without replay. Inspect GitHub before taking any
+manual recovery action. An older application cannot read the new trigger/config;
+do not downgrade an instance after enabling this feature.

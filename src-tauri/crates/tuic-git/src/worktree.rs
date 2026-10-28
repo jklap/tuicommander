@@ -954,6 +954,39 @@ fn describe_bases(bases: &[String]) -> String {
         .join(" and ")
 }
 
+/// Count commits absent from the default integration refs, naming the exact refs checked.
+/// Unlike a merge verdict, this deliberately does not treat squash-equivalent commits
+/// as ancestors: the archive checklist promises that the commits themselves are kept.
+pub fn workspace_commits_outside_default(
+    repo: &Path,
+    workspace_id: &str,
+) -> Result<(String, usize), String> {
+    let workspace = resolve_removable_workspace(repo, workspace_id)?;
+    let default = get_remote_default_branch(&repo.to_string_lossy())?;
+    let bases = integration_bases(repo, &default);
+    if bases.is_empty() {
+        return Err(format!("default branch '{default}' was not found"));
+    }
+    let tip = rev_at(Path::new(&workspace.path), "HEAD")?;
+    let mut args = vec![
+        "rev-list".to_string(),
+        "--count".into(),
+        tip,
+        "--not".into(),
+    ];
+    args.extend(bases.iter().cloned());
+    let output = git_cmd(repo)
+        .args(args)
+        .run()
+        .map_err(|error| error.to_string())?;
+    let count = output
+        .stdout
+        .trim()
+        .parse::<usize>()
+        .map_err(|error| error.to_string())?;
+    Ok((describe_bases(&bases), count))
+}
+
 fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, String> {
     for base in bases {
         if is_ancestor(repo, tip, base)? {

@@ -2,6 +2,9 @@
 
 - [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
 - [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
+## Shared Files directory watches (2452-8076) — Rust rebuild/restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm that collapsing a desktop tree folder does not stop external-change refresh in a phone/browser listing rooted at that same folder. Rust does not hot-reload; the daily app was not restarted. Automated coverage uses native Rust notify on rb and mounted frontend rows on the Mac.
 
 ## Terminal Compose growth (2447-9d28)
 
@@ -3244,6 +3247,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
 
 
+- [ ] After rebuilding the backend, put a short-TTL task secret, spawn with its scope, and confirm echoed output is masked in desktop, mobile and a diagnostic capture. A later spawn must reject the expired scope while the original session remains masked (#2319-02f6). Rust does not hot-reload; restart only when ready to end the current live app session.
 - [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
 ## Reviewed event issue publication (#2325-10c4)
 
@@ -3254,3 +3258,8 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 
 - [ ] After the next manual Rust rebuild/restart, remove a clean integrated workspace with no live sessions. Confirm the dialog shows Cancel, red Delete, and Archive; Delete removes its checkout and local branch, while Archive retains its existing behavior. Dirty or live-owned workspaces must not offer Delete, and a safety change while the dialog is open must stop deletion.
 - [ ] Event outcomes (#2326-98f1): after a manual Rust restart, inspect a permitted event run through `automations` run details; verify the PR URL and decision persist after restart and unknown publication does not create a second PR. No live GitHub write or desktop launch was performed in this implementation.
+
+- [ ] After a backend rebuild, open Archive workspace for a dirty, unmerged checkout and a clean integrated checkout. Confirm counts and disabled/enabled Delete; Archive must keep all changes. Rust changes require a manual restart to load. Automated Git and rendering evidence is recorded in story 2453-2ec7.
+## Incoming PR review automation (2327-1ca0)
+
+- [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.

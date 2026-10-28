@@ -2018,7 +2018,7 @@ POST   /watchers/dir?path=/path/to/directory
 DELETE /watchers/dir?path=/path/to/directory
 ```
 
-Start/stop watching a directory (non-recursive) for file changes (create/delete/rename). Emits `dir-changed` SSE event. Used by File Browser panel for auto-refresh.
+Acquire/release a shared nonrecursive directory watch for file changes (create/delete/rename). Pair each successful POST with one DELETE. A path shares one native watcher across IPC and HTTP consumers; only the last release stops it. Emits `dir-changed` SSE events. Used by the File Browser panel for auto-refresh.
 
 ### Hot Repos
 
@@ -2649,7 +2649,7 @@ for commits absent from its remote-tracking branches. `commit_status` is
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. The response also includes `untracked_files`, `live_sessions` with names, and `warnings` for removal review. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. The response also includes `archive_checklist` (`checks: [{ passed, label }]`, `can_delete`, `archive_explanation`, `delete_explanation`), `untracked_files`, `live_sessions` with names, and `warnings` for removal review. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -3721,6 +3721,28 @@ settles after connection shutdown. Dropping an HTTP caller does not skip cleanup
 Unused handles expire after 301 seconds. These calls never save a story.
 `create_story` accepts optional `problem` beside `input` and saves both atomically.
 
+Automatic PR reviews reuse the automation run/history endpoints; no new mutation
+route is added. `trigger.kind: "pull_request_review"` carries `repository`,
+`pr_number` and `head_sha` (the actual GitHub commit). Review output is saved in
+`stdout`; `outcome` carries the publication decision/intent and the review URL in
+`pr_url`. This differs from a manual review result's diff-hash identity. A
+review-only definition has no scheduled next run and rejects Run Now. HTTP and
+Tauri expose the same stored record.
+
+### Task-scoped secret injection
+
+The MCP `secret` tool accepts `action: "put"`, `names: string[]`,
+`values: string[]` (same order), `scope: string` (task ID), and a positive integer
+`ttl` in seconds. It returns `{names,status:"stored"}` without values. Use the
+existing authenticated `/mcp` transport; there is no public value-read endpoint.
+
+`POST /sessions/agent` accepts optional `scope`, with the same meaning as MCP
+`agent action=spawn scope=...`. Values are injected only into the child env.
+Expiry stops new injection; already-bound session masks survive until teardown.
+Output is sanitized before raw/text/log HTTP, raw/log/grid WS, terminal history
+and tcap output captures. Potential split-secret prefixes are withheld until
+resolved, and incomplete trailing prefixes are discarded at teardown. See
+[Private secret forms](../user-guide/secrets.md#task-scoped-controller-entry).
 
 ### Bound issue triage decisions (#2324-424d)
 

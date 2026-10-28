@@ -314,6 +314,23 @@ pub(super) async fn spawn_agent_session(
             }
         };
 
+    let scoped_environment = match body
+        .scope
+        .as_deref()
+        .map(|scope| state.secrets.scope_environment(scope))
+        .transpose()
+    {
+        Ok(environment) => environment,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+    let scoped_environment = Arc::new(scoped_environment);
+    let spawn_secrets = Arc::clone(&scoped_environment);
     let spawn_binary_path = binary_path.clone();
     let spawn_args = body.args.clone();
     let spawn_prompt = body.prompt.clone();
@@ -387,6 +404,10 @@ pub(super) async fn spawn_agent_session(
                 cmd.env(key, value);
             }
 
+            if let Some(environment) = spawn_secrets.as_ref() {
+                environment.apply_to(&mut cmd);
+            }
+
             crate::pty::bind_pty_identity(&spawn_state, &mut cmd, &spawn_session_id, None);
 
             if let Some(ref cwd) = spawn_cwd {
@@ -432,6 +453,9 @@ pub(super) async fn spawn_agent_session(
         }
     };
 
+    if let Some(environment) = scoped_environment.as_ref() {
+        state.secrets.bind_scope(&session_id, environment);
+    }
     let paused = Arc::new(AtomicBool::new(false));
     // Pre-set the session's agent type so the PTY reader's agent_active gate turns
     // on immediately and intent/suggest protocol tokens are parsed from the first
@@ -756,6 +780,7 @@ mod tests {
 
     fn spawn_request() -> SpawnAgentRequest {
         SpawnAgentRequest {
+            scope: None,
             rows: Some(24),
             cols: Some(80),
             cwd: None,

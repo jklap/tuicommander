@@ -147,6 +147,23 @@ impl RunStore {
             }
             write(&tx, &run)?;
         }
+        // A review POST may have arrived before the process died. Never retry it.
+        let pending_reviews = {
+            let mut stmt = tx.prepare("SELECT snapshot_json FROM automation_runs WHERE json_extract(snapshot_json,'$.trigger.kind')='pull_request_review' AND json_extract(snapshot_json,'$.outcome.decision')='publication_pending'").map_err(error)?;
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .map_err(error)?
+                .map(|row| decode::<AutomationRun>(row.map_err(error)?))
+                .collect::<Result<Vec<_>, String>>()?
+        };
+        for mut run in pending_reviews {
+            if let Some(outcome) = &mut run.outcome {
+                outcome.decision = "publication_unknown".into();
+                outcome.failure_reason =
+                    Some("Application restarted during review publication; not retried".into());
+            }
+            run.updated_ms = now_ms.max(run.updated_ms);
+            write(&tx, &run)?;
+        }
         // An attempted send may already have arrived. Mark it unknown, never claim again.
         let deliveries = {
             let mut stmt = tx

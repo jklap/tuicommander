@@ -439,44 +439,71 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		})();
 	});
 
-	// Directory watcher lifecycle: start/stop watcher as directory or visibility changes
+	// A nonrecursive watch must cover every directory whose children are visible,
+	// not just the flat listing. Keep unchanged watches when another node expands.
+	const watchedDirs = new Map<string, string>();
+	const invalidateDirectory = (subdir: string) => {
+		setTreeCache((prev) => {
+			if (!prev.has(subdir)) return prev;
+			const next = new Map(prev);
+			next.delete(subdir);
+			return next;
+		});
+	};
+	const stopDirectoryWatch = (path: string) => {
+		invoke("stop_dir_watcher", { path }).catch((err) => {
+			appLogger.warn("app", `Failed to stop dir watcher for ${path}`, err);
+		});
+	};
 	createEffect(() => {
-		if (!props.visible || !root()) return;
-
-		const fsRoot = root()!;
-		const subdir = currentSubdir();
-		// Don't watch during search (search is recursive, watcher is not)
-		if (searchQuery().trim()) return;
-
-		const absPath = subdir === "." || subdir === "" ? fsRoot : `${fsRoot}/${subdir}`;
-
-		invoke("start_dir_watcher", { path: absPath }).catch((err) => {
-			appLogger.warn("app", `Dir watcher failed for ${absPath}: ${err}`);
-		});
-
-		// Listen for dir-changed events matching this path
+		if (!props.visible || !root() || searchQuery().trim()) return;
 		const unlisten = listen<{ dir_path: string }>("dir-changed", (event) => {
-			if (event.payload.dir_path === absPath) {
-				setDirRevision((n) => n + 1);
-				// Invalidate only the changed directory in tree cache. The payload path is
-				// absolute; tree cache keys are repo-relative, and `subdir` is exactly the
-				// relative form of the watched `absPath` — deleting the absolute path never
-				// matched a key, so the subtree stayed stale forever.
-				setTreeCache((prev) => {
-					if (!prev.has(subdir)) return prev;
-					const next = new Map(prev);
-					next.delete(subdir);
-					return next;
-				});
-			}
+			const subdir = watchedDirs.get(event.payload.dir_path);
+			if (subdir === undefined) return;
+			if (subdir === currentSubdir()) setDirRevision((n) => n + 1);
+			invalidateDirectory(subdir);
 		});
+		onCleanup(() => unlisten.then((fn) => fn()));
+	});
 
-		onCleanup(() => {
-			invoke("stop_dir_watcher", { path: absPath }).catch((err) => {
-				appLogger.warn("app", `Failed to stop dir watcher for ${absPath}`, err);
+	createEffect(() => {
+		const desired = new Map<string, string>();
+		const fsRoot = root();
+		if (props.visible && fsRoot && !searchQuery().trim()) {
+			const subdir = currentSubdir();
+			desired.set(subdir === "." || subdir === "" ? fsRoot : joinPath(fsRoot, subdir), subdir);
+			if (viewMode() === "tree") {
+				const expanded = expandedDirs();
+				const cache = treeCache();
+				const visit = (children: DirEntry[]) => {
+					for (const entry of children) {
+						if (!entry.is_dir || !expanded.has(entry.path)) continue;
+						desired.set(joinPath(fsRoot, entry.path), entry.path);
+						visit(cache.get(entry.path) ?? []);
+					}
+				};
+				visit(entries());
+			}
+		}
+		for (const path of watchedDirs.keys()) {
+			if (desired.has(path)) continue;
+			watchedDirs.delete(path);
+			stopDirectoryWatch(path);
+		}
+		for (const [path, subdir] of desired) {
+			if (watchedDirs.has(path)) continue;
+			watchedDirs.set(path, subdir);
+			// A collapsed or hidden directory may have changed while unwatched.
+			invalidateDirectory(subdir);
+			invoke("start_dir_watcher", { path }).catch((err) => {
+				appLogger.warn("app", `Dir watcher failed for ${path}: ${err}`);
 			});
-			unlisten.then((fn) => fn());
-		});
+		}
+	});
+
+	onCleanup(() => {
+		for (const path of watchedDirs.keys()) stopDirectoryWatch(path);
+		watchedDirs.clear();
 	});
 
 	// Search results from recursive Rust search (when query is active)
