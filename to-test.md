@@ -1,3 +1,7 @@
+## Shared ego usage acquisition (2431-0847) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `ego_badge_shares_cached_bounded_usage_reader`, `terminal_ego_usage_does_not_require_acp_executable`, and the `session_usage::tests` / `ego_cli::usage::tests` consumers. RED reproduced four CLI reads instead of one on Linux rb; implementation-lane GREEN is not run.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm ego badge text and session details stay correct while switching tabs and polling. Rust does not hot-reload; the daily app was not restarted.
 ## Plans and Stories action placement (2380-23f1)
 
 - [ ] Coordinator critic: run the focused StoriesDialog action regressions, existing dialog/edit/metadata/filter consumers, and i18nKeyCollisions.test.ts. Pre-fix RED reproduced all three defects; local TypeScript passes. No implementation-lane GREEN run is claimed.

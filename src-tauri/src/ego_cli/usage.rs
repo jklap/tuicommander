@@ -194,7 +194,7 @@ pub(crate) async fn read(state: &AppState, terminal: &str) -> Result<EgoUsage, S
             tooltip: None,
         });
     };
-    let report = source.read(state, terminal).await?;
+    let (report, _) = source.read(state, terminal).await?;
     project(&report, &source.ego_session)
 }
 
