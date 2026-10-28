@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
+
 - Show exact-session ego context and cost in the shared status-bar usage slot. Use the live terminal executable, keep unknown values hidden, and show complete spend and subscription API equivalents independently. Read v4 observed context capacity and provider remaining limits, with current-key identity and hover provenance (#2386-6f7c).
 - Show a pulsing **Working…** row in session Chat after Send and while the CLI agent is busy on desktop and mobile, without covering questions or permission prompts (#2397-06b6).
 

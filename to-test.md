@@ -1,3 +1,9 @@
+## Stories across all plans (2358-b0b2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `stories::filter_tests` and `src/__tests__/components/StoriesDialog.filters.test.tsx`, plus `src/__tests__/i18nKeyCollisions.test.ts`. The implementer leaves GREEN to the critic.
+- [ ] Capture an isolated `make agent-test` Kanban with at least two disposable plans. Confirm plan labels, filters, archived-plan scope and a status change from the second plan. No daily app restart is authorized or performed by this change.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, verify All plans uses the new backend action. Rust does not hot-reload.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.

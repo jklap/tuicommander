@@ -186,3 +186,67 @@ it("catches a hand-rolled view switch bypassing the shared form controls", async
 	expect(storiesUi.view()).toBe("kanban");
 	expect(tabs.queryByRole("button")).toBeNull();
 });
+
+it("catches All plans staying selected-plan-only or losing plan ownership after a card action", async () => {
+	const secondPlan = { ...plan, id: "second", title: "Second plan" };
+	const secondStory = { ...ready, id: "second-story", planId: "second", title: "Second feature" };
+	const original = vi.mocked(invoke).getMockImplementation()!;
+	vi.mocked(invoke).mockImplementation(async (command, args) => {
+		const action = (args as { action?: { action: string; plan_id?: string } })?.action;
+		if (action?.action === "list_plans") return { type: "plans", value: [plan, secondPlan] };
+		if (action?.action === "project_story_view")
+			return {
+				type: "project_story_view",
+				value: {
+					stories: [ready, secondStory],
+					visibleStoryIds: [ready.id, secondStory.id],
+					columns: states.map((status) => ({ status, storyIds: status === "ready" ? [ready.id, secondStory.id] : [] })),
+				},
+			};
+		if (action?.action === "transition") return { type: "story", value: secondStory };
+		if ((action?.action === "plan_view" || action?.action === "filtered_plan_view") && action.plan_id === "second")
+			return { ...view([]), value: { ...view([]).value, stories: [secondStory], visibleStoryIds: [secondStory.id] } };
+		return original(command, args);
+	});
+	const ui = render(() => <StoriesDialog project="/filter-test" onClose={() => {}} />);
+	await ui.findByRole("button", { name: /Open feature/ });
+	fireEvent.click(ui.getByRole("button", { name: "All plans" }));
+	const list = within(ui.getByRole("region", { name: "Stories" }));
+	await list.findByRole("button", { name: /Second feature/ });
+	expect(list.getByRole("button", { name: /Open feature/ }).textContent).toContain("Filter plan");
+	expect(list.getByRole("button", { name: /Second feature/ }).textContent).toContain("Second plan");
+	expect(ui.getByRole("button", { name: "New story" })).toBeDisabled();
+	fireEvent.click(ui.getByRole("tab", { name: "Kanban" }));
+	const board = within(ui.getByRole("region", { name: "Kanban" }));
+	fireEvent.click(board.getByRole("button", { name: /Second feature/ }));
+	expect(board.getByRole("button", { name: /Second feature/ }).textContent).toContain("Second plan");
+	const details = within(ui.getByRole("region", { name: "Story details" }));
+	await details.findByText("Open criterion");
+	const dependencies = ui.getByLabelText("Add dependency");
+	expect(within(dependencies).queryByRole("option", { name: "Open feature" })).toBeNull();
+	fireEvent.click(details.getByRole("button", { name: "Start work" }));
+	await waitFor(() =>
+		expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/filter-test",
+			action: { action: "transition", story_id: "second-story", expected_revision: 1, command: "start_manual" },
+		}),
+	);
+	await waitFor(() => expect(ui.getByRole("button", { name: "All plans" })).toHaveAttribute("aria-current", "true"));
+	fireEvent.change(ui.getByLabelText("Status"), { target: { value: "open" } });
+	fireEvent.change(ui.getByLabelText("Story type"), { target: { value: "feature" } });
+	fireEvent.click(ui.getByLabelText("Archived plans"));
+	await waitFor(() =>
+		expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/filter-test",
+			action: {
+				action: "project_story_view",
+				archived_plans: true,
+				filter: { visibility: "open", storyType: "feature", untypedOnly: false },
+			},
+		}),
+	);
+	fireEvent.click(ui.getByLabelText("Archived plans"));
+	await waitFor(() => expect(ui.getByRole("button", { name: "All plans" })).toHaveAttribute("aria-current", "true"));
+	fireEvent.click(ui.getByRole("button", { name: "Second plan" }));
+	await waitFor(() => expect(board.queryByRole("button", { name: /Open feature/ })).toBeNull());
+});
