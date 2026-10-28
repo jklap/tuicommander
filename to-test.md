@@ -1,3 +1,8 @@
+## Quoted Claude tool diagnostics (2429-a18d) — Rust restart required
+
+- [ ] Coordinator critic: run `quoted_tool_auth_output_does_not_latch_api_error`, `claude_friendly_failures_reject_tool_result_rows`, `api_error_2335_final_failures_reject_quoted_prose`, `api_error_2335_inventory_reaches_session_error`, and existing API recovery consumers. Native pre-fix replay reproduced the latched transport error; no post-fix GREEN run was performed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm expanded successful tool diagnostics do not turn the session red, and genuine native failures still do. Rust does not hot-reload; the daily app was not restarted.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
