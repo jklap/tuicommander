@@ -267,7 +267,7 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
     tokio::spawn(async move {
         let outcome = async {
             let (intake, head) =
-                event_publication_prerequisites(DefinitionStore::new(), workspace.clone()).await?;
+                event_publication_prerequisites(DefinitionStore::new, workspace.clone()).await?;
             let api = crate::github_pr_api::RepoApi::resolve(&state, &workspace).await?;
             let bound = format!("{}/{}", api.owner, api.repo);
             super::publish::publish_draft_pr(
@@ -294,11 +294,11 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
 }
 
 async fn event_publication_prerequisites(
-    definitions: DefinitionStore,
+    definitions: impl FnOnce() -> DefinitionStore + Send + 'static,
     workspace: String,
 ) -> Result<(super::model::EventIntake, String), String> {
     tokio::task::spawn_blocking(move || {
-        let intake = definitions.load()?.event_intake;
+        let intake = definitions().load()?.event_intake;
         let head = super::publish::run_git(
             std::path::Path::new(&workspace),
             &["rev-parse", "--abbrev-ref", "HEAD"],

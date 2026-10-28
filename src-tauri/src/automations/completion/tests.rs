@@ -381,7 +381,7 @@ async fn event_publication_does_not_block_runtime_worker() {
     });
     let definitions = DefinitionStore::at_path(dir.path().join("automations.json"));
     let (result, ()) = tokio::join!(
-        event_publication_prerequisites(definitions, workspace),
+        event_publication_prerequisites(move || definitions, workspace),
         async {
             tokio::task::yield_now().await;
             let _ = progress.send(());
@@ -403,15 +403,18 @@ async fn event_publication_prerequisites_preserve_config_and_git_errors() {
     let workspace = dir.path().to_str().unwrap().to_owned();
     std::fs::write(&path, "not JSON").unwrap();
     let expected = DefinitionStore::at_path(path.clone()).load().err().unwrap();
-    let actual =
-        event_publication_prerequisites(DefinitionStore::at_path(path.clone()), workspace.clone())
-            .await
-            .err()
-            .unwrap();
+    let config_path = path.clone();
+    let actual = event_publication_prerequisites(
+        move || DefinitionStore::at_path(config_path),
+        workspace.clone(),
+    )
+    .await
+    .err()
+    .unwrap();
     assert_eq!(actual, expected);
     std::fs::remove_file(&path).unwrap();
     std::fs::write(dir.path().join(".git"), "invalid git directory").unwrap();
-    let error = event_publication_prerequisites(DefinitionStore::at_path(path), workspace)
+    let error = event_publication_prerequisites(move || DefinitionStore::at_path(path), workspace)
         .await
         .err()
         .unwrap();
