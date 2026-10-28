@@ -4740,7 +4740,7 @@ mod tests {
             .with_body(r#"{"protocol_version":0,"build":{"version":"1.8.0","target":"x86_64-unknown-linux-gnu","sha256":"75bb1c7c36ebc0515dc8417fc5c2f07e4c8fcf9886e7d74895ca5085c576ff1b"}}"#)
             .expect(1).create_async().await;
         let state = test_state();
-        let mut connection = RemoteConnection::new_direct("installed", &server.url(), "boss");
+        let mut connection = RemoteConnection::new_direct("installed", server.url(), "boss");
         connection.deploy = DeployMode::Installed;
         let id = connection.id.clone();
         RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
