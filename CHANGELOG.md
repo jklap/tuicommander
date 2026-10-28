@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
 - Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).
 - Keep the Remote Access QR code stable across unchanged status polls, while refreshing it for listener, address and token changes (#2432-edf6).
 
