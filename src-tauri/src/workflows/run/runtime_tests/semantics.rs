@@ -589,12 +589,7 @@ async fn event_workflow_creates_native_story_and_reuses_current_review_and_check
         Some(ReviewAssessment {
             decision: ReviewDecision::Approved,
             artifact_digest: artifact_digest(&commit, &tree),
-            findings: vec![ReviewFinding {
-                criterion_index: 0,
-                severity: ReviewSeverity::Minor,
-                summary: "Interface preserved".into(),
-                evidence: "Compared public exports".into(),
-            }],
+            findings: vec![],
         }),
     );
     let current = drive_turn(&store, &current.id).unwrap();
@@ -622,8 +617,8 @@ async fn event_workflow_creates_native_story_and_reuses_current_review_and_check
     assert_eq!(completed.status, RunStatus::Completed);
     let receipt = crate::automations::event_workflow::review(&automation).unwrap();
     assert_eq!(receipt.commit, commit);
-    assert!(receipt.findings.contains("Interface preserved"));
-    assert!(receipt.findings.contains("Compared public exports"));
+    assert!(receipt.findings.contains("Native current evidence"));
+    assert!(receipt.findings.contains("No review findings."));
     assert!(receipt.findings.contains("reviewer"));
     // Missing checks and self-review fail closed at the publication boundary.
     let mut missing = completed.clone();
