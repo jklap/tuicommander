@@ -1,3 +1,7 @@
+## Quoted Claude tool diagnostics (2429-a18d) — Rust restart required
+
+- [ ] Coordinator critic: run `quoted_tool_auth_output_does_not_latch_api_error`, `claude_friendly_failures_reject_tool_result_rows`, `api_error_2335_final_failures_reject_quoted_prose`, `api_error_2335_inventory_reaches_session_error`, and existing API recovery consumers. Native pre-fix replay reproduced the latched transport error; no post-fix GREEN run was performed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm expanded successful tool diagnostics do not turn the session red, and genuine native failures still do. Rust does not hot-reload; the daily app was not restarted.
 ## Managed delegation instructions (2441-bbcf) — Rust restart required
 
 - [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
