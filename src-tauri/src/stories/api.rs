@@ -61,8 +61,17 @@ pub enum StoryAction {
         plan_id: String,
         filter: super::StoryFilter,
     },
+    /// Read stories across the project's active (or archived-only) plans, with shared filters.
+    ProjectStoryView {
+        #[serde(default)]
+        archived_plans: bool,
+        filter: super::StoryFilter,
+    },
     CreateStory {
         input: NewStory,
+        /// Optional reviewed problem statement, persisted atomically with the story.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<String>,
     },
     /// Amend an unclaimed backlog/ready story atomically at its current revision.
     UpdateStory {
@@ -165,6 +174,7 @@ pub enum StoryReply {
     PlanSources(Vec<PlanSource>),
     PlanState(PlanState),
     PlanView(PlanView),
+    ProjectStoryView(super::ProjectStoryView),
     Summary(StorySummary),
     Story(Story),
     Transitions(Vec<StoryTransition>),
@@ -293,6 +303,14 @@ fn story_action_with_source(
                 store.filtered_plan_view(&plan_id, &filter)?,
             ))
         }
+        StoryAction::ProjectStoryView {
+            archived_plans,
+            filter,
+        } => Ok(StoryReply::ProjectStoryView(store.project_story_view(
+            &project,
+            archived_plans,
+            &filter,
+        )?)),
         StoryAction::PlanView { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanView(store.plan_view(&plan_id)?))
@@ -321,9 +339,11 @@ fn story_action_with_source(
             }
             Ok(StoryReply::Summary(summary))
         }
-        StoryAction::CreateStory { input } => {
+        StoryAction::CreateStory { input, problem } => {
             plan_in_project(&input.plan_id)?;
-            Ok(StoryReply::Story(store.create_story(input)?))
+            Ok(StoryReply::Story(
+                store.create_story_with_problem(input, problem)?,
+            ))
         }
         StoryAction::UpdateStory {
             story_id,
@@ -1071,6 +1091,7 @@ mod tests {
         let StoryReply::Story(story) = story_action(
             first_path,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),
@@ -1121,6 +1142,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plan.id.clone(),
@@ -1565,6 +1587,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plans[0].id.clone(),
@@ -1613,6 +1636,7 @@ mod tests {
             story_action(
                 project,
                 StoryAction::CreateStory {
+                    problem: None,
                     input: NewStory {
                         story_type: None,
                         plan_id: done_plan.id,
@@ -1865,6 +1889,7 @@ mod tests {
         let StoryReply::Story(mut story) = story_action(
             project,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),

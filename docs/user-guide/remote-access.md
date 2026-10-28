@@ -195,7 +195,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
    display. A 404 means no subscription; `stale_removed` after HTTP 410 means
    the phone must re-subscribe. A 503 means push is disabled or the VAPID key is
    unavailable. Confirm the notification actually appears on the phone.
-4. Have a managed agent report `progress type=blocked` with its question.
+4. If the agent was spawned by another agent, turn off **Settings → Notifications → Silence subagent sounds and notifications** on the host for this delivery check. This setting also controls mobile sounds and session Web Push; it defaults on. Have a managed agent report `progress type=blocked` with its question.
    After the desktop is unfocused, or the Mac has had no HID input for two
    minutes, the phone notification contains the question and opens that
    session. Type one answer and tap Send. The PWA waits for the same submission
@@ -913,7 +913,7 @@ TLS listener rather than the presence of certificate configuration.
 
 **Beta** — the core HTTP/WebSocket API is stable, but the standalone daemon is new and may have rough edges. Report issues on GitHub.
 
-Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. This refusal stops automatic connection retries and removes the retry delay. Use a name trusted by the daemon, or correct the daemon configuration, then press **Connect** to try again. The cause remains visible until that attempt. Unchanged failure states produce no additional warnings. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Retryable failures show the automatic retry delay; active attempts clear the previous failure.
 
 ## Troubleshooting
 

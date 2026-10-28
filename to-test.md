@@ -5,6 +5,63 @@
 - [ ] Coordinator critic: run `headless_credential_file_selector_is_accepted`, `credential_file_is_fail_closed_read_once_and_process_local`, `headless_credential_file_boots_without_a_session_bus` and `headless_credential_file_rejects_bad_input_without_secret_diagnostics`. The CLI regression failed on pre-fix Linux rb; no implementation-lane GREEN is claimed.
 - [ ] After rebuilding the headless binary, launch a disposable named instance with `--credential-file` and a read-only seed on unprivileged Linux without a session bus. Authenticate with the seeded token, replace the file, confirm the old token remains active until restart, then confirm the replacement token works. Rust does not hot-reload. The daily app was not restarted; desktop defaults are unchanged.
 
+## Remote Untrusted Host retry (2438-4c2f) — Rust restart required
+
+- [x] Live mac-mint probes reproduce HTTP 403 for the full MagicDNS name and HTTP 200 for its IP and short hostname. The pre-fix rb regression received three health requests instead of one. Evidence: `src-tauri/src/fixtures/remote/untrusted-host.md` and `~/Gits/.tmp/results/tuic-2438-evidence/red.log`.
+- [ ] Coordinator: run `untrusted_host_refusal`, `other_http_failures_keep_automatic_requests`, and `repeated_remote_failure_logs_only_when_the_cause_changes` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm the remote host card retains the rejected-name cause without a retry countdown and explicit Connect makes another attempt. The daily app and mac-mint daemon were not restarted or changed. Rust does not hot-reload.
+
+## Mobile subagent notification policy (2342-4a1c) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `subagent_push_does_not_lose_parentage_during_exit_teardown`, existing question/completion push-window tests, and `src/mobile/__tests__/useMobileNotifications.test.ts` against the final commit. Pre-fix RED reproduced the child push-budget reservation after teardown and both mobile sound bypasses; implementation-lane GREEN is not claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), check real-phone audio/Web Push with subagent silence on and off. Parented sessions follow the host setting, user-started sessions remain audible, and muted transitions do not replay. Real hardware delivery remains unverified; the daily app was not restarted.
+
+## Story drafts from requests (2357-a8f2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run the focused AI draft UI, Rust story_draft and one_shot_cancel tests, existing one-shot cleanup tests, native stories creation/amendment consumers, transport parity and i18n collisions on the final commit. The implementer ran feature RED only; no GREEN application run is claimed.
+- [ ] Capture isolated agent-test screenshots before Fill, during Fill and after Fill; exercise configured ego success, malformed/error reply, cancellation during initialization and an active turn. No daily app restart was performed. Rust changes require an authorized manual `make dev` restart or `make build` to load.
+## Stories across all plans (2358-b0b2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `stories::filter_tests` and `src/__tests__/components/StoriesDialog.filters.test.tsx`, plus `src/__tests__/i18nKeyCollisions.test.ts`. The implementer leaves GREEN to the critic.
+- [ ] Capture an isolated `make agent-test` Kanban with at least two disposable plans. Confirm plan labels, filters, archived-plan scope and a status change from the second plan. No daily app restart is authorized or performed by this change.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, verify All plans uses the new backend action. Rust does not hot-reload.
+## Shared ego usage acquisition (2431-0847) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `ego_badge_shares_cached_bounded_usage_reader`, `terminal_ego_usage_does_not_require_acp_executable`, and the `session_usage::tests` / `ego_cli::usage::tests` consumers. RED reproduced four CLI reads instead of one on Linux rb; implementation-lane GREEN is not run.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm ego badge text and session details stay correct while switching tabs and polling. Rust does not hot-reload; the daily app was not restarted.
+## Plans and Stories action placement (2380-23f1)
+
+- [ ] Coordinator critic: run the focused StoriesDialog action regressions, existing dialog/edit/metadata/filter consumers, and i18nKeyCollisions.test.ts. Pre-fix RED reproduced all three defects; local TypeScript passes. No implementation-lane GREEN run is claimed.
+- [ ] Capture New story, story detail and Edit plan at 1400, 700 and 390 pixels. Isolated worktree fixture attempts returned no DOM or screenshot with both installed Chrome for Testing builds; the harness reported `Capture not ready`. No screenshot or visual pass is claimed. Logs: `~/Gits/.tmp/tuic-2380-capture-retry.log`.
+
+## Event-run publication prerequisites (2428-cd8d) — Rust restart required
+
+- [ ] Coordinator critic: run `event_publication_does_not_block_runtime_worker`, `event_publication_prerequisites_preserve_config_and_git_errors`, and existing `automations::publish::tests` on the final commit. Pre-fix RED reproduced a blocked independent async task on Linux rb; no post-fix GREEN is claimed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm completed allowlisted event runs still open draft PRs and report prerequisite failures. Rust does not hot-reload; this peer did not restart the daily app or write to GitHub.
+## Quoted Claude tool diagnostics (2429-a18d) — Rust restart required
+
+- [ ] Coordinator critic: run `quoted_tool_auth_output_does_not_latch_api_error`, `claude_friendly_failures_reject_tool_result_rows`, `api_error_2335_final_failures_reject_quoted_prose`, `api_error_2335_inventory_reaches_session_error`, and existing API recovery consumers. Native pre-fix replay reproduced the latched transport error; no post-fix GREEN run was performed.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm expanded successful tool diagnostics do not turn the session red, and genuine native failures still do. Rust does not hot-reload; the daily app was not restarted.
+## Managed delegation instructions (2441-bbcf) — Rust restart required
+
+- [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, launch a fresh agent and inspect Git and worktrees for the managed-delegation sentence and CC-only exception. Confirm MCP only carries the delegation fallback for clients without a launch channel. Existing module off switches and child scope stay in effect. The daily app was not restarted; Rust does not hot-reload.
+## Worktree archive-pool cache (2424-e871) — Rust restart required
+
+- [ ] Coordinator critic: run `cached_worktree_inventory_does_not_reload_archive_pool`, `cached_worktree_inventory_tracks_storage_changes`, and existing `discovery_2157` / `discovery_2156` inventory consumers on the final commit. RED reproduced three pool resolutions instead of one for both cache-entry orders on Linux rb; no post-fix GREEN run is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, change global and per-repository worktree storage settings with disposable checkouts. Confirm archive-pool rows refresh and repeated inventory reads remain cached. Rust does not hot-reload; the daily app was not restarted.
+## Claude mobile 429 backoff (2430-4049) — Rust restart required
+
+- [ ] Coordinator critic: run `mobile_quota_429_sets_shared_profile_backoff`, `mobile_quota_non_429_and_timeout_do_not_set_backoff`, `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` on the final commit. Native macOS and Linux rb RED reproduced repeated credential IO after 429; post-fix GREEN belongs to integration.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm mobile quota refresh during a Claude 429 retains stale quota or reports unavailable without repeated GETs for the same profile. Other account profiles remain usable. Rust does not hot-reload; the daily app was not restarted.
+## Archived prerequisite retention (2426-821e) — Rust restart required
+
+- [ ] Coordinator critic: run `archiving_unresolved_prerequisite_does_not_hide_blocker`, the `archive_prerequisite_` regressions, and existing archive/dependency consumers on the final commit. The implementation lane reproduced RED on Linux rb; no post-fix GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm Archive story refuses an unresolved prerequisite with open dependents and shows their IDs. Confirm Done prerequisites can still be archived, and adding an archived unresolved dependency asks for restoration. Rust does not hot-reload; the daily app was not restarted.
+## ACP launch environment (2320-f493) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `story2320_connection_env` plus ACP launch/reuse consumers and the focused client/transport tests. The implementer recorded pre-implementation RED; no post-implementation Rust GREEN is claimed.
+- [ ] After an authorized rebuild and restart, connect with disposable environment overrides, confirm only that child receives them, and confirm env-bearing live-peer reuse asks for disconnect first. Reconnect must drop overrides. Rust does not hot-reload; the daily app was not restarted.
 ## MDKB hook telemetry state (2442-61f6)
 
 - [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.
@@ -3159,4 +3216,16 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
 
+- [ ] After the next Rust rebuild/restart, check that normal MCP reconnects log stale peer-binding recovery at info, while rejected live takeovers remain warnings (#2439-027f). The running backend does not hot-reload.
+## Native story mdkb search (#2333-b498)
+
+- [ ] After rebuilding/restarting the Rust backend when convenient, use an isolated
+  `make agent-test AGENT_TEST_INSTANCE=agent-test-2333` instance and a scratch
+  project admitted by mdkb. Create, amend, add a note, check and close a native
+  story; `mdkb search "criterion phrase" --root <scratch-project>` must find its
+  read-only record. Stop/restart only the scratch mdkb daemon and confirm changes
+  made while it is down become searchable after reconnect. Check that no story
+  file or `.tuic/stories` directory appears. Automated isolated-daemon coverage:
+  `ingest_closed_story_is_findable_in_real_mdkb_without_a_story_file` (requires
+  installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_

@@ -27,6 +27,9 @@
 /acp/connections/x/sessions/x/resume
 /acp/connections/x/sessions/x/resume-turn
 /acp/one-shot
+/acp/one-shot/prepare
+/acp/one-shot/x/cancel
+/acp/story-draft
 /acp/workspace
 /agent/claude-project-dir
 /agent/discover-session
