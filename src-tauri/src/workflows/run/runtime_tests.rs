@@ -238,6 +238,260 @@ async fn manual_only_workflow_pauses_before_implementer_spawn() {
     assert_eq!(paused.stories[0].worktree_path, None);
     assert_eq!(store.replay(&run.id).unwrap(), paused);
     assert!(result.unwrap());
+    let graph = &paused.graph_executions[0];
+    store
+        .command(
+            &run.id,
+            "resume-pending-qa",
+            RunCommand::ResumeGraph {
+                execution_id: graph.id.clone(),
+                activation_id: graph.activations.last().unwrap().id.clone(),
+                resolution: "QA is still pending".into(),
+            },
+        )
+        .unwrap();
+    let current = drive_turn(&store, &run.id).unwrap();
+    assert!(
+        runtime::effects::drive_effect(&state(config.path()), &store, &current)
+            .await
+            .unwrap()
+    );
+    let paused_again = store.snapshot(&run.id).unwrap();
+    assert_eq!(paused_again.status, RunStatus::Paused);
+    assert!(paused_again.effects.is_empty());
+    assert_eq!(paused_again.attempts, paused.attempts);
+    assert_eq!(store.replay(&run.id).unwrap(), paused_again);
+}
+
+/// Catches: Done stories falling through to an implementer spawn after manual QA approval.
+#[tokio::test]
+async fn resume_after_manual_qa_approval_does_not_respawn_done_story() {
+    for restart_before_resume in [false, true] {
+        let (config, project, _plan, story_id, _template, _guard) = fixture();
+        let stories = StoryStore::open().unwrap();
+        let story = stories.get_story(&story_id).unwrap();
+        stories
+            .transition(
+                &story.id,
+                story.revision,
+                crate::stories::StoryCommand::SetCriterionManual {
+                    index: 0,
+                    manual: true,
+                },
+            )
+            .unwrap();
+        let base = crate::config::load_agents_config();
+        let mut agents = base.clone();
+        for settings in agents.agents.values_mut() {
+            settings.run_configs.clear();
+        }
+        crate::config::save_agents_config(base, agents).unwrap();
+        let published = definition(project.path().to_str().unwrap(), false, true);
+        let path = config.path().join("workflow_runs.sqlite3");
+        let store = RunStore::open_at(&path).unwrap();
+        let run = store
+            .start_graph_run(&request(
+                project.path().to_str().unwrap(),
+                &story_id,
+                &published,
+                "approved-manual-qa",
+            ))
+            .unwrap();
+        let app = state(config.path());
+        let current = drive_turn(&store, &run.id).unwrap();
+        assert!(
+            runtime::effects::drive_effect(&app, &store, &current)
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.snapshot(&run.id).unwrap().status, RunStatus::Paused);
+        for command in [
+            crate::stories::StoryCommand::CheckCriterion(0),
+            crate::stories::StoryCommand::Approve,
+        ] {
+            let story = stories.get_story(&story_id).unwrap();
+            stories
+                .transition(&story_id, story.revision, command)
+                .unwrap();
+        }
+        let approved = stories.get_story(&story_id).unwrap();
+        assert_eq!(approved.status, crate::stories::StoryStatus::Done);
+        if restart_before_resume {
+            let recovered = RuntimeOwner::acquire(&path).unwrap();
+            assert_eq!(
+                recovered.store.snapshot(&run.id).unwrap().attempts[0].state,
+                AttemptState::Interrupted
+            );
+            drop(recovered);
+        }
+        let paused = store.snapshot(&run.id).unwrap();
+        let graph = &paused.graph_executions[0];
+        let activation = graph.activations.last().unwrap();
+        store
+            .command(
+                &run.id,
+                "resume-approved-qa",
+                RunCommand::ResumeGraph {
+                    execution_id: graph.id.clone(),
+                    activation_id: activation.id.clone(),
+                    resolution: "Manual QA approved the durable story".into(),
+                },
+            )
+            .unwrap();
+        let resumed = store.snapshot(&run.id).unwrap();
+        let public_error = run_action(
+            project.path().to_str().unwrap(),
+            RunAction::Command {
+                run_id: run.id.clone(),
+                command_id: "caller-cannot-accept-unspawned".into(),
+                expected_sequence: resumed.sequence,
+                command: Box::new(RunCommand::AcceptUnspawnedStory {
+                    attempt_id: resumed.attempts[0].id.clone(),
+                }),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            public_error.contains("internal backend service"),
+            "{public_error}"
+        );
+        let current = if restart_before_resume {
+            drive_turn(&store, &run.id).unwrap()
+        } else {
+            // Also cover approval arriving between the deterministic turn and its effect.
+            store.snapshot(&run.id).unwrap()
+        };
+        let effect = runtime::effects::drive_effect(&app, &store, &current).await;
+        assert!(
+            effect.is_ok(),
+            "Done story reached agent launch: {effect:?}"
+        );
+        let settled = drive_turn(&store, &run.id).unwrap();
+        assert!(settled.graph_executions[0].completed);
+        assert_eq!(settled.attempts.len(), 1);
+        assert_ne!(settled.attempts[0].state, AttemptState::Running);
+        assert!(settled.attempts[0].agent.is_none());
+        assert!(settled.effects.is_empty());
+        assert_eq!(settled.spawns, 0);
+        assert!(settled.stories[0].accepted);
+        assert_eq!(
+            settled.stories[0].accepted_revision,
+            Some(approved.revision)
+        );
+        assert!(settled.stories[0].worktree_path.is_none());
+        assert_eq!(store.replay(&run.id).unwrap(), settled);
+        drop(store);
+        let restarted = RuntimeOwner::acquire(&path).unwrap();
+        assert_eq!(
+            restarted.store.snapshot(&run.id).unwrap().attempts,
+            settled.attempts
+        );
+        assert_eq!(
+            restarted.store.snapshot(&run.id).unwrap().effects,
+            settled.effects
+        );
+    }
+}
+
+/// Catches: a story blocked or cancelled after attempt creation still launching an implementer.
+#[tokio::test]
+async fn nonstartable_story_pauses_before_implementer_spawn() {
+    for command in [
+        crate::stories::StoryCommand::Block,
+        crate::stories::StoryCommand::WontFix,
+    ] {
+        let (config, project, _plan, story_id, _template, _guard) = fixture();
+        let published = definition(project.path().to_str().unwrap(), false, true);
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_graph_run(&request(
+                project.path().to_str().unwrap(),
+                &story_id,
+                &published,
+                "nonstartable",
+            ))
+            .unwrap();
+        let current = drive_turn(&store, &run.id).unwrap();
+        let stories = StoryStore::open().unwrap();
+        let story = stories.get_story(&story_id).unwrap();
+        let stopped = stories
+            .transition(&story_id, story.revision, command)
+            .unwrap();
+        assert!(
+            runtime::effects::drive_effect(&state(config.path()), &store, &current)
+                .await
+                .unwrap()
+        );
+        let paused = store.snapshot(&run.id).unwrap();
+        assert_eq!(paused.status, RunStatus::Paused);
+        assert!(
+            paused
+                .pause_cause
+                .as_ref()
+                .unwrap()
+                .contains(&format!("{:?}", stopped.status))
+        );
+        assert!(paused.effects.is_empty());
+        assert!(paused.attempts[0].agent.is_none());
+        assert!(!paused.stories[0].accepted);
+        assert_eq!(stories.get_story(&story_id).unwrap(), stopped);
+        assert_eq!(store.replay(&run.id).unwrap(), paused);
+    }
+}
+
+/// Catches: native completion recovery suppressing legitimate Ready or Review implementation starts.
+#[test]
+fn ready_and_review_stories_still_begin_implementation() {
+    for review in [false, true] {
+        let (config, project, _plan, story_id, _template, _guard) = fixture();
+        let stories = StoryStore::open().unwrap();
+        if review {
+            for command in [
+                crate::stories::StoryCommand::StartManual,
+                crate::stories::StoryCommand::CheckCriterion(0),
+                crate::stories::StoryCommand::SubmitReview,
+            ] {
+                let story = stories.get_story(&story_id).unwrap();
+                stories
+                    .transition(&story_id, story.revision, command)
+                    .unwrap();
+            }
+        }
+        let published = definition(project.path().to_str().unwrap(), false, true);
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_graph_run(&request(
+                project.path().to_str().unwrap(),
+                &story_id,
+                &published,
+                "start-development",
+            ))
+            .unwrap();
+        let current = drive_turn(&store, &run.id).unwrap();
+        assert_eq!(
+            store
+                .begin_graph_story(&current, &story_id, "workflow:test-start")
+                .unwrap(),
+            crate::stories::StoryStatus::InProgress
+        );
+        assert_eq!(
+            stories.get_story(&story_id).unwrap().status,
+            crate::stories::StoryStatus::InProgress
+        );
+        assert_eq!(current.attempts[0].state, AttemptState::Running);
+        assert!(!current.stories[0].accepted);
+        assert!(
+            store
+                .command(
+                    &run.id,
+                    "not-approved",
+                    RunCommand::AcceptUnspawnedStory {
+                        attempt_id: current.attempts[0].id.clone()
+                    }
+                )
+                .is_err()
+        );
+    }
 }
 
 /// Catches: a story-root run fencing unrelated siblings as if it owned the whole plan.

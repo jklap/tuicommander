@@ -1,3 +1,8 @@
+## Workflow resume after manual QA (2416-52e8) — Rust restart required
+
+- [ ] Coordinator critic: run the focused workflow runtime regressions for approved QA, pending QA, blocked/cancelled stories, Ready/Review starts and restart recovery. The implementation lane ran only the pre-fix RED test on rb; no GREEN result is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, resume an all-manual story after QA approval. Confirm the run records native approval and does not create an implementer or worktree. Later graph checks retain their existing requirements. The running daily app was not restarted; Rust does not hot-reload.
+
 ## Compact Compose shortcut hints (2411-c7c9)
 
 - [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
