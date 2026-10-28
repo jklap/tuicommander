@@ -603,7 +603,9 @@ GitHub applies assigned, created and mentioned client predicates with the resolv
 
 The automation runtime can subscribe to registered github.com repositories through
 its separate `pull_request_reviews` allowlist. It consumes the shared poller's PR
-snapshots and requests resync after bus lag. The ACP one-shot review reads the
+snapshots only from the single registered polling path selected for each
+repository. Snapshots from sibling checkouts cannot roll back the admitted head;
+after bus lag it waits for the selected path to resync. The ACP one-shot review reads the
 GitHub comparison of immutable base/head SHAs. Host-owned publication revalidates
 eligibility and uses a durable claim plus `COMMENT` and an explicit `commit_id`.
 It never sends the manual review panel's diff hash as a commit. Unknown POST

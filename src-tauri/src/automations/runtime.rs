@@ -159,6 +159,7 @@ impl AutomationRuntime {
                         (Vec::new(), false)
                     }
                 };
+                let review_paths = paths.clone();
                 let resync = changed && !paths.is_empty();
                 if let Err(error) = crate::github_poller::set_intake_paths(&state, paths) {
                     tracing::error!(source="automations", %error, "Event intake configuration error");
@@ -195,7 +196,12 @@ impl AutomationRuntime {
                     }
                     if intake_wake {
                         match blocking.definitions.load().and_then(|config| {
-                            review_snapshot.admit(&blocking.runs, &config, now.timestamp_millis())
+                            review_snapshot.admit(
+                                &blocking.runs,
+                                &config,
+                                &review_paths,
+                                now.timestamp_millis(),
+                            )
                         }) {
                             Ok(admitted) => runs.extend(admitted),
                             Err(error) => errors.push(error),

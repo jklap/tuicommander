@@ -252,7 +252,9 @@ fn review_snapshot_requires_its_own_allowlist_and_drops_lost_updates() {
     let mut snapshot = ReviewSnapshot::default();
     snapshot.replace("/registered-repo".into(), vec![pr]);
     assert_eq!(
-        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        snapshot
+            .admit(owner.store(), &config, &["/registered-repo".into()], now())
+            .unwrap(),
         Vec::<AutomationRun>::new()
     );
     config.pull_request_reviews = PullRequestReviews {
@@ -260,20 +262,28 @@ fn review_snapshot_requires_its_own_allowlist_and_drops_lost_updates() {
         definition_id: "review".into(),
     };
     assert_eq!(
-        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        snapshot
+            .admit(owner.store(), &config, &["/registered-repo".into()], now())
+            .unwrap(),
         Vec::<AutomationRun>::new()
     );
     config.pull_request_reviews.repositories = vec!["CLI/CLI".into()];
-    let runs = snapshot.admit(owner.store(), &config, now()).unwrap();
+    let runs = snapshot
+        .admit(owner.store(), &config, &["/registered-repo".into()], now())
+        .unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].definition.repository, "/registered-repo");
     assert_eq!(
-        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        snapshot
+            .admit(owner.store(), &config, &["/registered-repo".into()], now())
+            .unwrap(),
         Vec::<AutomationRun>::new()
     );
     snapshot.lost_updates();
     assert_eq!(
-        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        snapshot
+            .admit(owner.store(), &config, &["/registered-repo".into()], now())
+            .unwrap(),
         Vec::<AutomationRun>::new()
     );
 }
@@ -456,7 +466,7 @@ async fn stale_registered_checkout_cannot_strand_current_head_review() {
     let mut snapshot = ReviewSnapshot::default();
     snapshot.replace(paths[0].clone(), vec![status(old_head)]);
     let old = snapshot
-        .admit(owner.store(), &config, now())
+        .admit(owner.store(), &config, &paths[..1], now())
         .unwrap()
         .remove(0);
     owner
@@ -465,14 +475,24 @@ async fn stale_registered_checkout_cannot_strand_current_head_review() {
         .unwrap();
     snapshot.replace(paths[0].clone(), vec![status(&latest)]);
     let current = snapshot
-        .admit(owner.store(), &config, now())
+        .admit(owner.store(), &config, &paths[..1], now())
         .unwrap()
         .remove(0);
+    // Retained mixed snapshots must not depend on HashMap iteration order.
+    snapshot.replace(paths[1].clone(), vec![status(old_head)]);
+    assert_eq!(
+        snapshot
+            .admit(owner.store(), &config, &paths[..1], now())
+            .unwrap(),
+        Vec::<AutomationRun>::new()
+    );
     // After bus lag, the sibling's retained old head may arrive before the canonical resync.
     snapshot.lost_updates();
     snapshot.replace(paths[1].clone(), vec![status(old_head)]);
     assert_eq!(
-        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        snapshot
+            .admit(owner.store(), &config, &paths[..1], now())
+            .unwrap(),
         Vec::<AutomationRun>::new()
     );
     let effects = Effects::default();

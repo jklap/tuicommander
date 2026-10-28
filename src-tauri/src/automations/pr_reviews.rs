@@ -27,6 +27,7 @@ impl ReviewSnapshot {
         &self,
         store: &RunStore,
         config: &AutomationsConfig,
+        authoritative_paths: &[String],
         now: i64,
     ) -> Result<Vec<AutomationRun>, String> {
         let intake = &config.pull_request_reviews;
@@ -38,7 +39,12 @@ impl ReviewSnapshot {
             return Ok(Vec::new());
         };
         let mut admitted = Vec::new();
+        // Sibling checkouts may retain older heads. Only the poller's selected
+        // registered path may update durable repository/PR publication authority.
         for (path, statuses) in &self.0 {
+            if !authoritative_paths.contains(path) {
+                continue;
+            }
             let mut definition = definition.clone();
             definition.repository = path.clone();
             for pr in statuses {
