@@ -2078,22 +2078,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		},
 	},
 	detect_installed_ides: { map: () => ({ method: "GET", path: "/agents/ides" }) },
-	// Settings → Agents only (the consent prompt itself answers through
-	// agent_wrap_prompt_response, which mobile renders too).
-	get_agent_wrap_user_function: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/config/agents/${p("agentType")}/wrap-user-function`,
-			transform: (data) => (data as { value: boolean | null }).value,
-		}),
-	},
-	set_agent_wrap_user_function: {
-		map: (args, p) => ({
-			method: "PUT",
-			path: `/config/agents/${p("agentType")}/wrap-user-function`,
-			body: { value: args.value },
-		}),
-	},
 
 	// --- Watchers ---
 	start_repo_watcher: {
