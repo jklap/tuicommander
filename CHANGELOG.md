@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep event-run draft PR configuration and git reads off async runtime workers, so slow publication prerequisites do not block unrelated async work (#2428-cd8d).
 - Do not turn successful Claude tool-result auth or transport diagnostics into sticky agent API-error badges (#2429-a18d).
 - Tell agents to use TUIC managed peers for delegation or parallel work through the launch playbook, with an MCP fallback and the existing Claude Code isolated-task exception (#2441-bbcf).
 - Refuse archival of unresolved story prerequisites with open dependents, and require restoring archived unresolved work before adding a dependency to it (#2426-821e).
