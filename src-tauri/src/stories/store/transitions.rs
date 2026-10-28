@@ -100,6 +100,7 @@ impl StoryStore {
                 story.status.as_str()
             ));
         }
+        require_actionable_dependency(&dependency)?;
         if story.dependencies.iter().any(|id| id == dependency_id) {
             return Err(format!(
                 "dependency already exists: {dependency_id} is already a dependency of {story_id}"
@@ -369,7 +370,7 @@ impl StoryStore {
                         | StoryStatus::Qa
                 ) {
                     return Err(format!(
-                        "story can be blocked only from ready, in_progress or review (status: {})",
+                        "story can be blocked only from ready, in_progress, review or qa (status: {})",
                         story.status.as_str()
                     ));
                 }
