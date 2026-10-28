@@ -194,6 +194,10 @@ mod tests {
                     ..Default::default()
                 },
             );
+            state.session_maps.shell_states.insert(
+                "idle".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+            );
             state.config.write().prevent_sleep_when_busy = true;
             Self(state)
         }
