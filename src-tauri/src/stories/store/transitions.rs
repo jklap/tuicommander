@@ -369,7 +369,7 @@ impl StoryStore {
                         | StoryStatus::Qa
                 ) {
                     return Err(format!(
-                        "story can be blocked only from ready, in_progress or review (status: {})",
+                        "story can be blocked only from ready, in_progress, review or qa (status: {})",
                         story.status.as_str()
                     ));
                 }
