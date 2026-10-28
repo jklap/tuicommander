@@ -66,7 +66,8 @@ jobs:
             --latest=false
 
   build:
-    timeout-minutes: 90
+    # Leave 15 minutes outside the macOS build step for setup and post actions.
+    timeout-minutes: ${{ matrix.platform == 'macos-latest' && 105 || 90 }}
     needs: cleanup
     permissions:
       contents: write
@@ -215,7 +216,9 @@ jobs:
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
-        timeout-minutes: 60
+        # Run 40706484667 exhausted 60m with no Cargo cache (863 Rust misses).
+        # Allow 50% more for cold macOS builds; see docs/guides/ci.md.
+        timeout-minutes: ${{ matrix.platform == 'macos-latest' && 90 || 60 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # sccache
