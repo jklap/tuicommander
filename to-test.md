@@ -2,6 +2,11 @@
 
 - [ ] Coordinator critic: run `launch_playbook_prevents_invisible_native_subagents`, `instructions_prevent_invisible_native_subagents_for_every_client`, `launch_capable_clients_receive_no_duplicate_playbook` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Corrected pre-fix RED reproduced the missing launch rule and duplicated MCP duty on Linux rb; no implementation-lane GREEN is claimed.
 - [ ] After an authorized `make dev` restart or `make build`, launch a fresh agent and inspect Git and worktrees for the managed-delegation sentence and CC-only exception. Confirm MCP only carries the delegation fallback for clients without a launch channel. Existing module off switches and child scope stay in effect. The daily app was not restarted; Rust does not hot-reload.
+## Development backend command mismatch (2409-aa48)
+
+- [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
+
+- [ ] Coordinator critic: run `dev_missing_command_explains_backend_frontend_mismatch_without_retry`, `src/__tests__/invoke.test.ts`, and the existing backend-skew startup/HMR tests. The implementation lane reproduced the pre-fix raw command error and Retry; post-fix GREEN belongs to integration. TypeScript passes locally. No Rust changes or daily-app restart.
 
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
