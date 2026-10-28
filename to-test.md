@@ -1,3 +1,9 @@
+## Empty branch reflog recovery (2437-b45b) — Rust restart required
+
+- [x] The pre-fix `empty_branch_reflog_does_not_abort_repository_merge_listing` regression fails on Linux rb with `branch creation is absent from reflog`. Log: `~/Gits/.tmp/results/tuic-2437-red.log`.
+- [ ] Coordinator critic: run the empty/missing reflog regressions and existing populated-history classification tests on the final commit. No implementation-lane GREEN run was performed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm the affected repository structure loads without repeated empty-reflog warnings. Rust does not hot-reload; the daily app was not restarted.
+
 ## Orchestrator mail wake budget (2418-fd33) — Rust restart required
 
 - [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.

@@ -1003,9 +1003,11 @@ fn classify_branch_merge(
         .map_err(|error| format!("could not inspect branch history: {error}"))?
         .stdout;
     let mut entries = reflog.lines().collect::<Vec<_>>();
-    let creation = entries
-        .pop()
-        .ok_or("branch creation is absent from reflog")?;
+    // Reflogs can expire or be disabled. Without origin history, neither an
+    // untouched branch nor completed work can be inferred from ancestry alone.
+    let Some(creation) = entries.pop() else {
+        return Ok((WorkspaceCommitStatus::Unknown, None));
+    };
     let (_, creation_message) = creation
         .split_once('\t')
         .ok_or("branch creation has no reflog message")?;
@@ -11515,6 +11517,74 @@ branch refs/heads/feat
         let after = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(after.commit_status, WorkspaceCommitStatus::Merged);
         assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
+    }
+
+    // Catches: one expired branch reflog aborts the repository's merged-branch
+    // listing, hiding unrelated branches on every structure refresh.
+    #[test]
+    fn empty_branch_reflog_does_not_abort_repository_merge_listing() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_worktree(&repo, "expired");
+        let completed = add_worktree(&repo, "completed");
+        commit_file(&completed, "completed.txt", "integrated work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "completed"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "later.txt", "advance default\n");
+        git_cmd(&repo)
+            .args(["reflog", "expire", "--expire=all", "refs/heads/expired"])
+            .run()
+            .unwrap();
+        assert!(
+            git_cmd(&repo)
+                .args(["reflog", "show", "refs/heads/expired"])
+                .run()
+                .unwrap()
+                .stdout
+                .is_empty()
+        );
+
+        for _ in 0..2 {
+            let merged = crate::git::get_merged_branches_impl(&repo)
+                .expect("an expired branch history must not fail repository structure");
+            assert_eq!(merged, vec!["completed"]);
+            let integration = branch_integration_with_pr(&repo, "expired", |_, _, _| false)
+                .expect("branch still exists");
+            assert_eq!(integration.commit_status, WorkspaceCommitStatus::Unknown);
+            assert!(!integration.integrated);
+            assert!(integration.proof.is_none());
+            assert!(integration.error.is_none());
+        }
+    }
+
+    // Catches: treating absent origin history as an untouched or merged branch
+    // authorizes deletion, including a branch at exactly the default tip.
+    #[test]
+    fn missing_branch_reflog_never_proves_safe_deletion() {
+        for advance_default in [false, true] {
+            let (_temp, repo, _) = workspace_fixture();
+            git_cmd(&repo).args(["branch", "no-history"]).run().unwrap();
+            git_cmd(&repo)
+                .args(["reflog", "expire", "--expire=all", "refs/heads/no-history"])
+                .run()
+                .unwrap();
+            fs::remove_file(repo.join(".git/logs/refs/heads/no-history")).unwrap();
+            if advance_default {
+                commit_file(&repo, "later.txt", "advance default\n");
+            }
+
+            let integration =
+                branch_integration_with_pr(&repo, "no-history", |_, _, _| false).unwrap();
+            assert_eq!(integration.commit_status, WorkspaceCommitStatus::Unknown);
+            assert!(integration.error.is_none());
+            assert!(!integration.integrated);
+            assert!(integration.proof.is_none());
+            let error =
+                delete_integrated_local_branch(&repo.to_string_lossy(), "no-history").unwrap_err();
+            assert!(error.contains("Cannot verify merged commits"), "{error}");
+            assert!(rev_at(&repo, "refs/heads/no-history").is_ok());
+        }
     }
 
     /// A branch sitting exactly on the default branch's tip never merged

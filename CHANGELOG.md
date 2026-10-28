@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep repository structure available when a branch reflog is empty or absent; classify that branch as unknown without repeated refresh errors (#2437-b45b).
 - Stop stable idle timer ticks from repeatedly retrying orchestrator mail wakes blocked by a user draft; retry on new Ready confirmation without changing queued-command flushing (#2418-fd33).
 - Restart mobile terminal streaming when returning to the PWA after socket retry exhaustion, without reopening confirmed ended sessions (#2422-a267).
 - Send AI Chat prompts that start with a multi-component absolute path while keeping unknown slash commands and unsupported host actions in the composer (#2421-6e0a).
