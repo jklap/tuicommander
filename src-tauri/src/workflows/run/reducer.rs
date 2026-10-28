@@ -284,7 +284,32 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                 return Err("workflow loop budget exhausted".into());
             }
         }
-        RunEventKind::StoryAccepted { story_id, revision } => {
+        RunEventKind::StoryAccepted { story_id, revision }
+        | RunEventKind::UnspawnedStoryAccepted {
+            story_id, revision, ..
+        } => {
+            if let RunEventKind::UnspawnedStoryAccepted { attempt_id, .. } = &event.kind {
+                let attempt = snapshot
+                    .attempts
+                    .iter_mut()
+                    .find(|attempt| attempt.id == *attempt_id && attempt.story_id == *story_id)
+                    .ok_or("native approval attempt not found")?;
+                if attempt.agent.is_some()
+                    || attempt.report.is_some()
+                    || !matches!(
+                        attempt.state,
+                        AttemptState::Running | AttemptState::Interrupted
+                    )
+                    || snapshot
+                        .effects
+                        .iter()
+                        .any(|effect| effect.key == format!("spawn:{attempt_id}"))
+                {
+                    return Err("native approval cannot settle a spawned attempt".into());
+                }
+                attempt.state = AttemptState::Reported;
+                attempt.outcome = Some(AttemptOutcome::Completed);
+            }
             let story = snapshot
                 .stories
                 .iter_mut()

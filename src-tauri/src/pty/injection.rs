@@ -1917,7 +1917,7 @@ pub(super) fn reevaluate_orchestrator_mail_wake(state: &AppState, pty_session: &
 /// Re-offer an outstanding wake on the budget the recipient already has. Unlike
 /// [`reevaluate_orchestrator_mail_wake`] this grants nothing, so it is what a
 /// caller inside one delivery uses to chase its own leftovers.
-fn chase_orchestrator_mail_wake(state: &AppState, recipient: &str) {
+pub(super) fn chase_orchestrator_mail_wake(state: &AppState, recipient: &str) {
     let Some(needed_through) = state.orchestrator_wake_needed_through(recipient) else {
         return;
     };

@@ -991,6 +991,7 @@ impl GitReads for GixGitReads {
             let branch = crate::git::read_branch_from_head(&path);
             entries.push(crate::worktree::WorktreeEntry {
                 path: git_spelling(&path.to_string_lossy()),
+                bare: false,
                 detached: branch.is_none() && !head.trim().is_empty() && !head.starts_with("ref:"),
                 branch,
                 head: head.trim().to_string(),
@@ -1884,6 +1885,57 @@ mod tests {
             actual.values().any(|entry| entry.path == expected),
             "main checkout omitted for linked input: {actual:?}"
         );
+    }
+
+    /// Catches archived external or former-storage checkouts reappearing as live rows.
+    #[test]
+    fn archived_external_checkout_stays_out_of_live_inventory() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let external = linked.path().join("external/checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "archived-external",
+                external.to_str().unwrap(),
+            ],
+        );
+        let archived = crate::worktree::archive_worktree(&repo, "archived-external", None)
+            .expect("archive an externally created checkout");
+        assert!(Path::new(&archived).is_dir());
+        let original_pool = linked.path().join("external/__archived");
+        let configured_pool = linked.path().join("configured/__archived");
+        let changed_pool = linked.path().join("new-storage/__archived");
+        let mut exposed = Vec::new();
+        for (name, reads) in [
+            ("cli", &CliGitReads as &dyn GitReads),
+            ("gix", &GixGitReads::new() as &dyn GitReads),
+        ] {
+            for (case, pool) in [
+                ("configured pool", &original_pool),
+                ("external parent", &configured_pool),
+                ("changed storage", &changed_pool),
+            ] {
+                let inventory = reads.worktree_inventory(&repo, Some(pool)).unwrap();
+                if inventory.worktree_paths.contains_key("archived-external") {
+                    exposed.push(format!("{name}: {case}"));
+                }
+                assert_eq!(inventory.detached_worktrees, []);
+                assert_eq!(inventory.worktree_diagnostics, []);
+            }
+            // Removal must retain access to pooled registrations.
+            assert!(
+                reads
+                    .worktree_inventory(&repo, None)
+                    .unwrap()
+                    .worktree_paths
+                    .contains_key("archived-external")
+            );
+        }
+        assert!(exposed.is_empty(), "archived live rows: {exposed:?}");
     }
 
     /// Catches treating a user's unrelated __archived directory as a TUIC recycling pool.

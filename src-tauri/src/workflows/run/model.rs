@@ -344,6 +344,11 @@ pub enum RunEventKind {
         state: EffectState,
     },
     LoopAdvanced,
+    UnspawnedStoryAccepted {
+        story_id: String,
+        attempt_id: String,
+        revision: i64,
+    },
     StoryAccepted {
         story_id: String,
         #[serde(default)]
@@ -453,6 +458,11 @@ pub enum RunCommand {
         succeeded: bool,
     },
     AdvanceLoop,
+    /// Internal only: native approval settles an implementer that never spawned.
+    #[schemars(skip)]
+    AcceptUnspawnedStory {
+        attempt_id: String,
+    },
     AcceptStory {
         story_id: String,
     },
